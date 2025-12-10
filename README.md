@@ -12,7 +12,7 @@
 - LXD/MicroCloud nodes with API access enabled
 - Valid client certificates for each node
 
-## Architecture
+## Port
 
 Backend aggregates data from configured nodes via their REST APIs. Frontend communicates exclusively with backend.
 
