@@ -1,0 +1,1240 @@
+"use client";
+
+import * as React from "react";
+import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, Loader2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { VMTable } from "@/components/vm-table";
+import { NodeStatusCards } from "@/components/node-status";
+import { StatsOverview } from "@/components/stats-overview";
+import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
+import { TagManager, TagFilter } from "@/components/tag-manager";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useVMs, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateInstanceTags, useUpdateProjectTags } from "@/hooks/use-lxd";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { toast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
+import { projectAPI } from "@/lib/api";
+
+interface ProjectsSectionProps {
+  projectsData: ProjectListResponse[] | undefined;
+  projectsLoading: boolean;
+  vmsData: VMInfo[];
+  projectInstanceCounts: Map<string, number>;
+  refetch: () => void;
+  isRefetching: boolean;
+  lastUpdated: string | null;
+}
+
+interface ProjectCardProps {
+  project: ProjectInfo;
+  projectKey: string;
+  instanceCount: number;
+  isExpanded: boolean;
+  instances: VMInfo[];
+  stats: { running: number; stopped: number; other: number; total: number };
+  toggleProject: (key: string) => void;
+  refetch: () => void;
+  isReadOnly?: boolean;
+}
+
+interface InstanceRowProps {
+  vm: VMInfo;
+  onTagsUpdate?: () => void;
+  isReadOnly?: boolean;
+}
+
+function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps) {
+  const startVM = useStartVM();
+  const stopVM = useStopVM();
+  const restartVM = useRestartVM();
+  const deleteVM = useDeleteVM();
+  const updateInstanceTags = useUpdateInstanceTags();
+  const [isDeleting, setIsDeleting] = React.useState(false);
+  const [showMonitoring, setShowMonitoring] = React.useState(false);
+
+  const handleTagsChange = async (newTags: string[]) => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Tag updates are disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await updateInstanceTags.mutateAsync({
+        host: vm.host,
+        instanceName: vm.name,
+        tags: newTags,
+        project: vm.config?.project || "default",
+      });
+      toast({
+        title: "Tags Updated",
+        description: `Tags for ${vm.name} have been updated.`,
+        variant: "success",
+      });
+      onTagsUpdate?.();
+    } catch (error) {
+      toast({
+        title: "Failed to update tags",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleStart = async () => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Instance actions are disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await startVM.mutateAsync({
+        name: vm.name,
+        request: { host: vm.host },
+      });
+      toast({
+        title: "VM Started",
+        description: `${vm.name} is now starting.`,
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to start VM",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleStop = async () => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Instance actions are disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await stopVM.mutateAsync({
+        name: vm.name,
+        request: { host: vm.host },
+      });
+      toast({
+        title: "VM Stopped",
+        description: `${vm.name} is now stopping.`,
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to stop VM",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleRestart = async () => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Instance actions are disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await restartVM.mutateAsync({
+        name: vm.name,
+        request: { host: vm.host },
+      });
+      toast({
+        title: "VM Restarted",
+        description: `${vm.name} is now restarting.`,
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to restart VM",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleDelete = async () => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Instance deletion is disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      await deleteVM.mutateAsync({
+        name: vm.name,
+        host: vm.host,
+        force: true,
+      });
+      toast({
+        title: "VM Deleted",
+        description: `${vm.name} has been deleted.`,
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to delete VM",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const isRunning = vm.status === "Running";
+  const isPending = startVM.isPending || stopVM.isPending || restartVM.isPending;
+
+  return (
+    <div className="p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors border">
+      <div className="flex items-start justify-between gap-3">
+        {/* Left: Instance Info - Clickable */}
+        <div 
+          className="flex-1 min-w-0 space-y-2 cursor-pointer" 
+          onClick={() => setShowMonitoring(true)}
+        >
+          <div className="flex items-center gap-2">
+            {vm.type === "virtual-machine" ? (
+              <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+            ) : (
+              <Container className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+            )}
+            <span className="text-sm font-medium truncate">{vm.name}</span>
+            <Badge variant={isRunning ? "success" : "secondary"} className="text-xs">
+              {vm.status}
+            </Badge>
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            {/* Type */}
+            <div className="flex items-center gap-1">
+              <span className="font-medium">Type:</span>
+              <span>{vm.type === "virtual-machine" ? "VM" : "Container"}</span>
+            </div>
+            
+            {/* Architecture */}
+            {vm.architecture && (
+              <div className="flex items-center gap-1">
+                <span className="font-medium">Arch:</span>
+                <span>{vm.architecture}</span>
+              </div>
+            )}
+            
+            {/* IP Address */}
+            {vm.ip_addresses && vm.ip_addresses.length > 0 && (
+              <div className="flex items-center gap-1">
+                <span className="font-medium">IP:</span>
+                <span>{vm.ip_addresses[0]}</span>
+              </div>
+            )}
+          </div>
+
+          {/* Tags */}
+          <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+            <TagManager
+              tags={vm.tags || []}
+              onTagsChange={handleTagsChange}
+              readonly={isReadOnly}
+              maxTags={10}
+              placeholder="Add instance tag..."
+            />
+          </div>
+        </div>
+
+        {/* Right: Actions */}
+        <TooltipProvider>
+          <div className="flex items-center gap-1">
+            {/* Start */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={handleStart}
+                  disabled={isRunning || isPending || isReadOnly}
+                >
+                  {startVM.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Start"}</TooltipContent>
+            </Tooltip>
+
+            {/* Stop */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={handleStop}
+                  disabled={!isRunning || isPending || isReadOnly}
+                >
+                  {stopVM.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Stop"}</TooltipContent>
+            </Tooltip>
+
+            {/* Restart */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={handleRestart}
+                  disabled={!isRunning || isPending || isReadOnly}
+                >
+                  {restartVM.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCw className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Restart"}</TooltipContent>
+            </Tooltip>
+
+            {/* Delete */}
+            <AlertDialog>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <AlertDialogTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive hover:text-destructive"
+                      disabled={isPending || isDeleting || isReadOnly}
+                    >
+                      {isDeleting ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  </AlertDialogTrigger>
+                </TooltipTrigger>
+                <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Delete"}</TooltipContent>
+              </Tooltip>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete {vm.name}?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete the instance. This action cannot be undone.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDelete}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    Delete
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </TooltipProvider>
+      </div>
+      
+      {/* Monitoring Modal */}
+      <InstanceMonitoringModal
+        instance={vm}
+        isOpen={showMonitoring}
+        onClose={() => setShowMonitoring(false)}
+        project="default"
+      />
+    </div>
+  );
+}
+
+function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances, stats, toggleProject, refetch, isReadOnly = false }: ProjectCardProps) {
+  const deleteProject = useDeleteProject();
+  const updateProjectTags = useUpdateProjectTags();
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
+  const [editDialogOpen, setEditDialogOpen] = React.useState(false);
+  const [isSaving, setIsSaving] = React.useState(false);
+
+  const handleTagsChange = async (newTags: string[]) => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Tag updates are disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      await updateProjectTags.mutateAsync({
+        host: project.host,
+        projectName: project.name,
+        tags: newTags,
+      });
+      toast({
+        title: "Tags Updated",
+        description: `Tags for project '${project.name}' have been updated.`,
+        variant: "success",
+      });
+      refetch();
+    } catch (error) {
+      toast({
+        title: "Failed to update tags",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+  
+  // form state for editing
+  const [editName, setEditName] = React.useState(project.name);
+  const [editDescription, setEditDescription] = React.useState(project.description || "");
+  const [editMaxCpu, setEditMaxCpu] = React.useState(1);
+  const [editMaxRamValue, setEditMaxRamValue] = React.useState(1);
+  const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<"GiB" | "MiB">("GiB");
+  const [editMaxStorageValue, setEditMaxStorageValue] = React.useState(1);
+  const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<"GiB" | "MiB">("GiB");
+
+  // calculate resource usage from instances
+  const resourceUsage = React.useMemo(() => {
+    let cpuUsed = 0;
+    let ramUsedBytes = 0;
+    let storageUsedBytes = 0;
+
+    instances.forEach((vm) => {
+      // count CPU
+      const vmCpu = vm.config?.["limits.cpu"];
+      if (vmCpu) {
+        cpuUsed += parseInt(vmCpu) || 0;
+      }
+
+      // count RAM
+      if (vm.resources?.memory_usage) {
+        ramUsedBytes += vm.resources.memory_usage;
+      }
+
+      // count storage from disk usage
+      if (vm.resources?.disk_usage) {
+        Object.values(vm.resources.disk_usage).forEach((bytes) => {
+          storageUsedBytes += bytes;
+        });
+      }
+    });
+
+    return { cpuUsed, ramUsedBytes, storageUsedBytes };
+  }, [instances]);
+
+  // parse project limits
+  const limits = React.useMemo(() => {
+    const cpuLimit = project.config?.["limits.cpu"] ? parseInt(project.config["limits.cpu"]) : null;
+    
+    const ramLimitStr = project.config?.["limits.memory"];
+    let ramLimitBytes = null;
+    if (ramLimitStr) {
+      const match = ramLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB|GB|MB)$/i);
+      if (match) {
+        const value = parseFloat(match[1]);
+        const unit = match[2].toUpperCase();
+        ramLimitBytes = unit.includes('G') ? value * 1024 * 1024 * 1024 : value * 1024 * 1024;
+      }
+    }
+
+    const storageLimitStr = project.config?.["limits.disk"];
+    let storageLimitBytes = null;
+    if (storageLimitStr) {
+      const match = storageLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB|GB|MB)$/i);
+      if (match) {
+        const value = parseFloat(match[1]);
+        const unit = match[2].toUpperCase();
+        storageLimitBytes = unit.includes('G') ? value * 1024 * 1024 * 1024 : value * 1024 * 1024;
+      }
+    }
+
+    return { cpuLimit, ramLimitBytes, storageLimitBytes };
+  }, [project.config]);
+
+  // Parse existing resource limits when dialog opens
+  React.useEffect(() => {
+    if (editDialogOpen && project.config) {
+      // Set name and description
+      setEditName(project.name);
+      setEditDescription(project.description || "");
+
+      // Parse CPU limit
+      const cpuLimitStr = project.config["limits.cpu"];
+      if (cpuLimitStr) {
+        setEditMaxCpu(parseInt(cpuLimitStr));
+      }
+
+      // Parse RAM limit
+      const ramLimitStr = project.config["limits.memory"];
+      if (ramLimitStr) {
+        const ramMatch = ramLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB)$/i);
+        if (ramMatch) {
+          setEditMaxRamValue(parseFloat(ramMatch[1]));
+          setEditMaxRamUnit(ramMatch[2] as "GiB" | "MiB");
+        }
+      }
+
+      // Parse Storage limit
+      const storageLimitStr = project.config["limits.disk"];
+      if (storageLimitStr) {
+        const storageMatch = storageLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB)$/i);
+        if (storageMatch) {
+          setEditMaxStorageValue(parseFloat(storageMatch[1]));
+          setEditMaxStorageUnit(storageMatch[2] as "GiB" | "MiB");
+        }
+      }
+    }
+  }, [editDialogOpen, project.config, project.description, project.name]);
+
+  const handleSave = async () => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Project updates are disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const updateData: {
+        description?: string;
+        max_cpu?: number;
+        max_ram?: string;
+        max_storage?: string;
+      } = {};
+
+      // Always include description
+      updateData.description = editDescription;
+
+      // Include CPU if set
+      if (editMaxCpu > 0) {
+        updateData.max_cpu = editMaxCpu;
+      }
+
+      // Include RAM if set
+      if (editMaxRamValue > 0) {
+        updateData.max_ram = `${editMaxRamValue}${editMaxRamUnit}`;
+      }
+
+      // Include Storage if set
+      if (editMaxStorageValue > 0) {
+        updateData.max_storage = `${editMaxStorageValue}${editMaxStorageUnit}`;
+      }
+
+      await projectAPI.update(project.host, project.name, updateData);
+
+      toast({
+        title: "Project Updated",
+        description: `Project '${project.name}' has been updated successfully.`,
+        variant: "success",
+      });
+
+      setEditDialogOpen(false);
+      refetch(); // Refresh the project list
+    } catch (error) {
+      toast({
+        title: "Failed to update project",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent) => {
+    if (isReadOnly) {
+      toast({
+        title: "Read-Only Mode Active",
+        description: "Project deletion is disabled in read-only mode",
+        variant: "destructive",
+      });
+      return;
+    }
+    e.stopPropagation();
+    setIsDeleting(true);
+    try {
+      await deleteProject.mutateAsync({
+        host: project.host,
+        projectName: project.name,
+      });
+      toast({
+        title: "Project Deleted",
+        description: `Project '${project.name}' has been deleted from ${project.host}.`,
+        variant: "success",
+      });
+      setDeleteDialogOpen(false);
+    } catch (error) {
+      toast({
+        title: "Failed to delete project",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  return (
+    <Card className="hover:border-primary/50 transition-colors">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div 
+            className="flex items-center gap-2 flex-1 cursor-pointer"
+            onClick={() => instanceCount > 0 && toggleProject(projectKey)}
+          >
+            <FolderKanban className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-base">{project.name}</CardTitle>
+          </div>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="text-xs">
+              {project.host}
+            </Badge>
+            {instanceCount > 0 && (
+              <div onClick={() => toggleProject(projectKey)} className="cursor-pointer">
+                {isExpanded ? 
+                  <ChevronUp className="h-4 w-4 text-muted-foreground" /> : 
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                }
+              </div>
+            )}
+            {/* Delete Button */}
+            {!isReadOnly && (
+              <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                    <Button variant="ghost" size="icon" className="h-7 w-7">
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                  <DropdownMenuItem 
+                    className="cursor-pointer"
+                    onSelect={() => setEditDialogOpen(true)}
+                  >
+                    <Settings className="mr-2 h-4 w-4" />
+                    Edit Project
+                  </DropdownMenuItem>
+                  <AlertDialogTrigger asChild>
+                    <DropdownMenuItem 
+                      className="text-destructive focus:text-destructive cursor-pointer"
+                      onSelect={(e) => e.preventDefault()}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Delete Project
+                    </DropdownMenuItem>
+                  </AlertDialogTrigger>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <AlertDialogContent onClick={(e) => e.stopPropagation()}>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete project '{project.name}'?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This will permanently delete the project from {project.host}. 
+                    {instanceCount > 0 && (
+                      <span className="block mt-2 text-destructive font-medium">
+                        Warning: This project has {instanceCount} instance(s). Delete all instances first.
+                      </span>
+                    )}
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDelete}
+                    disabled={isDeleting || instanceCount > 0}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {isDeleting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      "Delete Project"
+                    )}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {project.description && (
+          <p className="text-xs text-muted-foreground line-clamp-2">
+            {project.description}
+          </p>
+        )}
+
+        {/* Tags */}
+        <div 
+          className="pt-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <TagManager
+            tags={project.tags || []}
+            onTagsChange={handleTagsChange}
+            readonly={isReadOnly}
+            maxTags={10}
+            placeholder="Add project tag..."
+          />
+        </div>
+        
+        {/* Resource Usage */}
+        <div className="grid grid-cols-3 gap-2 pt-2">
+          {/* CPU */}
+          <div className="flex items-center gap-1.5 p-2 rounded-md bg-blue-500/10 border border-blue-500/20">
+            <Cpu className="h-4 w-4 text-blue-500 flex-shrink-0" />
+            <div className="flex flex-col min-w-0">
+              {limits.cpuLimit ? (
+                <>
+                  <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                    {resourceUsage.cpuUsed} of {limits.cpuLimit}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">cores</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                    Unlimited
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">CPU</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* RAM */}
+          <div className="flex items-center gap-1.5 p-2 rounded-md bg-purple-500/10 border border-purple-500/20">
+            <MemoryStick className="h-4 w-4 text-purple-500 flex-shrink-0" />
+            <div className="flex flex-col min-w-0">
+              {limits.ramLimitBytes ? (
+                <>
+                  <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">
+                    {(resourceUsage.ramUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.ramLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">GiB</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">
+                    Unlimited
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">RAM</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* Storage */}
+          <div className="flex items-center gap-1.5 p-2 rounded-md bg-orange-500/10 border border-orange-500/20">
+            <HardDrive className="h-4 w-4 text-orange-500 flex-shrink-0" />
+            <div className="flex flex-col min-w-0">
+              {limits.storageLimitBytes ? (
+                <>
+                  <span className="text-xs font-semibold text-orange-600 dark:text-orange-400">
+                    {(resourceUsage.storageUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.storageLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">GiB</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-xs font-semibold text-orange-600 dark:text-orange-400">
+                    Unlimited
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">Storage</span>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2 pt-2 border-t">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-muted-foreground">Instances</span>
+            <Badge variant={instanceCount > 0 ? "default" : "secondary"}>
+              {instanceCount}
+            </Badge>
+          </div>
+          {instanceCount > 0 && (
+            <div className="flex items-center gap-2 text-xs">
+              <div className="flex items-center gap-1">
+                <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                <span className="text-muted-foreground">{stats.running} running</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <div className="h-2 w-2 rounded-full bg-zinc-400" />
+                <span className="text-muted-foreground">{stats.stopped} stopped</span>
+              </div>
+              {stats.other > 0 && (
+                <div className="flex items-center gap-1">
+                  <div className="h-2 w-2 rounded-full bg-amber-500" />
+                  <span className="text-muted-foreground">{stats.other} other</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Expanded Instance List */}
+        {isExpanded && instanceCount > 0 && (
+          <div className="mt-3 pt-3 border-t space-y-2">
+            {instances.map((vm) => (
+              <InstanceRow key={vm.name} vm={vm} onTagsUpdate={refetch} isReadOnly={isReadOnly} />
+            ))}
+          </div>
+        )}
+      </CardContent>
+
+      {/* Edit Resources Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Edit Project</DialogTitle>
+            <DialogDescription>
+              Update the name, description and resource limits for {project.name}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            {/* Project Name */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-name">Project Name</Label>
+              <Input
+                id="edit-name"
+                placeholder="Project name"
+                value={editName}
+                disabled
+                className="bg-muted cursor-not-allowed"
+              />
+              <p className="text-xs text-muted-foreground">
+                Note: Renaming projects is not supported by LXD.
+              </p>
+            </div>
+
+            {/* Description */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-description">Description</Label>
+              <Textarea
+                id="edit-description"
+                placeholder="Project description"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+                rows={3}
+              />
+            </div>
+
+            {/* Max CPU */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-max-cpu">Max CPU Cores</Label>
+              <Input
+                id="edit-max-cpu"
+                type="number"
+                min="1"
+                value={editMaxCpu}
+                onChange={(e) => setEditMaxCpu(Number(e.target.value))}
+                placeholder="e.g., 2"
+              />
+            </div>
+
+            {/* Max RAM */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-max-ram">Max RAM</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="edit-max-ram"
+                  type="number"
+                  min="1"
+                  value={editMaxRamValue}
+                  onChange={(e) => setEditMaxRamValue(Number(e.target.value))}
+                  placeholder="e.g., 2"
+                  className="flex-1"
+                />
+                <Select value={editMaxRamUnit} onValueChange={(v) => setEditMaxRamUnit(v as "GiB" | "MiB")}>
+                  <SelectTrigger className="w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MiB">MiB</SelectItem>
+                    <SelectItem value="GiB">GiB</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Max Storage */}
+            <div className="space-y-2">
+              <Label htmlFor="edit-max-storage">Max Storage</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="edit-max-storage"
+                  type="number"
+                  min="1"
+                  value={editMaxStorageValue}
+                  onChange={(e) => setEditMaxStorageValue(Number(e.target.value))}
+                  placeholder="e.g., 10"
+                  className="flex-1"
+                />
+                <Select value={editMaxStorageUnit} onValueChange={(v) => setEditMaxStorageUnit(v as "GiB" | "MiB")}>
+                  <SelectTrigger className="w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="MiB">MiB</SelectItem>
+                    <SelectItem value="GiB">GiB</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setEditDialogOpen(false)}
+              disabled={isSaving}
+            >
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={isSaving}>
+              {isSaving ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
+  );
+}
+
+function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstanceCounts, refetch, isRefetching, lastUpdated }: ProjectsSectionProps) {
+  const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [selectedTags, setSelectedTags] = React.useState<string[]>([]);
+  const { isReadOnly } = useReadOnlyMode();
+
+  // Collect all unique tags from projects and instances
+  const allTags = React.useMemo(() => {
+    const tags = new Set<string>();
+    
+    // Tags from projects
+    projectsData?.forEach((nodeProjects) => {
+      nodeProjects.projects.forEach((project) => {
+        project.tags?.forEach((tag) => tags.add(tag));
+      });
+    });
+    
+    // Tags from instances
+    vmsData.forEach((vm) => {
+      vm.tags?.forEach((tag) => tags.add(tag));
+    });
+    
+    return Array.from(tags).sort();
+  }, [projectsData, vmsData]);
+
+  const toggleProject = (projectKey: string) => {
+    const newExpanded = new Set(expandedProjects);
+    if (newExpanded.has(projectKey)) {
+      newExpanded.delete(projectKey);
+    } else {
+      newExpanded.add(projectKey);
+    }
+    setExpandedProjects(newExpanded);
+  };
+
+  const getProjectInstances = (host: string, projectName: string) => {
+    return vmsData.filter(vm => 
+      vm.host === host && (vm.config?.project || "default") === projectName
+    );
+  };
+
+  const getProjectStats = (host: string, projectName: string) => {
+    const instances = getProjectInstances(host, projectName);
+    const running = instances.filter(vm => vm.status === "Running").length;
+    const stopped = instances.filter(vm => vm.status === "Stopped").length;
+    const other = instances.length - running - stopped;
+    return { running, stopped, other, total: instances.length };
+  };
+
+  // Filter projects based on search query and tags
+  const filterProjects = (project: ProjectInfo) => {
+    // Filter by tags first
+    if (selectedTags.length > 0) {
+      const projectTags = project.tags || [];
+      const instances = getProjectInstances(project.host, project.name);
+      const instanceTags = instances.flatMap(vm => vm.tags || []);
+      const allProjectTags = [...new Set([...projectTags, ...instanceTags])];
+      
+      const hasMatchingTag = selectedTags.some(tag => allProjectTags.includes(tag));
+      if (!hasMatchingTag) return false;
+    }
+
+    // Then filter by search query
+    if (!searchQuery.trim()) return true;
+    
+    const query = searchQuery.toLowerCase();
+    const matchesName = project.name.toLowerCase().includes(query);
+    const matchesHost = project.host.toLowerCase().includes(query);
+    const matchesDescription = project.description?.toLowerCase().includes(query);
+    const projectKey = `${project.host}:${project.name}`;
+    const instanceCount = projectInstanceCounts.get(projectKey) || 0;
+    const matchesInstanceCount = instanceCount.toString().includes(query);
+    
+    // Also search in instance names and tags within the project
+    const instances = getProjectInstances(project.host, project.name);
+    const matchesInstanceName = instances.some(vm => 
+      vm.name.toLowerCase().includes(query)
+    );
+    const matchesTags = [...(project.tags || []), ...instances.flatMap(vm => vm.tags || [])]
+      .some(tag => tag.toLowerCase().includes(query));
+    
+    return matchesName || matchesHost || matchesDescription || matchesInstanceCount || matchesInstanceName || matchesTags;
+  };
+
+  // Get filtered projects count
+  const filteredProjectsCount = projectsData?.reduce((count, nodeProjects) => {
+    return count + nodeProjects.projects.filter(filterProjects).length;
+  }, 0) || 0;
+
+  const totalProjectsCount = projectsData?.reduce((count, nodeProjects) => {
+    return count + nodeProjects.projects.length;
+  }, 0) || 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold">Projects</h2>
+          {lastUpdated && (
+            <p className="text-xs text-muted-foreground">
+              Last updated: {lastUpdated}
+            </p>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={refetch}
+          disabled={isRefetching}
+          className="gap-2"
+        >
+          <RefreshCw
+            className={cn("h-4 w-4", isRefetching && "animate-spin")}
+          />
+          Refresh
+        </Button>
+      </div>
+
+      {/* Search Bar */}
+      <div className="flex items-center gap-2">
+        <div className="relative flex-1">
+          <Input
+            type="text"
+            placeholder="Search projects by name, host, description, or instance..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-4"
+          />
+          {searchQuery && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+              onClick={() => setSearchQuery("")}
+            >
+              <span className="sr-only">Clear search</span>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </Button>
+          )}
+        </div>
+        {(searchQuery || selectedTags.length > 0) && (
+          <div className="text-sm text-muted-foreground whitespace-nowrap">
+            {filteredProjectsCount} of {totalProjectsCount}
+          </div>
+        )}
+      </div>
+
+      {/* Tag Filter */}
+      {allTags.length > 0 && (
+        <TagFilter
+          availableTags={allTags}
+          selectedTags={selectedTags}
+          onTagsChange={setSelectedTags}
+        />
+      )}
+      
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {projectsLoading ? (
+          [...Array(6)].map((_, i) => (
+            <Skeleton key={i} className="h-32" />
+          ))
+        ) : (
+          <>
+            {projectsData?.map((nodeProjects) =>
+              nodeProjects.projects
+                .filter(filterProjects)
+                .map((project) => {
+                  const projectKey = `${project.host}:${project.name}`;
+                  const instanceCount = projectInstanceCounts.get(projectKey) || 0;
+                  const isExpanded = expandedProjects.has(projectKey);
+                  const instances = getProjectInstances(project.host, project.name);
+                  const stats = getProjectStats(project.host, project.name);
+                  
+                  return (
+                    <ProjectCard
+                      key={projectKey}
+                      project={project}
+                      projectKey={projectKey}
+                      instanceCount={instanceCount}
+                      isExpanded={isExpanded}
+                      instances={instances}
+                      stats={stats}
+                      toggleProject={toggleProject}
+                      refetch={refetch}
+                      isReadOnly={isReadOnly}
+                    />
+                  );
+                })
+            )}
+            {searchQuery && filteredProjectsCount === 0 && (
+              <div className="col-span-full text-center py-12">
+                <FolderKanban className="h-12 w-12 text-muted-foreground mx-auto mb-3 opacity-50" />
+                <h3 className="text-lg font-semibold text-muted-foreground mb-2">
+                  No projects found
+                </h3>
+                <p className="text-sm text-muted-foreground">
+                  Try adjusting your search query
+                </p>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function Dashboard() {
+  const { data: vmsData, isLoading: vmsLoading, refetch, isRefetching, dataUpdatedAt } = useVMs();
+  const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
+
+  const lastUpdated = dataUpdatedAt
+    ? new Date(dataUpdatedAt).toLocaleTimeString()
+    : null;
+
+  // calculate instance count per project
+  const projectInstanceCounts = new Map<string, number>();
+  vmsData?.vms.forEach((vm) => {
+    const projectKey = `${vm.host}:${vm.config?.project || "default"}`;
+    projectInstanceCounts.set(projectKey, (projectInstanceCounts.get(projectKey) || 0) + 1);
+  });
+
+  return (
+    <div className="space-y-8">
+      {/* Stats Overview */}
+      <StatsOverview data={vmsData} isLoading={vmsLoading} />
+
+      {/* Nodes Status */}
+      <NodeStatusCards />
+
+      {/* Projects Overview */}
+      <ProjectsSection 
+        projectsData={projectsData} 
+        projectsLoading={projectsLoading}
+        vmsData={vmsData?.vms || []}
+        projectInstanceCounts={projectInstanceCounts}
+        refetch={refetch}
+        isRefetching={isRefetching}
+        lastUpdated={lastUpdated}
+      />
+    </div>
+  );
+}

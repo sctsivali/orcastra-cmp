@@ -1,0 +1,114 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Settings, Loader2, RotateCw } from "lucide-react";
+import { ProfileInfo, ProfileListResponse } from "@/types/api";
+import { useToast } from "@/hooks/use-toast";
+import { profileAPI } from "@/lib/api";
+
+export default function ProfilesPage() {
+  const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    fetchProfiles();
+  }, []);
+
+  const fetchProfiles = async () => {
+    try {
+      setLoading(true);
+      const data = await profileAPI.list() as any;
+      setProfiles(data.profiles);
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: "Failed to fetch profiles",
+        variant: "destructive",
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-8 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold flex items-center gap-2">
+            <Settings className="h-8 w-8" />
+            Profiles
+          </h1>
+          <p className="text-muted-foreground mt-2">
+            Manage LXD configuration profiles
+          </p>
+        </div>
+        <Button onClick={fetchProfiles}>
+          <RotateCw className="h-4 w-4 mr-2" />
+          Refresh
+        </Button>
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>All Profiles ({profiles.length})</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Config Items</TableHead>
+                <TableHead>Devices</TableHead>
+                <TableHead>Used By</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {profiles.map((profile) => (
+                <TableRow key={profile.name}>
+                  <TableCell className="font-medium">{profile.name}</TableCell>
+                  <TableCell>{profile.description || "N/A"}</TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">
+                      {Object.keys(profile.config || {}).length} items
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">
+                      {Object.keys(profile.devices || {}).length} devices
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">
+                      {profile.used_by?.length || 0} instances
+                    </Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
