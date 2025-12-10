@@ -14,16 +14,16 @@
 
 ## Architecture
 
-Backend aggregates data from configured LXD nodes via their REST APIs. Frontend communicates exclusively with backend.
+Backend aggregates data from configured nodes via their REST APIs. Frontend communicates exclusively with backend.
 
 ### Dev
 ```
-frontend:2025 → backend:4050 → LXD nodes
+frontend:2025 → backend:4050 → nodes
 ```
 
 ### Prod
 ```
-frontend:4321 → backend:8765 → LXD nodes
+frontend:4321 → backend:8765 → nodes
 ```
 
 ## API Endpoints
