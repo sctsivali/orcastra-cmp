@@ -1,12 +1,16 @@
 # Backend Dockerfile for Orcastra Dashboard API
 FROM python:3.12-slim as base
 
+# Build arguments for version management
+ARG APP_VERSION=0.1.0
+
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    APP_VERSION=${APP_VERSION}
 
 # Install system dependencies in a separate layer
 FROM base as builder

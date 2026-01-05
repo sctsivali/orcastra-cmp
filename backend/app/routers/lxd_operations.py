@@ -6,6 +6,8 @@ Provides endpoints for monitoring and managing LXD operations.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from app.services.lxd_service import (
@@ -17,6 +19,9 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/operations", tags=["Operations"])
+
+# Thread pool for parallel operations
+_executor = ThreadPoolExecutor(max_workers=5)
 
 
 class OperationInfo(BaseModel):
@@ -40,6 +45,41 @@ class OperationListResponse(BaseModel):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[OperationInfo]:
+    """Fetch operations for a single node - runs in thread pool."""
+    operations = []
+    try:
+        client = lxd_service.connection_manager.get_client(node_name)
+        # Use recursion=1 to get full operation details
+        response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
+        if response.status_code == 200:
+            operations_data = response.json().get('metadata', {})
+            # Operations are returned in 'running' and 'success' keys
+            running_ops = operations_data.get('running', [])
+            
+            for op_data in running_ops:
+                try:
+                    operations.append(OperationInfo(
+                        id=op_data.get('id', ''),
+                        class_name=op_data.get('class', ''),
+                        created_at=op_data.get('created_at', ''),
+                        updated_at=op_data.get('updated_at', ''),
+                        status=op_data.get('status', ''),
+                        status_code=op_data.get('status_code', 0),
+                        description=op_data.get('description', ''),
+                        err=op_data.get('err', ''),
+                        may_cancel=op_data.get('may_cancel', False),
+                        metadata=op_data.get('metadata', {})
+                    ))
+                except Exception as e:
+                    logger.error(f"Error parsing operation data on {node_name}: {e}")
+        else:
+            logger.warning(f"Got status {response.status_code} for operations on {node_name}")
+    except Exception as e:
+        logger.error(f"Error listing operations on {node_name}: {e}", exc_info=True)
+    return operations
+
+
 @router.get(
     "",
     response_model=OperationListResponse,
@@ -53,27 +93,22 @@ async def list_operations(
     """List all operations."""
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
-        all_operations = []
         
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                operations = client.operations.all()
-                for operation in operations:
-                    all_operations.append(OperationInfo(
-                        id=operation.id,
-                        class_name=getattr(operation, 'class', ''),
-                        created_at=getattr(operation, 'created_at', ''),
-                        updated_at=getattr(operation, 'updated_at', ''),
-                        status=getattr(operation, 'status', ''),
-                        status_code=getattr(operation, 'status_code', 0),
-                        description=getattr(operation, 'description', ''),
-                        err=getattr(operation, 'err', ''),
-                        may_cancel=getattr(operation, 'may_cancel', False),
-                        metadata=getattr(operation, 'metadata', {})
-                    ))
-            except Exception as e:
-                logger.error(f"Error listing operations on {node_name}: {e}")
+        # Fetch operations from all nodes in parallel
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_executor, _fetch_operations_for_node, lxd_service, node_name)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Flatten results
+        all_operations = []
+        for result in results:
+            if isinstance(result, list):
+                all_operations.extend(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error fetching operations: {result}")
         
         return OperationListResponse(
             total=len(all_operations),

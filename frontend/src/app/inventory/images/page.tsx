@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,9 +21,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ImageIcon, Loader2, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { ImageIcon, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { useImages } from "@/hooks/use-lxd";
+import { LoadingLottiePage, LoadingLottieMedium } from "@/components/loading-lottie";
+import { ImageListResponse } from "@/types/api";
 
 type SortField = "fingerprint" | "size" | "architecture" | "type";
 type SortDirection = "asc" | "desc";
@@ -45,15 +47,9 @@ interface ImageInfo {
   node?: string;
 }
 
-interface ImagesByHost {
-  host: string;
-  images: ImageInfo[];
-  total: number;
-}
-
 export default function ImagesPage() {
-  const [imagesByHost, setImagesByHost] = useState<ImagesByHost[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data: imagesByHost = [], isLoading, refetch, isRefetching } = useImages();
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
@@ -63,41 +59,19 @@ export default function ImagesPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchImages();
-  }, []);
-
-  const fetchImages = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/images`);
-      if (!response.ok) throw new Error("Failed to fetch images");
-      const data: ImagesByHost[] = await response.json();
-      setImagesByHost(data);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch images",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const allImages = useMemo(() => {
-    return imagesByHost.flatMap((host) =>
+    return (imagesByHost as ImageListResponse[]).flatMap((host) =>
       host.images.map((img) => ({ ...img, node: host.host }))
     );
   }, [imagesByHost]);
 
   const nodes = useMemo(() => {
-    const nodeSet = new Set(imagesByHost.map((h) => h.host));
+    const nodeSet = new Set((imagesByHost as ImageListResponse[]).map((h) => h.host));
     return Array.from(nodeSet).sort();
   }, [imagesByHost]);
 
   const imageTypes = useMemo(() => {
-    const typeSet = new Set(allImages.map((img) => img.type));
+    const typeSet = new Set(allImages.map((img: any) => img.type));
     return Array.from(typeSet).sort();
   }, [allImages]);
 
@@ -117,9 +91,9 @@ export default function ImagesPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (img) =>
+        (img: any) =>
           img.fingerprint.toLowerCase().includes(query) ||
-          img.aliases?.some((alias) =>
+          img.aliases?.some((alias: any) =>
             alias.name.toLowerCase().includes(query)
           ) ||
           (img.properties?.description &&
@@ -190,12 +164,8 @@ export default function ImagesPage() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -207,12 +177,12 @@ export default function ImagesPage() {
             Images
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud container and VM images
+            Manage hypervisor container and VM images
           </p>
         </div>
-        <Button onClick={fetchImages}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -244,7 +214,7 @@ export default function ImagesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node) => (
+                  {nodes.map((node: any) => (
                     <SelectItem key={node} value={node}>
                       {node}
                     </SelectItem>
@@ -264,7 +234,7 @@ export default function ImagesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                {imageTypes.map((type) => (
+                {imageTypes.map((type: any) => (
                   <SelectItem key={type} value={type}>
                     {type}
                   </SelectItem>
@@ -318,7 +288,15 @@ export default function ImagesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paginatedImages.length === 0 ? (
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-8">
+                    <div className="flex justify-center">
+                      <LoadingLottieMedium />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : paginatedImages.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={7}
@@ -328,7 +306,7 @@ export default function ImagesPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedImages.map((image, idx) => (
+                paginatedImages.map((image: any, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
                     <TableCell className="font-mono text-xs">
                       {image.fingerprint.substring(0, 12)}...

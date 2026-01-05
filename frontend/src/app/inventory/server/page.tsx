@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,10 +19,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Server, Loader2, RotateCw, Cpu, HardDrive } from "lucide-react";
-import { ServerInfo, ServerListResponse } from "@/types/api";
+import { Server, RotateCw, Cpu, HardDrive, Settings } from "lucide-react";
+import { ServerInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { useServerInfo } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import { ScrollArea } from "@/components/ui/scroll-area";
 
 function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
   const [open, setOpen] = useState(false);
@@ -43,35 +45,50 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
       </Badge>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Configuration Items</DialogTitle>
+        <DialogContent className="max-w-4xl max-h-[85vh]">
+          <DialogHeader className="pr-8">
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <Settings className="h-5 w-5" />
+              Configuration Items
+            </DialogTitle>
             <DialogDescription>
               {itemCount} configuration item{itemCount !== 1 ? 's' : ''}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="mt-4 space-y-2">
-            {Object.entries(config).map(([key, value], index) => (
-              <div key={index} className="flex items-start gap-3 p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors">
-                <div className="flex items-center justify-center w-8 h-8 rounded-full bg-primary/10 text-primary font-semibold text-sm flex-shrink-0">
-                  {index + 1}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium text-sm font-mono break-all">{key}</div>
-                  <div className="text-xs text-muted-foreground mt-1 break-all">
-                    {typeof value === 'object' ? (
-                      <pre className="text-xs bg-muted p-2 rounded mt-1 overflow-x-auto">
-                        {JSON.stringify(value, null, 2)}
-                      </pre>
-                    ) : (
-                      <span className="font-mono">{String(value)}</span>
-                    )}
+          <ScrollArea className="max-h-[calc(85vh-8rem)] pr-4">
+            <div className="space-y-3">
+              {Object.entries(config).map(([key, value], index) => (
+                <div key={index} className="border rounded-lg p-4 space-y-2 hover:bg-muted/30 transition-colors">
+                  <div className="flex items-start gap-3">
+                    <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10 text-primary font-semibold text-sm flex-shrink-0">
+                      {index + 1}
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-1">Configuration Key</div>
+                        <div className="font-semibold text-sm font-mono break-all bg-muted/50 p-2 rounded">
+                          {key}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground mb-1">Value</div>
+                        {typeof value === 'object' ? (
+                          <pre className="text-xs bg-muted/70 p-3 rounded overflow-x-auto font-mono">
+                            {JSON.stringify(value, null, 2)}
+                          </pre>
+                        ) : (
+                          <div className="font-medium text-sm font-mono bg-muted/50 p-2 rounded break-all">
+                            {String(value)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          </ScrollArea>
         </DialogContent>
       </Dialog>
     </>
@@ -79,38 +96,12 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
 }
 
 export default function ServerPage() {
-  const [servers, setServers] = useState<ServerInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useServerInfo();
+  const servers = (data as any)?.servers || [];
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchServers();
-  }, []);
-
-  const fetchServers = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/server`);
-      if (!response.ok) throw new Error("Failed to fetch server info");
-      const data: ServerListResponse = await response.json();
-      setServers(data.servers);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch server information",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -122,17 +113,17 @@ export default function ServerPage() {
             Server Information
           </h1>
           <p className="text-muted-foreground mt-2">
-            View LXD and MicroCloud server details and configuration
+            View hypervisor server details and configuration
           </p>
         </div>
-        <Button onClick={fetchServers}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {servers.map((server) => (
+        {servers.map((server: any) => (
           <Card key={server.node}>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">

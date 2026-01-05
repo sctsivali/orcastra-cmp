@@ -8,34 +8,39 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { useCounterAnimation } from "@/hooks/use-counter-animation";
+import { STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG, REALTIME_DATA_CONFIG } from "@/lib/query-config";
 
 export default function HomePage() {
   const { data: nodesData } = useQuery({
     queryKey: ["nodes-status"],
     queryFn: api.nodes.status,
+    ...REALTIME_DATA_CONFIG, // Nodes status needs frequent updates
   });
 
   const { data: vmsData } = useQuery({
     queryKey: ["vms-count"],
     queryFn: () => api.vms.list(),
+    ...DYNAMIC_DATA_CONFIG, // VMs change frequently
   });
 
   const { data: projectsData } = useQuery({
     queryKey: ["projects-count"],
     queryFn: () => api.projects.listAll(),
+    ...STATIC_DATA_CONFIG, // Projects rarely change
   });
 
   const totalNodes = nodesData?.nodes?.length || 0;
-  const connectedNodes = nodesData?.nodes?.filter(n => n.connected).length || 0;
+  // Only count nodes as connected if they are authenticated (has server_version)
+  const connectedNodes = nodesData?.nodes?.filter(n => n.connected && n.server_version).length || 0;
   const totalVMs = vmsData?.total || 0;
   const runningVMs = vmsData?.vms?.filter(vm => vm.status === "Running").length || 0;
   const totalProjects = projectsData?.reduce((sum, node) => sum + (node.projects?.length || 0), 0) || 0;
 
-  // Animated counters
-  const animatedTotalNodes = useCounterAnimation(totalNodes);
-  const animatedTotalVMs = useCounterAnimation(totalVMs);
-  const animatedRunningVMs = useCounterAnimation(runningVMs);
-  const animatedTotalProjects = useCounterAnimation(totalProjects);
+  // Animated counters with faster duration (800ms)
+  const animatedTotalNodes = useCounterAnimation(totalNodes, 800);
+  const animatedTotalVMs = useCounterAnimation(totalVMs, 800);
+  const animatedRunningVMs = useCounterAnimation(runningVMs, 800);
+  const animatedTotalProjects = useCounterAnimation(totalProjects, 800);
 
   const features = [
     {
@@ -83,9 +88,25 @@ export default function HomePage() {
   ];
 
   return (
-    <div className="container py-8 space-y-12">
-      {/* Hero Section */}
-      <section className="text-center space-y-6 py-12">
+    <div className="relative">
+      {/* Background Image */}
+      <div className="fixed inset-0 z-0">
+        <div 
+          className="absolute inset-0 bg-cover bg-center bg-no-repeat"
+          style={{ 
+            backgroundImage: 'url(/bg_orcastra-scaled-1.jpg)',
+            backgroundAttachment: 'fixed',
+            filter: 'brightness(1.2) contrast(0.9)'
+          }}
+        />
+        {/* Gradient overlay for better readability - lighter in dark mode, more opaque in light mode */}
+        <div className="absolute inset-0 bg-gradient-to-b from-background/85 via-background/75 to-background/85 dark:from-background/90 dark:via-background/85 dark:to-background/90" />
+      </div>
+      
+      {/* Content */}
+      <div className="relative z-10 container py-8 space-y-12">
+        {/* Hero Section */}
+        <section className="text-center space-y-6 py-12">
         <div className="space-y-4">
           <Badge variant="secondary" className="text-sm">
             Cloud Federation Platform
@@ -97,7 +118,7 @@ export default function HomePage() {
             </span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
-            A unified dashboard for managing LXD and MicroCloud virtual machines and containers across multiple nodes. Streamline your infrastructure management with powerful tools and real-time insights.
+            A unified dashboard for managing hypervisor virtual machines and containers across multiple nodes. Streamline your infrastructure management with powerful tools and real-time insights.
           </p>
           <div className="flex items-center justify-center gap-2 pt-2">
             <Badge variant="outline" className="text-xs">
@@ -218,6 +239,7 @@ export default function HomePage() {
           </Button>
         </div>
       </section>
+      </div>
     </div>
   );
 }

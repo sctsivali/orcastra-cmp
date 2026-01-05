@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -20,10 +20,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Box, Play, Square, RotateCw, Trash2, Loader2, Search, Filter, ArrowUp, ArrowDown } from "lucide-react";
-import { VMInfo, VMListResponse } from "@/types/api";
+import { Box, Play, Square, RotateCw, Trash2, Search, Filter, ArrowUp, ArrowDown } from "lucide-react";
+import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
-import { instanceAPI } from "@/lib/api";
+import { LoadingLottieMedium } from "@/components/loading-lottie";
+import { 
+  useInstances, 
+  useStartInstance, 
+  useStopInstance, 
+  useRestartInstance 
+} from "@/hooks/use-lxd";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -32,8 +38,13 @@ type SortField = "name" | "host" | "project" | "status";
 type SortDirection = "asc" | "desc";
 
 export default function InstancesPage() {
-  const [instances, setInstances] = useState<VMInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useInstances();
+  const instances = (data as any)?.vms || [];
+  
+  const startInstance = useStartInstance();
+  const stopInstance = useStopInstance();
+  const restartInstance = useRestartInstance();
+  
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
@@ -47,26 +58,6 @@ export default function InstancesPage() {
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
-
-  useEffect(() => {
-    fetchInstances();
-  }, []);
-
-  const fetchInstances = async () => {
-    try {
-      setLoading(true);
-      const data = await instanceAPI.list() as VMListResponse;
-      setInstances(data.vms);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch instances",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleInstanceClick = (instance: VMInfo) => {
     setSelectedInstance(instance);
@@ -89,16 +80,14 @@ export default function InstancesPage() {
 
     try {
       setActionLoading(`${instanceName}-${action}`);
-      const response = await fetch(`http://localhost:4050/api/v1/instances/${instanceName}/${action}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ host }),
-      });
       
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `Failed to ${action} instance`);
-      }
+      const mutation = action === "start" 
+        ? startInstance 
+        : action === "stop" 
+        ? stopInstance 
+        : restartInstance;
+      
+      await mutation.mutateAsync({ name: instanceName, host });
       
       toast({
         title: "Success",
@@ -106,7 +95,7 @@ export default function InstancesPage() {
       });
       
       // Refresh instances after action
-      setTimeout(fetchInstances, 2000);
+      setTimeout(() => refetch(), 2000);
     } catch (error) {
       toast({
         title: "Error",
@@ -133,12 +122,12 @@ export default function InstancesPage() {
 
   // Get unique nodes and projects for filters
   const availableNodes = useMemo(() => {
-    const nodes = Array.from(new Set(instances.map((i) => i.host)));
+    const nodes = Array.from(new Set(instances.map((i: any) => i.host as string))) as string[];
     return nodes.sort();
   }, [instances]);
 
   const availableProjects = useMemo(() => {
-    const projects = Array.from(new Set(instances.map((i) => i.project || "default")));
+    const projects = Array.from(new Set(instances.map((i: any) => (i.project || "default") as string))) as string[];
     return projects.sort();
   }, [instances]);
 
@@ -154,7 +143,7 @@ export default function InstancesPage() {
 
   // Filter and search instances
   const filteredInstances = useMemo(() => {
-    let filtered = instances.filter((instance) => {
+    let filtered = instances.filter((instance: any) => {
       const matchesSearch = 
         instance.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         instance.host.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -168,7 +157,7 @@ export default function InstancesPage() {
     });
 
     // Apply sorting
-    filtered.sort((a, b) => {
+    filtered.sort((a: any, b: any) => {
       let aVal, bVal;
       
       switch (sortField) {
@@ -207,13 +196,7 @@ export default function InstancesPage() {
     return filteredInstances.slice(startIndex, startIndex + pageSize);
   }, [filteredInstances, currentPage, pageSize]);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
-  }
+
 
   return (
     <div className="p-8 space-y-6">
@@ -224,12 +207,12 @@ export default function InstancesPage() {
             Instances
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud instances (containers and virtual machines)
+            Manage hypervisor instances (containers and virtual machines)
           </p>
         </div>
-        <Button onClick={fetchInstances}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -261,7 +244,7 @@ export default function InstancesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Nodes</SelectItem>
-                  {availableNodes.map((node) => (
+                  {availableNodes.map((node: string) => (
                     <SelectItem key={node} value={node}>{node}</SelectItem>
                   ))}
                 </SelectContent>
@@ -272,7 +255,7 @@ export default function InstancesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Projects</SelectItem>
-                  {availableProjects.map((project) => (
+                  {availableProjects.map((project: string) => (
                     <SelectItem key={project} value={project}>{project}</SelectItem>
                   ))}
                 </SelectContent>
@@ -326,14 +309,22 @@ export default function InstancesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paginatedInstances.length === 0 ? (
+              {isLoading ? (
+                <TableRow>
+                  <TableCell colSpan={8} className="text-center py-8">
+                    <div className="flex justify-center">
+                      <LoadingLottieMedium />
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : paginatedInstances.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                     No instances found
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedInstances.map((instance) => (
+                paginatedInstances.map((instance: any) => (
                 <TableRow key={`${instance.host}-${instance.name}`}>
                   <TableCell 
                     className="font-medium cursor-pointer hover:text-primary hover:underline"
@@ -359,7 +350,7 @@ export default function InstancesPage() {
                       : "N/A"}
                   </TableCell>
                   <TableCell>
-                    {instance.profiles.map((profile) => (
+                    {instance.profiles.map((profile: string) => (
                       <Badge key={profile} variant="outline" className="mr-1">
                         {profile}
                       </Badge>

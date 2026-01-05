@@ -6,6 +6,8 @@ Provides endpoints for getting LXD server details and configuration.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
@@ -17,6 +19,9 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/server", tags=["Server"])
+
+# Thread pool for parallel operations
+_executor = ThreadPoolExecutor(max_workers=5)
 
 
 class ServerInfo(BaseModel):
@@ -35,6 +40,25 @@ class ServerListResponse(BaseModel):
     total: int = Field(..., description="Total number of servers")
 
 
+def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Optional[ServerInfo]:
+    """Fetch server info for a single node - runs in thread pool."""
+    try:
+        client = lxd_service.connection_manager.get_client(node_name)
+        # Get server info from host_info property
+        server_data = client.host_info
+        return ServerInfo(
+            node=node_name,
+            api_version=server_data.get('api_version', ''),
+            auth=server_data.get('auth', ''),
+            config=server_data.get('config', {}),
+            environment=server_data.get('environment', {}),
+            public=server_data.get('public', False)
+        )
+    except Exception as e:
+        logger.error(f"Error getting server info from {node_name}: {e}")
+        return None
+
+
 @router.get(
     "",
     response_model=ServerListResponse,
@@ -48,23 +72,22 @@ async def list_servers(
     """List all server information."""
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
-        all_servers = []
         
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                # Get server info from host_info property
-                server_data = client.host_info
-                all_servers.append(ServerInfo(
-                    node=node_name,
-                    api_version=server_data.get('api_version', ''),
-                    auth=server_data.get('auth', ''),
-                    config=server_data.get('config', {}),
-                    environment=server_data.get('environment', {}),
-                    public=server_data.get('public', False)
-                ))
-            except Exception as e:
-                logger.error(f"Error getting server info from {node_name}: {e}")
+        # Fetch server info from all nodes in parallel
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_executor, _fetch_server_info_for_node, lxd_service, node_name)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter out None and exceptions
+        all_servers = []
+        for result in results:
+            if isinstance(result, ServerInfo):
+                all_servers.append(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error fetching server info: {result}")
         
         return ServerListResponse(
             servers=all_servers,

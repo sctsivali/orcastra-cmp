@@ -23,6 +23,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode
+from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,19 @@ async def list_all_projects(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all projects across all LXD nodes."""
+    # Try cache first (30 second cache)
+    cache = get_cache_manager()
+    cache_key = "projects:list:all"
+    cached_response = cache.get("api_responses", cache_key)
+    if cached_response is not None:
+        logger.debug("Returning cached projects list")
+        # Reconstruct from cached dict
+        return [ProjectListResponse(**item) for item in cached_response]
+    
     try:
         all_projects = []
         node_names = lxd_service.get_node_names()
+        logger.info(f"Fetching projects from {len(node_names)} nodes: {node_names}")
         
         for host in node_names:
             try:
@@ -82,6 +93,11 @@ async def list_all_projects(
             except Exception as e:
                 logger.warning(f"Could not list projects from {host}: {e}")
                 continue
+        
+        # Cache for 120 seconds (enterprise TTL)
+        cache_data = [proj.model_dump() for proj in all_projects]
+        cache.set("api_responses", cache_key, cache_data, ttl=180)
+        logger.debug("Cached projects list for 120 seconds")
         
         return all_projects
         

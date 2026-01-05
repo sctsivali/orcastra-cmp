@@ -49,7 +49,11 @@ export function NodeDetailModal({
     return ((used / total) * 100).toFixed(1);
   };
 
-  const NodeIcon = node.node_type === "microcloud" ? Cloud : Server;
+  const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
+  
+  // Determine if node is truly connected (authenticated) or just pending trust
+  const isAuthenticated = node.connected && node.server_version;
+  const isPendingTrust = !node.connected && !node.error;
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
@@ -59,19 +63,26 @@ export function NodeDetailModal({
             <div
               className={cn(
                 "flex h-12 w-12 items-center justify-center rounded-lg",
-                node.connected
+                isAuthenticated
                   ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400"
+                  : isPendingTrust
+                  ? "bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400"
                   : "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400"
               )}
             >
               <NodeIcon className="h-6 w-6" />
             </div>
-            <div>
+            <div className="flex-1">
               <DialogTitle className="text-2xl flex items-center gap-2">
-                {node.name}
+                {node.display_name || node.name}
                 {node.node_type && (
                   <Badge variant="outline" className="text-xs">
-                    {node.node_type.toUpperCase()}
+                    {node.node_type.toLowerCase() === "microcloud" ? "MICROCLOUD" : "LXD"}
+                  </Badge>
+                )}
+                {isPendingTrust && (
+                  <Badge variant="secondary" className="text-xs">
+                    Pending Trust
                   </Badge>
                 )}
               </DialogTitle>

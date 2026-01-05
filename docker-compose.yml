@@ -1,33 +1,64 @@
 
 
 services:
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-redis
+    restart: always
+    ports:
+      - "${REDIS_PORT:-6381}:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - orcastra-dashboard
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - redis-data:/data
+
   # Backend API
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    image: dev-orcastra-dashboard-backend
-    container_name: dev-orcastra-dashboard-backend
+      args:
+        - APP_VERSION=${APP_VERSION:-0.2.0}
+    image: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-backend:${APP_VERSION:-latest}
+    container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-backend
     restart: always
     ports:
-      - "4050:4050"
+      - "${BACKEND_PORT:-4050}:4050"
     env_file:
       - .env
     environment:
+      - APP_VERSION=${APP_VERSION:-0.2.0}
+      - API_VERSION=${API_VERSION:-0.2.0}
       - DEBUG=${DEBUG:-false}
     volumes:
-      - ./certs:/certs:ro
-      - ./config:/app/config
+      - ./config:/app/config:rw  # Read-write for node_metadata.json
     networks:
       - orcastra-dashboard
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 10s
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # Set true for production (requires tmpfs mounts)
+    tmpfs:
+      - /tmp:mode=1777,size=100m  # Temp files in tmpfs (RAM), more secure
 
   # Frontend
   frontend:
@@ -35,21 +66,22 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=http://localhost:4050
-    image: dev-orcastra-dashboard-frontend
-    container_name: dev-orcastra-dashboard-frontend
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4050}
+        - APP_VERSION=${APP_VERSION:-0.2.0}
+    image: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-frontend:${APP_VERSION:-latest}
+    container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-frontend
     restart: always
     ports:
-      - "2025:2025"
+      - "${FRONTEND_PORT:-2025}:2025"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:4050
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4050}
     networks:
       - orcastra-dashboard
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:2025"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2025"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -58,3 +90,6 @@ services:
 networks:
   orcastra-dashboard:
     driver: bridge
+
+volumes:
+  redis-data:

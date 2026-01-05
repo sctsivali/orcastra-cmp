@@ -25,6 +25,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode
+from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,14 @@ async def list_instances(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all instances across all nodes with optional filters."""
+    # Try cache first (30 second cache for instances list)
+    cache = get_cache_manager()
+    cache_key = f"instances:list:host={host}:status={status}:type={instance_type}"
+    cached_response = cache.get("api_responses", cache_key)
+    if cached_response is not None:
+        logger.debug(f"Returning cached instances list for {cache_key}")
+        return VMListResponse(**cached_response)
+    
     try:
         all_vms, connected_nodes = await lxd_service.list_all_vms()
         
@@ -59,11 +68,17 @@ async def list_instances(
         if instance_type:
             all_vms = [vm for vm in all_vms if vm.type == instance_type]
         
-        return VMListResponse(
+        response = VMListResponse(
             total=len(all_vms),
             vms=all_vms,
             nodes=connected_nodes
         )
+        
+        # Cache for 120 seconds (enterprise TTL)
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+        logger.debug(f"Cached instances list for 120 seconds: {cache_key}")
+        
+        return response
     except LXDConnectionError as e:
         logger.error(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))

@@ -84,6 +84,25 @@ class NodeMetadataStore:
         self._write_metadata(metadata)
         logger.info(f"Updated display name for node '{node_name}' to '{display_name}'")
     
+    def set_node_type(self, node_name: str, node_type: str) -> None:
+        """Set node type for a node from hypervisor. If node_type is None, type field will be removed."""
+        metadata = self._read_metadata()
+        
+        if node_name not in metadata:
+            metadata[node_name] = {}
+        
+        # If node_type is None, don't set type (or remove it if exists)
+        if node_type is not None:
+            metadata[node_name]["type"] = node_type.lower()
+            logger.info(f"Updated type for node '{node_name}' to '{node_type}'")
+        else:
+            # Remove type if it exists
+            if "type" in metadata[node_name]:
+                del metadata[node_name]["type"]
+            logger.info(f"Removed type for node '{node_name}' (will be detected after authentication)")
+        
+        self._write_metadata(metadata)
+    
     def get_all_node_metadata(self) -> Dict[str, Dict[str, str]]:
         """Get all node metadata."""
         return self._read_metadata()

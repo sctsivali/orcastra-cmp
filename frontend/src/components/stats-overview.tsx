@@ -3,12 +3,14 @@
 import { Server, Activity, HardDrive, Cpu } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { VMListResponse } from "@/types";
+import { VMListResponse, ClusterListResponse, ClusterStatus } from "@/types";
 import { cn } from "@/lib/utils";
 
 interface StatsOverviewProps {
   data?: VMListResponse;
+  clustersData?: ClusterListResponse;
   isLoading?: boolean;
+  clustersLoading?: boolean;
 }
 
 interface StatCardProps {
@@ -77,8 +79,8 @@ function LoadingSkeleton() {
   );
 }
 
-export function StatsOverview({ data, isLoading }: StatsOverviewProps) {
-  if (isLoading) {
+export function StatsOverview({ data, clustersData, isLoading, clustersLoading }: StatsOverviewProps) {
+  if (isLoading || clustersLoading) {
     return <LoadingSkeleton />;
   }
 
@@ -88,6 +90,13 @@ export function StatsOverview({ data, isLoading }: StatsOverviewProps) {
   const containers = data?.vms.filter((vm) => vm.type === "container").length || 0;
   const virtualMachines =
     data?.vms.filter((vm) => vm.type === "virtual-machine").length || 0;
+  
+  // Count registered clusters by status
+  const totalClusters = clustersData?.total || 0;
+  const onlineClusters = clustersData?.clusters?.filter(c => c.status === ClusterStatus.ONLINE).length || 0;
+  // Calculate cluster types from registered clusters
+  const lxdClusters = clustersData?.clusters?.filter(c => c.cluster_type?.toUpperCase() === "LXD").length || 0;
+  const microcloudClusters = clustersData?.clusters?.filter(c => c.cluster_type?.toUpperCase() === "MICROCLOUD").length || 0;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -117,9 +126,9 @@ export function StatsOverview({ data, isLoading }: StatsOverviewProps) {
       />
       <StatCard
         icon={<Cpu className="h-6 w-6 text-blue-600" />}
-        label="Nodes Online"
-        value={data?.nodes.length || 0}
-        subtext="LXD hosts connected"
+        label="Registered Clusters"
+        value={totalClusters}
+        subtext={`${lxdClusters} LXD, ${microcloudClusters} MicroCloud`}
         color="bg-blue-100 dark:bg-blue-950"
         delay={150}
       />

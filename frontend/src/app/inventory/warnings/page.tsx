@@ -1,9 +1,16 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -12,36 +19,21 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { AlertTriangle, Loader2, RotateCw, X } from "lucide-react";
-import { WarningInfo, WarningListResponse } from "@/types/api";
-import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { AlertTriangle, RotateCw, X, Info } from "lucide-react";
+import { useWarnings } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 export default function WarningsPage() {
-  const [warnings, setWarnings] = useState<WarningInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { toast } = useToast();
+  const { data, isLoading, refetch, isRefetching } = useWarnings();
+  const warnings = (data as any)?.warnings || [];
+  
+  // State for warning detail modal
+  const [selectedWarning, setSelectedWarning] = useState<any>(null);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
 
-  useEffect(() => {
-    fetchWarnings();
-  }, []);
-
-  const fetchWarnings = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/warnings`);
-      if (!response.ok) throw new Error("Failed to fetch warnings");
-      const data: WarningListResponse = await response.json();
-      setWarnings(data.warnings);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch warnings",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
+  const handleShowWarningDetail = (warning: any) => {
+    setSelectedWarning(warning);
+    setDetailModalOpen(true);
   };
 
   const getSeverityColor = (severity: string) => {
@@ -60,12 +52,8 @@ export default function WarningsPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -77,12 +65,12 @@ export default function WarningsPage() {
             Warnings
           </h1>
           <p className="text-muted-foreground mt-2">
-            View LXD and MicroCloud system warnings and alerts
+            View hypervisor system warnings and alerts
           </p>
         </div>
-        <Button onClick={fetchWarnings}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -108,8 +96,12 @@ export default function WarningsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {warnings.map((warning) => (
-                  <TableRow key={warning.uuid}>
+                {warnings.map((warning: any) => (
+                  <TableRow 
+                    key={warning.uuid}
+                    className="cursor-pointer hover:bg-accent/50 transition-colors"
+                    onClick={() => handleShowWarningDetail(warning)}
+                  >
                     <TableCell>
                       <Badge variant="outline">{warning.type}</Badge>
                     </TableCell>
@@ -135,6 +127,102 @@ export default function WarningsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Warning Detail Modal */}
+      <Dialog open={detailModalOpen} onOpenChange={setDetailModalOpen}>
+        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5" />
+              Warning Details
+            </DialogTitle>
+            <DialogDescription>
+              Detailed information about the system warning
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 space-y-4">
+            {selectedWarning && (
+              <>
+                {/* Warning Type & Severity */}
+                <div className="flex items-center gap-3">
+                  <div>
+                    <span className="text-sm font-medium text-muted-foreground">Type:</span>
+                    <Badge variant="outline" className="ml-2">{selectedWarning.type}</Badge>
+                  </div>
+                  <div>
+                    <span className="text-sm font-medium text-muted-foreground">Severity:</span>
+                    <Badge variant={getSeverityColor(selectedWarning.severity)} className="ml-2">
+                      {selectedWarning.severity}
+                    </Badge>
+                  </div>
+                  <div>
+                    <span className="text-sm font-medium text-muted-foreground">Status:</span>
+                    <Badge variant="secondary" className="ml-2">{selectedWarning.status}</Badge>
+                  </div>
+                </div>
+
+                {/* Location & Project */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">Location:</span>
+                    <p className="text-sm font-mono bg-secondary/50 p-2 rounded">
+                      {selectedWarning.location || "N/A"}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">Project:</span>
+                    <p className="text-sm font-mono bg-secondary/50 p-2 rounded">
+                      {selectedWarning.project || "N/A"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Full Message */}
+                <div className="space-y-2">
+                  <span className="text-sm font-medium text-muted-foreground">Full Message:</span>
+                  <div className="p-4 bg-secondary/50 rounded-md border border-border">
+                    <p className="text-sm whitespace-pre-wrap break-words">
+                      {selectedWarning.last_message || "No message available"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Occurrence Info */}
+                <div className="grid grid-cols-3 gap-4 pt-4 border-t">
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">Count:</span>
+                    <p className="text-lg font-semibold">{selectedWarning.count}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">First Seen:</span>
+                    <p className="text-sm">
+                      {selectedWarning.first_seen_at 
+                        ? new Date(selectedWarning.first_seen_at).toLocaleString()
+                        : "N/A"}
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium text-muted-foreground">Last Seen:</span>
+                    <p className="text-sm">
+                      {selectedWarning.last_seen_at 
+                        ? new Date(selectedWarning.last_seen_at).toLocaleString()
+                        : "N/A"}
+                    </p>
+                  </div>
+                </div>
+
+                {/* UUID */}
+                <div className="pt-4 border-t">
+                  <span className="text-xs font-medium text-muted-foreground">UUID:</span>
+                  <p className="text-xs font-mono bg-secondary/30 p-2 rounded mt-1">
+                    {selectedWarning.uuid}
+                  </p>
+                </div>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

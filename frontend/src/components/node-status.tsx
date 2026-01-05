@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { CheckCircle2, XCircle, Server, RefreshCw, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { CheckCircle2, XCircle, Server, RefreshCw, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ interface NodeStatusCardProps {
 }
 
 function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatusCardProps) {
+  const router = useRouter();
   const updateNodeTags = useUpdateNodeTags();
   const updateNodeDisplayName = useUpdateNodeDisplayName();
   const { isReadOnly } = useReadOnlyMode();
@@ -125,18 +127,17 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
     return ((used / total) * 100).toFixed(0);
   };
 
-  const NodeIcon = node.node_type === "microcloud" ? Cloud : Server;
+  const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
 
   return (
     <Card
       className={cn(
-        "animate-fade-in overflow-hidden transition-all duration-300 hover:shadow-md cursor-pointer",
+        "animate-fade-in overflow-hidden transition-all duration-300 hover:shadow-md",
         node.connected
           ? "border-emerald-200 dark:border-emerald-900"
           : "border-red-200 dark:border-red-900"
       )}
       style={{ animationDelay: `${index * 100}ms` }}
-      onClick={() => onViewDetails(node)}
     >
       <div
         className={cn(
@@ -146,12 +147,12 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
             : "bg-gradient-to-r from-red-400 to-red-600"
         )}
       />
-      <CardContent className="p-4">
-        <div className="flex items-start justify-between">
-          <div className="flex items-center gap-3">
+      <CardContent className="p-3 md:p-4">
+        <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1">
             <div
               className={cn(
-                "flex h-10 w-10 items-center justify-center rounded-lg",
+                "flex h-10 w-10 items-center justify-center rounded-lg shrink-0",
                 node.connected
                   ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400"
                   : "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400"
@@ -159,26 +160,26 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
             >
               <NodeIcon className="h-5 w-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold">{node.display_name || node.name}</h3>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="font-semibold truncate">{node.display_name || node.name}</h3>
                 {node.node_type && (
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
-                    {node.node_type}
+                    {node.node_type.toLowerCase() === "microcloud" ? "MicroCloud" : "LXD"}
                   </Badge>
                 )}
               </div>
               {node.display_name && (
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-muted-foreground truncate">
                   {node.name}
                 </p>
               )}
-              <p className="text-xs text-muted-foreground font-mono">
+              <p className="text-xs text-muted-foreground font-mono truncate">
                 {node.endpoint}
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
             {node.connected ? (
               <Badge variant="success" className="gap-1">
                 <CheckCircle2 className="h-3 w-3" />
@@ -216,20 +217,22 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
           </div>
         </div>
         {node.connected && node.server_version && (
-          <div className="mt-3 flex gap-4 text-xs text-muted-foreground items-center">
+          <div className="mt-3 flex flex-wrap gap-2 md:gap-4 text-xs text-muted-foreground items-center">
             <span>
-              <span className="font-medium">Version:</span> {node.server_version}
+              <span className="font-medium">Version:</span>{" "}
+              {node.server_version}
             </span>
             {node.api_version && (
               <span>
                 <span className="font-medium">API:</span> {node.api_version}
               </span>
             )}
+            {/* LXD Version checker - works for both LXD and MicroCloud (which uses LXD internally) */}
             <LXDVersionChecker currentVersion={node.server_version} />
           </div>
         )}
         {node.connected && node.resources && (
-          <div className="mt-4 grid grid-cols-3 gap-3">
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* CPU Info */}
             <div className="flex flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -300,6 +303,39 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
             maxTags={10}
             placeholder="Add node tag..."
           />
+        </div>
+
+        {/* View Members Button for MicroCloud */}
+        {node.node_type?.toLowerCase() === "microcloud" && node.connected && (
+          <div className="mt-3 pt-3 border-t">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full gap-2"
+              onClick={(e) => {
+                e.stopPropagation();
+                router.push(`/inventory/clustering/members?node=${node.name}`);
+              }}
+            >
+              <Users className="h-4 w-4" />
+              View Cluster Members
+            </Button>
+          </div>
+        )}
+
+        {/* View Details Button */}
+        <div className="mt-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full"
+            onClick={(e) => {
+              e.stopPropagation();
+              onViewDetails(node);
+            }}
+          >
+            View Details
+          </Button>
         </div>
       </CardContent>
 
@@ -385,12 +421,17 @@ export function NodeStatusCards() {
     return Array.from(tags).sort();
   }, [data?.nodes]);
 
-  // Filter nodes by tags
+  // Filter nodes by tags and status (exclude pending/not_authorized nodes)
   const filteredNodes = useMemo(() => {
     if (!data?.nodes) return [];
-    if (selectedTags.length === 0) return data.nodes;
     
-    return data.nodes.filter((node) => {
+    // Filter out nodes with pending/not_authorized status
+    // Only show truly authenticated nodes (connected AND has server_version)
+    const onlineNodes = data.nodes.filter(node => node.connected && node.server_version);
+    
+    if (selectedTags.length === 0) return onlineNodes;
+    
+    return onlineNodes.filter((node) => {
       const nodeTags = node.tags || [];
       return selectedTags.some(tag => nodeTags.includes(tag));
     });
@@ -416,13 +457,19 @@ export function NodeStatusCards() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold">Clusters</h2>
-            {data?.all_connected ? (
-              <Badge variant="success" className="text-xs">
-                All Connected
-              </Badge>
+            {data?.nodes && data.nodes.length > 0 ? (
+              data.all_connected ? (
+                <Badge variant="success" className="text-xs">
+                  All Connected
+                </Badge>
+              ) : (
+                <Badge variant="warning" className="text-xs">
+                  Some Nodes Offline
+                </Badge>
+              )
             ) : (
-              <Badge variant="warning" className="text-xs">
-                Some Nodes Offline
+              <Badge variant="secondary" className="text-xs">
+                No Clusters
               </Badge>
             )}
             {selectedTags.length > 0 && (
@@ -431,18 +478,20 @@ export function NodeStatusCards() {
               </Badge>
             )}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isRefetching}
-            className="gap-2"
-          >
-            <RefreshCw
-              className={cn("h-4 w-4", isRefetching && "animate-spin")}
-            />
-            Refresh
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => refetch()}
+              disabled={isRefetching}
+              className="gap-2"
+            >
+              <RefreshCw
+                className={cn("h-4 w-4", isRefetching && "animate-spin")}
+              />
+              Refresh
+            </Button>
+          </div>
         </div>
 
         {/* Tag Filter */}

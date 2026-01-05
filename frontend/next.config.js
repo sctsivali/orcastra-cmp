@@ -1,4 +1,8 @@
 /** @type {import('next').NextConfig} */
+
+// Read version from package.json at build time
+const packageJson = require('./package.json');
+
 const nextConfig = {
   output: 'standalone',
   images: {
@@ -14,6 +18,7 @@ const nextConfig = {
   compress: true,
   env: {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4050',
+    NEXT_PUBLIC_APP_VERSION: packageJson.version, // Embedded at build time
   },
   async headers() {
     return [

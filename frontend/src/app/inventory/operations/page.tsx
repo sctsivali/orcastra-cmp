@@ -1,6 +1,5 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,39 +11,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Activity, Loader2, RotateCw, X, Clock } from "lucide-react";
-import { OperationInfo, OperationListResponse } from "@/types/api";
-import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { Cog, RotateCw, X, Clock } from "lucide-react";
+import { useOperations } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 export default function OperationsPage() {
-  const [operations, setOperations] = useState<OperationInfo[]>([]);
-  const [loading, setLoading] = useState(true);
-  const { toast } = useToast();
-
-  useEffect(() => {
-    fetchOperations();
-    // Auto-refresh every 5 seconds
-    const interval = setInterval(fetchOperations, 5000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const fetchOperations = async () => {
-    try {
-      const response = await fetch(`${API_URL}/operations`);
-      if (!response.ok) throw new Error("Failed to fetch operations");
-      const data: OperationListResponse = await response.json();
-      setOperations(data.operations);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch operations",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { data, isLoading, refetch, isRefetching } = useOperations();
+  const operations = (data as any)?.operations || [];
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -60,12 +33,8 @@ export default function OperationsPage() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -73,16 +42,16 @@ export default function OperationsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Activity className="h-8 w-8" />
+            <Cog className="h-8 w-8" />
             Operations
           </h1>
           <p className="text-muted-foreground mt-2">
-            Monitor LXD and MicroCloud operations and background tasks
+            Monitor hypervisor operations and background tasks
           </p>
         </div>
-        <Button onClick={fetchOperations}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -108,7 +77,7 @@ export default function OperationsPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {operations.map((operation) => (
+                {operations.map((operation: any) => (
                   <TableRow key={operation.id}>
                     <TableCell className="font-mono text-xs">
                       {operation.id.substring(0, 8)}...

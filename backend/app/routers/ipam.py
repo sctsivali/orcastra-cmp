@@ -53,82 +53,82 @@ async def list_ipam_allocations(
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         all_allocations = []
         
-        # Build instance -> project mapping by querying all projects
-        instance_project_map = {}
         for node_name in nodes_to_query:
             try:
                 client = lxd_service.connection_manager.get_client(node_name)
-                # Get all projects
-                projects_response = client.api.get('/1.0/projects?recursion=0')
-                if projects_response.status_code == 200:
-                    project_urls = projects_response.json().get('metadata', [])
-                    for project_url in project_urls:
-                        project_name = project_url.split('/')[-1]
-                        try:
-                            # Get instances for each project
-                            instances_response = client.api.get(f'/1.0/instances?project={project_name}')
-                            if instances_response.status_code == 200:
-                                instance_urls = instances_response.json().get('metadata', [])
-                                for inst_url in instance_urls:
-                                    inst_name = inst_url.split('/')[-1].split('?')[0]
-                                    instance_project_map[inst_name] = project_name
-                        except Exception as e:
-                            logger.debug(f"Error getting instances for project {project_name}: {e}")
-            except Exception as e:
-                logger.debug(f"Error building instance map for {node_name}: {e}")
-        
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                networks = client.networks.all()
                 
-                for net in networks:
-                    # Filter by network if specified
-                    if network and net.name != network:
-                        continue
-                    
-                    # Get network state which contains IPAM information
+                # Get all projects using the high-level pylxd interface
+                try:
+                    projects = client.projects.all()
+                    project_names = [p.name for p in projects]
+                except Exception as e:
+                    logger.error(f"Could not get projects for {node_name}: {e}")
+                    project_names = ['default']  # Fallback to default project
+                
+                # Get network allocations from each project
+                for project_name in project_names:
                     try:
-                        state = net.state()
+                        # Use the network-allocations API endpoint which provides comprehensive IPAM data
+                        # This is the same endpoint used by the LXD UI
+                        # We need to use the session directly as pylxd doesn't have a high-level wrapper for this
+                        base_url = client.api._api_endpoint
+                        # Note: base_url already includes `/1.0`, so we just add the endpoint path
+                        allocations_url = f"network-allocations?project={project_name}&recursion=1"
+                        full_url = f"{base_url}/{allocations_url}"
                         
-                        # Parse IPv4 addresses
-                        if hasattr(state, 'addresses') and state.addresses:
-                            for addr_info in state.addresses:
-                                address = addr_info.get('address', '')
-                                family = addr_info.get('family', '')
+                        # Use the underlying session from the client
+                        allocations_response = client.api.session.get(full_url)
+                        
+                        if allocations_response.status_code == 200:
+                            allocations_data = allocations_response.json().get('metadata', [])
+                            
+                            for alloc in allocations_data:
+                                # Filter by network if specified
+                                alloc_network = alloc.get('network', '')
+                                if network and alloc_network != network:
+                                    continue
                                 
-                                if address and family in ['inet', 'inet6']:
+                                # Note: the API returns 'addresses' (plural) with CIDR notation
+                                addresses_str = alloc.get('addresses', '')
+                                # Extract just the IP address without CIDR
+                                address = addresses_str.split('/')[0] if addresses_str else ''
+                                alloc_type = alloc.get('type', 'network')
+                                used_by = alloc.get('used_by', '')
+                                hwaddr = alloc.get('hwaddr', '')
+                                nat = alloc.get('nat', False)
+                                
+                                # Determine the type and used_by field
+                                if used_by:
+                                    # Extract instance name from used_by path
+                                    # Format is usually: `/1.0/instances/<name>?project=<project>`
+                                    if '/instances/' in used_by:
+                                        instance_name = used_by.split('/instances/')[-1].split('?')[0]
+                                        resource_type = "instance"
+                                        resource_name = instance_name
+                                    else:
+                                        resource_type = alloc_type
+                                        resource_name = alloc_network
+                                else:
+                                    resource_type = "network"
+                                    resource_name = alloc_network
+                                
+                                if address:
                                     all_allocations.append(IPAMAllocation(
                                         address=address,
-                                        type="network",
-                                        used_by=net.name,
-                                        hardware_address="",
-                                        network=net.name,
+                                        type=resource_type,
+                                        used_by=resource_name,
+                                        hardware_address=hwaddr or "",
+                                        network=alloc_network,
                                         node=node_name,
-                                        project="default"
+                                        project=project_name
                                     ))
-                        
-                        # Parse leases (DHCP allocations)
-                        if hasattr(state, 'leases') and state.leases:
-                            for lease_type, leases in state.leases.items():
-                                for lease in leases:
-                                    hostname = lease.get('hostname', '')
-                                    address = lease.get('address', '')
-                                    hwaddr = lease.get('hwaddr', '')
-                                    
-                                    if address:
-                                        project = instance_project_map.get(hostname, 'default')
-                                        all_allocations.append(IPAMAllocation(
-                                            address=address,
-                                            type="instance",
-                                            used_by=hostname or "unknown",
-                                            hardware_address=hwaddr,
-                                            network=net.name,
-                                            node=node_name,
-                                            project=project
-                                        ))
+                        else:
+                            logger.debug(
+                                f"Could not get network allocations for project {project_name} on {node_name}: "
+                                f"status {allocations_response.status_code}"
+                            )
                     except Exception as e:
-                        logger.debug(f"Could not get state for network {net.name} on {node_name}: {e}")
+                        logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
                         
             except Exception as e:
                 logger.error(f"Error listing IPAM on {node_name}: {e}")

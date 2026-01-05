@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, Server, ArrowLeft, Sparkles } from "lucide-react";
+import { Server, ArrowLeft, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LoadingLottieSmall } from "@/components/loading-lottie";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,7 +24,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useCreateVM, useNodeNames, useImages } from "@/hooks/use-lxd";
 import { toast } from "@/hooks/use-toast";
 import { formatBytes, truncateFingerprint } from "@/lib/utils";
-import { ImageInfo } from "@/types";
+import { ImageInfo, ImageListResponse } from "@/types";
 
 const vmCreateSchema = z.object({
   name: z
@@ -69,7 +70,7 @@ function ImageSelector({
 
   const hostImages = React.useMemo(() => {
     if (!imagesData || !host) return [];
-    const hostData = imagesData.find((h) => h.host === host);
+    const hostData = (imagesData as ImageListResponse[]).find((h) => h.host === host);
     return hostData?.images || [];
   }, [imagesData, host]);
 
@@ -358,7 +359,7 @@ export function VMCreateForm() {
             >
               {createVM.isPending ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingLottieSmall className="mr-2" />
                   Creating...
                 </>
               ) : (

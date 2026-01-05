@@ -6,17 +6,23 @@ Provides endpoints for managing LXD storage pools.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode
+from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/storage/pools", tags=["Storage Pools"])
+
+# Thread pool for parallel operations
+_executor = ThreadPoolExecutor(max_workers=5)
 
 
 class StoragePoolInfo(BaseModel):
@@ -45,6 +51,30 @@ class StoragePoolListResponse(BaseModel):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> List[StoragePoolInfo]:
+    """Fetch storage pools for a single node - runs in thread pool."""
+    pools_list = []
+    try:
+        client = lxd_service.get_client_with_reconnect(node_name)
+        if client is None:
+            logger.warning(f"Could not connect to {node_name}, skipping for storage pools list")
+            return pools_list
+        pools = client.storage_pools.all()
+        for pool in pools:
+            pools_list.append(StoragePoolInfo(
+                name=pool.name,
+                description=getattr(pool, 'description', '') or "",
+                driver=pool.driver,
+                config=pool.config or {},
+                used_by=pool.used_by or [],
+                status=getattr(pool, 'status', ''),
+                node=node_name
+            ))
+    except Exception as e:
+        logger.error(f"Error listing storage pools on {node_name}: {e}")
+    return pools_list
+
+
 @router.get(
     "",
     response_model=StoragePoolListResponse,
@@ -56,32 +86,46 @@ async def list_storage_pools(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all storage pools."""
+    # Try cache first (60 second cache)
+    cache = get_cache_manager()
+    cache_key = f"storage_pools:list:host={host}"
+    cached_data = cache.get("api_responses", cache_key)
+    if cached_data is not None:
+        logger.debug(f"Returning cached storage pools for host={host}")
+        # Reconstruct Pydantic model from cached dict
+        return StoragePoolListResponse(**cached_data)
+    
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
+        
+        # Fetch pools from all nodes in parallel
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_executor, _fetch_pools_for_node, lxd_service, node_name)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Flatten results
         all_pools = []
+        for result in results:
+            if isinstance(result, list):
+                all_pools.extend(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error fetching pools: {result}")
         
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                pools = client.storage_pools.all()
-                for pool in pools:
-                    all_pools.append(StoragePoolInfo(
-                        name=pool.name,
-                        description=getattr(pool, 'description', '') or "",
-                        driver=pool.driver,
-                        config=pool.config or {},
-                        used_by=pool.used_by or [],
-                        status=getattr(pool, 'status', ''),
-                        node=node_name
-                    ))
-            except Exception as e:
-                logger.error(f"Error listing storage pools on {node_name}: {e}")
-        
-        return StoragePoolListResponse(
+        # Store in variable first
+        response = StoragePoolListResponse(
             total=len(all_pools),
             pools=all_pools,
             nodes=lxd_service.connection_manager.get_node_names()
         )
+        
+        # Cache as dict for 120 seconds (enterprise TTL)
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+        logger.debug(f"Cached storage pools list for 120 seconds")
+        
+        return response
     except Exception as e:
         logger.error(f"Error listing storage pools: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -102,9 +146,10 @@ async def get_all_storage_pool_resources(
         
         for node_name in nodes:
             try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                pools = client.storage_pools.all()
-                
+                client = lxd_service.get_client_with_reconnect(node_name)
+                if client is None:
+                    logger.warning(f"Could not connect to {node_name}, skipping for resources")
+                    continue
                 for pool in pools:
                     try:
                         resources = pool.resources.get()
@@ -136,7 +181,9 @@ async def get_storage_pool(
 ):
     """Get details for a specific storage pool."""
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(pool_name)
         
         return StoragePoolInfo(
@@ -166,7 +213,9 @@ async def create_storage_pool(
 ):
     """Create a new storage pool."""
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.create({
             "name": request.name,
             "driver": request.driver,
@@ -207,7 +256,9 @@ async def update_storage_pool(
 ):
     """Update a storage pool."""
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(pool_name)
         
         if config is not None:
@@ -240,7 +291,9 @@ async def delete_storage_pool(
 ):
     """Delete a storage pool."""
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(pool_name)
         pool.delete()
         
@@ -269,7 +322,10 @@ async def get_all_storage_pool_resources(
         
         for node_name in nodes:
             try:
-                client = lxd_service.connection_manager.get_client(node_name)
+                client = lxd_service.get_client_with_reconnect(node_name)
+                if client is None:
+                    logger.warning(f"Could not connect to {node_name}, skipping")
+                    continue
                 pools = client.storage_pools.all()
                 
                 for pool in pools:
@@ -301,7 +357,9 @@ async def get_storage_pool_resources(
 ):
     """Get storage pool resources."""
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = lxd_service.get_client_with_reconnect(host)
+        if client is None:
+            raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(pool_name)
         resources = pool.resources.get()
         

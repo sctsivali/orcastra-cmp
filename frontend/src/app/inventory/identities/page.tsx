@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Table,
   TableBody,
@@ -12,44 +13,125 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { User, Loader2, RotateCw, UserCircle } from "lucide-react";
-import { IdentityInfo, IdentityListResponse } from "@/types/api";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { RotateCw, UserCircle, Search, Trash2, MoreVertical } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { useIdentities, useDeleteIdentity } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 
 export default function IdentitiesPage() {
-  const [identities, setIdentities] = useState<IdentityInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useIdentities();
+  const identities = (data as any)?.identities || [];
   const { toast } = useToast();
+  const deleteIdentityMutation = useDeleteIdentity();
+  
+  // Pagination and search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterNode, setFilterNode] = useState<string>("all");
+  const [filterType, setFilterType] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  
+  // Delete confirmation state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [identityToDelete, setIdentityToDelete] = useState<any>(null);
 
-  useEffect(() => {
-    fetchIdentities();
-  }, []);
+  // Get unique nodes and types for filters
+  const availableNodes = useMemo((): string[] => {
+    const nodeSet = new Set<string>();
+    identities.forEach((i: any) => {
+      if (i.node) nodeSet.add(i.node);
+    });
+    return Array.from(nodeSet).sort();
+  }, [identities]);
 
-  const fetchIdentities = async () => {
+  const availableTypes = useMemo((): string[] => {
+    const typeSet = new Set<string>();
+    identities.forEach((i: any) => {
+      if (i.type) typeSet.add(i.type);
+    });
+    return Array.from(typeSet).sort();
+  }, [identities]);
+
+  // Filter and search identities
+  const filteredIdentities = useMemo(() => {
+    return identities.filter((identity: any) => {
+      const matchesSearch = 
+        identity.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        identity.id?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        identity.node?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        identity.groups?.some((g: string) => g.toLowerCase().includes(searchQuery.toLowerCase()));
+      
+      const matchesNode = filterNode === "all" || identity.node === filterNode;
+      const matchesType = filterType === "all" || identity.type === filterType;
+      
+      return matchesSearch && matchesNode && matchesType;
+    });
+  }, [identities, searchQuery, filterNode, filterType]);
+
+  // Pagination
+  const totalPages = Math.ceil(filteredIdentities.length / pageSize);
+  const paginatedIdentities = useMemo(() => {
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredIdentities.slice(startIndex, startIndex + pageSize);
+  }, [filteredIdentities, currentPage, pageSize]);
+
+  const handleDeleteClick = (identity: any) => {
+    setIdentityToDelete(identity);
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!identityToDelete) return;
+    
     try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/identities`);
-      if (!response.ok) throw new Error("Failed to fetch identities");
-      const data: IdentityListResponse = await response.json();
-      setIdentities(data.identities);
-    } catch (error) {
+      await deleteIdentityMutation.mutateAsync({
+        authType: identityToDelete.type.toLowerCase(),
+        identityId: identityToDelete.id,
+        host: identityToDelete.node,
+      });
+      toast({
+        title: "Success",
+        description: `Identity deleted successfully`,
+      });
+      refetch();
+    } catch (error: any) {
       toast({
         title: "Error",
-        description: "Failed to fetch identities",
+        description: error.message || "Failed to delete identity",
         variant: "destructive",
       });
     } finally {
-      setLoading(false);
+      setDeleteDialogOpen(false);
+      setIdentityToDelete(null);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -61,60 +143,168 @@ export default function IdentitiesPage() {
             Identities
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud user identities
+            Manage hypervisor user identities
           </p>
         </div>
-        <Button onClick={fetchIdentities}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} variant="outline" size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>All Identities ({identities.length})</CardTitle>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <CardTitle>All Identities ({filteredIdentities.length} of {identities.length})</CardTitle>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="lg:col-span-2">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Search identities..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+              <Select value={filterNode} onValueChange={(value) => { setFilterNode(value); setCurrentPage(1); }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All Nodes" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Nodes</SelectItem>
+                  {availableNodes.map((node) => (
+                    <SelectItem key={node} value={node}>{node}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={filterType} onValueChange={(value) => { setFilterType(value); setCurrentPage(1); }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="All Types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Types</SelectItem>
+                  {availableTypes.map((type) => (
+                    <SelectItem key={type} value={type}>{type.toUpperCase()}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {identities.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               No identities found
             </div>
+          ) : filteredIdentities.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              No identities match your search criteria
+            </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>ID</TableHead>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Groups</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {identities.map((identity) => (
-                  <TableRow key={identity.id}>
-                    <TableCell className="font-mono text-xs">
-                      {identity.id}
-                    </TableCell>
-                    <TableCell className="font-medium">
-                      {identity.name || "N/A"}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{identity.type}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      {identity.groups.map((group) => (
-                        <Badge key={group} variant="secondary" className="mr-1">
-                          {group}
-                        </Badge>
-                      ))}
-                    </TableCell>
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>ID</TableHead>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Cluster/Node</TableHead>
+                    <TableHead>Groups</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {paginatedIdentities.map((identity: any, index: number) => (
+                    <TableRow key={identity.node + "-" + identity.id + "-" + index}>
+                      <TableCell className="font-mono text-xs max-w-[200px] truncate" title={identity.id}>
+                        {identity.id.length > 30 
+                          ? identity.id.substring(0, 15) + "..." + identity.id.substring(identity.id.length - 10)
+                          : identity.id}
+                      </TableCell>
+                      <TableCell className="font-medium">
+                        {identity.name || <span className="text-muted-foreground italic">N/A</span>}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{identity.type?.toUpperCase()}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="secondary">{identity.node || "N/A"}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex flex-wrap gap-1">
+                          {identity.groups && identity.groups.length > 0 ? (
+                            identity.groups.map((group: string) => (
+                              <Badge key={group} variant="secondary" className="text-xs">
+                                {group}
+                              </Badge>
+                            ))
+                          ) : (
+                            <span className="text-muted-foreground text-xs italic">No groups</span>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="sm">
+                              <MoreVertical className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem 
+                              onClick={() => handleDeleteClick(identity)}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete Identity
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <DataTablePagination
+                currentPage={currentPage}
+                totalPages={totalPages || 1}
+                totalItems={filteredIdentities.length}
+                pageSize={pageSize}
+                onPageChange={setCurrentPage}
+                onPageSizeChange={setPageSize}
+              />
+            </>
           )}
         </CardContent>
       </Card>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Identity</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this identity? 
+              This action cannot be undone and will remove this identity from the hypervisor.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setIdentityToDelete(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleDeleteConfirm}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

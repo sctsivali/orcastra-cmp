@@ -8,9 +8,17 @@ function makeQueryClient() {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        staleTime: 5 * 1000, // 5 seconds
-        refetchOnWindowFocus: true,
+        // Increase staleTime to reduce refetching
+        staleTime: 60 * 1000, // 1 minute (data is considered fresh for 1 minute)
+        // Cache data for 5 minutes
+        gcTime: 5 * 60 * 1000, // 5 minutes (formerly cacheTime in v4)
+        // Disable aggressive refetching
+        refetchOnWindowFocus: false, // Don't refetch when switching tabs
+        refetchOnMount: false, // Don't refetch on component mount if data is fresh
+        refetchOnReconnect: true, // Still refetch on reconnect
+        // Retry failed requests once
         retry: 1,
+        retryDelay: 1000,
       },
     },
   });

@@ -8,8 +8,8 @@ import {
   Trash2,
   Server,
   Container,
-  Loader2,
 } from "lucide-react";
+import { LoadingLottieSmall } from "@/components/loading-lottie";
 import {
   Table,
   TableBody,
@@ -241,7 +241,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isRunning || isLoading}
             >
               {startMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingLottieSmall />
               ) : (
                 <Play className="h-4 w-4" />
               )}
@@ -260,7 +260,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isStopped || isLoading}
             >
               {stopMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingLottieSmall />
               ) : (
                 <Square className="h-4 w-4" />
               )}
@@ -279,7 +279,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isStopped || isLoading}
             >
               {restartMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingLottieSmall />
               ) : (
                 <RotateCw className="h-4 w-4" />
               )}
@@ -299,7 +299,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
                   disabled={isLoading}
                 >
                   {deleteMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <LoadingLottieSmall />
                   ) : (
                     <Trash2 className="h-4 w-4" />
                   )}

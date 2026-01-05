@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,17 +23,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Settings, Loader2, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
-import { ProfileInfo, ProfileListResponse } from "@/types/api";
+import { Settings, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { ProfileInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
-import { profileAPI } from "@/lib/api";
+import { useProfiles } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 type SortField = "name" | "description" | "devices" | "used_by";
 type SortDirection = "asc" | "desc";
 
 export default function ProfilesPage() {
-  const [profiles, setProfiles] = useState<ProfileInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useProfiles();
+  const profiles = (data as any)?.profiles || [];
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -42,29 +44,9 @@ export default function ProfilesPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchProfiles();
-  }, []);
-
-  const fetchProfiles = async () => {
-    try {
-      setLoading(true);
-      const data = await profileAPI.list() as any;
-      setProfiles(data.profiles);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch profiles",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   // Get unique nodes
   const nodes = useMemo(() => {
-    const nodeSet = new Set(profiles.map(p => p.node));
+    const nodeSet = new Set(profiles.map((p: any) => p.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [profiles]);
 
@@ -87,7 +69,7 @@ export default function ProfilesPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (profile) =>
+        (profile: any) =>
           profile.name.toLowerCase().includes(query) ||
           (profile.description && profile.description.toLowerCase().includes(query))
       );
@@ -95,11 +77,11 @@ export default function ProfilesPage() {
 
     // Filter by node
     if (filterNode !== "all") {
-      filtered = filtered.filter((profile) => profile.node === filterNode);
+      filtered = filtered.filter((profile: any) => profile.node === filterNode);
     }
 
     // Sort
-    filtered.sort((a, b) => {
+    filtered.sort((a: any, b: any) => {
       let aVal, bVal;
       
       switch (sortField) {
@@ -147,12 +129,8 @@ export default function ProfilesPage() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -164,12 +142,12 @@ export default function ProfilesPage() {
             Profiles
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud configuration profiles
+            Manage hypervisor configuration profiles
           </p>
         </div>
-        <Button onClick={fetchProfiles}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -198,7 +176,7 @@ export default function ProfilesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Nodes</SelectItem>
-                {nodes.map((node) => (
+                {nodes.map((node: any) => (
                   <SelectItem key={node} value={node}>
                     {node}
                   </SelectItem>
@@ -257,7 +235,7 @@ export default function ProfilesPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedProfiles.map((profile) => (
+                paginatedProfiles.map((profile: any) => (
                   <TableRow key={`${profile.node}-${profile.name}`}>
                     <TableCell className="font-medium">{profile.name}</TableCell>
                     <TableCell className="max-w-xs truncate">
@@ -277,17 +255,6 @@ export default function ProfilesPage() {
                         }))}
                         title={`Devices in ${profile.name}`}
                         description={`${Object.keys(profile.devices || {}).length} device(s) configured`}
-                        renderItem={(device, index) => (
-                          <div key={index} className="p-3 bg-muted rounded-lg">
-                            <div className="font-mono font-semibold text-sm">{device.name}</div>
-                            <div className="text-xs text-muted-foreground mt-1">
-                              Type: <Badge variant="outline" className="ml-1">{device.type}</Badge>
-                            </div>
-                            <pre className="text-xs mt-2 overflow-x-auto">
-                              {JSON.stringify(device.config, null, 2)}
-                            </pre>
-                          </div>
-                        )}
                       />
                     </TableCell>
                     <TableCell>

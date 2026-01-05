@@ -6,17 +6,23 @@ Provides endpoints for managing LXD storage volumes.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode
+from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/storage/volumes", tags=["Storage Volumes"])
+
+# Thread pool for parallel operations
+_executor = ThreadPoolExecutor(max_workers=5)
 
 
 class StorageVolumeInfo(BaseModel):
@@ -48,6 +54,38 @@ class StorageVolumeListResponse(BaseModel):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter: Optional[str]) -> List[StorageVolumeInfo]:
+    """Fetch storage volumes for a single node - runs in thread pool."""
+    volumes_list = []
+    try:
+        client = lxd_service.connection_manager.get_client(node_name)
+        # Get all storage pools
+        pools = client.storage_pools.all()
+        
+        for storage_pool in pools:
+            if pool_filter and storage_pool.name != pool_filter:
+                continue
+            
+            try:
+                volumes = storage_pool.volumes.all()
+                for volume in volumes:
+                    volumes_list.append(StorageVolumeInfo(
+                        name=volume.name,
+                        type=volume.type,
+                        pool=storage_pool.name,
+                        description=getattr(volume, 'description', '') or "",
+                        config=volume.config or {},
+                        used_by=volume.used_by or [],
+                        content_type=getattr(volume, 'content_type', ''),
+                        node=node_name
+                    ))
+            except Exception as e:
+                logger.error(f"Error listing volumes in pool {storage_pool.name}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing storage volumes on {node_name}: {e}")
+    return volumes_list
+
+
 @router.get(
     "",
     response_model=StorageVolumeListResponse,
@@ -60,43 +98,46 @@ async def list_storage_volumes(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all storage volumes."""
+    # Try cache first (30 second cache)
+    cache = get_cache_manager()
+    cache_key = f"storage_volumes:list:host={host}:pool={pool}"
+    cached_data = cache.get("api_responses", cache_key)
+    if cached_data is not None:
+        logger.debug(f"Returning cached storage volumes for host={host}, pool={pool}")
+        # Reconstruct Pydantic model from cached dict
+        return StorageVolumeListResponse(**cached_data)
+    
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
+        
+        # Fetch volumes from all nodes in parallel
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_executor, _fetch_volumes_for_node, lxd_service, node_name, pool)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Flatten results
         all_volumes = []
+        for result in results:
+            if isinstance(result, list):
+                all_volumes.extend(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error fetching storage volumes: {result}")
         
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                # Get all storage pools
-                pools = client.storage_pools.all()
-                
-                for storage_pool in pools:
-                    if pool and storage_pool.name != pool:
-                        continue
-                    
-                    try:
-                        volumes = storage_pool.volumes.all()
-                        for volume in volumes:
-                            all_volumes.append(StorageVolumeInfo(
-                                name=volume.name,
-                                type=volume.type,
-                                pool=storage_pool.name,
-                                description=getattr(volume, 'description', '') or "",
-                                config=volume.config or {},
-                                used_by=volume.used_by or [],
-                                content_type=getattr(volume, 'content_type', ''),
-                                node=node_name
-                            ))
-                    except Exception as e:
-                        logger.error(f"Error listing volumes in pool {storage_pool.name}: {e}")
-            except Exception as e:
-                logger.error(f"Error listing storage volumes on {node_name}: {e}")
-        
-        return StorageVolumeListResponse(
+        # Store in variable first
+        response = StorageVolumeListResponse(
             total=len(all_volumes),
             volumes=all_volumes,
             nodes=lxd_service.connection_manager.get_node_names()
         )
+        
+        # Cache as dict for 120 seconds (enterprise TTL)
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+        logger.debug(f"Cached storage volumes list for 120 seconds")
+        
+        return response
     except Exception as e:
         logger.error(f"Error listing storage volumes: {e}")
         raise HTTPException(status_code=500, detail=str(e))

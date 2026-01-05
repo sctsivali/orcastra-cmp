@@ -25,6 +25,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode
+from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,15 @@ async def list_vms(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all VMs across all LXD nodes with optional filtering."""
+    # Try cache first (30 second cache for VM list)
+    cache = get_cache_manager()
+    cache_key = f"vms:list:host={host}:status={status}"
+    cached_response = cache.get("api_responses", cache_key)
+    if cached_response is not None:
+        logger.debug(f"Returning cached VMs list for {cache_key}")
+        # Reconstruct from cached dict
+        return VMListResponse(**cached_response)
+    
     try:
         vms, connected_nodes = await lxd_service.list_all_vms()
         
@@ -65,11 +75,46 @@ async def list_vms(
         if status:
             filtered_vms = [vm for vm in filtered_vms if vm.status == status]
         
-        return VMListResponse(
+        # Count LXD vs MicroCloud nodes
+        lxd_count = 0
+        microcloud_count = 0
+        
+        # Config nodes are LXD
+        config_nodes = lxd_service.get_node_names()
+        for node in connected_nodes:
+            if node in config_nodes:
+                lxd_count += 1
+            else:
+                # Check if it's MicroCloud from Vault
+                try:
+                    # Read metadata directly from Vault
+                    metadata_path = f"secret/data/clusters/{node}/metadata"
+                    metadata = lxd_service.cert_manager.vault.vault_read(metadata_path)
+                    if metadata:
+                        # Key in Vault is 'type' not 'cluster_type'
+                        cluster_type = metadata.get('type', 'lxd').lower()
+                        if cluster_type == 'microcloud':
+                            microcloud_count += 1
+                        else:
+                            lxd_count += 1
+                    else:
+                        lxd_count += 1
+                except:
+                    lxd_count += 1  # Default to LXD if unknown
+        
+        response = VMListResponse(
             total=len(filtered_vms),
             vms=filtered_vms,
             nodes=connected_nodes,
+            lxd_count=lxd_count,
+            microcloud_count=microcloud_count,
         )
+        
+        # Cache for 120 seconds (enterprise TTL)
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+        logger.debug(f"Cached VMs list for 120 seconds: {cache_key}")
+        
+        return response
         
     except LXDConnectionError as e:
         logger.error(f"LXD connection error: {e}")

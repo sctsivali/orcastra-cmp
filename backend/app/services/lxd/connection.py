@@ -5,13 +5,17 @@ Handles client connections, pooling, and connection lifecycle.
 
 import logging
 import time
-from typing import Dict, Optional
+import tempfile
+import os
+import atexit
+import gc
+from typing import Dict, Optional, Tuple
 import requests
 import pylxd
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from app.core.config import get_settings, LXDNodeConfig
+from app.core.config import get_settings
 from .exceptions import LXDConnectionError
 
 logger = logging.getLogger(__name__)
@@ -19,33 +23,64 @@ logger = logging.getLogger(__name__)
 
 class LXDConnectionManager:
     """
-    Manages LXD client connections with pooling and automatic refresh.
+    Manages LXD client connections with pooling and automatic reconnection.
     """
+    
+    # Connection pool settings for parallel operations (Enterprise scale)
+    POOL_CONNECTIONS = 50   # Number of connection pools to cache
+    POOL_MAXSIZE = 100      # Maximum connections per pool (> ThreadPoolExecutor workers)
     
     def __init__(self):
         self.settings = get_settings()
         self._clients: Dict[str, pylxd.Client] = {}
-        self._node_configs: Dict[str, LXDNodeConfig] = {}
-        # Track connection creation time for refresh: {"node_name": timestamp}
+        # Track connection creation time (for logging only, not TTL)
         self._connection_times: Dict[str, float] = {}
-        # Connection refresh interval (30 minutes in seconds)
-        self._connection_refresh_interval = 1800
-        self._initialize_nodes()
+        # Store FULL connection info in memory (including cert content)
+        # This allows reconnection without hitting Vault repeatedly
+        # {"cluster_id": {"endpoint": str, "cert_content": str, "key_content": str, "verify": bool}}
+        self._connection_info: Dict[str, Dict[str, str]] = {}
+        # Track temp file paths for cleanup
+        self._temp_cert_paths: Dict[str, Tuple[str, str]] = {}
+        
+        # Register cleanup on exit
+        atexit.register(self._cleanup_all_temp_files)
+        atexit.register(self._secure_cleanup_credentials)
     
-    def _initialize_nodes(self) -> None:
-        """Initialize node configurations."""
-        self._node_configs = {
-            self.settings.lxd_node1_name: self.settings.get_node1_config(),
-            self.settings.lxd_node2_name: self.settings.get_node2_config(),
-        }
+    def _configure_client_session(self, client: pylxd.Client) -> None:
+        """
+        Configure pylxd client's session with larger connection pool.
+        This prevents 'Connection pool is full' warnings during parallel operations.
+        """
+        try:
+            # pylxd uses client.api.session internally
+            if hasattr(client, 'api') and hasattr(client.api, 'session'):
+                session = client.api.session
+                
+                retry_strategy = Retry(
+                    total=3,
+                    backoff_factor=0.5,
+                    status_forcelist=[429, 500, 502, 503, 504],
+                    allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
+                    raise_on_status=False
+                )
+                
+                adapter = HTTPAdapter(
+                    max_retries=retry_strategy,
+                    pool_connections=self.POOL_CONNECTIONS,
+                    pool_maxsize=self.POOL_MAXSIZE,
+                    pool_block=False  # Don't block, just create new connection
+                )
+                
+                session.mount("http://", adapter)
+                session.mount("https://", adapter)
+                logger.debug(f"Configured client session with pool_maxsize={self.POOL_MAXSIZE}")
+        except Exception as e:
+            logger.debug(f"Could not configure client session: {e}")
     
     def _create_http_session(self):
-        """
-        Create HTTP session with proper timeout, keep-alive and retry configuration.
-        """
+        """Create HTTP session with retry configuration."""
         session = requests.Session()
         
-        # Configure retry strategy
         retry_strategy = Retry(
             total=3,
             backoff_factor=1,
@@ -56,15 +91,13 @@ class LXDConnectionManager:
         
         adapter = HTTPAdapter(
             max_retries=retry_strategy,
-            pool_connections=10,
-            pool_maxsize=20,
+            pool_connections=self.POOL_CONNECTIONS,
+            pool_maxsize=self.POOL_MAXSIZE,
             pool_block=False
         )
         
         session.mount("http://", adapter)
         session.mount("https://", adapter)
-        
-        # Enable TCP keep-alive to prevent idle connection drops
         session.headers.update({
             'Connection': 'keep-alive',
             'Keep-Alive': 'timeout=600, max=1000'
@@ -72,136 +105,274 @@ class LXDConnectionManager:
         
         return session
     
-    def _should_refresh_connection(self, node_name: str) -> bool:
-        """
-        Check if connection should be refreshed based on age.
-        """
-        if node_name not in self._connection_times:
-            return True
-        
-        connection_age = time.time() - self._connection_times[node_name]
-        return connection_age > self._connection_refresh_interval
-    
     def _validate_connection(self, client: pylxd.Client, node_name: str) -> bool:
         """
-        Validate if connection is still alive with proper timeout.
+        Validate if connection is still alive and authenticated.
         """
         try:
-            # Make an actual API call with shorter timeout to verify connection quickly
-            client.api.get(timeout=(3, 5))  # 3s connect, 5s read timeout
+            response = client.api.get(timeout=(3, 5))
+            if response.status_code == 200:
+                data = response.json()
+                auth_status = data.get("metadata", {}).get("auth", "")
+                if auth_status == "trusted":
+                    return True
+                else:
+                    logger.warning(f"Connection to {node_name} not trusted (auth={auth_status})")
+                    return False
             return True
         except Exception as e:
             logger.warning(f"Connection validation failed for {node_name}: {e}")
             return False
     
-    def get_client(self, node_name: str) -> pylxd.Client:
+    def _create_temp_cert_files(self, cluster_id: str, cert_content: str, key_content: str) -> Tuple[str, str]:
         """
-        Get or create an LXD client for the specified node.
-        Uses certificate-based authentication with optional trust password fallback.
-        Implements connection caching with periodic refresh and validation.
+        Create temporary certificate files for pylxd client.
+        Files are created with 0600 permissions.
         """
-        if node_name not in self._node_configs:
-            raise LXDConnectionError(f"Unknown node: {node_name}")
-        
-        # Check if we need to refresh the connection
-        should_refresh = self._should_refresh_connection(node_name)
-        
-        # Return cached client if available, not expired, and still connected
-        if node_name in self._clients and not should_refresh:
-            if self._validate_connection(self._clients[node_name], node_name):
-                return self._clients[node_name]
-            else:
-                # Connection validation failed, remove from cache and close
-                logger.warning(f"Connection to {node_name} is stale, reconnecting...")
-                try:
-                    # Try to close the old connection gracefully
-                    if hasattr(self._clients[node_name], '_api_session'):
-                        self._clients[node_name]._api_session.close()
-                except Exception as close_err:
-                    logger.debug(f"Error closing stale connection: {close_err}")
-                del self._clients[node_name]
-                if node_name in self._connection_times:
-                    del self._connection_times[node_name]
-        elif should_refresh and node_name in self._clients:
-            # Connection is too old, force refresh
-            logger.info(f"Connection to {node_name} is old (>30min), refreshing...")
-            try:
-                if hasattr(self._clients[node_name], '_api_session'):
-                    self._clients[node_name]._api_session.close()
-            except Exception as close_err:
-                logger.debug(f"Error closing old connection: {close_err}")
-            del self._clients[node_name]
-            if node_name in self._connection_times:
-                del self._connection_times[node_name]
-        
-        config = self._node_configs[node_name]
+        cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', prefix=f'lxd_{cluster_id}_')
+        key_fd, key_path = tempfile.mkstemp(suffix='.key', prefix=f'lxd_{cluster_id}_')
         
         try:
-            # Try certificate-based authentication first
+            os.write(cert_fd, cert_content.encode('utf-8'))
+            os.close(cert_fd)
+            os.chmod(cert_path, 0o600)
+            
+            os.write(key_fd, key_content.encode('utf-8'))
+            os.close(key_fd)
+            os.chmod(key_path, 0o600)
+            
+            self._temp_cert_paths[cluster_id] = (cert_path, key_path)
+            logger.debug(f"Created temp cert files for {cluster_id}")
+            return cert_path, key_path
+            
+        except Exception as e:
+            try:
+                os.close(cert_fd)
+                os.close(key_fd)
+                os.unlink(cert_path)
+                os.unlink(key_path)
+            except:
+                pass
+            raise e
+    
+    def _cleanup_temp_cert_files(self, cluster_id: str) -> None:
+        """
+        Clean up temporary certificate files.
+        Overwrites file content before deletion.
+        """
+        if cluster_id in self._temp_cert_paths:
+            cert_path, key_path = self._temp_cert_paths[cluster_id]
+            try:
+                for path in [cert_path, key_path]:
+                    if os.path.exists(path):
+                        try:
+                            size = os.path.getsize(path)
+                            with open(path, 'wb') as f:
+                                f.write(b'\x00' * size)
+                                f.flush()
+                                os.fsync(f.fileno())
+                        except Exception:
+                            pass
+                        os.unlink(path)
+                logger.debug(f"Cleaned temp cert files for {cluster_id}")
+            except Exception as e:
+                logger.debug(f"Error cleaning temp files for {cluster_id}: {e}")
+            del self._temp_cert_paths[cluster_id]
+    
+    def _cleanup_all_temp_files(self) -> None:
+        """Clean up all temporary certificate files (called on exit)."""
+        for cluster_id in list(self._temp_cert_paths.keys()):
+            self._cleanup_temp_cert_files(cluster_id)
+    
+    def _secure_cleanup_credentials(self) -> None:
+        """Clear all credential data from memory on exit."""
+        for cluster_id in list(self._connection_info.keys()):
+            try:
+                info = self._connection_info[cluster_id]
+                if "cert_content" in info:
+                    info["cert_content"] = ""
+                if "key_content" in info:
+                    info["key_content"] = ""
+            except Exception:
+                pass
+        self._connection_info.clear()
+        gc.collect()
+        logger.debug("Cleared all credentials from memory")
+    
+    def connect_with_vault_cert(
+        self,
+        cluster_id: str,
+        endpoint: str,
+        cert_content: str,
+        key_content: str,
+        verify: bool = False
+    ) -> pylxd.Client:
+        """
+        Create LXD client connection using certificate content from Vault.
+        """
+        try:
+            # Store FULL connection info in memory (for auto-reconnect)
+            self._connection_info[cluster_id] = {
+                "endpoint": endpoint,
+                "cert_content": cert_content,
+                "key_content": key_content,
+                "verify": verify
+            }
+            
+            # Clean up existing temp files before creating new ones
+            self._cleanup_temp_cert_files(cluster_id)
+            
+            # Create temp cert files (pylxd requires file paths)
+            cert_path, key_path = self._create_temp_cert_files(cluster_id, cert_content, key_content)
+            
+            # Create LXD client
             client = pylxd.Client(
-                endpoint=config.endpoint,
-                cert=(config.cert_path, config.key_path),
-                verify=config.verify,
-                timeout=(10, 30)  # 10s connect timeout, 30s read timeout
+                endpoint=endpoint,
+                cert=(cert_path, key_path),
+                verify=verify,
+                timeout=(10, 30)
             )
             
-            # Verify connection with timeout
-            client.api.get(timeout=(5, 10))
+            # Verify connection and authentication
+            response = client.api.get(timeout=(5, 10))
+            if response.status_code == 200:
+                data = response.json()
+                auth_status = data.get("metadata", {}).get("auth", "")
+                if auth_status != "trusted":
+                    self._cleanup_temp_cert_files(cluster_id)
+                    raise LXDConnectionError(f"Certificate not trusted by {cluster_id} (auth={auth_status})")
             
-            self._clients[node_name] = client
-            self._connection_times[node_name] = time.time()
-            logger.info(f"Connected to LXD node: {node_name} at {config.endpoint}")
+            # Configure session with larger connection pool for parallel operations
+            self._configure_client_session(client)
+            
+            # Cache the client
+            self._clients[cluster_id] = client
+            self._connection_times[cluster_id] = time.time()
+            logger.info(f"Connected to cluster {cluster_id} using Vault certificate")
+            
+            return client
+                    
+        except LXDConnectionError:
+            raise
+        except Exception as e:
+            self._cleanup_temp_cert_files(cluster_id)
+            if cluster_id in self._connection_info:
+                del self._connection_info[cluster_id]
+            logger.error(f"Failed to connect to cluster {cluster_id}: {e}")
+            raise LXDConnectionError(f"Cannot connect to {cluster_id}: {str(e)}")
+    
+    def get_client(self, cluster_id: str) -> Optional[pylxd.Client]:
+        """
+        Get cached LXD client for the specified cluster.
+        
+        RECONNECTION LOGIC:
+        - If client exists and is valid, return it
+        - If validation fails, attempt auto-reconnect using stored credentials
+        - NO TTL-based refresh (connections persist indefinitely while valid)
+        """
+        if cluster_id in self._clients:
+            # Validate connection is still working
+            if self._validate_connection(self._clients[cluster_id], cluster_id):
+                return self._clients[cluster_id]
+            else:
+                # Connection failed validation, try reconnect
+                logger.warning(f"Connection to {cluster_id} failed validation, reconnecting...")
+                self.cleanup_connection(cluster_id)
+                return self._auto_reconnect(cluster_id)
+        else:
+            # Not in cache, try auto-reconnect if we have connection info
+            return self._auto_reconnect(cluster_id)
+    
+    def _auto_reconnect(self, cluster_id: str) -> Optional[pylxd.Client]:
+        """
+        Attempt to automatically reconnect using stored connection info.
+        
+        FLOW:
+        1. Check if connection info exists in memory
+        2. Use stored cert content to reconnect
+        3. NO Vault or Redis calls here (memory only)
+        """
+        if cluster_id not in self._connection_info:
+            logger.debug(f"No stored connection info for {cluster_id}, cannot auto-reconnect")
+            return None
+        
+        try:
+            info = self._connection_info[cluster_id]
+            
+            # Reconnect using stored credentials
+            self._cleanup_temp_cert_files(cluster_id)
+            cert_path, key_path = self._create_temp_cert_files(
+                cluster_id, 
+                info["cert_content"], 
+                info["key_content"]
+            )
+            
+            client = pylxd.Client(
+                endpoint=info["endpoint"],
+                cert=(cert_path, key_path),
+                verify=info.get("verify", False),
+                timeout=(10, 30)
+            )
+            
+            # Verify authentication
+            response = client.api.get(timeout=(5, 10))
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("metadata", {}).get("auth") != "trusted":
+                    logger.warning(f"Reconnect failed: cert not trusted by {cluster_id}")
+                    self._cleanup_temp_cert_files(cluster_id)
+                    return None
+            
+            self._clients[cluster_id] = client
+            self._connection_times[cluster_id] = time.time()
+            logger.info(f"Auto-reconnected to {cluster_id}")
             return client
             
         except Exception as e:
-            # Try trust password if certificate fails
-            trust_password = (
-                self.settings.lxd_node1_trust_password 
-                if node_name == self.settings.lxd_node1_name 
-                else self.settings.lxd_node2_trust_password
-            )
-            
-            if trust_password:
-                try:
-                    client = pylxd.Client(
-                        endpoint=config.endpoint,
-                        verify=config.verify,
-                        timeout=(10, 30)
-                    )
-                    client.authenticate(trust_password)
-                    client.api.get(timeout=(5, 10))
-                    self._clients[node_name] = client
-                    self._connection_times[node_name] = time.time()
-                    logger.info(
-                        f"Connected to LXD node via trust password: {node_name}"
-                    )
-                    return client
-                except Exception as auth_error:
-                    logger.error(
-                        f"Trust password auth failed for {node_name}: {auth_error}"
-                    )
-            
-            logger.error(f"Failed to connect to LXD node {node_name}: {e}")
-            raise LXDConnectionError(
-                f"Cannot connect to {node_name}: {str(e)}"
-            )
+            logger.warning(f"Auto-reconnect to {cluster_id} failed: {e}")
+            self._cleanup_temp_cert_files(cluster_id)
+            return None
     
     def get_node_names(self) -> list:
-        """Get list of configured node names."""
-        return list(self._node_configs.keys())
+        """Get list of active cluster IDs (cached clients)."""
+        return list(self._clients.keys())
     
-    def get_node_config(self, node_name: str) -> Optional[LXDNodeConfig]:
-        """Get configuration for a specific node."""
-        return self._node_configs.get(node_name)
+    def has_connection_info(self, cluster_id: str) -> bool:
+        """Check if we have stored connection info for a cluster."""
+        return cluster_id in self._connection_info
     
-    def cleanup_connection(self, node_name: str) -> None:
-        """Cleanup a specific connection."""
-        if node_name in self._clients:
+    def cleanup_connection(self, cluster_id: str) -> None:
+        """
+        Cleanup connection client only (preserve connection info for reconnect).
+        """
+        if cluster_id in self._clients:
             try:
-                if hasattr(self._clients[node_name], '_api_session'):
-                    self._clients[node_name]._api_session.close()
+                if hasattr(self._clients[cluster_id], '_api_session'):
+                    self._clients[cluster_id]._api_session.close()
             except Exception as e:
-                logger.debug(f"Error closing connection for {node_name}: {e}")
-            del self._clients[node_name]
-        if node_name in self._connection_times:
-            del self._connection_times[node_name]
+                logger.debug(f"Error closing connection for {cluster_id}: {e}")
+            del self._clients[cluster_id]
+        if cluster_id in self._connection_times:
+            del self._connection_times[cluster_id]
+        # Keep _connection_info for auto-reconnect
+    
+    def remove_connection(self, cluster_id: str) -> None:
+        """
+        Completely remove a connection including all stored info.
+        Use this when a cluster is deleted or deregistered.
+        """
+        self.cleanup_connection(cluster_id)
+        
+        # Clear credentials from memory
+        if cluster_id in self._connection_info:
+            info = self._connection_info[cluster_id]
+            if "cert_content" in info:
+                info["cert_content"] = ""
+            if "key_content" in info:
+                info["key_content"] = ""
+            del self._connection_info[cluster_id]
+        
+        # Clean up temp files
+        self._cleanup_temp_cert_files(cluster_id)
+        
+        logger.info(f"Completely removed connection for {cluster_id}")

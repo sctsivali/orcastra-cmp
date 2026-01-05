@@ -28,6 +28,8 @@ import {
   AlertTriangle,
   Users,
   UserCircle,
+  Cog,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -121,7 +123,7 @@ const merchantsData: MerchantInfo[] = [
 ];
 
 export function Sidebar({ className }: SidebarProps) {
-  const { sidebarCollapsed: isCollapsed, setSidebarCollapsed: setIsCollapsed } = useLayout();
+  const { sidebarCollapsed: isCollapsed, setSidebarCollapsed: setIsCollapsed, sidebarOpen, setSidebarOpen } = useLayout();
   const [servicesExpanded, setServicesExpanded] = useState(false);
   const [techExpanded, setTechExpanded] = useState(false);
   const [hardwareExpanded, setHardwareExpanded] = useState(false);
@@ -131,6 +133,15 @@ export function Sidebar({ className }: SidebarProps) {
     useState<MerchantInfo | null>(null);
   const { theme, setTheme } = useTheme();
   
+  const pathname = usePathname();
+
+  // Auto-expand inventory on mobile if on inventory page
+  useEffect(() => {
+    if (pathname?.startsWith("/inventory") && window.innerWidth < 1024) {
+      setInventoryExpanded(true);
+    }
+  }, [pathname]);
+  
   // Save collapsed state to localStorage
   const handleToggleCollapse = () => {
     const newState = !isCollapsed;
@@ -138,7 +149,13 @@ export function Sidebar({ className }: SidebarProps) {
     localStorage.setItem("sidebar-collapsed", String(newState));
   };
 
-  // Hardware data from cluster resources
+  // Close sidebar on mobile when clicking a link
+  const handleLinkClick = () => {
+    if (window.innerWidth < 768) { // md breakpoint
+      setSidebarOpen(false);
+    }
+  };
+
   const hardwareData: HardwareInfo[] = [
     {
       category: "CPU",
@@ -200,248 +217,356 @@ export function Sidebar({ className }: SidebarProps) {
     },
   ];
 
-  const pathname = usePathname();
+  // Wrapper component for links to handle mobile close
+  const SidebarLink = ({ href, children, ...props }: any) => (
+    <Link href={href} onClick={handleLinkClick} {...props}>
+      {children}
+    </Link>
+  );
 
   return (
     <>
+      {/* Overlay - show when sidebar is open */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 z-[45] bg-black/50 backdrop-blur-sm"
+          onClick={() => setSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       <aside
         className={cn(
-          "fixed left-0 top-0 z-40 h-screen border-r bg-card transition-all duration-300",
-          isCollapsed ? "w-16" : "w-64",
+          "fixed left-0 top-0 z-50 border-r bg-card transition-all duration-300",
+          // Height - use 100dvh for mobile compatibility, fallback to 100vh
+          "h-[100dvh] h-screen",
+          // Ensure sidebar stays on top during scroll with proper positioning
+          "overscroll-contain",
+          // When opened via hamburger: always full width, always visible
+          sidebarOpen && "w-64 translate-x-0",
+          // When not opened via hamburger: hide on mobile, show on desktop
+          !sidebarOpen && "-translate-x-full md:translate-x-0",
+          // Desktop collapsed/expanded (only when NOT opened via hamburger)
+          !sidebarOpen && isCollapsed && "md:w-16",
+          !sidebarOpen && !isCollapsed && "md:w-64",
           className
         )}
       >
-        <div className="flex h-full flex-col">
-          {/* Header with toggle */}
-          <div className="flex h-20 items-center justify-between border-b px-2">
-            <Link 
-              href="/" 
+        {/* Inner flex container for layout */}
+        <div className="flex flex-col h-full overflow-hidden overscroll-contain">
+        {/* Header with toggle */}
+        <div className="flex h-16 md:h-20 items-center justify-between border-b px-3 md:px-2 shrink-0">
+            <SidebarLink
+              href="/"
               className={cn(
-                "hover:scale-105 transition-transform flex items-center justify-center",
-                isCollapsed ? "w-full" : "flex-1"
+                "flex items-center justify-center rounded-lg transition-all hover:bg-accent",
+                // When opened via hamburger, always show expanded
+                sidebarOpen ? "flex-1 px-3 gap-3" : (isCollapsed ? "w-10 h-10 md:w-12 md:h-12" : "flex-1 px-3 gap-3")
               )}
             >
               <Image
                 src={theme === "light" ? "/orca-logo-black.png" : "/orca-logo-white.png"}
                 alt="Orcastra Logo"
-                width={isCollapsed ? 96 : 48}
-                height={isCollapsed ? 96 : 48}
-                className="cursor-pointer transition-all duration-300"
+                width={120}
+                height={120}
+                className={cn(
+                  "cursor-pointer transition-all duration-300 object-contain",
+                  // When opened via hamburger or not collapsed: full size
+                  // When collapsed (desktop only): small icon
+                  sidebarOpen || !isCollapsed
+                    ? "w-auto h-8 md:h-10 lg:h-12"
+                    : "w-8 h-8 md:w-10 md:h-10"
+                )}
               />
-            </Link>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={handleToggleCollapse}
-              className={cn(isCollapsed && "ml-1")}
-            >
-              {isCollapsed ? (
-                <ChevronRight className="h-4 w-4" />
-              ) : (
-                <ChevronLeft className="h-4 w-4" />
-              )}
-            </Button>
+            </SidebarLink>
+            {/* Close button - show when sidebar is opened via menu button */}
+            {sidebarOpen && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setSidebarOpen(false)}
+              >
+                <X className="h-5 w-5" />
+              </Button>
+            )}
+            {/* Desktop collapse button - show when sidebar is not opened via menu */}
+            {!sidebarOpen && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleToggleCollapse}
+                className={cn(isCollapsed && "ml-1", "hidden md:flex")}
+              >
+                {isCollapsed ? (
+                  <ChevronRight className="h-4 w-4" />
+                ) : (
+                  <ChevronLeft className="h-4 w-4" />
+                )}
+              </Button>
+            )}
           </div>
 
-          {/* Menu Items */}
-          <ScrollArea className="flex-1 px-3 py-4">
-            <div className="space-y-2">
+          {/* Menu Items - ScrollArea takes remaining space */}
+          <ScrollArea className="flex-1">
+            <div className="px-3 py-4 space-y-2">
               {/* Inventory Menu with Submenu */}
               <div>
-                {isCollapsed ? (
-                  <Link href="/inventory">
-                    <Button
-                      variant={pathname?.startsWith("/inventory") ? "default" : "ghost"}
-                      className={cn(
-                        "w-full justify-center px-2"
-                      )}
-                    >
-                      <Package className="h-5 w-5" />
-                    </Button>
-                  </Link>
-                ) : (
-                  <Button
-                    variant={pathname?.startsWith("/inventory") ? "default" : "ghost"}
-                    className="w-full justify-start"
-                    onClick={() => setInventoryExpanded(!inventoryExpanded)}
-                  >
-                    <Package className="h-5 w-5" />
-                    <span className="ml-3 flex-1 text-left">Inventory</span>
+                <Button
+                  variant={pathname?.startsWith("/inventory") ? "default" : "ghost"}
+                  className={cn(
+                    "w-full",
+                    isCollapsed ? "md:justify-center md:px-2" : "justify-start"
+                  )}
+                  onClick={() => {
+                    if (isCollapsed && window.innerWidth >= 1024) {
+                      // On large screens with collapsed sidebar, go to link
+                      window.location.href = "/inventory";
+                    } else {
+                      // Otherwise toggle dropdown
+                      setInventoryExpanded(!inventoryExpanded);
+                    }
+                  }}
+                >
+                  <Package className="h-5 w-5" />
+                  <span className={cn(
+                    "ml-3 flex-1 text-left",
+                    isCollapsed && !sidebarOpen && "md:hidden"
+                  )}>Inventory</span>
+                  <span className={cn(
+                    isCollapsed && !sidebarOpen && "md:hidden"
+                  )}>
                     {inventoryExpanded ? (
                       <ChevronUp className="h-4 w-4" />
                     ) : (
                       <ChevronDown className="h-4 w-4" />
                     )}
-                  </Button>
-                )}
+                  </span>
+                </Button>
                 
                 {/* Inventory Submenu */}
-                {!isCollapsed && inventoryExpanded && (
-                  <div className="mt-2 ml-4 space-y-1 border-l-2 border-border pl-2">
-                    <Link href="/inventory">
-                      <Button
-                        variant={pathname === "/inventory" ? "secondary" : "ghost"}
-                        className="w-full justify-start text-sm font-semibold"
-                        size="sm"
-                      >
+                {inventoryExpanded && (
+                  <div className={cn(
+                    "mt-2 ml-4 space-y-1 border-l-2 border-border pl-2",
+                    isCollapsed && !sidebarOpen && "md:hidden"
+                  )}>
+                    <Button
+                      variant={pathname === "/inventory" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm font-semibold"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory">
                         <Package className="h-4 w-4 mr-2" />
                         Overview
-                      </Button>
-                    </Link>
+                      </SidebarLink>
+                    </Button>
                     
-                    <Link href="/inventory/instances">
+                    <Button
+                      variant={pathname === "/inventory/monitoring" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/monitoring">
+                        <Activity className="h-4 w-4 mr-2" />
+                        Monitoring
+                      </SidebarLink>
+                    </Button>
+                    
+                    <Button
+                      variant={pathname === "/inventory/clusters" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/clusters">
+                        <Server className="h-4 w-4 mr-2" />
+                        Clusters
+                      </SidebarLink>
+                    </Button>
+                    
+                    {/* Clustering Submenu */}
+                    <div className="pl-2">
+                      <p className="text-xs font-semibold text-muted-foreground mb-1 mt-2">Clustering</p>
                       <Button
-                        variant={pathname === "/inventory/instances" ? "secondary" : "ghost"}
+                        variant={pathname === "/inventory/clustering/members" ? "secondary" : "ghost"}
                         className="w-full justify-start text-sm"
                         size="sm"
+                        asChild
                       >
+                        <SidebarLink href="/inventory/clustering/members">
+                          <Users className="h-4 w-4 mr-2" />
+                          Members
+                        </SidebarLink>
+                      </Button>
+                    </div>
+                    
+                    <Button
+                      variant={pathname === "/inventory/instances" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/instances">
                         <Box className="h-4 w-4 mr-2" />
                         Instances
-                      </Button>
-                    </Link>
+                      </SidebarLink>
+                    </Button>
                     
-                    <Link href="/inventory/profiles">
-                      <Button
-                        variant={pathname === "/inventory/profiles" ? "secondary" : "ghost"}
-                        className="w-full justify-start text-sm"
-                        size="sm"
-                      >
+                    <Button
+                      variant={pathname === "/inventory/profiles" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/profiles">
                         <Settings className="h-4 w-4 mr-2" />
                         Profiles
-                      </Button>
-                    </Link>
+                      </SidebarLink>
+                    </Button>
                     
                     {/* Networking Submenu */}
                     <div className="pl-2">
                       <p className="text-xs font-semibold text-muted-foreground mb-1 mt-2">Networking</p>
-                      <Link href="/inventory/networks">
-                        <Button
-                          variant={pathname === "/inventory/networks" ? "secondary" : "ghost"}
-                          className="w-full justify-start text-sm"
-                          size="sm"
-                        >
+                      <Button
+                        variant={pathname === "/inventory/networks" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/networks">
                           <Network className="h-4 w-4 mr-2" />
                           Networks
-                        </Button>
-                      </Link>
+                        </SidebarLink>
+                      </Button>
                       
-                      <Link href="/inventory/network-acls">
-                        <Button
-                          variant={pathname === "/inventory/network-acls" ? "secondary" : "ghost"}
-                          className="w-full justify-start text-sm"
-                          size="sm"
-                        >
+                      <Button
+                        variant={pathname === "/inventory/network-acls" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/network-acls">
                           <Shield className="h-4 w-4 mr-2" />
                           ACLs
-                        </Button>
-                      </Link>
+                        </SidebarLink>
+                      </Button>
                       
-                      <Link href="/inventory/ipam">
-                        <Button
-                          variant={pathname === "/inventory/ipam" ? "secondary" : "ghost"}
-                          className="w-full justify-start text-sm"
-                          size="sm"
-                        >
+                      <Button
+                        variant={pathname === "/inventory/ipam" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/ipam">
                           <Network className="h-4 w-4 mr-2" />
                           IPAM
-                        </Button>
-                      </Link>
+                        </SidebarLink>
+                      </Button>
                     </div>
                     
                     {/* Storage Submenu */}
                     <div className="pl-2">
                       <p className="text-xs font-semibold text-muted-foreground mb-1 mt-2">Storage</p>
-                      <Link href="/inventory/storage-pools">
-                        <Button
-                          variant={pathname === "/inventory/storage-pools" ? "secondary" : "ghost"}
-                          className="w-full justify-start text-sm"
-                          size="sm"
-                        >
+                      <Button
+                        variant={pathname === "/inventory/storage-pools" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/storage-pools">
                           <Database className="h-4 w-4 mr-2" />
                           Pools
-                        </Button>
-                      </Link>
+                        </SidebarLink>
+                      </Button>
                       
-                      <Link href="/inventory/storage-volumes">
-                        <Button
-                          variant={pathname === "/inventory/storage-volumes" ? "secondary" : "ghost"}
-                          className="w-full justify-start text-sm"
-                          size="sm"
-                        >
+                      <Button
+                        variant={pathname === "/inventory/storage-volumes" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/storage-volumes">
                           <HardDrive className="h-4 w-4 mr-2" />
                           Volumes
-                        </Button>
-                      </Link>
+                        </SidebarLink>
+                      </Button>
                     </div>
                     
-                    <Link href="/inventory/images">
-                      <Button
-                        variant={pathname === "/inventory/images" ? "secondary" : "ghost"}
-                        className="w-full justify-start text-sm"
-                        size="sm"
-                      >
+                    <Button
+                      variant={pathname === "/inventory/images" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/images">
                         <ImageIcon className="h-4 w-4 mr-2" />
                         Images
-                      </Button>
-                    </Link>
+                      </SidebarLink>
+                    </Button>
                     
-                    <Link href="/inventory/server">
-                      <Button
-                        variant={pathname === "/inventory/server" ? "secondary" : "ghost"}
-                        className="w-full justify-start text-sm"
-                        size="sm"
-                      >
+                    <Button
+                      variant={pathname === "/inventory/server" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/server">
                         <Server className="h-4 w-4 mr-2" />
                         Server
-                      </Button>
-                    </Link>
+                      </SidebarLink>
+                    </Button>
                     
-                    <Link href="/inventory/operations">
-                      <Button
-                        variant={pathname === "/inventory/operations" ? "secondary" : "ghost"}
-                        className="w-full justify-start text-sm"
-                        size="sm"
-                      >
-                        <Activity className="h-4 w-4 mr-2" />
+                    <Button
+                      variant={pathname === "/inventory/operations" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/operations">
+                        <Cog className="h-4 w-4 mr-2" />
                         Operations
-                      </Button>
-                    </Link>
+                      </SidebarLink>
+                    </Button>
                     
-                    <Link href="/inventory/warnings">
-                      <Button
-                        variant={pathname === "/inventory/warnings" ? "secondary" : "ghost"}
-                        className="w-full justify-start text-sm"
-                        size="sm"
-                      >
+                    <Button
+                      variant={pathname === "/inventory/warnings" ? "secondary" : "ghost"}
+                      className="w-full justify-start text-sm"
+                      size="sm"
+                      asChild
+                    >
+                      <SidebarLink href="/inventory/warnings">
                         <AlertTriangle className="h-4 w-4 mr-2" />
                         Warnings
-                      </Button>
-                    </Link>
+                      </SidebarLink>
+                    </Button>
                     
                     {/* Permissions Submenu */}
                     <div className="pl-2">
                       <p className="text-xs font-semibold text-muted-foreground mb-1 mt-2">Permissions</p>
-                      <Link href="/inventory/identities">
-                        <Button
-                          variant={pathname === "/inventory/identities" ? "secondary" : "ghost"}
-                          className="w-full justify-start text-sm"
-                          size="sm"
-                        >
+                      <Button
+                        variant={pathname === "/inventory/identities" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/identities">
                           <UserCircle className="h-4 w-4 mr-2" />
                           Identities
-                        </Button>
-                      </Link>
+                        </SidebarLink>
+                      </Button>
                       
-                      <Link href="/inventory/groups">
-                        <Button
-                          variant={pathname === "/inventory/groups" ? "secondary" : "ghost"}
-                          className="w-full justify-start text-sm"
-                          size="sm"
-                        >
+                      <Button
+                        variant={pathname === "/inventory/groups" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/groups">
                           <Users className="h-4 w-4 mr-2" />
                           Groups
-                        </Button>
-                      </Link>
+                        </SidebarLink>
+                      </Button>
                     </div>
                   </div>
                 )}
@@ -449,88 +574,110 @@ export function Sidebar({ className }: SidebarProps) {
 
               {/* Services Menu */}
               <div>
-                <Link href="/service-providers">
-                  <Button
-                    variant={pathname === "/service-providers" ? "default" : "ghost"}
-                    className={cn(
-                      "w-full justify-start",
-                      isCollapsed && "justify-center px-2"
-                    )}
-                  >
+                <Button
+                  variant={pathname === "/service-providers" ? "default" : "ghost"}
+                  className={cn(
+                    "w-full justify-start",
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                  )}
+                  asChild
+                >
+                  <SidebarLink href="/service-providers">
                     <Layers className="h-5 w-5" />
-                    {!isCollapsed && (
-                      <>
-                        <span className="ml-3 flex-1 text-left">Services</span>
-                        <Badge variant="secondary" className="ml-2">
-                          1
-                        </Badge>
-                      </>
-                    )}
-                  </Button>
-                </Link>
+                    <span className={cn(
+                      "ml-3 flex-1 text-left",
+                      isCollapsed && !sidebarOpen && "md:hidden"
+                    )}>Services</span>
+                  </SidebarLink>
+                </Button>
               </div>
 
               {/* Solutions Menu */}
               <div>
-                <Link href="/solutions">
-                  <Button
-                    variant={pathname === "/solutions" ? "default" : "ghost"}
-                    className={cn(
-                      "w-full justify-start",
-                      isCollapsed && "justify-center px-2"
-                    )}
-                  >
+                <Button
+                  variant={pathname === "/solutions" ? "default" : "ghost"}
+                  className={cn(
+                    "w-full justify-start",
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                  )}
+                  asChild
+                >
+                  <SidebarLink href="/solutions">
                     <HardDrive className="h-5 w-5" />
-                    {!isCollapsed && (
-                      <>
-                        <span className="ml-3 flex-1 text-left">Solutions</span>
-                        <Badge variant="secondary" className="ml-2">
-                          2
-                        </Badge>
-                      </>
-                    )}
-                  </Button>
-                </Link>
+                    <span className={cn(
+                      "ml-3 flex-1 text-left",
+                      isCollapsed && !sidebarOpen && "md:hidden"
+                    )}>Solutions</span>
+                  </SidebarLink>
+                </Button>
               </div>
 
               {/* Technologies Menu */}
               <div>
-                <Link href="/technologies">
-                  <Button
-                    variant={pathname === "/technologies" ? "default" : "ghost"}
-                    className={cn(
-                      "w-full justify-start",
-                      isCollapsed && "justify-center px-2"
-                    )}
-                  >
+                <Button
+                  variant={pathname === "/technologies" ? "default" : "ghost"}
+                  className={cn(
+                    "w-full justify-start",
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                  )}
+                  asChild
+                >
+                  <SidebarLink href="/technologies">
                     <Server className="h-5 w-5" />
-                    {!isCollapsed && (
-                      <span className="ml-3 flex-1 text-left">Technologies</span>
-                    )}
-                  </Button>
-                </Link>
+                    <span className={cn(
+                      "ml-3 flex-1 text-left",
+                      isCollapsed && !sidebarOpen && "md:hidden"
+                    )}>Technologies</span>
+                  </SidebarLink>
+                </Button>
               </div>
             </div>
           </ScrollArea>
 
-          {/* Footer with System Preferences */}
-          <div className="border-t p-3">
+          {/* Footer with Settings and Theme Switcher */}
+          <div className="border-t p-3 space-y-2 shrink-0">
+            {/* Settings Link */}
+            <Button
+              variant={pathname === "/settings" ? "default" : "ghost"}
+              className={cn(
+                "w-full justify-start",
+                isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+              )}
+              asChild
+            >
+              <SidebarLink href="/settings">
+                <Settings className="h-5 w-5" />
+                <span className={cn(
+                  "ml-3",
+                  isCollapsed && !sidebarOpen && "md:hidden"
+                )}>Settings</span>
+              </SidebarLink>
+            </Button>
+
+            {/* Theme Switcher */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
                   className={cn(
                     "w-full justify-start",
-                    isCollapsed && "justify-center px-2"
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
                   )}
                 >
-                  <Settings className="h-5 w-5" />
-                  {!isCollapsed && (
-                    <span className="ml-3">System Preferences</span>
+                  {theme === "light" ? (
+                    <Sun className="h-5 w-5" />
+                  ) : theme === "dark" ? (
+                    <Moon className="h-5 w-5" />
+                  ) : (
+                    <Monitor className="h-5 w-5" />
                   )}
+                  <span className={cn(
+                    "ml-3",
+                    isCollapsed && !sidebarOpen && "md:hidden"
+                  )}>Theme</span>
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuContent align="start" side="top" className="w-48">
                 <DropdownMenuItem onClick={() => setTheme("light")}>
                   <Sun className="mr-2 h-4 w-4" />
                   Light Mode

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,9 +23,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { HardDrive, Loader2, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { HardDrive, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { useStoragePools } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 type SortField = "name" | "driver" | "status" | "used_by";
 type SortDirection = "asc" | "desc";
@@ -52,9 +53,10 @@ interface PoolResources {
 }
 
 export default function StoragePoolsPage() {
-  const [pools, setPools] = useState<PoolInfo[]>([]);
-  const [poolResources, setPoolResources] = useState<Record<string, PoolResources>>({});
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useStoragePools();
+  const pools = (data as any)?.pools || [];
+  const poolResources = (data as any)?.resources || {};
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterDriver, setFilterDriver] = useState<string>("all");
@@ -64,41 +66,13 @@ export default function StoragePoolsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchPools();
-  }, []);
-
-  const fetchPools = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/storage/pools`);
-      if (!response.ok) throw new Error("Failed to fetch storage pools");
-      const data = await response.json();
-      setPools(data.pools || []);
-      
-      const resourcesResponse = await fetch(`${API_URL}/storage/pools/resources-all`);
-      if (resourcesResponse.ok) {
-        const resourcesData = await resourcesResponse.json();
-        setPoolResources(resourcesData.resources || {});
-      }
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch storage pools",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const nodes = useMemo(() => {
-    const nodeSet = new Set(pools.map(p => p.node).filter((n): n is string => Boolean(n)));
+    const nodeSet = new Set(pools.map((p: any) => p.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [pools]);
 
   const drivers = useMemo(() => {
-    const driverSet = new Set(pools.map(p => p.driver));
+    const driverSet = new Set(pools.map((p: any) => p.driver));
     return Array.from(driverSet).sort();
   }, [pools]);
 
@@ -126,21 +100,21 @@ export default function StoragePoolsPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (pool) =>
+        (pool: any) =>
           pool.name.toLowerCase().includes(query) ||
           (pool.description && pool.description.toLowerCase().includes(query))
       );
     }
 
     if (filterNode !== "all") {
-      filtered = filtered.filter((pool) => pool.node === filterNode);
+      filtered = filtered.filter((pool: any) => pool.node === filterNode);
     }
 
     if (filterDriver !== "all") {
-      filtered = filtered.filter((pool) => pool.driver === filterDriver);
+      filtered = filtered.filter((pool: any) => pool.driver === filterDriver);
     }
 
-    filtered.sort((a, b) => {
+    filtered.sort((a: any, b: any) => {
       let aVal, bVal;
       
       switch (sortField) {
@@ -187,12 +161,8 @@ export default function StoragePoolsPage() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -204,12 +174,12 @@ export default function StoragePoolsPage() {
             Storage Pools
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud storage pools
+            Manage hypervisor storage pools
           </p>
         </div>
-        <Button onClick={fetchPools}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -238,7 +208,7 @@ export default function StoragePoolsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node) => (
+                  {nodes.map((node: any) => (
                     <SelectItem key={node} value={node}>
                       {node}
                     </SelectItem>
@@ -255,7 +225,7 @@ export default function StoragePoolsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Drivers</SelectItem>
-                {drivers.map((driver) => (
+                {drivers.map((driver: any) => (
                   <SelectItem key={driver} value={driver}>
                     {driver}
                   </SelectItem>
@@ -314,7 +284,7 @@ export default function StoragePoolsPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedPools.map((pool, idx) => {
+                paginatedPools.map((pool: any, idx: number) => {
                   const poolKey = `${pool.node}-${pool.name}`;
                   const resources = poolResources[poolKey];
                   

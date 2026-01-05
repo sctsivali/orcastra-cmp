@@ -6,6 +6,8 @@ Provides endpoints for listing available images on each node.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
     ImageInfo,
@@ -18,10 +20,32 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
+from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/images", tags=["Images"])
+
+# Thread pool for parallel operations
+_executor = ThreadPoolExecutor(max_workers=5)
+
+
+async def _fetch_images_for_node(lxd_service: LXDService, node_name: str) -> ImageListResponse:
+    """Fetch images for a single node."""
+    try:
+        images = await lxd_service.list_images(node_name)
+        return ImageListResponse(
+            host=node_name,
+            images=images,
+            total=len(images),
+        )
+    except Exception as e:
+        logger.warning(f"Could not list images from {node_name}: {e}")
+        return ImageListResponse(
+            host=node_name,
+            images=[],
+            total=0,
+        )
 
 
 @router.get(
@@ -38,25 +62,39 @@ async def list_all_images(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all images from all LXD nodes."""
-    results = []
+    # Try cache first (60 second cache)
+    cache = get_cache_manager()
+    cache_key = "images:list:all"
+    cached_data = cache.get("api_responses", cache_key)
+    if cached_data is not None:
+        logger.debug(f"Returning cached images list")
+        # Reconstruct Pydantic models from cached dict
+        return [ImageListResponse(**item) for item in cached_data]
     
-    for node_name in lxd_service.get_node_names():
-        try:
-            images = await lxd_service.list_images(node_name)
-            results.append(ImageListResponse(
-                host=node_name,
-                images=images,
-                total=len(images),
-            ))
-        except Exception as e:
-            logger.warning(f"Could not list images from {node_name}: {e}")
-            results.append(ImageListResponse(
-                host=node_name,
+    # Fetch images from all nodes in parallel
+    node_names = lxd_service.get_node_names()
+    tasks = [_fetch_images_for_node(lxd_service, node_name) for node_name in node_names]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    # Filter out exceptions
+    response = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            logger.error(f"Error fetching images from node: {result}")
+            response.append(ImageListResponse(
+                host=node_names[i] if i < len(node_names) else "unknown",
                 images=[],
                 total=0,
             ))
+        else:
+            response.append(result)
     
-    return results
+    # Cache as dict for 120 seconds (enterprise TTL)
+    cache_data = [item.model_dump() for item in response]
+    cache.set("api_responses", cache_key, cache_data, ttl=180)
+    logger.debug(f"Cached images list for 120 seconds")
+    
+    return response
 
 
 @router.get(

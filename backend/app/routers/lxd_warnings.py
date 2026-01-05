@@ -6,6 +6,8 @@ Provides endpoints for viewing LXD warnings.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
@@ -16,6 +18,9 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/warnings", tags=["Warnings"])
+
+# Thread pool for parallel operations
+_executor = ThreadPoolExecutor(max_workers=5)
 
 
 class WarningInfo(BaseModel):
@@ -39,6 +44,40 @@ class WarningListResponse(BaseModel):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[WarningInfo]:
+    """Fetch warnings for a single node - runs in thread pool."""
+    warnings = []
+    try:
+        client = lxd_service.connection_manager.get_client(node_name)
+        # Use recursion=1 to get full details in one call
+        response = client.api.warnings.get(params={'recursion': '1'}, timeout=(5, 30))
+        if response.status_code == 200:
+            warnings_data = response.json().get('metadata', [])
+            for warning_detail in warnings_data:
+                try:
+                    warnings.append(WarningInfo(
+                        uuid=warning_detail.get('uuid', ''),
+                        location=warning_detail.get('location', ''),
+                        project=warning_detail.get('project', ''),
+                        type=warning_detail.get('type', ''),
+                        count=warning_detail.get('count', 0),
+                        first_seen_at=warning_detail.get('first_seen_at', ''),
+                        last_seen_at=warning_detail.get('last_seen_at', ''),
+                        last_message=warning_detail.get('last_message', ''),
+                        severity=warning_detail.get('severity', ''),
+                        status=warning_detail.get('status', '')
+                    ))
+                except Exception as e:
+                    logger.error(f"Error parsing warning data on {node_name}: {e}")
+        elif response.status_code == 404:
+            logger.debug(f"Warnings endpoint not available on {node_name} (404 - older LXD version?)")
+        else:
+            logger.warning(f"Got status {response.status_code} for warnings on {node_name}")
+    except Exception as e:
+        logger.error(f"Error listing warnings on {node_name}: {e}", exc_info=True)
+    return warnings
+
+
 @router.get(
     "",
     response_model=WarningListResponse,
@@ -52,35 +91,22 @@ async def list_warnings(
     """List all warnings."""
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
-        all_warnings = []
         
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                # Try to get warnings using API call
-                warnings_response = client.api.get('/1.0/warnings')
-                if warnings_response.status_code == 200:
-                    warnings_data = warnings_response.json().get('metadata', [])
-                    for warning_url in warnings_data:
-                        try:
-                            # Get individual warning details
-                            warning_detail = client.api.get(warning_url).json().get('metadata', {})
-                            all_warnings.append(WarningInfo(
-                                uuid=warning_detail.get('uuid', ''),
-                                location=warning_detail.get('location', ''),
-                                project=warning_detail.get('project', ''),
-                                type=warning_detail.get('type', ''),
-                                count=warning_detail.get('count', 0),
-                                first_seen_at=warning_detail.get('first_seen_at', ''),
-                                last_seen_at=warning_detail.get('last_seen_at', ''),
-                                last_message=warning_detail.get('last_message', ''),
-                                severity=warning_detail.get('severity', ''),
-                                status=warning_detail.get('status', '')
-                            ))
-                        except Exception as e:
-                            logger.error(f"Error getting warning details: {e}")
-            except Exception as e:
-                logger.error(f"Error listing warnings on {node_name}: {e}")
+        # Fetch warnings from all nodes in parallel
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_executor, _fetch_warnings_for_node, lxd_service, node_name)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Flatten results
+        all_warnings = []
+        for result in results:
+            if isinstance(result, list):
+                all_warnings.extend(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error fetching warnings: {result}")
         
         return WarningListResponse(
             total=len(all_warnings),
@@ -106,7 +132,7 @@ async def get_warning(
     """Get details for a specific warning."""
     try:
         client = lxd_service.connection_manager.get_client(host)
-        warning_response = client.api.get(f'/1.0/warnings/{warning_uuid}')
+        warning_response = client.api.warnings[warning_uuid].get(timeout=(5, 30))
         
         if warning_response.status_code == 200:
             warning_data = warning_response.json().get('metadata', {})
@@ -145,7 +171,7 @@ async def delete_warning(
     """Delete a warning."""
     try:
         client = lxd_service.connection_manager.get_client(host)
-        response = client.api.delete(f'/1.0/warnings/{warning_uuid}')
+        response = client.api.warnings[warning_uuid].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:
             return {

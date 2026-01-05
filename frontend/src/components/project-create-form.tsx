@@ -5,8 +5,9 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Loader2, FolderKanban, ArrowLeft, Info } from "lucide-react";
+import { FolderKanban, ArrowLeft, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LoadingLottieSmall } from "@/components/loading-lottie";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -269,9 +270,9 @@ export function ProjectCreateForm() {
                 </p>
               </div>
 
-              {/* Host Selection */}
+              {/* Cluster Selection */}
               <div className="space-y-2">
-                <Label>Target Host</Label>
+                <Label>Target Cluster</Label>
                 <Select
                   value={selectedHost}
                   onValueChange={(value) => setValue("host", value)}
@@ -280,7 +281,7 @@ export function ProjectCreateForm() {
                   <SelectTrigger
                     className={errors.host ? "border-red-500" : ""}
                   >
-                    <SelectValue placeholder={nodesLoading ? "Loading hosts..." : "Select a host"} />
+                    <SelectValue placeholder={nodesLoading ? "Loading clusters..." : "Select a cluster"} />
                   </SelectTrigger>
                   <SelectContent>
                     {nodesLoading ? (
@@ -295,7 +296,7 @@ export function ProjectCreateForm() {
                       ))
                     ) : (
                       <div className="p-2 text-sm text-muted-foreground text-center">
-                        No hosts available
+                        No clusters available
                       </div>
                     )}
                   </SelectContent>
@@ -324,14 +325,14 @@ export function ProjectCreateForm() {
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Resource Limits</h3>
                   {loadingResources && (
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    <LoadingLottieSmall />
                   )}
                 </div>
 
                 {/* Show available resources */}
                 {selectedHost && nodeResources && (
                   <div className="p-3 bg-muted/50 rounded-md space-y-1 text-xs">
-                    <div className="font-medium text-foreground mb-1">Available on {selectedHost}:</div>
+                    <div className="font-medium text-foreground mb-1">Available Resources on {selectedHost}:</div>
                     <div className="text-muted-foreground">
                       CPU: {nodeResources.cpu_available} cores available (of {nodeResources.cpu_total})
                     </div>
@@ -511,7 +512,7 @@ export function ProjectCreateForm() {
             >
               {createProject.isPending ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingLottieSmall className="mr-2" />
                   Creating...
                 </>
               ) : (

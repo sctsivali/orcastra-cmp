@@ -1,8 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, Loader2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag } from "lucide-react";
+import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LoadingLottieSmall } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
 import { StatsOverview } from "@/components/stats-overview";
@@ -52,12 +53,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useVMs, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateInstanceTags, useUpdateProjectTags } from "@/hooks/use-lxd";
+import { useVMs, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateProject, useUpdateInstanceTags, useUpdateProjectTags, useClusters } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
-import { projectAPI } from "@/lib/api";
 
 interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
@@ -247,14 +247,14 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
   const isPending = startVM.isPending || stopVM.isPending || restartVM.isPending;
 
   return (
-    <div className="p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors border">
-      <div className="flex items-start justify-between gap-3">
+    <div className="p-2 md:p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors border">
+      <div className="flex flex-col sm:flex-row items-start gap-2 md:gap-3">
         {/* Left: Instance Info - Clickable */}
         <div 
-          className="flex-1 min-w-0 space-y-2 cursor-pointer" 
+          className="flex-1 w-full sm:min-w-0 space-y-2 cursor-pointer" 
           onClick={() => setShowMonitoring(true)}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             {vm.type === "virtual-machine" ? (
               <Server className="h-4 w-4 text-muted-foreground flex-shrink-0" />
             ) : (
@@ -304,7 +304,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
 
         {/* Right: Actions */}
         <TooltipProvider>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 shrink-0">
             {/* Start */}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -316,7 +316,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={isRunning || isPending || isReadOnly}
                 >
                   {startVM.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <LoadingLottieSmall />
                   ) : (
                     <Play className="h-3.5 w-3.5" />
                   )}
@@ -336,7 +336,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={!isRunning || isPending || isReadOnly}
                 >
                   {stopVM.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <LoadingLottieSmall />
                   ) : (
                     <Square className="h-3.5 w-3.5" />
                   )}
@@ -356,7 +356,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={!isRunning || isPending || isReadOnly}
                 >
                   {restartVM.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <LoadingLottieSmall />
                   ) : (
                     <RotateCw className="h-3.5 w-3.5" />
                   )}
@@ -377,7 +377,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       disabled={isPending || isDeleting || isReadOnly}
                     >
                       {isDeleting ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <LoadingLottieSmall />
                       ) : (
                         <Trash2 className="h-3.5 w-3.5" />
                       )}
@@ -421,6 +421,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
 
 function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances, stats, toggleProject, refetch, isReadOnly = false }: ProjectCardProps) {
   const deleteProject = useDeleteProject();
+  const updateProject = useUpdateProject();
   const updateProjectTags = useUpdateProjectTags();
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [isDeleting, setIsDeleting] = React.useState(false);
@@ -595,7 +596,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         updateData.max_storage = `${editMaxStorageValue}${editMaxStorageUnit}`;
       }
 
-      await projectAPI.update(project.host, project.name, updateData);
+      await updateProject.mutateAsync({ host: project.host, projectName: project.name, data: updateData });
 
       toast({
         title: "Project Updated",
@@ -651,11 +652,10 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
 
   return (
     <Card className="hover:border-primary/50 transition-colors">
-      <CardHeader className="pb-3">
-        <div className="flex items-start justify-between">
+      <CardHeader className="pb-3 px-3 md:px-6">
+        <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-2">
           <div 
-            className="flex items-center gap-2 flex-1 cursor-pointer"
-            onClick={() => instanceCount > 0 && toggleProject(projectKey)}
+            className="flex items-center gap-2 flex-1"
           >
             <FolderKanban className="h-4 w-4 text-muted-foreground" />
             <CardTitle className="text-base">{project.name}</CardTitle>
@@ -664,14 +664,6 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
             <Badge variant="outline" className="text-xs">
               {project.host}
             </Badge>
-            {instanceCount > 0 && (
-              <div onClick={() => toggleProject(projectKey)} className="cursor-pointer">
-                {isExpanded ? 
-                  <ChevronUp className="h-4 w-4 text-muted-foreground" /> : 
-                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                }
-              </div>
-            )}
             {/* Delete Button */}
             {!isReadOnly && (
               <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -721,7 +713,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
                   >
                     {isDeleting ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <LoadingLottieSmall className="mr-2" />
                         Deleting...
                       </>
                     ) : (
@@ -828,9 +820,23 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         <div className="space-y-2 pt-2 border-t">
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">Instances</span>
-            <Badge variant={instanceCount > 0 ? "default" : "secondary"}>
-              {instanceCount}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge 
+                variant={instanceCount > 0 ? "default" : "secondary"}
+                className={instanceCount > 0 ? "cursor-pointer hover:bg-primary/80 transition-colors" : ""}
+                onClick={() => instanceCount > 0 && toggleProject(projectKey)}
+              >
+                {instanceCount}
+              </Badge>
+              {instanceCount > 0 && (
+                <div onClick={() => toggleProject(projectKey)} className="cursor-pointer">
+                  {isExpanded ? 
+                    <ChevronUp className="h-4 w-4 text-muted-foreground" /> : 
+                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                  }
+                </div>
+              )}
+            </div>
           </div>
           {instanceCount > 0 && (
             <div className="flex items-center gap-2 text-xs">
@@ -986,18 +992,39 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = React.useState("");
   const [selectedTags, setSelectedTags] = React.useState<string[]>([]);
+  const [selectedNode, setSelectedNode] = React.useState<string>("all");
   const { isReadOnly } = useReadOnlyMode();
+
+  // Get unique nodes from projects
+  const availableNodes = React.useMemo(() => {
+    if (!projectsData || !Array.isArray(projectsData)) return [];
+    const nodes = new Set<string>();
+    projectsData.forEach((nodeProjects) => {
+      if (nodeProjects && nodeProjects.projects) {
+        nodeProjects.projects.forEach((project) => {
+          if (project.host) nodes.add(project.host);
+        });
+      }
+    });
+    return Array.from(nodes).sort();
+  }, [projectsData]);
 
   // Collect all unique tags from projects and instances
   const allTags = React.useMemo(() => {
     const tags = new Set<string>();
     
-    // Tags from projects
-    projectsData?.forEach((nodeProjects) => {
-      nodeProjects.projects.forEach((project) => {
-        project.tags?.forEach((tag) => tags.add(tag));
+    // Tags from projects - handle null/undefined projectsData
+    if (projectsData && Array.isArray(projectsData)) {
+      projectsData.forEach((nodeProjects) => {
+        if (nodeProjects && nodeProjects.projects) {
+          nodeProjects.projects.forEach((project) => {
+            if (project.tags && Array.isArray(project.tags)) {
+              project.tags.forEach((tag) => tags.add(tag));
+            }
+          });
+        }
       });
-    });
+    }
     
     // Tags from instances
     vmsData.forEach((vm) => {
@@ -1031,14 +1058,19 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
     return { running, stopped, other, total: instances.length };
   };
 
-  // Filter projects based on search query and tags
+  // Filter projects based on search query, tags, and node
   const filterProjects = (project: ProjectInfo) => {
-    // Filter by tags first
+    // Filter by node first
+    if (selectedNode !== "all" && project.host !== selectedNode) {
+      return false;
+    }
+
+    // Filter by tags
     if (selectedTags.length > 0) {
       const projectTags = project.tags || [];
       const instances = getProjectInstances(project.host, project.name);
       const instanceTags = instances.flatMap(vm => vm.tags || []);
-      const allProjectTags = [...new Set([...projectTags, ...instanceTags])];
+      const allProjectTags = Array.from(new Set([...projectTags, ...instanceTags]));
       
       const hasMatchingTag = selectedTags.some(tag => allProjectTags.includes(tag));
       if (!hasMatchingTag) return false;
@@ -1100,9 +1132,9 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
         </Button>
       </div>
 
-      {/* Search Bar */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
+      {/* Search Bar and Node Filter */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
           <Input
             type="text"
             placeholder="Search projects by name, host, description, or instance..."
@@ -1135,7 +1167,21 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
             </Button>
           )}
         </div>
-        {(searchQuery || selectedTags.length > 0) && (
+        {availableNodes.length > 1 && (
+          <Select value={selectedNode} onValueChange={setSelectedNode}>
+            <SelectTrigger className="w-[180px]">
+              <Server className="h-4 w-4 mr-2" />
+              <SelectValue placeholder="All Nodes" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Nodes ({availableNodes.length})</SelectItem>
+              {availableNodes.map((node: string) => (
+                <SelectItem key={node} value={node}>{node}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {(searchQuery || selectedTags.length > 0 || selectedNode !== "all") && (
           <div className="text-sm text-muted-foreground whitespace-nowrap">
             {filteredProjectsCount} of {totalProjectsCount}
           </div>
@@ -1205,9 +1251,15 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
 export function Dashboard() {
   const { data: vmsData, isLoading: vmsLoading, refetch, isRefetching, dataUpdatedAt } = useVMs();
   const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
+  const { data: clustersData, isLoading: clustersLoading } = useClusters();
 
   const lastUpdated = dataUpdatedAt
-    ? new Date(dataUpdatedAt).toLocaleTimeString()
+    ? new Date(dataUpdatedAt).toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      })
     : null;
 
   // calculate instance count per project
@@ -1220,7 +1272,7 @@ export function Dashboard() {
   return (
     <div className="space-y-8">
       {/* Stats Overview */}
-      <StatsOverview data={vmsData} isLoading={vmsLoading} />
+      <StatsOverview data={vmsData} clustersData={clustersData} isLoading={vmsLoading} clustersLoading={clustersLoading} />
 
       {/* Nodes Status */}
       <NodeStatusCards />

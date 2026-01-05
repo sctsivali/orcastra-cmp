@@ -17,34 +17,52 @@ import {
   ProjectCreateResponse,
   InstanceMetrics,
   APIError,
+  ClusterRegisterRequest,
+  ClusterRegisterResponse,
+  ClusterAuthCheckResponse,
+  ClusterListResponse,
+  ClusterInfo,
+  ClusterDeleteResponse,
+  ClusterMembersResponse,
+  ClusterMember,
+  MemberResources,
+  VersionInfo,
+  SystemSettings,
+  SystemResourceUsage,
 } from "@/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4050";
 const API_PREFIX = "/api/v1";
 
 // Export for direct use in components
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4050";
 export const API_URL = `${API_BASE_URL}${API_PREFIX}`;
 
 // Timeout wrapper for fetch with AbortController
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
-  timeoutMs: number = 30000
+  timeoutMs: number = 90000
 ): Promise<Response> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = setTimeout(() => {
+    console.error(`Request timeout after ${timeoutMs}ms for ${url}`);
+    controller.abort();
+  }, timeoutMs);
 
   try {
+    const startTime = Date.now();
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
+    const duration = Date.now() - startTime;
+    console.log(`Request completed in ${duration}ms: ${url}`);
     return response;
   } catch (error) {
     clearTimeout(timeoutId);
     if (error instanceof Error && error.name === 'AbortError') {
-      throw new APIError('Request timeout - server took too long to respond', 504, 'Request timeout');
+      throw new APIError(`Request timeout after ${timeoutMs / 1000}s - server took too long to respond`, 504, 'Request timeout');
     }
     throw error;
   }
@@ -53,7 +71,7 @@ async function fetchWithTimeout(
 async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {},
-  timeoutMs: number = 30000
+  timeoutMs: number = 90000
 ): Promise<T> {
   const url = `${API_BASE_URL}${API_PREFIX}${endpoint}`;
 
@@ -209,6 +227,24 @@ export const nodeAPI = {
       }
     );
   },
+
+  invalidateCache: async (nodeName: string): Promise<{ success: boolean; message: string; node_name: string }> => {
+    return fetchAPI(
+      `/nodes/${nodeName}/cache/invalidate`,
+      {
+        method: "POST",
+      }
+    );
+  },
+
+  invalidateAllCache: async (): Promise<{ success: boolean; message: string }> => {
+    return fetchAPI(
+      `/nodes/cache/invalidate-all`,
+      {
+        method: "POST",
+      }
+    );
+  },
 };
 
 // Project Operations
@@ -218,7 +254,7 @@ export const projectAPI = {
   },
 
   list: async (host: string): Promise<ProjectListResponse> => {
-    return fetchAPI<ProjectListResponse>(`/projects/${host}`);
+    return fetchAPI<ProjectListResponse>(`/projects/${encodeURIComponent(host)}`);
   },
 
   create: async (data: ProjectCreateRequest): Promise<ProjectCreateResponse> => {
@@ -317,6 +353,18 @@ const systemAPI = {
       api_version: string;
       debug: boolean;
     }>("/system/settings");
+  },
+  getVersion: async () => {
+    return fetchAPI<{
+      app_version: string;
+      api_version: string;
+      build_date?: string | null;
+      build_commit?: string | null;
+      environment: string;
+    }>("/system/version");
+  },
+  getResourceUsage: async (): Promise<SystemResourceUsage> => {
+    return fetchAPI<SystemResourceUsage>("/system/resource-usage");
   },
 };
 
@@ -603,6 +651,13 @@ export const identityAPI = {
   get: async (id: string, host: string) => {
     return fetchAPI(`/identities/${id}?host=${encodeURIComponent(host)}`);
   },
+
+  delete: async (authType: string, identityId: string, host: string) => {
+    return fetchAPI(
+      `/identities/${authType}/${encodeURIComponent(identityId)}?host=${encodeURIComponent(host)}`,
+      { method: "DELETE" }
+    );
+  },
 };
 
 // Group Operations
@@ -623,10 +678,141 @@ export const groupAPI = {
     });
   },
 
+  update: async (name: string, data: any, host: string) => {
+    return fetchAPI(`/groups/${name}?host=${encodeURIComponent(host)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  },
+
+  addIdentity: async (groupName: string, authType: "tls" | "oidc", identityId: string, host: string) => {
+    return fetchAPI(`/groups/${groupName}/identities?host=${encodeURIComponent(host)}`, {
+      method: "POST",
+      body: JSON.stringify({ auth_type: authType, identity_id: identityId }),
+    });
+  },
+
+  removeIdentity: async (groupName: string, authType: string, identityId: string, host: string) => {
+    return fetchAPI(
+      `/groups/${groupName}/identities/${authType}/${encodeURIComponent(identityId)}?host=${encodeURIComponent(host)}`,
+      {
+        method: "DELETE",
+      }
+    );
+  },
+
   delete: async (name: string, host: string) => {
     return fetchAPI(`/groups/${name}?host=${encodeURIComponent(host)}`, {
       method: "DELETE",
     });
+  },
+};
+
+// Cluster Operations
+export const clusterAPI = {
+  register: async (data: ClusterRegisterRequest): Promise<ClusterRegisterResponse> => {
+    return fetchAPI<ClusterRegisterResponse>("/clusters/register", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }, 90000); // 90 second timeout for Vault operations and auto-detect
+  },
+
+  checkAuth: async (clusterId: string): Promise<ClusterAuthCheckResponse> => {
+    return fetchAPI<ClusterAuthCheckResponse>("/clusters/check-auth", {
+      method: "POST",
+      body: JSON.stringify({ cluster_id: clusterId }),
+    });
+  },
+
+  list: async (): Promise<ClusterListResponse> => {
+    return fetchAPI<ClusterListResponse>("/clusters");
+  },
+
+  get: async (clusterId: string): Promise<ClusterInfo> => {
+    return fetchAPI<ClusterInfo>(`/clusters/${clusterId}`);
+  },
+
+  delete: async (clusterId: string): Promise<ClusterDeleteResponse> => {
+    return fetchAPI<ClusterDeleteResponse>(`/clusters/${clusterId}`, {
+      method: "DELETE",
+    });
+  },
+
+  regenerateCert: async (clusterId: string): Promise<ClusterRegisterResponse> => {
+    return fetchAPI<ClusterRegisterResponse>(
+      `/clusters/${clusterId}/regenerate-cert`,
+      {
+        method: "POST",
+      }
+    );
+  },
+};
+
+// IPAM API
+export const ipamAPI = {
+  list: async (host?: string) => {
+    const url = host ? `/ipam?host=${encodeURIComponent(host)}` : "/ipam";
+    return fetchAPI(url);
+  },
+};
+
+// My Keys API
+export const myKeysAPI = {
+  list: async (statusFilter?: string, search?: string) => {
+    let url = "/my-keys";
+    const params = new URLSearchParams();
+    if (statusFilter) params.append("status_filter", statusFilter);
+    if (search) params.append("search", search);
+    if (params.toString()) url += `?${params.toString()}`;
+    return fetchAPI(url);
+  },
+
+  create: async (request: any) => {
+    return fetchAPI("/my-keys", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  },
+
+  download: async (keyId: string) => {
+    const url = `${API_BASE_URL}${API_PREFIX}/my-keys/${keyId}/download`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error("Failed to download key");
+    }
+    return response.blob();
+  },
+
+  delete: async (keyId: string) => {
+    return fetchAPI(`/my-keys/${keyId}`, {
+      method: "DELETE",
+    });
+  },
+};
+
+// Monitoring API
+import type { 
+  MonitoringDashboardResponse, 
+  ClusterMonitoringMetrics, 
+  MetricsHistoryPoint,
+  MonitoringNetworkMetrics,
+} from "@/types";
+
+export const monitoringAPI = {
+  getDashboard: async (): Promise<MonitoringDashboardResponse> => {
+    return fetchAPI<MonitoringDashboardResponse>("/monitoring/dashboard");
+  },
+
+  getNodeMetrics: async (nodeName: string): Promise<ClusterMonitoringMetrics> => {
+    return fetchAPI<ClusterMonitoringMetrics>(`/monitoring/nodes/${encodeURIComponent(nodeName)}/metrics`);
+  },
+
+  getHistory: async (points: number = 60): Promise<MetricsHistoryPoint[]> => {
+    return fetchAPI<MetricsHistoryPoint[]>(`/monitoring/history?points=${points}`);
+  },
+
+  getNetworkMetrics: async (): Promise<MonitoringNetworkMetrics> => {
+    return fetchAPI<MonitoringNetworkMetrics>("/monitoring/network");
   },
 };
 
@@ -651,4 +837,23 @@ export const api = {
   server: serverAPI,
   identities: identityAPI,
   groups: groupAPI,
+  clusters: clusterAPI,
+  ipam: ipamAPI,
+  myKeys: myKeysAPI,
+  monitoring: monitoringAPI,
+  clusterMembers: {
+    list: async (node: string) => {
+      return fetchAPI<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`);
+    },
+    get: async (node: string, memberName: string) => {
+      return fetchAPI<ClusterMember>(
+        `/cluster-members/${encodeURIComponent(memberName)}?node=${encodeURIComponent(node)}`
+      );
+    },
+    getResources: async (node: string, memberName: string) => {
+      return fetchAPI<MemberResources>(
+        `/cluster-members/${encodeURIComponent(memberName)}/resources?node=${encodeURIComponent(node)}`
+      );
+    },
+  },
 };

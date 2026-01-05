@@ -65,13 +65,13 @@ export default function ServiceProvidersPage() {
         {serviceProviders.map((provider) => (
           <Card key={provider.name} className="overflow-hidden">
             <CardHeader className="border-b bg-muted/50">
-              <div className="flex items-center gap-4">
-                <div className="relative h-10 sm:h-16 w-32 sm:w-48">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                <div className="relative h-8 sm:h-16 w-24 sm:w-48">
                   <Image
                     src={provider.logo}
                     alt={`${provider.name} logo`}
                     fill
-                    className="object-contain"
+                    className="object-contain object-left"
                   />
                 </div>
                 <div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,9 +23,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Shield, Loader2, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Shield, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { useNetworkACLs } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 type SortField = "name" | "description" | "used_by";
 type SortDirection = "asc" | "desc";
@@ -41,8 +42,9 @@ interface ACLInfo {
 }
 
 export default function NetworkACLsPage() {
-  const [acls, setAcls] = useState<ACLInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useNetworkACLs();
+  const acls = (data as any)?.acls || [];
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -51,30 +53,8 @@ export default function NetworkACLsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchACLs();
-  }, []);
-
-  const fetchACLs = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/network-acls`);
-      if (!response.ok) throw new Error("Failed to fetch network ACLs");
-      const data = await response.json();
-      setAcls(data.acls || []);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch network ACLs",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const nodes = useMemo(() => {
-    const nodeSet = new Set(acls.map(a => a.node).filter((n): n is string => Boolean(n)));
+    const nodeSet = new Set(acls.map((a: any) => a.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [acls]);
 
@@ -94,17 +74,17 @@ export default function NetworkACLsPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (acl) =>
+        (acl: any) =>
           acl.name.toLowerCase().includes(query) ||
           (acl.description && acl.description.toLowerCase().includes(query))
       );
     }
 
     if (filterNode !== "all") {
-      filtered = filtered.filter((acl) => acl.node === filterNode);
+      filtered = filtered.filter((acl: any) => acl.node === filterNode);
     }
 
-    filtered.sort((a, b) => {
+    filtered.sort((a: any, b: any) => {
       let aVal, bVal;
       
       switch (sortField) {
@@ -147,12 +127,8 @@ export default function NetworkACLsPage() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -164,12 +140,12 @@ export default function NetworkACLsPage() {
             Network ACLs
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud network access control lists
+            Manage hypervisor network access control lists
           </p>
         </div>
-        <Button onClick={fetchACLs}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -198,7 +174,7 @@ export default function NetworkACLsPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node) => (
+                  {nodes.map((node: any) => (
                     <SelectItem key={node} value={node}>
                       {node}
                     </SelectItem>
@@ -253,7 +229,7 @@ export default function NetworkACLsPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedACLs.map((acl, idx) => (
+                paginatedACLs.map((acl: any, idx: number) => (
                   <TableRow key={`${acl.node}-${acl.name}-${idx}`}>
                     <TableCell className="font-medium">{acl.name}</TableCell>
                     <TableCell className="max-w-md truncate">

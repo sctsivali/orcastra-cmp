@@ -18,6 +18,9 @@ from .instance import InstanceManager
 from .projects import ProjectManager
 from .images import ImageManager
 from .exceptions import LXDConnectionError, LXDOperationError
+from app.services.lxd_cert_manager import LXDCertificateManager
+from app.core.vault_client import VaultClient
+from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -32,29 +35,101 @@ class LXDService:
         # Initialize managers
         self.connection_manager = LXDConnectionManager()
         self.resource_manager = ResourceManager()
-        self.instance_manager = InstanceManager(self.connection_manager, self.resource_manager)
-        self.project_manager = ProjectManager(self.connection_manager)
-        self.image_manager = ImageManager(self.connection_manager)
+        settings = get_settings()
+        vault_client = VaultClient(settings.vault_addr, settings.vault_token)
+        self.cert_manager = LXDCertificateManager(vault_client)
+        self.instance_manager = InstanceManager(self.connection_manager, self.resource_manager, self.cert_manager)
+        self.project_manager = ProjectManager(self.connection_manager, self.cert_manager)
+        self.image_manager = ImageManager(self.connection_manager, self.cert_manager)
+    
+    def ensure_connection(self, cluster_id: str) -> bool:
+        """
+        Ensure cluster is connected (lazy loading helper).
+        """
+        # Check if already connected
+        client = self.connection_manager.get_client(cluster_id)
+        if client:
+            return True
+        
+        # Try to connect
+        try:
+            cluster_info = self.cert_manager.get_cluster_info(cluster_id)
+            cert_data = self.cert_manager.get_cluster_certificate(cluster_id)
+            
+            self.connection_manager.connect_with_vault_cert(
+                cluster_id=cluster_id,
+                endpoint=cluster_info["metadata"]["endpoint"],
+                cert_content=cert_data["client.crt"],
+                key_content=cert_data["client.key"],
+                verify=False
+            )
+            logger.info(f"Lazy-connected to cluster: {cluster_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect cluster {cluster_id}: {e}")
+            return False
+    
+    def get_client_with_reconnect(self, cluster_id: str):
+        """
+        Get LXD client with automatic reconnection if stale.
+        This method properly adds reconnected clients back to the connection pool.
+        """
+        client = self.connection_manager.get_client(cluster_id)
+        if client is None:
+            logger.info(f"Connection to {cluster_id} is stale, attempting reconnect...")
+            # Use ensure_connection which properly adds client to connection_manager._clients
+            if self.ensure_connection(cluster_id):
+                client = self.connection_manager.get_client(cluster_id)
+                logger.info(f"Reconnected to {cluster_id} successfully")
+            else:
+                logger.warning(f"Reconnect failed for {cluster_id}")
+                client = None
+        return client
     
     # Node operations
     def get_node_names(self) -> List[str]:
-        """Get list of configured node names."""
-        return self.connection_manager.get_node_names()
+        """Get list of all registered cluster names from Vault."""
+        return self.cert_manager.list_clusters()
     
     def check_nodes_status(self) -> List[NodeStatus]:
-        """Check connection status for all nodes."""
+        """Check connection status for all nodes.
+        Uses Vault as source of truth for node list and supports auto-reconnection.
+        """
         statuses = []
+        settings = get_settings()
         
-        for node_name in self.connection_manager.get_node_names():
-            config = self.connection_manager.get_node_config(node_name)
+        # Use Vault as source of truth - not just cached connections
+        node_names = self.get_node_names()
+        
+        for node_name in node_names:
             try:
-                client = self.connection_manager.get_client(node_name)
-                status = self.resource_manager.check_node_status(client, node_name, config.endpoint)
-                statuses.append(status)
+                # Get endpoint from Vault metadata
+                endpoint = "unknown"
+                try:
+                    metadata = self.cert_manager.vault.vault_read(
+                        f"{settings.vault_clusters_path}/{node_name}/metadata"
+                    )
+                    endpoint = metadata.get("endpoint", "unknown")
+                except Exception:
+                    pass
+                
+                # Use get_client_with_reconnect for automatic reconnection
+                client = self.get_client_with_reconnect(node_name)
+                if client:
+                    status = self.resource_manager.check_node_status(client, node_name, endpoint)
+                    statuses.append(status)
+                else:
+                    status = NodeStatus(
+                        name=node_name,
+                        endpoint=endpoint,
+                        connected=False,
+                        error="Client not connected"
+                    )
+                    statuses.append(status)
             except Exception as e:
                 status = NodeStatus(
                     name=node_name,
-                    endpoint=config.endpoint,
+                    endpoint="unknown",
                     connected=False,
                     error=str(e)
                 )
@@ -139,6 +214,8 @@ class LXDService:
     # Project operations
     async def list_projects(self, host: str) -> List[Dict[str, Any]]:
         """List all projects on a specific LXD host."""
+        # Ensure connection (lazy loading)
+        self.ensure_connection(host)
         return await self.project_manager.list_projects(host)
     
     async def create_project(

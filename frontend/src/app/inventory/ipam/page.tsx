@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -21,9 +21,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Network, Loader2, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { Network, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { useIPAM } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 type SortField = "address" | "type" | "used_by" | "network";
 type SortDirection = "asc" | "desc";
@@ -38,16 +38,11 @@ interface IPAMAllocation {
   project: string;
 }
 
-interface IPAMListResponse {
-  total: number;
-  allocations: IPAMAllocation[];
-  nodes: string[];
-}
-
 export default function IPAMPage() {
-  const [allocations, setAllocations] = useState<IPAMAllocation[]>([]);
-  const [nodes, setNodes] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useIPAM();
+  const allocations = (data as any)?.allocations || [];
+  const nodes = (data as any)?.nodes || [];
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterNetwork, setFilterNetwork] = useState<string>("all");
@@ -56,38 +51,14 @@ export default function IPAMPage() {
   const [pageSize, setPageSize] = useState(25);
   const [sortField, setSortField] = useState<SortField>("address");
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
-  const { toast } = useToast();
-
-  useEffect(() => {
-    fetchAllocations();
-  }, []);
-
-  const fetchAllocations = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/ipam`);
-      if (!response.ok) throw new Error("Failed to fetch IPAM allocations");
-      const data: IPAMListResponse = await response.json();
-      setAllocations(data.allocations);
-      setNodes(data.nodes);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch IPAM allocations",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const networks = useMemo(() => {
-    const networkSet = new Set(allocations.map((a) => a.network));
+    const networkSet = new Set(allocations.map((a: any) => a.network));
     return Array.from(networkSet).sort();
   }, [allocations]);
 
   const types = useMemo(() => {
-    const typeSet = new Set(allocations.map((a) => a.type));
+    const typeSet = new Set(allocations.map((a: any) => a.type));
     return Array.from(typeSet).sort();
   }, [allocations]);
 
@@ -107,7 +78,7 @@ export default function IPAMPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (alloc) =>
+        (alloc: any) =>
           alloc.address.toLowerCase().includes(query) ||
           alloc.used_by.toLowerCase().includes(query) ||
           alloc.hardware_address.toLowerCase().includes(query)
@@ -115,18 +86,18 @@ export default function IPAMPage() {
     }
 
     if (filterNode !== "all") {
-      filtered = filtered.filter((alloc) => alloc.node === filterNode);
+      filtered = filtered.filter((alloc: any) => alloc.node === filterNode);
     }
 
     if (filterNetwork !== "all") {
-      filtered = filtered.filter((alloc) => alloc.network === filterNetwork);
+      filtered = filtered.filter((alloc: any) => alloc.network === filterNetwork);
     }
 
     if (filterType !== "all") {
-      filtered = filtered.filter((alloc) => alloc.type === filterType);
+      filtered = filtered.filter((alloc: any) => alloc.type === filterType);
     }
 
-    filtered.sort((a, b) => {
+    filtered.sort((a: any, b: any) => {
       let aVal, bVal;
 
       switch (sortField) {
@@ -173,12 +144,8 @@ export default function IPAMPage() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -193,9 +160,9 @@ export default function IPAMPage() {
             IP Address Management - View and manage IP allocations across networks
           </p>
         </div>
-        <Button onClick={fetchAllocations}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -227,7 +194,7 @@ export default function IPAMPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node) => (
+                  {nodes.map((node: any) => (
                     <SelectItem key={node} value={node}>
                       {node}
                     </SelectItem>
@@ -247,7 +214,7 @@ export default function IPAMPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Networks</SelectItem>
-                {networks.map((network) => (
+                {networks.map((network: any) => (
                   <SelectItem key={network} value={network}>
                     {network}
                   </SelectItem>
@@ -266,7 +233,7 @@ export default function IPAMPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                {types.map((type) => (
+                {types.map((type: any) => (
                   <SelectItem key={type} value={type}>
                     {type}
                   </SelectItem>
@@ -330,7 +297,7 @@ export default function IPAMPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedAllocations.map((alloc, idx) => (
+                paginatedAllocations.map((alloc: any, idx: number) => (
                   <TableRow key={`${alloc.node}-${alloc.address}-${idx}`}>
                     <TableCell className="font-mono">
                       {alloc.address}

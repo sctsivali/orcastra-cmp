@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { X, Activity, Cpu, HardDrive, Network, Clock } from "lucide-react";
+import { LoadingLottieMedium } from "./loading-lottie";
 import { useInstanceMetrics } from "@/hooks";
 import { VMInfo } from "@/types";
 import { Button } from "./ui/button";
@@ -59,20 +60,21 @@ export function InstanceMonitoringModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[85dvh] max-h-[90vh] overflow-y-auto overscroll-contain pt-10 sm:pt-6">
         <DialogHeader>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Activity className="h-6 w-6 text-blue-500" />
-              <div>
-                <DialogTitle className="text-2xl">{instance.name}</DialogTitle>
-                <DialogDescription>
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 min-w-0">
+              <Activity className="h-5 w-5 sm:h-6 sm:w-6 text-blue-500 shrink-0" />
+              <div className="min-w-0">
+                <DialogTitle className="text-lg sm:text-2xl truncate">{instance.name}</DialogTitle>
+                <DialogDescription className="truncate">
                   Real-time monitoring • {instance.host}
                 </DialogDescription>
               </div>
             </div>
             <Badge
               variant={instance.status === "Running" ? "default" : "secondary"}
+              className="shrink-0"
             >
               {instance.status}
             </Badge>
@@ -122,8 +124,8 @@ export function InstanceMonitoringModal({
           </Card>
 
           {isLoading ? (
-            <div className="text-center py-8 text-muted-foreground">
-              Loading metrics...
+            <div className="flex justify-center py-8">
+              <LoadingLottieMedium />
             </div>
           ) : instance.status !== "Running" ? (
             <div className="text-center py-8 text-muted-foreground">

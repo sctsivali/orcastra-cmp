@@ -18,13 +18,36 @@ class ProjectManager:
     Manages LXD project operations.
     """
     
-    def __init__(self, connection_manager: LXDConnectionManager):
+    def __init__(self, connection_manager: LXDConnectionManager, cert_manager=None):
         self.connection_manager = connection_manager
+        self.cert_manager = cert_manager
+    
+    def _get_client_with_reconnect(self, node_name: str):
+        """Get client with automatic reconnection if stale."""
+        client = self.connection_manager.get_client(node_name)
+        if client is None and self.cert_manager:
+            logger.info(f"Connection to {node_name} is stale, attempting reconnect...")
+            try:
+                # Pass connection_manager for proper pooling
+                client = self.cert_manager.connect_with_vault_cert(
+                    node_name,
+                    connection_manager=self.connection_manager
+                )
+                logger.info(f"Reconnected to {node_name} successfully")
+            except Exception as e:
+                logger.warning(f"Reconnect failed for {node_name}: {e}")
+                client = None
+        return client
     
     async def list_projects(self, host: str) -> List[Dict[str, Any]]:
         """List all projects on a specific LXD host."""
         try:
-            client = self.connection_manager.get_client(host)
+            client = self._get_client_with_reconnect(host)
+            
+            # If client is None, raise specific error
+            if client is None:
+                raise LXDOperationError(f"No connection to host: {host}. Client returned None. Please ensure the cluster is properly registered and connected.")
+            
             projects = client.projects.all()
             
             project_list = []
@@ -62,7 +85,9 @@ class ProjectManager:
     ) -> Dict[str, Any]:
         """Create a new project on a specific LXD host."""
         try:
-            client = self.connection_manager.get_client(host)
+            client = self._get_client_with_reconnect(host)
+            if client is None:
+                raise LXDOperationError(f"No connection to host: {host}. Please ensure the cluster is properly registered and connected.")
             
             # prepare project config with default features
             project_config = config or {
@@ -121,7 +146,9 @@ class ProjectManager:
     ) -> Dict[str, Any]:
         """Update an existing project's description and resource limits."""
         try:
-            client = self.connection_manager.get_client(host)
+            client = self._get_client_with_reconnect(host)
+            if client is None:
+                raise LXDOperationError(f"No connection to host: {host}. Please ensure the cluster is properly registered and connected.")
             
             # get the current project
             project = client.projects.get(project_name)
@@ -164,7 +191,9 @@ class ProjectManager:
     async def delete_project(self, host: str, name: str) -> None:
         """Delete a project from a specific LXD host."""
         try:
-            client = self.connection_manager.get_client(host)
+            client = self._get_client_with_reconnect(host)
+            if client is None:
+                raise LXDOperationError(f"No connection to host: {host}. Please ensure the cluster is properly registered and connected.")
             
             # get the project first
             project = client.projects.get(name)

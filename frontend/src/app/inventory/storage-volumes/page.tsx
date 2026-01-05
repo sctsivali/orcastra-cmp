@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,9 +23,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Database, Loader2, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Database, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { useStorageVolumes } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 type SortField = "name" | "type" | "content_type" | "used_by";
 type SortDirection = "asc" | "desc";
@@ -41,8 +42,9 @@ interface VolumeInfo {
 }
 
 export default function StorageVolumesPage() {
-  const [volumes, setVolumes] = useState<VolumeInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useStorageVolumes();
+  const volumes = (data as any)?.volumes || [];
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
@@ -52,35 +54,13 @@ export default function StorageVolumesPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchVolumes();
-  }, []);
-
-  const fetchVolumes = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/storage/volumes`);
-      if (!response.ok) throw new Error("Failed to fetch storage volumes");
-      const data = await response.json();
-      setVolumes(data.volumes || []);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch storage volumes",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const nodes = useMemo(() => {
-    const nodeSet = new Set(volumes.map(v => v.node).filter((n): n is string => Boolean(n)));
+    const nodeSet = new Set(volumes.map((v: any) => v.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [volumes]);
 
   const volumeTypes = useMemo(() => {
-    const typeSet = new Set(volumes.map(v => v.type));
+    const typeSet = new Set(volumes.map((v: any) => v.type));
     return Array.from(typeSet).sort();
   }, [volumes]);
 
@@ -100,21 +80,21 @@ export default function StorageVolumesPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (volume) =>
+        (volume: any) =>
           volume.name.toLowerCase().includes(query) ||
           (volume.description && volume.description.toLowerCase().includes(query))
       );
     }
 
     if (filterNode !== "all") {
-      filtered = filtered.filter((volume) => volume.node === filterNode);
+      filtered = filtered.filter((volume: any) => volume.node === filterNode);
     }
 
     if (filterType !== "all") {
-      filtered = filtered.filter((volume) => volume.type === filterType);
+      filtered = filtered.filter((volume: any) => volume.type === filterType);
     }
 
-    filtered.sort((a, b) => {
+    filtered.sort((a: any, b: any) => {
       let aVal, bVal;
       
       switch (sortField) {
@@ -161,12 +141,8 @@ export default function StorageVolumesPage() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -178,12 +154,12 @@ export default function StorageVolumesPage() {
             Storage Volumes
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud storage volumes
+            Manage hypervisor storage volumes
           </p>
         </div>
-        <Button onClick={fetchVolumes}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -212,7 +188,7 @@ export default function StorageVolumesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node) => (
+                  {nodes.map((node: any) => (
                     <SelectItem key={node} value={node}>
                       {node}
                     </SelectItem>
@@ -229,7 +205,7 @@ export default function StorageVolumesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                {volumeTypes.map((type) => (
+                {volumeTypes.map((type: any) => (
                   <SelectItem key={type} value={type}>
                     {type}
                   </SelectItem>
@@ -287,7 +263,7 @@ export default function StorageVolumesPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedVolumes.map((volume, idx) => (
+                paginatedVolumes.map((volume: any, idx: number) => (
                   <TableRow key={`${volume.node}-${volume.name}-${idx}`}>
                     <TableCell className="font-medium">{volume.name}</TableCell>
                     <TableCell>

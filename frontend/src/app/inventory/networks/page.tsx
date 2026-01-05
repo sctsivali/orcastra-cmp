@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,9 +23,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Network, Loader2, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Network, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { useNetworks } from "@/hooks/use-lxd";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 type SortField = "name" | "type" | "status" | "used_by";
 type SortDirection = "asc" | "desc";
@@ -42,8 +43,9 @@ interface NetworkInfo {
 }
 
 export default function NetworksPage() {
-  const [networks, setNetworks] = useState<NetworkInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { data, isLoading, refetch, isRefetching } = useNetworks();
+  const networks = (data as any)?.networks || [];
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
@@ -53,35 +55,13 @@ export default function NetworksPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
 
-  useEffect(() => {
-    fetchNetworks();
-  }, []);
-
-  const fetchNetworks = async () => {
-    try {
-      setLoading(true);
-      const response = await fetch(`${API_URL}/networks`);
-      if (!response.ok) throw new Error("Failed to fetch networks");
-      const data = await response.json();
-      setNetworks(data.networks || []);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to fetch networks",
-        variant: "destructive",
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const nodes = useMemo(() => {
-    const nodeSet = new Set(networks.map(n => n.node).filter((n): n is string => Boolean(n)));
+    const nodeSet = new Set(networks.map((n: any) => n.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [networks]);
 
   const networkTypes = useMemo(() => {
-    const typeSet = new Set(networks.map(n => n.type));
+    const typeSet = new Set(networks.map((n: any) => n.type));
     return Array.from(typeSet).sort();
   }, [networks]);
 
@@ -101,21 +81,21 @@ export default function NetworksPage() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
-        (network) =>
+        (network: any) =>
           network.name.toLowerCase().includes(query) ||
           (network.description && network.description.toLowerCase().includes(query))
       );
     }
 
     if (filterNode !== "all") {
-      filtered = filtered.filter((network) => network.node === filterNode);
+      filtered = filtered.filter((network: any) => network.node === filterNode);
     }
 
     if (filterType !== "all") {
-      filtered = filtered.filter((network) => network.type === filterType);
+      filtered = filtered.filter((network: any) => network.type === filterType);
     }
 
-    filtered.sort((a, b) => {
+    filtered.sort((a: any, b: any) => {
       let aVal, bVal;
       
       switch (sortField) {
@@ -162,12 +142,8 @@ export default function NetworksPage() {
     );
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
+  if (isLoading) {
+    return <LoadingLottiePage />;
   }
 
   return (
@@ -179,12 +155,12 @@ export default function NetworksPage() {
             Networks
           </h1>
           <p className="text-muted-foreground mt-2">
-            Manage LXD and MicroCloud network configurations
+            Manage hypervisor network configurations
           </p>
         </div>
-        <Button onClick={fetchNetworks}>
-          <RotateCw className="h-4 w-4 mr-2" />
-          Refresh
+        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
+          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
+          <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>
 
@@ -213,7 +189,7 @@ export default function NetworksPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node) => (
+                  {nodes.map((node: any) => (
                     <SelectItem key={node} value={node}>
                       {node}
                     </SelectItem>
@@ -230,7 +206,7 @@ export default function NetworksPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All Types</SelectItem>
-                {networkTypes.map((type) => (
+                {networkTypes.map((type: any) => (
                   <SelectItem key={type} value={type}>
                     {type}
                   </SelectItem>
@@ -291,7 +267,7 @@ export default function NetworksPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedNetworks.map((network, idx) => {
+                paginatedNetworks.map((network: any, idx: number) => {
                   const ipv4 = network.config?.["ipv4.address"] || "N/A";
                   const ipv6 = network.config?.["ipv6.address"] || "N/A";
                   

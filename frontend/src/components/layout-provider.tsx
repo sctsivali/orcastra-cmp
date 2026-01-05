@@ -5,15 +5,20 @@ import * as React from "react";
 interface LayoutContextType {
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  sidebarOpen: boolean;
+  setSidebarOpen: (open: boolean) => void;
 }
 
 const LayoutContext = React.createContext<LayoutContextType>({
   sidebarCollapsed: true,
   setSidebarCollapsed: () => {},
+  sidebarOpen: false,
+  setSidebarOpen: () => {},
 });
 
 export function LayoutProvider({ children }: { children: React.ReactNode }) {
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(true);
+  const [sidebarOpen, setSidebarOpen] = React.useState(false);
 
   React.useEffect(() => {
     const saved = localStorage.getItem("sidebar-collapsed");
@@ -23,7 +28,7 @@ export function LayoutProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <LayoutContext.Provider value={{ sidebarCollapsed, setSidebarCollapsed }}>
+    <LayoutContext.Provider value={{ sidebarCollapsed, setSidebarCollapsed, sidebarOpen, setSidebarOpen }}>
       {children}
     </LayoutContext.Provider>
   );

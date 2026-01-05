@@ -16,6 +16,7 @@ from .lxd_warnings import router as lxd_warnings_router
 from .lxd_server import router as lxd_server_router
 from .permissions import identities_router, groups_router
 from .ipam import router as ipam_router
+from .my_keys import router as my_keys_router
 
 __all__ = [
     "vms_router",
@@ -35,4 +36,5 @@ __all__ = [
     "identities_router",
     "groups_router",
     "ipam_router",
+    "my_keys_router",
 ]

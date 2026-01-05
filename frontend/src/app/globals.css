@@ -176,3 +176,167 @@ tbody tr {
 .sidebar-transition {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  /* Improve touch targets */
+  button, a {
+    min-height: 44px;
+    min-width: 44px;
+  }
+  
+  /* Prevent text selection on double tap */
+  .no-select {
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+  }
+  
+  /* Smooth scrolling */
+  html {
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  /* Better input handling */
+  input, textarea, select {
+    font-size: 16px; /* Prevents zoom on iOS */
+  }
+  
+  /* Optimize animations on mobile */
+  .animate-fade-in,
+  .animate-scale-in {
+    animation-duration: 0.2s;
+  }
+}
+
+/* Safe area padding for notched devices */
+@supports (padding: max(0px)) {
+  .safe-area-inset-top {
+    padding-top: max(env(safe-area-inset-top), 1rem);
+  }
+  
+  .safe-area-inset-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 1rem);
+  }
+}
+
+/* Responsive tables */
+@media (max-width: 640px) {
+  .responsive-table {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  
+  .responsive-table table {
+    min-width: 600px;
+  }
+}
+
+/* Better scrollbar for mobile */
+@media (max-width: 768px) {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  /* Prevent excessive vertical space on mobile */
+  body {
+    min-height: 100vh;
+    min-height: 100dvh;
+  }
+  
+  /* Constrain main content area */
+  main {
+    min-height: auto;
+  }
+}
+
+/* ===== MOBILE SIDEBAR FIX ===== */
+/* Ensure sidebar always uses viewport height, not document height */
+@supports (height: 100dvh) {
+  aside[class*="fixed"][class*="left-0"] {
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+  }
+}
+
+/* Fallback for browsers without dvh support */
+@supports not (height: 100dvh) {
+  aside[class*="fixed"][class*="left-0"] {
+    height: 100vh !important;
+    height: -webkit-fill-available !important;
+    max-height: 100vh !important;
+  }
+}
+
+/* Fix for desktop-site mode on mobile - ensure fixed elements work properly */
+@media screen {
+  /* Ensure overlays and modals are viewport-relative */
+  [data-radix-portal],
+  [role="dialog"],
+  .fixed.inset-0 {
+    position: fixed !important;
+  }
+}
+
+/* ===== MODAL/DIALOG MOBILE FIX ===== */
+/* Ensure dialogs are always visible in viewport on mobile */
+@media (max-width: 768px) {
+  /* Dialog content - ensure it's within viewport */
+  [role="dialog"][data-state="open"] {
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    max-height: calc(100dvh - 2rem) !important;
+    max-height: calc(100vh - 2rem) !important;
+    width: calc(100vw - 2rem) !important;
+    max-width: calc(100vw - 2rem) !important;
+  }
+  
+  /* Alert dialog content */
+  [role="alertdialog"][data-state="open"] {
+    position: fixed !important;
+    top: 50% !important;
+    left: 50% !important;
+    transform: translate(-50%, -50%) !important;
+    max-height: calc(100dvh - 2rem) !important;
+    max-height: calc(100vh - 2rem) !important;
+    width: calc(100vw - 2rem) !important;
+    max-width: calc(100vw - 2rem) !important;
+  }
+}
+
+/* ===== DROPDOWN MENU MOBILE FIX ===== */
+/* Ensure dropdown menus are positioned within viewport */
+@media (max-width: 768px) {
+  [data-radix-popper-content-wrapper] {
+    /* Use viewport-relative positioning */
+    position: fixed !important;
+    /* Allow the popper to reposition within viewport bounds */
+    max-width: calc(100vw - 1rem) !important;
+    max-height: calc(100dvh - 1rem) !important;
+  }
+  
+  /* Dropdown menu content adjustments */
+  [role="menu"] {
+    max-height: 50dvh !important;
+    overflow-y: auto !important;
+  }
+}
+
+/* ===== COLLAPSED SIDEBAR DESKTOP SITE MODE FIX ===== */
+/* When viewing desktop site on mobile, ensure collapsed sidebar is proper */
+@media (min-width: 768px) {
+  aside[class*="fixed"][class*="left-0"][class*="w-16"] {
+    /* Ensure proper collapsed state */
+    width: 4rem !important;
+    min-width: 4rem !important;
+  }
+  
+  aside[class*="fixed"][class*="left-0"][class*="w-16"] .flex-1.text-left,
+  aside[class*="fixed"][class*="left-0"][class*="w-16"] span:not([class*="sr-only"]) {
+    /* Hide text in collapsed mode but keep icons */
+  }
+}

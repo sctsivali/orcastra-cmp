@@ -34,9 +34,10 @@ export function DataTablePagination({
   const endItem = Math.min(currentPage * pageSize, totalItems);
 
   return (
-    <div className="flex items-center justify-between px-2 py-4">
-      <div className="flex items-center space-x-2">
-        <p className="text-sm font-medium">Rows per page</p>
+    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 px-2 py-4">
+      {/* Left section - Rows per page and info */}
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs sm:text-sm font-medium whitespace-nowrap">Rows per page</p>
         <Select
           value={pageSize.toString()}
           onValueChange={(value) => {
@@ -44,7 +45,7 @@ export function DataTablePagination({
             onPageChange(1); // Reset to first page when changing page size
           }}
         >
-          <SelectTrigger className="h-8 w-[70px]">
+          <SelectTrigger className="h-8 w-[60px] sm:w-[70px]">
             <SelectValue placeholder={pageSize.toString()} />
           </SelectTrigger>
           <SelectContent side="top">
@@ -55,17 +56,19 @@ export function DataTablePagination({
             ))}
           </SelectContent>
         </Select>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-xs sm:text-sm text-muted-foreground whitespace-nowrap">
           Showing {startItem} to {endItem} of {totalItems} entries
         </p>
       </div>
 
-      <div className="flex items-center space-x-2">
+      {/* Right section - Navigation buttons */}
+      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
         <Button
           variant="outline"
           size="sm"
           onClick={() => onPageChange(1)}
           disabled={currentPage === 1}
+          className="h-8 w-8 p-0"
         >
           <ChevronsLeft className="h-4 w-4" />
         </Button>
@@ -74,6 +77,7 @@ export function DataTablePagination({
           size="sm"
           onClick={() => onPageChange(currentPage - 1)}
           disabled={currentPage === 1}
+          className="h-8 w-8 p-0"
         >
           <ChevronLeft className="h-4 w-4" />
         </Button>
@@ -89,15 +93,16 @@ export function DataTablePagination({
                 onPageChange(page);
               }
             }}
-            className="h-8 w-12 text-center"
+            className="h-8 w-12 sm:w-16 text-center px-1"
           />
-          <span className="text-sm text-muted-foreground">of {totalPages}</span>
+          <span className="text-xs sm:text-sm text-muted-foreground whitespace-nowrap">of {totalPages}</span>
         </div>
         <Button
           variant="outline"
           size="sm"
           onClick={() => onPageChange(currentPage + 1)}
           disabled={currentPage === totalPages}
+          className="h-8 w-8 p-0"
         >
           <ChevronRight className="h-4 w-4" />
         </Button>
@@ -106,6 +111,7 @@ export function DataTablePagination({
           size="sm"
           onClick={() => onPageChange(totalPages)}
           disabled={currentPage === totalPages}
+          className="h-8 w-8 p-0"
         >
           <ChevronsRight className="h-4 w-4" />
         </Button>

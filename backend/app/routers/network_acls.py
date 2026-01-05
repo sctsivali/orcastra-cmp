@@ -6,6 +6,8 @@ Provides endpoints for managing LXD network ACLs.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
@@ -18,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/network-acls", tags=["Network ACLs"])
 
+# Thread pool for parallel operations
+_executor = ThreadPoolExecutor(max_workers=5)
+
 
 class NetworkACLInfo(BaseModel):
     """Network ACL information."""
@@ -27,6 +32,7 @@ class NetworkACLInfo(BaseModel):
     egress: List[Dict[str, Any]] = Field(default_factory=list, description="Egress rules")
     config: Dict[str, str] = Field(default_factory=dict, description="ACL configuration")
     used_by: List[str] = Field(default_factory=list, description="Resources using this ACL")
+    node: str = Field("", description="Node name")
 
 
 class NetworkACLCreateRequest(BaseModel):
@@ -45,6 +51,33 @@ class NetworkACLListResponse(BaseModel):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _fetch_acls_for_node(lxd_service: LXDService, node_name: str) -> List[NetworkACLInfo]:
+    """Fetch network ACLs for a single node - runs in thread pool."""
+    acls = []
+    try:
+        client = lxd_service.connection_manager.get_client(node_name)
+        # Get ACLs via API with recursion=1 to get full details in one call
+        response = client.api.get('/1.0/network-acls?recursion=1')
+        if response.status_code == 200:
+            acls_data = response.json().get('metadata', [])
+            for acl_data in acls_data:
+                try:
+                    acls.append(NetworkACLInfo(
+                        name=acl_data.get('name', ''),
+                        description=acl_data.get('description', ''),
+                        ingress=acl_data.get('ingress', []),
+                        egress=acl_data.get('egress', []),
+                        config=acl_data.get('config', {}),
+                        used_by=acl_data.get('used_by', []),
+                        node=node_name
+                    ))
+                except Exception as e:
+                    logger.error(f"Error parsing ACL data on {node_name}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing network ACLs on {node_name}: {e}")
+    return acls
+
+
 @router.get(
     "",
     response_model=NetworkACLListResponse,
@@ -58,33 +91,22 @@ async def list_network_acls(
     """List all network ACLs."""
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
-        all_acls = []
         
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                # Get ACLs via API
-                response = client.api.get('/1.0/network-acls')
-                if response.status_code == 200:
-                    acl_urls = response.json().get('metadata', [])
-                    for acl_url in acl_urls:
-                        try:
-                            acl_response = client.api.get(acl_url)
-                            if acl_response.status_code == 200:
-                                acl_data = acl_response.json().get('metadata', {})
-                                all_acls.append(NetworkACLInfo(
-                                    name=acl_data.get('name', ''),
-                                    description=acl_data.get('description', ''),
-                                    ingress=acl_data.get('ingress', []),
-                                    egress=acl_data.get('egress', []),
-                                    config=acl_data.get('config', {}),
-                                    used_by=acl_data.get('used_by', []),
-                                    node=node_name
-                                ))
-                        except Exception as e:
-                            logger.error(f"Error getting ACL details: {e}")
-            except Exception as e:
-                logger.error(f"Error listing network ACLs on {node_name}: {e}")
+        # Fetch ACLs from all nodes in parallel
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_executor, _fetch_acls_for_node, lxd_service, node_name)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Flatten results
+        all_acls = []
+        for result in results:
+            if isinstance(result, list):
+                all_acls.extend(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error fetching network ACLs: {result}")
         
         return NetworkACLListResponse(
             total=len(all_acls),

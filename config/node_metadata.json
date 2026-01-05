@@ -4,5 +4,40 @@
   },
   "node2": {
     "display_name": "vdc"
+  },
+  "lmao1": {
+    "display_name": "lmao"
+  },
+  "test-registration": {
+    "display_name": "Test Registration"
+  },
+  "test-reg-2": {
+    "display_name": "Test Registration 2"
+  },
+  "test-reg-3": {
+    "display_name": "Test Registration 3"
+  },
+  "test-final": {
+    "display_name": "Test Final"
+  },
+  "nuc-industrial": {
+    "display_name": "NUC Industrial",
+    "type": "lxd"
+  },
+  "cyber-argon-2": {
+    "display_name": "Central-2",
+    "type": "microcloud"
+  },
+  "hetzner": {
+    "display_name": "Hetzner",
+    "type": "lxd"
+  },
+  "nuc-intel-1": {
+    "display_name": "NUC Intel 1",
+    "type": "lxd"
+  },
+  "central1": {
+    "display_name": "central1",
+    "type": "lxd"
   }
 }

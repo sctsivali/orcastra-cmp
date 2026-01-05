@@ -23,9 +23,13 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-# Set environment variables for build
+# Build arguments for version management
 ARG NEXT_PUBLIC_API_URL
+ARG APP_VERSION=0.1.0
+
+# Set environment variables for build
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV APP_VERSION=$APP_VERSION
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # Build the application

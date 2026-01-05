@@ -34,6 +34,13 @@ const softwareStack: SoftwareItem[] = [
     icon: Server,
   },
   {
+    name: "Ubuntu",
+    version: "",
+    purpose: "Enterprise-grade Linux operating system with long-term support",
+    category: "Operating System",
+    icon: Server,
+  },
+  {
     name: "Linux Kernel",
     version: "",
     purpose: "Operating system core providing hardware abstraction",
@@ -227,9 +234,9 @@ export default function TechnologiesPage() {
       </div>
 
       <Tabs defaultValue="hardware" className="w-full">
-        <TabsList className="grid w-full max-w-md grid-cols-2">
-          <TabsTrigger value="hardware">Hardware</TabsTrigger>
-          <TabsTrigger value="software">Software</TabsTrigger>
+        <TabsList className="grid w-full max-w-md grid-cols-2 h-auto">
+          <TabsTrigger value="hardware" className="py-2.5">Hardware</TabsTrigger>
+          <TabsTrigger value="software" className="py-2.5">Software</TabsTrigger>
         </TabsList>
 
         {/* Hardware Tab */}
