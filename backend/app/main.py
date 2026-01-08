@@ -52,6 +52,30 @@ logger = logging.getLogger(__name__)
 
 # Rate limiting storage (in-memory, consider Redis for production)
 rate_limit_storage = defaultdict(list)
+# Timestamp for last rate limit cleanup to prevent memory leaks
+rate_limit_last_cleanup = 0
+
+
+def cleanup_rate_limit_storage(current_time: float = None) -> int:
+    """
+    Remove expired entries from rate limit storage to prevent memory leaks.
+    Returns number of keys removed.
+    """
+    if current_time is None:
+        current_time = time.time()
+
+    keys_to_remove = [
+        ip for ip, reqs in rate_limit_storage.items()
+        # Remove if empty or if newest request is older than 60s
+        if not reqs or (reqs and current_time - reqs[-1] > 60)
+    ]
+
+    if keys_to_remove:
+        logger.debug(f"Cleaning up {len(keys_to_remove)} expired rate limit keys")
+        for ip in keys_to_remove:
+            del rate_limit_storage[ip]
+
+    return len(keys_to_remove)
 
 
 @asynccontextmanager
@@ -212,15 +236,22 @@ Ensure your client certificates are properly configured.
         if not settings.rate_limit_enabled:
             return await call_next(request)
         
+        # Access global cleanup timestamp
+        global rate_limit_last_cleanup
+
         client_ip = request.client.host
         current_time = time.time()
         
-        # Clean old requests (older than 1 minute)
+        # Clean old requests for current IP (older than 1 minute)
         rate_limit_storage[client_ip] = [
             req_time for req_time in rate_limit_storage[client_ip]
             if current_time - req_time < 60
         ]
         
+        # Optimization: Remove key if empty (prevents immediate leak for single requests)
+        if not rate_limit_storage[client_ip]:
+            del rate_limit_storage[client_ip]
+
         # Check rate limit
         if len(rate_limit_storage[client_ip]) >= settings.rate_limit_requests:
             logger.warning(f"Rate limit exceeded for IP: {client_ip}")
@@ -232,6 +263,11 @@ Ensure your client certificates are properly configured.
         # Add current request
         rate_limit_storage[client_ip].append(current_time)
         
+        # Periodic Cleanup (every 60 seconds) to prevent memory leak from non-returning IPs
+        if current_time - rate_limit_last_cleanup > 60:
+            rate_limit_last_cleanup = current_time
+            cleanup_rate_limit_storage(current_time)
+
         return await call_next(request)
     
     # Register routers
