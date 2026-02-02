@@ -302,6 +302,17 @@ pull: ## Pull latest images
 
 update: pull up-build ## Update and restart all services
 
+##@ Vault PKI Commands
+
+vault-status: ## Check Vault PKI certificate status
+	@./scripts/vault_pki_manager.sh status
+
+vault-renew: ## Renew Vault Intermediate CA certificate (interactive)
+	@./scripts/vault_pki_manager.sh renew
+
+vault-help: ## Show Vault PKI Manager help
+	@./scripts/vault_pki_manager.sh help
+
 ##@ Quick Commands
 
 quick-start: env-check build up ## Quick start: build and run all services

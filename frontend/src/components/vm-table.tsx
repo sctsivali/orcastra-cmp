@@ -8,7 +8,9 @@ import {
   Trash2,
   Server,
   Container,
+  Terminal,
 } from "lucide-react";
+import { useTerminal } from "@/hooks/use-terminal";
 import { LoadingLottieSmall } from "@/components/loading-lottie";
 import {
   Table,
@@ -118,14 +120,32 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
   const stopMutation = useStopVM();
   const restartMutation = useRestartVM();
   const deleteMutation = useDeleteVM();
+  const { openTerminal, hasTerminal } = useTerminal();
 
   const isRunning = vm.status === "Running";
   const isStopped = vm.status === "Stopped";
+  const hasActiveTerminal = hasTerminal(vm.name, vm.host);
   const isLoading =
     startMutation.isPending ||
     stopMutation.isPending ||
     restartMutation.isPending ||
     deleteMutation.isPending;
+
+  const handleOpenTerminal = () => {
+    if (!isRunning) {
+      toast({
+        title: "Cannot Open Terminal",
+        description: "Instance must be running to open a terminal.",
+        variant: "destructive",
+      });
+      return;
+    }
+    openTerminal({
+      instanceName: vm.name,
+      host: vm.host,
+      project: vm.project || "default",
+    });
+  };
 
   const handleStart = async () => {
     try {
@@ -231,6 +251,32 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
   return (
     <TooltipProvider delayDuration={100}>
       <div className="flex items-center gap-1">
+        {/* Terminal Button */}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "h-8 w-8",
+                hasActiveTerminal
+                  ? "text-blue-500 bg-blue-50 dark:bg-blue-950"
+                  : "text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950",
+                !isRunning && "opacity-50"
+              )}
+              onClick={handleOpenTerminal}
+              disabled={!isRunning}
+            >
+              <Terminal className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            {isRunning 
+              ? (hasActiveTerminal ? "Focus Terminal" : "Open Terminal") 
+              : "Instance must be running"}
+          </TooltipContent>
+        </Tooltip>
+
         <Tooltip>
           <TooltipTrigger asChild>
             <Button

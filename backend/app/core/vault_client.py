@@ -44,7 +44,7 @@ class VaultClient:
         """
         Initialize Vault client.
         
-            vault_addr: Vault server address (ex; http://10.62.42.122:8200)
+            vault_addr: Vault server address (ex; http://localhost:8200 or http://<IP>:8200)
         """
         self.vault_addr = vault_addr.rstrip('/')
         self.headers = {"X-Vault-Token": vault_token}

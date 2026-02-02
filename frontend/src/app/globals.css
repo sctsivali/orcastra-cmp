@@ -3,6 +3,15 @@
 @tailwind utilities;
 
 @layer base {
+  /* 
+   * Protect body text color from being overridden by external CSS (ex; spice.css).
+   * This rule has higher specificity to ensure theme colors always apply.
+   */
+  html body {
+    color: hsl(var(--foreground)) !important;
+    background-color: hsl(var(--background));
+  }
+
   :root {
     --background: 220 13% 96%;
     --foreground: 222 47% 11%;
@@ -28,6 +37,18 @@
     --input: 220 13% 87%;
     --ring: 262.1 83.3% 57.8%;
     --radius: 0.75rem;
+    
+    /* Personalization defaults - unified accent color */
+    --personalization-accent: #8b5cf6;
+    --personalization-accent-h: 262;
+    --personalization-accent-s: 83%;
+    --personalization-accent-l: 58%;
+    --personalization-sidebar-bg: #ffffff;
+    --personalization-sidebar-bg-h: 0;
+    --personalization-sidebar-bg-s: 0%;
+    --personalization-sidebar-bg-l: 100%;
+    --personalization-sidebar-text: #0f172a;
+    --personalization-sidebar-muted: rgba(15,23,42,0.5);
   }
 
   .dark {
@@ -55,6 +76,94 @@
     --input: 240 3.7% 15.9%;
     --ring: 263.4 70% 50.4%;
   }
+}
+
+/* Dynamic color overrides from personalization */
+:root {
+  --primary: var(--personalization-accent-h) var(--personalization-accent-s) var(--personalization-accent-l);
+  --ring: var(--personalization-accent-h) var(--personalization-accent-s) var(--personalization-accent-l);
+}
+
+/* Sidebar active state uses accent color - higher specificity for full override */
+.sidebar-active,
+.sidebar-active:hover {
+  background-color: var(--personalization-accent) !important;
+  color: white !important;
+}
+
+/* All text inside active sidebar item should be white */
+.sidebar-active span,
+.sidebar-active svg,
+.sidebar-active p {
+  color: white !important;
+}
+
+/* Sidebar with custom background - apply text colors to all descendants */
+.sidebar-custom-bg {
+  background-color: var(--personalization-sidebar-bg) !important;
+  color: var(--personalization-sidebar-text) !important;
+}
+
+/* Apply text color to all text elements in sidebar (not buttons/links - handled separately) */
+.sidebar-custom-bg span:not(.sidebar-active span),
+.sidebar-custom-bg p {
+  color: var(--personalization-sidebar-text) !important;
+}
+
+/* Override muted text in sidebar */
+.sidebar-custom-bg .text-muted-foreground {
+  color: var(--personalization-sidebar-muted) !important;
+}
+
+/* Sidebar menu item - ghost variant text color (non-active) */
+.sidebar-custom-bg button:not(.sidebar-active):not(:hover),
+.sidebar-custom-bg a:not(.sidebar-active):not(:hover) {
+  color: var(--personalization-sidebar-text) !important;
+  background-color: transparent !important;
+}
+
+/* Sidebar menu item hover states - subtle overlay effect */
+.sidebar-custom-bg button:not(.sidebar-active):hover,
+.sidebar-custom-bg a:not(.sidebar-active):hover {
+  background-color: color-mix(in srgb, var(--personalization-sidebar-text) 10%, transparent) !important;
+  color: var(--personalization-sidebar-text) !important;
+}
+
+/* Icons inside sidebar buttons should inherit parent color */
+.sidebar-custom-bg button svg,
+.sidebar-custom-bg a svg {
+  color: inherit !important;
+}
+
+/* Explicit sidebar text classes (for manual usage) */
+.sidebar-custom-bg .sidebar-text {
+  color: var(--personalization-sidebar-text) !important;
+}
+
+.sidebar-custom-bg .sidebar-text-muted {
+  color: var(--personalization-sidebar-muted) !important;
+}
+
+/* Border styling in sidebar - subtle and thin */
+.sidebar-custom-bg .border-border {
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 15%, transparent) !important;
+}
+
+/* Submenu left border - keep thin */
+.sidebar-custom-bg .border-l-2 {
+  border-left-width: 1px !important;
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 20%, transparent) !important;
+}
+
+/* Top/bottom borders in sidebar - keep thin */
+.sidebar-custom-bg .border-t,
+.sidebar-custom-bg .border-b {
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 12%, transparent) !important;
+}
+
+/* Right border (sidebar edge) */
+.sidebar-custom-bg.border-r {
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 10%, transparent) !important;
 }
 
 @layer base {
@@ -133,6 +242,10 @@
   100% {
     transform: translateX(100%);
   }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s ease-in-out infinite;
 }
 
 .animate-fade-in {
@@ -339,4 +452,35 @@ tbody tr {
   aside[class*="fixed"][class*="left-0"][class*="w-16"] span:not([class*="sr-only"]) {
     /* Hide text in collapsed mode but keep icons */
   }
+}
+
+/* ===== ACCESSIBILITY: SLOW PULSE ANIMATION ===== */
+/* Slower animation for epilepsy-friendly UI (3 flashes per second max per WCAG) */
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Status dot gentle pulse - even slower for small indicators */
+@keyframes pulse-gentle {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(0.95);
+  }
+}
+
+.animate-pulse-gentle {
+  animation: pulse-gentle 2.5s ease-in-out infinite;
 }

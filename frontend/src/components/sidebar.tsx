@@ -30,6 +30,8 @@ import {
   UserCircle,
   Cog,
   X,
+  Blocks,
+  Terminal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,6 +54,9 @@ import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { useTheme } from "./theme-provider";
 import { useLayout } from "./layout-provider";
+import { usePersonalization, useCurrentLogo } from "./personalization-provider";
+import { useTerminalStore } from "@/lib/terminal-store";
+import { useConsoleStore } from "@/lib/console-store";
 
 interface SidebarProps {
   className?: string;
@@ -122,6 +127,170 @@ const merchantsData: MerchantInfo[] = [
   },
 ];
 
+// Terminal menu item with active terminals count
+function TerminalMenuItem() {
+  const terminals = useTerminalStore((s) => s.terminals);
+  const totalCount = terminals.length;
+  const store = useTerminalStore.getState();
+
+  if (totalCount === 0) {
+    return (
+      <Button
+        variant="ghost"
+        className="w-full justify-start text-sm relative text-muted-foreground"
+        size="sm"
+        disabled
+      >
+        <Terminal className="h-4 w-4 mr-2" />
+        Terminals
+      </Button>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          className="w-full justify-start text-sm relative"
+          size="sm"
+        >
+          <Terminal className="h-4 w-4 mr-2" />
+          Terminals
+          <Badge 
+            variant="secondary" 
+            className="ml-auto h-5 min-w-5 px-1.5 text-xs bg-blue-500/20 text-blue-500"
+          >
+            {totalCount}
+          </Badge>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {terminals.map((terminal) => (
+          <DropdownMenuItem
+            key={terminal.id}
+            className="flex items-center justify-between gap-2"
+            onClick={() => {
+              if (terminal.minimized) {
+                store.restoreTerminal(terminal.id);
+              } else {
+                store.focusTerminal(terminal.id);
+              }
+            }}
+          >
+            <div className="flex items-center gap-2 flex-1 truncate">
+              <Terminal className="h-3 w-3" />
+              <span className="truncate">{terminal.instanceName}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {terminal.minimized ? (
+                <Badge variant="outline" className="text-xs">minimized</Badge>
+              ) : (
+                <Badge variant="secondary" className="text-xs">open</Badge>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  store.closeTerminal(terminal.id);
+                }}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// Console menu item with active consoles count
+function ConsoleMenuItem() {
+  const consoles = useConsoleStore((s) => s.consoles);
+  const totalCount = consoles.length;
+  const store = useConsoleStore.getState();
+
+  if (totalCount === 0) {
+    return (
+      <Button
+        variant="ghost"
+        className="w-full justify-start text-sm relative text-muted-foreground"
+        size="sm"
+        disabled
+      >
+        <Monitor className="h-4 w-4 mr-2" />
+        Consoles
+      </Button>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          className="w-full justify-start text-sm relative"
+          size="sm"
+        >
+          <Monitor className="h-4 w-4 mr-2" />
+          Consoles
+          <Badge 
+            variant="secondary" 
+            className="ml-auto h-5 min-w-5 px-1.5 text-xs bg-green-500/20 text-green-500"
+          >
+            {totalCount}
+          </Badge>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {consoles.map((console) => (
+          <DropdownMenuItem
+            key={console.id}
+            className="flex items-center justify-between gap-2"
+            onClick={() => {
+              if (console.minimized) {
+                store.restoreConsole(console.id);
+              } else {
+                store.focusConsole(console.id);
+              }
+            }}
+          >
+            <div className="flex items-center gap-2 flex-1 truncate">
+              {console.instanceType === 'virtual-machine' ? (
+                <Monitor className="h-3 w-3" />
+              ) : (
+                <Box className="h-3 w-3" />
+              )}
+              <span className="truncate">{console.instanceName}</span>
+            </div>
+            <div className="flex items-center gap-1">
+              {console.minimized ? (
+                <Badge variant="outline" className="text-xs">minimized</Badge>
+              ) : (
+                <Badge variant="secondary" className="text-xs">open</Badge>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  store.closeConsole(console.id);
+                }}
+              >
+                <X className="h-3 w-3" />
+              </Button>
+            </div>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export function Sidebar({ className }: SidebarProps) {
   const { sidebarCollapsed: isCollapsed, setSidebarCollapsed: setIsCollapsed, sidebarOpen, setSidebarOpen } = useLayout();
   const [servicesExpanded, setServicesExpanded] = useState(false);
@@ -132,6 +301,8 @@ export function Sidebar({ className }: SidebarProps) {
   const [selectedMerchant, setSelectedMerchant] =
     useState<MerchantInfo | null>(null);
   const { theme, setTheme } = useTheme();
+  const { settings } = usePersonalization();
+  const currentLogo = useCurrentLogo(theme);
   
   const pathname = usePathname();
 
@@ -237,7 +408,11 @@ export function Sidebar({ className }: SidebarProps) {
 
       <aside
         className={cn(
-          "fixed left-0 top-0 z-50 border-r bg-card transition-all duration-300",
+          "fixed left-0 top-0 z-50 border-r transition-all duration-300",
+          // Apply custom sidebar styling only when user has customized the sidebar background
+          settings.colors.useCustomSidebarBg && "sidebar-custom-bg",
+          // When not customized, use default theme colors (bg-card for consistency)
+          !settings.colors.useCustomSidebarBg && "bg-card",
           // Height - use 100dvh for mobile compatibility, fallback to 100vh
           "h-[100dvh] h-screen",
           // Ensure sidebar stays on top during scroll with proper positioning
@@ -251,6 +426,7 @@ export function Sidebar({ className }: SidebarProps) {
           !sidebarOpen && !isCollapsed && "md:w-64",
           className
         )}
+        style={settings.colors.useCustomSidebarBg ? { backgroundColor: settings.colors.sidebarBgColor || "#ffffff" } : undefined}
       >
         {/* Inner flex container for layout */}
         <div className="flex flex-col h-full overflow-hidden overscroll-contain">
@@ -265,8 +441,8 @@ export function Sidebar({ className }: SidebarProps) {
               )}
             >
               <Image
-                src={theme === "light" ? "/orca-logo-black.png" : "/orca-logo-white.png"}
-                alt="Orcastra Logo"
+                src={currentLogo}
+                alt={`${settings.branding.appName} Logo`}
                 width={120}
                 height={120}
                 className={cn(
@@ -277,6 +453,7 @@ export function Sidebar({ className }: SidebarProps) {
                     ? "w-auto h-8 md:h-10 lg:h-12"
                     : "w-8 h-8 md:w-10 md:h-10"
                 )}
+                unoptimized={currentLogo.startsWith('data:')}
               />
             </SidebarLink>
             {/* Close button - show when sidebar is opened via menu button */}
@@ -315,7 +492,8 @@ export function Sidebar({ className }: SidebarProps) {
                   variant={pathname?.startsWith("/inventory") ? "default" : "ghost"}
                   className={cn(
                     "w-full",
-                    isCollapsed ? "md:justify-center md:px-2" : "justify-start"
+                    isCollapsed ? "md:justify-center md:px-2" : "justify-start",
+                    pathname?.startsWith("/inventory") && "sidebar-active"
                   )}
                   onClick={() => {
                     if (isCollapsed && window.innerWidth >= 1024) {
@@ -380,7 +558,7 @@ export function Sidebar({ className }: SidebarProps) {
                       asChild
                     >
                       <SidebarLink href="/inventory/clusters">
-                        <Server className="h-4 w-4 mr-2" />
+                        <Network className="h-4 w-4 mr-2" />
                         Clusters
                       </SidebarLink>
                     </Button>
@@ -412,6 +590,10 @@ export function Sidebar({ className }: SidebarProps) {
                         Instances
                       </SidebarLink>
                     </Button>
+                    
+                    <TerminalMenuItem />
+                    
+                    <ConsoleMenuItem />
                     
                     <Button
                       variant={pathname === "/inventory/profiles" ? "secondary" : "ghost"}
@@ -512,7 +694,7 @@ export function Sidebar({ className }: SidebarProps) {
                       asChild
                     >
                       <SidebarLink href="/inventory/server">
-                        <Server className="h-4 w-4 mr-2" />
+                        <HardDrive className="h-4 w-4 mr-2" />
                         Server
                       </SidebarLink>
                     </Button>
@@ -578,7 +760,8 @@ export function Sidebar({ className }: SidebarProps) {
                   variant={pathname === "/service-providers" ? "default" : "ghost"}
                   className={cn(
                     "w-full justify-start",
-                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2",
+                    pathname === "/service-providers" && "sidebar-active"
                   )}
                   asChild
                 >
@@ -598,7 +781,8 @@ export function Sidebar({ className }: SidebarProps) {
                   variant={pathname === "/solutions" ? "default" : "ghost"}
                   className={cn(
                     "w-full justify-start",
-                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2",
+                    pathname === "/solutions" && "sidebar-active"
                   )}
                   asChild
                 >
@@ -618,12 +802,13 @@ export function Sidebar({ className }: SidebarProps) {
                   variant={pathname === "/technologies" ? "default" : "ghost"}
                   className={cn(
                     "w-full justify-start",
-                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2",
+                    pathname === "/technologies" && "sidebar-active"
                   )}
                   asChild
                 >
                   <SidebarLink href="/technologies">
-                    <Server className="h-5 w-5" />
+                    <Blocks className="h-5 w-5" />
                     <span className={cn(
                       "ml-3 flex-1 text-left",
                       isCollapsed && !sidebarOpen && "md:hidden"
@@ -641,7 +826,8 @@ export function Sidebar({ className }: SidebarProps) {
               variant={pathname === "/settings" ? "default" : "ghost"}
               className={cn(
                 "w-full justify-start",
-                isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                isCollapsed && !sidebarOpen && "md:justify-center md:px-2",
+                pathname === "/settings" && "sidebar-active"
               )}
               asChild
             >

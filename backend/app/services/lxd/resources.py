@@ -14,6 +14,11 @@ from app.models.schemas import (
     NodeResources,
     NodeStatus,
     InstanceMetrics,
+    GPUCardInfo,
+    GPUDRMInfo,
+    GPUNvidiaInfo,
+    GPUSRIOVInfo,
+    GPUMdevProfile,
 )
 from app.core.node_metadata import get_node_metadata_store
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_node_type
@@ -32,6 +37,152 @@ class ResourceManager:
         # CPU usage tracking: {"host:instance": {"usage_ns": int, "timestamp": float}}
         self._cpu_history: Dict[str, Dict[str, any]] = {}
     
+    def _parse_gpu_cards(
+        self, 
+        gpu_cards_raw: list, 
+        gpu_usage_map: Dict[str, str] = None
+    ) -> list[GPUCardInfo]:
+        """
+        Parse detailed GPU card information from LXD resources API.
+        """
+        if not gpu_cards_raw:
+            return []
+        
+        if gpu_usage_map is None:
+            gpu_usage_map = {}
+        
+        gpu_cards = []
+        for index, card in enumerate(gpu_cards_raw):
+            try:
+                # Parse DRM info
+                drm_info = None
+                drm_raw = card.get("drm")
+                if drm_raw:
+                    drm_info = GPUDRMInfo(
+                        id=drm_raw.get("id"),
+                        card_name=drm_raw.get("card_name"),
+                        card_device=drm_raw.get("card_device"),
+                        control_name=drm_raw.get("control_name"),
+                        control_device=drm_raw.get("control_device"),
+                        render_name=drm_raw.get("render_name"),
+                        render_device=drm_raw.get("render_device"),
+                    )
+                
+                # Parse NVIDIA-specific info
+                nvidia_info = None
+                nvidia_raw = card.get("nvidia")
+                if nvidia_raw:
+                    nvidia_info = GPUNvidiaInfo(
+                        cuda_version=nvidia_raw.get("cuda_version"),
+                        nvrm_version=nvidia_raw.get("nvrm_version"),
+                        brand=nvidia_raw.get("brand"),
+                        model=nvidia_raw.get("model"),
+                        uuid=nvidia_raw.get("uuid"),
+                        architecture=nvidia_raw.get("architecture"),
+                        card_name=nvidia_raw.get("card_name"),
+                        card_device=nvidia_raw.get("card_device"),
+                    )
+                
+                # Parse SR-IOV info
+                sriov_info = None
+                sriov_raw = card.get("sriov")
+                if sriov_raw:
+                    vfs = sriov_raw.get("vfs", [])
+                    sriov_info = GPUSRIOVInfo(
+                        current_vfs=sriov_raw.get("current_vfs", 0),
+                        maximum_vfs=sriov_raw.get("maximum_vfs", 0),
+                        vfs_count=len(vfs) if isinstance(vfs, list) else 0,
+                    )
+                
+                # Parse mdev profiles
+                mdev_profiles = []
+                mdev_raw = card.get("mdev")
+                if mdev_raw and isinstance(mdev_raw, dict):
+                    for profile_name, profile_data in mdev_raw.items():
+                        if isinstance(profile_data, dict):
+                            mdev_profiles.append(GPUMdevProfile(
+                                name=profile_data.get("name", profile_name),
+                                api=profile_data.get("api"),
+                                available=profile_data.get("available", 0),
+                                description=profile_data.get("description"),
+                                devices=profile_data.get("devices", []),
+                            ))
+                
+                # Determine if GPU is in use
+                pci_address = card.get("pci_address", "")
+                usb_address = card.get("usb_address", "")
+                nvidia_uuid = nvidia_raw.get("uuid") if nvidia_raw else None
+                
+                # Check usage by various identifiers
+                in_use = False
+                used_by = None
+                for identifier in [pci_address, usb_address, nvidia_uuid, str(index)]:
+                    if identifier and identifier in gpu_usage_map:
+                        in_use = True
+                        used_by = gpu_usage_map[identifier]
+                        break
+                
+                gpu_card = GPUCardInfo(
+                    index=index,
+                    driver=card.get("driver"),
+                    driver_version=card.get("driver_version"),
+                    pci_address=pci_address or None,
+                    usb_address=usb_address or None,
+                    vendor=card.get("vendor"),
+                    vendor_id=card.get("vendor_id"),
+                    product=card.get("product"),
+                    product_id=card.get("product_id"),
+                    numa_node=card.get("numa_node"),
+                    in_use=in_use,
+                    used_by=used_by,
+                    drm=drm_info,
+                    nvidia=nvidia_info,
+                    sriov=sriov_info,
+                    mdev_profiles=mdev_profiles,
+                )
+                gpu_cards.append(gpu_card)
+                
+            except Exception as e:
+                logger.warning(f"Failed to parse GPU card {index}: {e}")
+                # Add a minimal entry for failed cards
+                gpu_cards.append(GPUCardInfo(
+                    index=index,
+                    vendor=card.get("vendor", "Unknown"),
+                    product=card.get("product", "Unknown GPU"),
+                ))
+        
+        return gpu_cards
+    
+    def _get_gpu_usage_map(self, client: pylxd.Client) -> Dict[str, str]:
+        """
+        Build a mapping of GPU identifiers to instance names.
+        """
+        usage_map = {}
+        try:
+            instances = client.instances.all()
+            for instance in instances:
+                if instance.status == "Running":
+                    devices = getattr(instance, 'devices', {}) or {}
+                    for device_name, device_config in devices.items():
+                        if device_config.get('type') == 'gpu':
+                            # Map various GPU identifiers to this instance
+                            pci_address = device_config.get('pci')
+                            gpu_id = device_config.get('id')
+                            gpu_vendorid = device_config.get('vendorid')
+                            gpu_productid = device_config.get('productid')
+                            
+                            if pci_address:
+                                usage_map[pci_address] = instance.name
+                            if gpu_id:
+                                usage_map[gpu_id] = instance.name
+                            # Also track by vendor:product combo
+                            if gpu_vendorid and gpu_productid:
+                                usage_map[f"{gpu_vendorid}:{gpu_productid}"] = instance.name
+        except Exception as e:
+            logger.debug(f"Could not build GPU usage map: {e}")
+        
+        return usage_map
+
     def get_resource_usage(self, instance) -> Optional[ResourceUsage]:
         """Get resource usage for a running instance."""
         try:
@@ -244,24 +395,23 @@ class ResourceManager:
             try:
                 resources_data = self.get_node_resources(client, node_name)
                 
-                # Get GPU information
+                # Get GPU information with detailed card info
                 gpu_total = 0
                 gpu_used = 0
+                gpu_cards_detailed = []
                 try:
                     raw_resources = client.resources
                     gpu_info = raw_resources.get("gpu", {})
-                    gpu_cards = gpu_info.get("cards", [])
-                    gpu_total = len(gpu_cards)
+                    gpu_cards_raw = gpu_info.get("cards", [])
+                    gpu_total = len(gpu_cards_raw)
                     
-                    # Count GPUs in use
-                    instances = client.instances.all()
-                    for instance in instances:
-                        if instance.status == "Running":
-                            devices = getattr(instance, 'devices', {}) or {}
-                            for device_name, device_config in devices.items():
-                                if device_config.get('type') == 'gpu':
-                                    gpu_used += 1
-                                    break
+                    # Build GPU usage map from running instances
+                    gpu_usage_map = self._get_gpu_usage_map(client)
+                    gpu_used = len(gpu_usage_map)
+                    
+                    # Parse detailed GPU card information
+                    gpu_cards_detailed = self._parse_gpu_cards(gpu_cards_raw, gpu_usage_map)
+                    
                 except Exception as gpu_err:
                     logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")
                 
@@ -295,6 +445,7 @@ class ResourceManager:
                                 gpu_total=gpu_total,
                                 gpu_used=gpu_used,
                                 gpu_available=gpu_total - gpu_used,
+                                gpu_cards=gpu_cards_detailed,
                                 storage_total=resources_data.get("storage_total", 0),
                                 storage_available=resources_data.get("storage_available", 0),
                                 storage_pools=resources_data.get("storage_pools", []),
@@ -313,6 +464,7 @@ class ResourceManager:
                             gpu_total=gpu_total,
                             gpu_used=gpu_used,
                             gpu_available=gpu_total - gpu_used,
+                            gpu_cards=gpu_cards_detailed,
                             storage_total=resources_data.get("storage_total", 0),
                             storage_available=resources_data.get("storage_available", 0),
                             storage_pools=resources_data.get("storage_pools", []),
@@ -330,6 +482,7 @@ class ResourceManager:
                         gpu_total=gpu_total,
                         gpu_used=gpu_used,
                         gpu_available=gpu_total - gpu_used,
+                        gpu_cards=gpu_cards_detailed,
                         storage_total=resources_data.get("storage_total", 0),
                         storage_available=resources_data.get("storage_available", 0),
                         storage_pools=resources_data.get("storage_pools", []),
@@ -430,6 +583,7 @@ class ResourceManager:
                 total_storage = 0
                 total_storage_available = 0
                 storage_pools_map = {}
+                all_gpu_cards = []  # Collect all GPU cards from all members
                 
                 successful_members = 0
                 
@@ -462,8 +616,32 @@ class ResourceManager:
                             
                             # Extract GPU resources
                             gpu_info = member_resources.get("gpu", {})
-                            gpu_cards = gpu_info.get("cards", [])
-                            member_gpu_total = len(gpu_cards)
+                            gpu_cards_raw = gpu_info.get("cards", [])
+                            member_gpu_total = len(gpu_cards_raw)
+                            
+                            # Parse detailed GPU cards for this member
+                            # Build member-specific GPU usage map
+                            member_gpu_usage = {}
+                            try:
+                                instances = client.instances.all()
+                                for inst in instances:
+                                    inst_location = getattr(inst, 'location', '')
+                                    if inst_location == member_name and inst.status == "Running":
+                                        devices = getattr(inst, 'devices', {}) or {}
+                                        for dev_name, dev_config in devices.items():
+                                            if dev_config.get('type') == 'gpu':
+                                                pci = dev_config.get('pci', '')
+                                                if pci:
+                                                    member_gpu_usage[pci] = inst.name
+                            except Exception:
+                                pass
+                            
+                            member_gpu_cards = self._parse_gpu_cards(gpu_cards_raw, member_gpu_usage)
+                            # Adjust indices to be unique across cluster
+                            base_index = len(all_gpu_cards)
+                            for card in member_gpu_cards:
+                                card.index = base_index + card.index
+                            all_gpu_cards.extend(member_gpu_cards)
                             
                             # Extract storage resources from storage pools
                             storage_info = member_resources.get("storage", {})
@@ -586,6 +764,7 @@ class ResourceManager:
                     gpu_total=total_gpu,
                     gpu_used=total_gpu_used,
                     gpu_available=total_gpu - total_gpu_used,
+                    gpu_cards=all_gpu_cards,
                     storage_total=total_storage,
                     storage_available=total_storage_available,
                     storage_pools=storage_pools_list,

@@ -28,6 +28,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.cache import get_cache_manager
+from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
 
 logger = logging.getLogger(__name__)
 
@@ -401,7 +402,7 @@ async def get_monitoring_dashboard(
         nodes_metrics: List[ClusterMonitoringMetrics] = []
         
         online_nodes = 0
-        offline_nodes = 0
+        inactive_nodes = 0
         
         for node in node_statuses_list:
             if node.connected:
@@ -436,6 +437,8 @@ async def get_monitoring_dashboard(
                         node_name=node.name,
                         node_type=node.node_type or "lxd",
                         is_online=True,
+                        cluster_status="online",
+                        status_message="Connected and authenticated",
                         cpu_total=resources.cpu_total,
                         cpu_used=resources.cpu_used,
                         cpu_usage_percent=round(
@@ -457,11 +460,31 @@ async def get_monitoring_dashboard(
                         running_instances=len([vm for vm in all_vms if vm.host == node.name and vm.status.value == "Running"]),
                     ))
             else:
-                offline_nodes += 1
+                inactive_nodes += 1
+                # Determine cluster status based on error message
+                error_msg = node.error or ""
+                cli_prefix = get_cli_command_prefix(node.node_type)
+                trust_subcmd = get_trust_add_subcommand(node.node_type)
+                if "not authorized" in error_msg.lower() or "untrusted" in error_msg.lower() or "certificate" in error_msg.lower():
+                    cluster_status = "pending_trust"
+                    status_message = f"Certificate not yet trusted. Run '{cli_prefix} config trust {trust_subcmd}' on the cluster."
+                elif not error_msg:
+                    # No error but not connected - likely pending trust
+                    cluster_status = "pending_trust"
+                    status_message = "Waiting for certificate trust. Check cluster registration."
+                elif "connection refused" in error_msg.lower() or "timeout" in error_msg.lower():
+                    cluster_status = "offline"
+                    status_message = f"Node unreachable: {error_msg}"
+                else:
+                    cluster_status = "error"
+                    status_message = error_msg or "Unknown error"
+                
                 nodes_metrics.append(ClusterMonitoringMetrics(
                     node_name=node.name,
                     node_type=node.node_type or "lxd",
                     is_online=False,
+                    cluster_status=cluster_status,
+                    status_message=status_message,
                     cpu_total=0,
                     cpu_used=0,
                     cpu_usage_percent=0,
@@ -563,7 +586,8 @@ async def get_monitoring_dashboard(
                         # Use get_client_with_reconnect for resilience
                         client = lxd_service.get_client_with_reconnect(node.name)
                         if client:
-                            warnings_response = client.api.warnings.get()
+                            # Use recursion=1 to get full warning objects, not just URLs
+                            warnings_response = client.api.warnings.get(params={'recursion': '1'})
                             warnings_data = warnings_response.json().get("metadata", [])
                             for warning in warnings_data:
                                 if isinstance(warning, dict):
@@ -588,7 +612,7 @@ async def get_monitoring_dashboard(
             # Cluster Overview
             total_nodes=len(node_statuses_list),
             online_nodes=online_nodes,
-            offline_nodes=offline_nodes,
+            inactive_nodes=inactive_nodes,
             
             # Instance Overview
             total_instances=total_instances,

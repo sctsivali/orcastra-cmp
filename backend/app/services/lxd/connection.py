@@ -225,16 +225,16 @@ class LXDConnectionManager:
             # Create temp cert files (pylxd requires file paths)
             cert_path, key_path = self._create_temp_cert_files(cluster_id, cert_content, key_content)
             
-            # Create LXD client
+            # Create LXD client with faster timeout for quick failure detection
             client = pylxd.Client(
                 endpoint=endpoint,
                 cert=(cert_path, key_path),
                 verify=verify,
-                timeout=(10, 30)
+                timeout=(3, 8)
             )
             
             # Verify connection and authentication
-            response = client.api.get(timeout=(5, 10))
+            response = client.api.get(timeout=(2, 5))
             if response.status_code == 200:
                 data = response.json()
                 auth_status = data.get("metadata", {}).get("auth", "")
@@ -311,11 +311,11 @@ class LXDConnectionManager:
                 endpoint=info["endpoint"],
                 cert=(cert_path, key_path),
                 verify=info.get("verify", False),
-                timeout=(10, 30)
+                timeout=(3, 8)
             )
             
             # Verify authentication
-            response = client.api.get(timeout=(5, 10))
+            response = client.api.get(timeout=(2, 5))
             if response.status_code == 200:
                 data = response.json()
                 if data.get("metadata", {}).get("auth") != "trusted":

@@ -22,7 +22,8 @@ const PopoverContent = React.forwardRef<
       collisionPadding={16}
       avoidCollisions={true}
       className={cn(
-        "z-50 w-72 rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none",
+        // z-[100002] to appear above dialogs (z-[100001])
+        "z-[100002] w-72 min-w-[var(--radix-popover-trigger-width)] rounded-md border bg-popover p-4 text-popover-foreground shadow-md outline-none",
         // Max dimensions for mobile
         "max-w-[calc(100vw-2rem)] max-h-[50dvh] max-h-[50vh] overflow-y-auto",
         // Prevent scroll issues

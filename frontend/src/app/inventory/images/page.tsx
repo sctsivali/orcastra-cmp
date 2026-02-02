@@ -24,7 +24,7 @@ import {
 import { ImageIcon, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useImages } from "@/hooks/use-lxd";
-import { LoadingLottiePage, LoadingLottieMedium } from "@/components/loading-lottie";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { ImageListResponse } from "@/types/api";
 
 type SortField = "fingerprint" | "size" | "architecture" | "type";
@@ -92,9 +92,9 @@ export default function ImagesPage() {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
         (img: any) =>
-          img.fingerprint.toLowerCase().includes(query) ||
+          img.fingerprint?.toLowerCase()?.includes(query) ||
           img.aliases?.some((alias: any) =>
-            alias.name.toLowerCase().includes(query)
+            alias?.name?.toLowerCase()?.includes(query)
           ) ||
           (img.properties?.description &&
             img.properties.description.toLowerCase().includes(query))
@@ -288,15 +288,7 @@ export default function ImagesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center py-8">
-                    <div className="flex justify-center">
-                      <LoadingLottieMedium />
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : paginatedImages.length === 0 ? (
+              {paginatedImages.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={7}

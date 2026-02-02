@@ -75,9 +75,10 @@ async def list_vms(
         if status:
             filtered_vms = [vm for vm in filtered_vms if vm.status == status]
         
-        # Count LXD vs MicroCloud nodes
+        # Count LXD vs MicroCloud vs Incus nodes
         lxd_count = 0
         microcloud_count = 0
+        incus_count = 0
         
         # Config nodes are LXD
         config_nodes = lxd_service.get_node_names()
@@ -85,7 +86,7 @@ async def list_vms(
             if node in config_nodes:
                 lxd_count += 1
             else:
-                # Check if it's MicroCloud from Vault
+                # Check if it's MicroCloud/Incus from Vault
                 try:
                     # Read metadata directly from Vault
                     metadata_path = f"secret/data/clusters/{node}/metadata"
@@ -95,6 +96,8 @@ async def list_vms(
                         cluster_type = metadata.get('type', 'lxd').lower()
                         if cluster_type == 'microcloud':
                             microcloud_count += 1
+                        elif cluster_type == 'incus':
+                            incus_count += 1
                         else:
                             lxd_count += 1
                     else:
@@ -108,6 +111,7 @@ async def list_vms(
             nodes=connected_nodes,
             lxd_count=lxd_count,
             microcloud_count=microcloud_count,
+            incus_count=incus_count,
         )
         
         # Cache for 120 seconds (enterprise TTL)

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Server, Plus, ChevronDown, Menu } from "lucide-react";
+import { LayoutGrid, Plus, ChevronDown, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import Image from "next/image";
 import { useTheme } from "./theme-provider";
 import { useLayout } from "./layout-provider";
+import { UserNav } from "./user-nav";
 
 export function Header() {
   const pathname = usePathname();
@@ -47,12 +48,12 @@ export function Header() {
           </div>
 
           {/* Actions - Desktop only */}
-          <div className="hidden sm:flex items-center gap-2">
+          <div className="hidden sm:flex items-center gap-3">
             {!hideCreateButton && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
-                    className="gap-2 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 shadow-lg shadow-violet-500/25"
+                    className="gap-2 shadow-lg"
                   >
                     <Plus className="h-4 w-4" />
                     <span>Add</span>
@@ -64,7 +65,7 @@ export function Header() {
                     className="cursor-pointer"
                     onClick={() => router.push("/create")}
                   >
-                    <Server className="mr-2 h-4 w-4" />
+                    <LayoutGrid className="mr-2 h-4 w-4" />
                     Create Project
                   </DropdownMenuItem>
                   <DropdownMenuItem 
@@ -77,6 +78,14 @@ export function Header() {
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
+            
+            {/* User Navigation */}
+            <UserNav />
+          </div>
+
+          {/* Mobile User Nav */}
+          <div className="sm:hidden">
+            <UserNav />
           </div>
         </div>
       </header>
@@ -88,7 +97,7 @@ export function Header() {
             <DropdownMenuTrigger asChild>
               <Button
                 size="lg"
-                className="h-14 w-14 rounded-full bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 shadow-lg shadow-violet-500/50 flex items-center justify-center"
+                className="h-14 w-14 rounded-full shadow-lg flex items-center justify-center"
               >
                 <Plus className="h-6 w-6 shrink-0" />
                 <span className="sr-only">Add</span>
@@ -99,7 +108,7 @@ export function Header() {
                 className="cursor-pointer"
                 onClick={() => router.push("/create")}
               >
-                <Server className="mr-2 h-4 w-4" />
+                <LayoutGrid className="mr-2 h-4 w-4" />
                 Create Project
               </DropdownMenuItem>
               <DropdownMenuItem 

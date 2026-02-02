@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -11,13 +12,59 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Cog, RotateCw, X, Clock } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Cog, RotateCw, X, Clock, Loader2, AlertTriangle, XCircle, Unplug } from "lucide-react";
 import { useOperations } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import { toast } from "@/hooks/use-toast";
+import { API_URL } from "@/lib/api";
+
+// Format datetime to DD/MM/YYYY, HH:MM:SS
+const formatDateTime = (dateStr: string) => {
+  if (!dateStr) return "N/A";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "N/A";
+  
+  const day = d.getDate().toString().padStart(2, '0');
+  const month = (d.getMonth() + 1).toString().padStart(2, '0');
+  const year = d.getFullYear();
+  const hours = d.getHours().toString().padStart(2, '0');
+  const minutes = d.getMinutes().toString().padStart(2, '0');
+  const seconds = d.getSeconds().toString().padStart(2, '0');
+  
+  return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}`;
+};
 
 export default function OperationsPage() {
   const { data, isLoading, refetch, isRefetching } = useOperations();
   const operations = (data as any)?.operations || [];
+  const nodes = (data as any)?.nodes || [];
+  
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [killingId, setKillingId] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<{
+    open: boolean;
+    operationId: string;
+    host: string;
+    description: string;
+    isKillSession?: boolean;
+    instanceName?: string;
+  }>({ open: false, operationId: "", host: "", description: "" });
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -31,6 +78,117 @@ export default function OperationsPage() {
       default:
         return "destructive";
     }
+  };
+
+  // Find the host for an operation (check metadata, node_name, or iterate nodes)
+  const findOperationHost = (operation: any): string => {
+    // Check if operation has node_name from backend
+    if (operation.node_name) {
+      return operation.node_name;
+    }
+    // Check if operation has host in metadata
+    if (operation.metadata?.host) {
+      return operation.metadata.host;
+    }
+    // Default to first node if we can't determine
+    return nodes[0] || "";
+  };
+
+  // Extract instance name from console operation description
+  const extractInstanceName = (operation: any): string | null => {
+    // Console operations have description like "Executing command" and metadata with fds
+    if (operation.class_name === "websocket" && operation.description === "Executing command") {
+      // Try to get from metadata
+      if (operation.metadata?.command) {
+        return null; // exec command, not console
+      }
+      // Check resources for instance name
+      const resources = operation.metadata?.resources || {};
+      const instances = resources.instances || [];
+      if (instances.length > 0) {
+        // Path format: /1.0/instances/name?project=xxx
+        const path = instances[0];
+        const match = path.match(/\/instances\/([^?]+)/);
+        if (match) return match[1];
+      }
+    }
+    return null;
+  };
+
+  const handleCancelOperation = async (operationId: string, host: string) => {
+    setCancellingId(operationId);
+    try {
+      const response = await fetch(
+        `${API_URL}/operations/${operationId}?host=${encodeURIComponent(host)}`,
+        { method: "DELETE" }
+      );
+      
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: "Failed to cancel" }));
+        throw new Error(error.detail || "Failed to cancel operation");
+      }
+      
+      toast({
+        title: "Operation cancelled",
+        description: `Operation ${operationId.substring(0, 8)}... has been cancelled`,
+      });
+      
+      // Refresh operations list
+      refetch();
+    } catch (error) {
+      toast({
+        title: "Failed to cancel operation",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setCancellingId(null);
+      setConfirmDialog({ open: false, operationId: "", host: "", description: "" });
+    }
+  };
+
+  const handleKillSession = async (operationId: string, instanceName: string, host: string) => {
+    setKillingId(operationId);
+    try {
+      const response = await fetch(
+        `${API_URL}/console/${instanceName}/active-sessions/${operationId}?host=${encodeURIComponent(host)}`,
+        { method: "DELETE" }
+      );
+      
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ detail: "Failed to kill session" }));
+        throw new Error(error.detail || "Failed to kill session");
+      }
+      
+      toast({
+        title: "Session killed",
+        description: `Console session for ${instanceName} has been terminated`,
+      });
+      
+      // Refresh operations list
+      refetch();
+    } catch (error) {
+      toast({
+        title: "Failed to kill session",
+        description: error instanceof Error ? error.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setKillingId(null);
+      setConfirmDialog({ open: false, operationId: "", host: "", description: "" });
+    }
+  };
+
+  const openCancelConfirm = (operation: any, isKillSession = false, instanceName?: string) => {
+    const host = findOperationHost(operation);
+    setConfirmDialog({
+      open: true,
+      operationId: operation.id,
+      host,
+      description: operation.description || `Operation ${operation.id.substring(0, 8)}...`,
+      isKillSession,
+      instanceName,
+    });
   };
 
   if (isLoading) {
@@ -55,6 +213,61 @@ export default function OperationsPage() {
         </Button>
       </div>
 
+      {/* Cancel/Kill Confirmation Dialog */}
+      <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+              {confirmDialog.isKillSession ? "Kill Console Session?" : "Cancel Operation?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDialog.isKillSession ? (
+                <>
+                  Are you sure you want to kill this console session?
+                  <br />
+                  <span className="font-medium text-foreground">Instance: {confirmDialog.instanceName}</span>
+                </>
+              ) : (
+                <>
+                  Are you sure you want to cancel this operation?
+                  <br />
+                  <span className="font-medium text-foreground">{confirmDialog.description}</span>
+                </>
+              )}
+              <br /><br />
+              This action cannot be undone. The {confirmDialog.isKillSession ? "session" : "operation"} will be terminated immediately.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancellingId !== null && killingId !== null}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (confirmDialog.isKillSession && confirmDialog.instanceName) {
+                  handleKillSession(confirmDialog.operationId, confirmDialog.instanceName, confirmDialog.host);
+                } else {
+                  handleCancelOperation(confirmDialog.operationId, confirmDialog.host);
+                }
+              }}
+              disabled={cancellingId !== null || killingId !== null}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              {(cancellingId === confirmDialog.operationId || killingId === confirmDialog.operationId) ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  {confirmDialog.isKillSession ? "Killing..." : "Cancelling..."}
+                </>
+              ) : (
+                <>
+                  {confirmDialog.isKillSession ? <Unplug className="h-4 w-4 mr-2" /> : <XCircle className="h-4 w-4 mr-2" />}
+                  {confirmDialog.isKillSession ? "Kill Session" : "Cancel Operation"}
+                </>
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <Card>
         <CardHeader>
           <CardTitle>Active Operations ({operations.length})</CardTitle>
@@ -65,46 +278,112 @@ export default function OperationsPage() {
               No active operations
             </div>
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Operation ID</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Class</TableHead>
-                  <TableHead>Created</TableHead>
-                  <TableHead>Can Cancel</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {operations.map((operation: any) => (
-                  <TableRow key={operation.id}>
-                    <TableCell className="font-mono text-xs">
-                      {operation.id.substring(0, 8)}...
-                    </TableCell>
-                    <TableCell>{operation.description || "N/A"}</TableCell>
-                    <TableCell>
-                      <Badge variant={getStatusColor(operation.status)}>
-                        {operation.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{operation.class_name}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      {new Date(operation.created_at).toLocaleString()}
-                    </TableCell>
-                    <TableCell>
-                      {operation.may_cancel ? (
-                        <Badge variant="secondary">Yes</Badge>
-                      ) : (
-                        <Badge variant="outline">No</Badge>
-                      )}
-                    </TableCell>
+            <TooltipProvider>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Operation ID</TableHead>
+                    <TableHead>Instance</TableHead>
+                    <TableHead>Description</TableHead>
+                    <TableHead>Node</TableHead>
+                    <TableHead>Project</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Class</TableHead>
+                    <TableHead>Created</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {operations.map((operation: any) => {
+                    // Use instance_name from backend, or extract from metadata
+                    const instanceName = operation.instance_name || extractInstanceName(operation) || "";
+                    const isConsoleOp = operation.class_name === "websocket";
+                    
+                    return (
+                    <TableRow key={operation.id}>
+                      <TableCell className="font-mono text-xs">
+                        {operation.id.substring(0, 8)}...
+                      </TableCell>
+                      <TableCell>
+                        {instanceName ? (
+                          <span className="font-medium text-sm">{instanceName}</span>
+                        ) : (
+                          <span className="text-muted-foreground text-xs">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell>{operation.description || "N/A"}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{operation.node_name || "Unknown"}</Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm">{operation.project || "default"}</span>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={getStatusColor(operation.status)}>
+                          {operation.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{operation.class_name}</Badge>
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {formatDateTime(operation.created_at)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {operation.may_cancel ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-100"
+                                onClick={() => openCancelConfirm(operation)}
+                                disabled={cancellingId !== null || killingId !== null}
+                              >
+                                {cancellingId === operation.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <XCircle className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Cancel Operation</TooltipContent>
+                          </Tooltip>
+                        ) : isConsoleOp ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 text-orange-500 hover:text-orange-600 hover:bg-orange-100"
+                                onClick={() => openCancelConfirm(operation, true, instanceName || "unknown")}
+                                disabled={cancellingId !== null || killingId !== null}
+                              >
+                                {killingId === operation.id ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Unplug className="h-4 w-4" />
+                                )}
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Kill Console Session</TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <span className="text-xs text-muted-foreground">
+                                Cannot cancel
+                              </span>
+                            </TooltipTrigger>
+                            <TooltipContent>This operation cannot be cancelled</TooltipContent>
+                          </Tooltip>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  )})}
+                </TableBody>
+              </Table>
+            </TooltipProvider>
           )}
         </CardContent>
       </Card>

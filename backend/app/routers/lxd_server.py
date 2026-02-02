@@ -14,6 +14,8 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode
+from app.core.type_utils import detect_cluster_type_from_metadata
+from app.core.node_metadata import get_node_metadata_store
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,7 @@ _executor = ThreadPoolExecutor(max_workers=5)
 class ServerInfo(BaseModel):
     """Server information."""
     node: str = Field(..., description="Node name")
+    node_type: str = Field("LXD", description="Node type (LXD, Incus, MicroCloud)")
     api_version: str = Field("", description="API version")
     auth: str = Field("", description="Authentication method")
     config: Dict[str, Any] = Field(default_factory=dict, description="Server configuration")
@@ -46,8 +49,32 @@ def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Opti
         client = lxd_service.connection_manager.get_client(node_name)
         # Get server info from host_info property
         server_data = client.host_info
+        
+        # Detect node type from api_extensions in the server response
+        # Build metadata dict similar to /1.0 endpoint response
+        metadata = {
+            "api_extensions": server_data.get('api_extensions', []),
+            "environment": server_data.get('environment', {})
+        }
+        detected_type = detect_cluster_type_from_metadata(metadata)
+        
+        # Also try to get from stored metadata as fallback
+        try:
+            metadata_store = get_node_metadata_store()
+            stored_metadata = metadata_store.get_node(node_name)
+            if stored_metadata and stored_metadata.get("type"):
+                # Prefer stored type if it's more specific (ex;, explicitly set as Incus)
+                stored_type = stored_metadata.get("type", "").lower()
+                if stored_type == "incus":
+                    detected_type = "Incus"
+                elif stored_type == "microcloud":
+                    detected_type = "MicroCloud"
+        except Exception as e:
+            logger.debug(f"Could not get stored metadata for {node_name}: {e}")
+        
         return ServerInfo(
             node=node_name,
+            node_type=detected_type,
             api_version=server_data.get('api_version', ''),
             auth=server_data.get('auth', ''),
             config=server_data.get('config', {}),
@@ -113,8 +140,29 @@ async def get_server_info(
         client = lxd_service.connection_manager.get_client(node_name)
         server_data = client.host_info
         
+        # Detect node type from api_extensions in the server response
+        metadata = {
+            "api_extensions": server_data.get('api_extensions', []),
+            "environment": server_data.get('environment', {})
+        }
+        detected_type = detect_cluster_type_from_metadata(metadata)
+        
+        # Also try to get from stored metadata as fallback
+        try:
+            metadata_store = get_node_metadata_store()
+            stored_metadata = metadata_store.get_node(node_name)
+            if stored_metadata and stored_metadata.get("type"):
+                stored_type = stored_metadata.get("type", "").lower()
+                if stored_type == "incus":
+                    detected_type = "Incus"
+                elif stored_type == "microcloud":
+                    detected_type = "MicroCloud"
+        except Exception as e:
+            logger.debug(f"Could not get stored metadata for {node_name}: {e}")
+        
         return ServerInfo(
             node=node_name,
+            node_type=detected_type,
             api_version=server_data.get('api_version', ''),
             auth=server_data.get('auth', ''),
             config=server_data.get('config', {}),

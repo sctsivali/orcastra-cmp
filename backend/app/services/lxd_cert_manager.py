@@ -6,6 +6,7 @@ Handles certificate generation via Vault PKI and LXD trust registration.
 import logging
 import os
 import tempfile
+import re
 from typing import Dict, Any, Optional, Tuple
 import requests
 from pylxd import Client
@@ -18,6 +19,20 @@ logger = logging.getLogger(__name__)
 class LXDCertManagerError(Exception):
     """Base exception for LXD certificate manager errors."""
     pass
+
+
+def extract_cert_base64(pem_cert: str) -> str:
+    """
+    Extract pure base64 content from PEM certificate.
+    LXD API expects base64-encoded certificate without PEM headers.
+    """
+    # Remove headers, footers, and whitespace
+    lines = pem_cert.strip().split('\n')
+    base64_lines = [
+        line for line in lines 
+        if not line.startswith('-----') and line.strip()
+    ]
+    return ''.join(base64_lines)
 
 
 class LXDCertificateManager:
@@ -46,7 +61,7 @@ class LXDCertificateManager:
 
             cluster_id: Unique cluster identifier
             display_name: Human-readable display name
-            endpoint: LXD API endpoint (e.g., https://xxx:8443)
+            endpoint: LXD API endpoint (ex; https://xxx:8443)
             zone: Geographical or logical zone
             cluster_type: Type of cluster (auto-detected from hypervisor)
             merchant_id: Merchant/organization identifier
@@ -162,10 +177,13 @@ class LXDCertificateManager:
             trust_password = secrets.get("trust_password")
             certificate = cert_data["client.crt"]
             
+            # Extract pure base64 from PEM - LXD API expects base64-only format
+            cert_base64 = extract_cert_base64(certificate)
+            
             # Prepare payload
             payload = {
                 "type": "client",
-                "certificate": certificate,
+                "certificate": cert_base64,
                 "name": cert_name,
                 "restricted": restricted
             }
@@ -472,3 +490,212 @@ class LXDCertificateManager:
         except Exception as e:
             logger.error(f"Failed to delete cluster data for {cluster_id}: {e}")
             return False
+
+    def add_trust_with_existing_cert(
+        self,
+        cluster_id: str,
+        new_cert_pem: str,
+        cert_name: str,
+        projects: Optional[list] = None,
+        restricted: bool = False
+    ) -> bool:
+        """
+        Add a new certificate to LXD trust store using existing trusted certificate.
+        
+        This allows seamless certificate renewal when the current cert is still valid.
+        Uses the existing certificate to authenticate and add the new certificate.
+        """
+        cert_path = None
+        key_path = None
+        
+        try:
+            # Get cluster metadata and current certificate
+            metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
+            current_cert = self.get_cluster_certificate(cluster_id)
+            
+            endpoint = metadata["endpoint"]
+            
+            # Create temp files for current certificate
+            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', prefix=f'lxd_add_trust_{cluster_id}_')
+            key_fd, key_path = tempfile.mkstemp(suffix='.key', prefix=f'lxd_add_trust_{cluster_id}_')
+            
+            os.write(cert_fd, current_cert["client.crt"].encode('utf-8'))
+            os.close(cert_fd)
+            os.chmod(cert_path, 0o600)
+            
+            os.write(key_fd, current_cert["client.key"].encode('utf-8'))
+            os.close(key_fd)
+            os.chmod(key_path, 0o600)
+            
+            # Prepare payload for adding new certificate
+            # LXD API expects base64-only format (no PEM headers)
+            cert_base64 = extract_cert_base64(new_cert_pem)
+            
+            payload = {
+                "type": "client",
+                "certificate": cert_base64,
+                "name": cert_name,
+                "restricted": restricted
+            }
+            
+            if projects:
+                payload["projects"] = projects
+            
+            # Add new certificate using existing cert for authentication
+            url = f"{endpoint}/1.0/certificates"
+            
+            response = requests.post(
+                url,
+                json=payload,
+                cert=(cert_path, key_path),
+                verify=False,
+                timeout=15
+            )
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Successfully added new certificate to LXD trust for {cluster_id}")
+                return True
+            elif response.status_code == 409:
+                # Certificate already exists - that's fine
+                logger.info(f"Certificate already trusted for {cluster_id}")
+                return True
+            else:
+                logger.warning(f"Failed to add trust: HTTP {response.status_code} - {response.text}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed when adding trust for {cluster_id}: {e}")
+            raise LXDCertManagerError(f"Failed to add trust: {str(e)}")
+        except VaultClientError as e:
+            logger.error(f"Vault error: {e}")
+            raise LXDCertManagerError(f"Vault error: {str(e)}")
+        finally:
+            # Cleanup temp files
+            try:
+                if cert_path and os.path.exists(cert_path):
+                    os.unlink(cert_path)
+                if key_path and os.path.exists(key_path):
+                    os.unlink(key_path)
+            except:
+                pass
+
+    def add_trust_with_password(
+        self,
+        cluster_id: str,
+        new_cert_pem: str,
+        cert_name: str,
+        trust_password: str,
+        projects: Optional[list] = None,
+        restricted: bool = False
+    ) -> bool:
+        """
+        Add a new certificate to LXD trust store using trust password.
+        
+        Used when the current certificate is expired and cannot be used
+        for authentication.
+        """
+        try:
+            # Get cluster metadata
+            metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
+            endpoint = metadata["endpoint"]
+            
+            # Extract base64 from PEM - LXD API expects base64-only format
+            cert_base64 = extract_cert_base64(new_cert_pem)
+            
+            # Prepare payload
+            payload = {
+                "type": "client",
+                "certificate": cert_base64,
+                "name": cert_name,
+                "restricted": restricted,
+                "password": trust_password
+            }
+            
+            if projects:
+                payload["projects"] = projects
+            
+            # Add to LXD trust using password
+            url = f"{endpoint}/1.0/certificates"
+            
+            response = requests.post(
+                url,
+                json=payload,
+                verify=False,
+                timeout=15
+            )
+            
+            if response.status_code in [200, 201]:
+                logger.info(f"Successfully added certificate with password for {cluster_id}")
+                return True
+            elif response.status_code == 409:
+                logger.info(f"Certificate already trusted for {cluster_id}")
+                return True
+            else:
+                logger.warning(f"Failed to add trust with password: HTTP {response.status_code}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request failed: {e}")
+            raise LXDCertManagerError(f"Failed to add trust: {str(e)}")
+        except VaultClientError as e:
+            logger.error(f"Vault error: {e}")
+            raise LXDCertManagerError(f"Vault error: {str(e)}")
+
+    def verify_connection_with_cert(
+        self,
+        endpoint: str,
+        cert_pem: str,
+        key_pem: str
+    ) -> bool:
+        """
+        Verify that a certificate can successfully connect to an LXD endpoint.
+        
+        Used to verify pending certificate before activating it.
+        """
+        cert_path = None
+        key_path = None
+        
+        try:
+            # Create temp files
+            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', prefix='lxd_verify_')
+            key_fd, key_path = tempfile.mkstemp(suffix='.key', prefix='lxd_verify_')
+            
+            os.write(cert_fd, cert_pem.encode('utf-8'))
+            os.close(cert_fd)
+            os.chmod(cert_path, 0o600)
+            
+            os.write(key_fd, key_pem.encode('utf-8'))
+            os.close(key_fd)
+            os.chmod(key_path, 0o600)
+            
+            # Test authenticated endpoint
+            test_url = f"{endpoint}/1.0/instances"
+            
+            response = requests.get(
+                test_url,
+                cert=(cert_path, key_path),
+                verify=False,
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                logger.info(f"Certificate verified successfully for {endpoint}")
+                return True
+            elif response.status_code == 403:
+                logger.warning(f"Certificate not trusted at {endpoint}")
+                return False
+            else:
+                logger.warning(f"Unexpected status {response.status_code} for {endpoint}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Connection verification failed: {e}")
+            return False
+        finally:
+            try:
+                if cert_path and os.path.exists(cert_path):
+                    os.unlink(cert_path)
+                if key_path and os.path.exists(key_path):
+                    os.unlink(key_path)
+            except:
+                pass

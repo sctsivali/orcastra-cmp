@@ -73,6 +73,7 @@ export function NodeRegisterForm() {
     certificate_generated?: boolean;
     certificate?: string;
     cluster_id?: string;
+    cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus"
   } | null>(null);
 
   // Generate unique identity name: orca-{clustername}-{datetime}
@@ -218,6 +219,7 @@ export function NodeRegisterForm() {
         certificate_generated: response.certificate_generated,
         certificate: response.certificate,
         cluster_id: data.cluster_id,
+        cluster_type: response.cluster_type,  // Include auto-detected type
       });
 
       if (response.success && response.certificate) {
@@ -309,29 +311,41 @@ export function NodeRegisterForm() {
                 <AlertDescription className="space-y-3">
                   <p className="text-sm font-medium">Run this command on your hypervisor server:</p>
                   
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs text-muted-foreground">
-                        Add trust with unique identity name <code className="text-xs bg-muted px-1 py-0.5 rounded">{identityName}</code>
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          const cmd = `lxc config trust add --name ${identityName} - <<EOF\n${registrationResult.certificate}\nEOF`;
-                          copyToClipboard(cmd, "Command");
-                        }}
-                      >
-                        <Copy className="h-3 w-3 mr-1" />
-                        Copy
-                      </Button>
-                    </div>
-                    <pre className="bg-black text-green-400 p-3 rounded text-xs overflow-x-auto">
-{`lxc config trust add --name ${identityName} - <<EOF
+                  {/* Dynamic CLI Command based on detected type */}
+                  {(() => {
+                    const isIncus = registrationResult.cluster_type === "Incus";
+                    const cliTool = isIncus ? "incus" : "lxc";
+                    const trustSubCmd = isIncus ? "add-certificate" : "add";
+                    const typeLabel = registrationResult.cluster_type || "LXD";
+                    const badgeVariant = isIncus ? "secondary" : "outline";
+                    
+                    return (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-muted-foreground">
+                            <Badge variant={badgeVariant} className="mr-2">{typeLabel}</Badge>
+                            Identity: <code className="text-xs bg-muted px-1 py-0.5 rounded">{identityName}</code>
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              const cmd = `cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${identityName}"\n${registrationResult.certificate}\nEOF`;
+                              copyToClipboard(cmd, `${typeLabel} Command`);
+                            }}
+                          >
+                            <Copy className="h-3 w-3 mr-1" />
+                            Copy
+                          </Button>
+                        </div>
+                        <pre className="bg-black text-green-400 p-3 rounded text-xs overflow-x-auto">
+{`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${identityName}"
 ${registrationResult.certificate}
 EOF`}
-                    </pre>
-                  </div>
+                        </pre>
+                      </div>
+                    );
+                  })()}
                 </AlertDescription>
               </Alert>
             </div>
@@ -347,7 +361,7 @@ EOF`}
               <Button
                 onClick={() => registrationResult.cluster_id && handleCheckAuth(registrationResult.cluster_id)}
                 disabled={isCheckingAuth}
-                className="w-full bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700"
+                className="w-full"
               >
                 {isCheckingAuth ? (
                   <>
@@ -461,18 +475,14 @@ EOF`}
               <Button
                 type="submit"
                 disabled={isSubmitting}
-                className="gap-2 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700"
               >
                 {isSubmitting ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
                     Registering Node...
                   </>
                 ) : (
-                  <>
-                    <Server className="h-4 w-4" />
-                    Register Node
-                  </>
+                  "Register Node"
                 )}
               </Button>
               <Button

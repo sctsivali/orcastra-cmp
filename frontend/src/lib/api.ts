@@ -287,19 +287,221 @@ export const projectAPI = {
   },
 };
 
-// Tags API
+// Tags API (Enterprise-Grade)
 export const tagAPI = {
+  // ============================================
+  // Category Operations
+  // ============================================
+  
+  listCategories: async (includeInactive = false): Promise<import("@/types/api").TagCategory[]> => {
+    return fetchAPI<import("@/types/api").TagCategory[]>(
+      `/tags/categories?include_inactive=${includeInactive}`
+    );
+  },
+
+  createCategory: async (
+    data: import("@/types/api").TagCategoryCreate
+  ): Promise<import("@/types/api").TagCategory> => {
+    return fetchAPI<import("@/types/api").TagCategory>("/tags/categories", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateCategory: async (
+    categoryId: number,
+    data: import("@/types/api").TagCategoryUpdate
+  ): Promise<import("@/types/api").TagCategory> => {
+    return fetchAPI<import("@/types/api").TagCategory>(
+      `/tags/categories/${categoryId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }
+    );
+  },
+
+  // ============================================
+  // Tag CRUD Operations
+  // ============================================
+
+  listTags: async (params?: {
+    category_id?: number;
+    search?: string;
+  }): Promise<import("@/types/api").TagListResponse> => {
+    const searchParams = new URLSearchParams();
+    if (params?.category_id) searchParams.append("category_id", String(params.category_id));
+    if (params?.search) searchParams.append("search", params.search);
+    const query = searchParams.toString();
+    return fetchAPI<import("@/types/api").TagListResponse>(
+      `/tags${query ? `?${query}` : ""}`
+    );
+  },
+
+  createTag: async (
+    data: import("@/types/api").TagCreate
+  ): Promise<import("@/types/api").Tag> => {
+    return fetchAPI<import("@/types/api").Tag>("/tags", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateTag: async (
+    tagId: number,
+    data: import("@/types/api").TagUpdate
+  ): Promise<import("@/types/api").Tag> => {
+    return fetchAPI<import("@/types/api").Tag>(`/tags/${tagId}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  },
+
+  deleteTag: async (tagId: number): Promise<void> => {
+    return fetchAPI<void>(`/tags/${tagId}`, { method: "DELETE" });
+  },
+
+  // ============================================
+  // Statistics
+  // ============================================
+
+  getStats: async (): Promise<import("@/types/api").TagStatsResponse> => {
+    return fetchAPI<import("@/types/api").TagStatsResponse>("/tags/stats");
+  },
+
+  // ============================================
+  // Resource Tag Operations (New API)
+  // ============================================
+
+  getResourceTags: async (
+    resourceType: "node" | "project" | "instance",
+    resourceId: string,
+    host?: string,
+    project?: string
+  ): Promise<import("@/types/api").ResourceTagsResponse> => {
+    const params = new URLSearchParams();
+    if (host) params.append("host", host);
+    if (project) params.append("project", project);
+    const query = params.toString();
+    return fetchAPI<import("@/types/api").ResourceTagsResponse>(
+      `/tags/resources/${resourceType}/${encodeURIComponent(resourceId)}${query ? `?${query}` : ""}`
+    );
+  },
+
+  setResourceTags: async (
+    resourceType: "node" | "project" | "instance",
+    resourceId: string,
+    tags: string[],
+    host?: string,
+    project?: string
+  ): Promise<import("@/types/api").BulkTagAssignResponse> => {
+    const params = new URLSearchParams();
+    if (host) params.append("host", host);
+    if (project) params.append("project", project);
+    const query = params.toString();
+    return fetchAPI<import("@/types/api").BulkTagAssignResponse>(
+      `/tags/resources/${resourceType}/${encodeURIComponent(resourceId)}${query ? `?${query}` : ""}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({ tags, resource_type: resourceType, resource_id: resourceId }),
+      }
+    );
+  },
+
+  addResourceTags: async (
+    resourceType: "node" | "project" | "instance",
+    resourceId: string,
+    tags: string[],
+    host?: string,
+    project?: string
+  ): Promise<import("@/types/api").BulkTagAssignResponse> => {
+    const params = new URLSearchParams();
+    if (host) params.append("host", host);
+    if (project) params.append("project", project);
+    const query = params.toString();
+    return fetchAPI<import("@/types/api").BulkTagAssignResponse>(
+      `/tags/resources/${resourceType}/${encodeURIComponent(resourceId)}/add${query ? `?${query}` : ""}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ tags, resource_type: resourceType, resource_id: resourceId }),
+      }
+    );
+  },
+
+  removeResourceTag: async (
+    resourceType: "node" | "project" | "instance",
+    resourceId: string,
+    tagName: string,
+    host?: string,
+    project?: string
+  ): Promise<void> => {
+    const params = new URLSearchParams();
+    if (host) params.append("host", host);
+    if (project) params.append("project", project);
+    const query = params.toString();
+    return fetchAPI<void>(
+      `/tags/resources/${resourceType}/${encodeURIComponent(resourceId)}/${encodeURIComponent(tagName)}${query ? `?${query}` : ""}`,
+      { method: "DELETE" }
+    );
+  },
+
+  // ============================================
+  // User Visibility Settings
+  // ============================================
+
+  getUserVisibility: async (): Promise<import("@/types/api").UserTagVisibilityResponse> => {
+    return fetchAPI<import("@/types/api").UserTagVisibilityResponse>("/tags/visibility");
+  },
+
+  updateUserVisibility: async (
+    settings: import("@/types/api").UserTagVisibilitySettings
+  ): Promise<import("@/types/api").UserTagVisibilityResponse> => {
+    return fetchAPI<import("@/types/api").UserTagVisibilityResponse>("/tags/visibility", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    });
+  },
+
+  // ============================================
+  // Utility Endpoints
+  // ============================================
+
+  classifyTags: async (tags: string[]): Promise<import("@/types/api").TagGrouped> => {
+    return fetchAPI<import("@/types/api").TagGrouped>("/tags/classify", {
+      method: "POST",
+      body: JSON.stringify(tags),
+    });
+  },
+
+  validateTags: async (tags: string[]): Promise<Record<string, { valid: boolean; error: string | null }>> => {
+    return fetchAPI<Record<string, { valid: boolean; error: string | null }>>("/tags/validate", {
+      method: "POST",
+      body: JSON.stringify(tags),
+    });
+  },
+
+  initCategories: async (): Promise<{ success: boolean; message: string; created_count: number }> => {
+    return fetchAPI<{ success: boolean; message: string; created_count: number }>(
+      "/tags/init-categories",
+      { method: "POST" }
+    );
+  },
+
+  // ============================================
+  // Legacy Endpoints (Backward Compatibility)
+  // ============================================
+
   updateInstanceTags: async (
     host: string,
     instanceName: string,
     tags: string[],
     project: string = "default"
-  ): Promise<{ success: boolean; message: string; tags: string[] }> => {
-    return fetchAPI<{ success: boolean; message: string; tags: string[] }>(
+  ): Promise<import("@/types/api").BulkTagAssignResponse> => {
+    return fetchAPI<import("@/types/api").BulkTagAssignResponse>(
       `/tags/instances/${host}/${encodeURIComponent(instanceName)}?project=${project}`,
       {
         method: "PUT",
-        body: JSON.stringify({ tags }),
+        body: JSON.stringify({ tags, resource_type: "instance", resource_id: instanceName }),
       }
     );
   },
@@ -308,12 +510,12 @@ export const tagAPI = {
     host: string,
     projectName: string,
     tags: string[]
-  ): Promise<{ success: boolean; message: string; tags: string[] }> => {
-    return fetchAPI<{ success: boolean; message: string; tags: string[] }>(
+  ): Promise<import("@/types/api").BulkTagAssignResponse> => {
+    return fetchAPI<import("@/types/api").BulkTagAssignResponse>(
       `/tags/projects/${host}/${encodeURIComponent(projectName)}`,
       {
         method: "PUT",
-        body: JSON.stringify({ tags }),
+        body: JSON.stringify({ tags, resource_type: "project", resource_id: projectName }),
       }
     );
   },
@@ -321,13 +523,23 @@ export const tagAPI = {
   updateNodeTags: async (
     nodeName: string,
     tags: string[]
-  ): Promise<{ success: boolean; message: string; tags: string[] }> => {
-    return fetchAPI<{ success: boolean; message: string; tags: string[] }>(
+  ): Promise<import("@/types/api").BulkTagAssignResponse> => {
+    return fetchAPI<import("@/types/api").BulkTagAssignResponse>(
       `/tags/nodes/${nodeName}`,
       {
         method: "PUT",
-        body: JSON.stringify({ tags }),
+        body: JSON.stringify({ tags, resource_type: "node", resource_id: nodeName }),
       }
+    );
+  },
+
+  getInstanceTags: async (
+    host: string,
+    instanceName: string,
+    project: string = "default"
+  ): Promise<import("@/types/api").ResourceTagsResponse> => {
+    return fetchAPI<import("@/types/api").ResourceTagsResponse>(
+      `/tags/instances/${host}/${encodeURIComponent(instanceName)}?project=${project}`
     );
   },
 };
@@ -370,7 +582,7 @@ const systemAPI = {
 
 // Instance Operations (similar to VMs but more comprehensive)
 export const instanceAPI = {
-  list: async (host?: string, status?: string, type?: string) => {
+  list: async (host?: string, status?: string, type?: string): Promise<VMListResponse> => {
     const params = new URLSearchParams();
     if (host) params.append("host", host);
     if (status) params.append("status", status);
@@ -379,14 +591,14 @@ export const instanceAPI = {
     const queryString = params.toString();
     const endpoint = queryString ? `/instances?${queryString}` : "/instances";
     
-    return fetchAPI(endpoint);
+    return fetchAPI<VMListResponse>(endpoint);
   },
 
-  get: async (name: string, host: string) => {
-    return fetchAPI(`/instances/${name}?host=${encodeURIComponent(host)}`);
+  get: async (name: string, host: string): Promise<VMInfo> => {
+    return fetchAPI<VMInfo>(`/instances/${name}?host=${encodeURIComponent(host)}`);
   },
 
-  getMetrics: async (name: string, host: string) => {
+  getMetrics: async (name: string, host: string): Promise<InstanceMetrics> => {
     return fetchAPI<InstanceMetrics>(`/instances/${name}/metrics?host=${encodeURIComponent(host)}`);
   },
 };
@@ -724,8 +936,9 @@ export const clusterAPI = {
     });
   },
 
-  list: async (): Promise<ClusterListResponse> => {
-    return fetchAPI<ClusterListResponse>("/clusters");
+  list: async (fresh: boolean = false): Promise<ClusterListResponse> => {
+    const endpoint = fresh ? "/clusters?fresh=true" : "/clusters";
+    return fetchAPI<ClusterListResponse>(endpoint);
   },
 
   get: async (clusterId: string): Promise<ClusterInfo> => {
@@ -796,6 +1009,13 @@ import type {
   ClusterMonitoringMetrics, 
   MetricsHistoryPoint,
   MonitoringNetworkMetrics,
+  CertificateListResponse,
+  CertificateInfo,
+  CertificateRenewalRequest,
+  CertificateRenewalResponse,
+  CertificateVerifyRequest,
+  CertificateVerifyResponse,
+  SystemWarningsResponse,
 } from "@/types";
 
 export const monitoringAPI = {
@@ -813,6 +1033,119 @@ export const monitoringAPI = {
 
   getNetworkMetrics: async (): Promise<MonitoringNetworkMetrics> => {
     return fetchAPI<MonitoringNetworkMetrics>("/monitoring/network");
+  },
+};
+
+// Certificate Management API
+export const certificateAPI = {
+  list: async (): Promise<CertificateListResponse> => {
+    return fetchAPI<CertificateListResponse>("/certificates");
+  },
+
+  get: async (clusterId: string): Promise<CertificateInfo> => {
+    return fetchAPI<CertificateInfo>(`/certificates/${encodeURIComponent(clusterId)}`);
+  },
+
+  initiateRenewal: async (request: CertificateRenewalRequest): Promise<CertificateRenewalResponse> => {
+    return fetchAPI<CertificateRenewalResponse>("/certificates/renew", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  },
+
+  verifyRenewal: async (request: CertificateVerifyRequest): Promise<CertificateVerifyResponse> => {
+    return fetchAPI<CertificateVerifyResponse>("/certificates/verify", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  },
+
+  cancelPending: async (clusterId: string): Promise<{ success: boolean; message: string }> => {
+    return fetchAPI(`/certificates/${encodeURIComponent(clusterId)}/pending`, {
+      method: "DELETE",
+    });
+  },
+
+  getSystemWarnings: async (): Promise<SystemWarningsResponse> => {
+    return fetchAPI<SystemWarningsResponse>("/warnings/system/all");
+  },
+
+  cleanupPending: async (): Promise<{ success: boolean; message: string; cleaned_count: number }> => {
+    return fetchAPI("/certificates/cleanup-pending", {
+      method: "POST",
+    });
+  },
+};
+
+// Integrations API (External Apps - Orcahub)
+import type {
+  APIKeyInfo,
+  APIKeyCreateRequest,
+  APIKeyCreateResponse,
+  APIKeyListResponse,
+  ClusterPermission,
+  ExternalUserMapping,
+  UserMappingRequest,
+  AvailableClustersResponse,
+} from "@/types";
+
+export const integrationsAPI = {
+  // API Key Management
+  listAPIKeys: async (): Promise<APIKeyListResponse> => {
+    return fetchAPI<APIKeyListResponse>("/integrations/api-keys");
+  },
+
+  getAPIKey: async (keyId: string): Promise<APIKeyInfo> => {
+    return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}`);
+  },
+
+  createAPIKey: async (request: APIKeyCreateRequest): Promise<APIKeyCreateResponse> => {
+    return fetchAPI<APIKeyCreateResponse>("/integrations/api-keys", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  },
+
+  updateAPIKeyPermissions: async (keyId: string, permissions: ClusterPermission[]): Promise<APIKeyInfo> => {
+    return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}/permissions`, {
+      method: "PUT",
+      body: JSON.stringify(permissions),
+    });
+  },
+
+  revokeAPIKey: async (keyId: string): Promise<APIKeyInfo> => {
+    return fetchAPI<APIKeyInfo>(`/integrations/api-keys/${encodeURIComponent(keyId)}/revoke`, {
+      method: "POST",
+    });
+  },
+
+  deleteAPIKey: async (keyId: string): Promise<{ success: boolean; message: string }> => {
+    return fetchAPI(`/integrations/api-keys/${encodeURIComponent(keyId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  // User Mappings
+  listUserMappings: async (keyId: string): Promise<ExternalUserMapping[]> => {
+    return fetchAPI<ExternalUserMapping[]>(`/integrations/api-keys/${encodeURIComponent(keyId)}/users`);
+  },
+
+  addUserMapping: async (keyId: string, request: UserMappingRequest): Promise<ExternalUserMapping> => {
+    return fetchAPI<ExternalUserMapping>(`/integrations/api-keys/${encodeURIComponent(keyId)}/users`, {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
+  },
+
+  deleteUserMapping: async (keyId: string, userId: string): Promise<{ success: boolean; message: string }> => {
+    return fetchAPI(`/integrations/api-keys/${encodeURIComponent(keyId)}/users/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+    });
+  },
+
+  // Available Clusters
+  getAvailableClusters: async (): Promise<AvailableClustersResponse> => {
+    return fetchAPI<AvailableClustersResponse>("/integrations/available-clusters");
   },
 };
 
@@ -841,6 +1174,8 @@ export const api = {
   ipam: ipamAPI,
   myKeys: myKeysAPI,
   monitoring: monitoringAPI,
+  certificates: certificateAPI,
+  integrations: integrationsAPI,
   clusterMembers: {
     list: async (node: string) => {
       return fetchAPI<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`);

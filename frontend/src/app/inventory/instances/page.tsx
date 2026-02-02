@@ -20,10 +20,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Box, Play, Square, RotateCw, Trash2, Search, Filter, ArrowUp, ArrowDown } from "lucide-react";
+import { Box, Play, Square, RotateCw, Trash2, Search, Filter, ArrowUp, ArrowDown, Terminal, Monitor } from "lucide-react";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
-import { LoadingLottieMedium } from "@/components/loading-lottie";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { 
   useInstances, 
   useStartInstance, 
@@ -32,6 +32,8 @@ import {
 } from "@/hooks/use-lxd";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
+import { useTerminalStore } from "@/lib/terminal-store";
+import { useConsoleStore } from "@/lib/console-store";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 
 type SortField = "name" | "host" | "project" | "status";
@@ -196,7 +198,10 @@ export default function InstancesPage() {
     return filteredInstances.slice(startIndex, startIndex + pageSize);
   }, [filteredInstances, currentPage, pageSize]);
 
-
+  // Full-page loading state
+  if (isLoading) {
+    return <LoadingLottiePage />;
+  }
 
   return (
     <div className="p-8 space-y-6">
@@ -309,15 +314,7 @@ export default function InstancesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center py-8">
-                    <div className="flex justify-center">
-                      <LoadingLottieMedium />
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : paginatedInstances.length === 0 ? (
+              {paginatedInstances.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                     No instances found
@@ -394,6 +391,35 @@ export default function InstancesPage() {
                             title={isReadOnly ? "Action disabled in read-only mode" : "Restart instance"}
                           >
                             <RotateCw className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              useTerminalStore.getState().openTerminal({
+                                instanceName: instance.name,
+                                host: instance.host,
+                                project: instance.project || "default",
+                              });
+                            }}
+                            title="Open Terminal"
+                          >
+                            <Terminal className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              useConsoleStore.getState().openConsole({
+                                instanceName: instance.name,
+                                instanceType: instance.type || "container",
+                                host: instance.host,
+                                project: instance.project || "default",
+                              });
+                            }}
+                            title="Open Console"
+                          >
+                            <Monitor className="h-4 w-4" />
                           </Button>
                         </>
                       )}

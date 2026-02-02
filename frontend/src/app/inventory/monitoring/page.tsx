@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, memo } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Activity,
   Server,
@@ -33,6 +35,14 @@ import {
   Info,
   ShieldAlert,
   Flame,
+  Shield,
+  WifiOff,
+  ZoomIn,
+  ZoomOut,
+  ChevronLeft,
+  ChevronRight,
+  Maximize2,
+  RotateCcw,
 } from "lucide-react";
 
 // Dynamically import Lottie to avoid SSR issues
@@ -53,6 +63,8 @@ import {
   BarChart,
   Bar,
   Legend,
+  Brush,
+  ReferenceArea,
 } from "recharts";
 import { format } from "date-fns";
 
@@ -79,13 +91,13 @@ import {
 import {
   Tooltip as UITooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useMonitoringDashboard, useMonitoringHistory } from "@/hooks/use-lxd";
+import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { cn } from "@/lib/utils";
 import { MonitoringDashboardResponse, MetricsHistoryPoint, ClusterMonitoringMetrics, InstanceMonitoringSummary, VMInfo } from "@/types";
 import { vmAPI } from "@/lib/api";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 // Format CPU time from nanoseconds to readable format
 const formatCpuTime = (nanoseconds: number): string => {
@@ -209,9 +221,10 @@ interface GaugeChartProps {
   label: string;
   color?: string;
   size?: number;
+  statusMessage?: string; // Optional status message to show on hover when value is 0
 }
 
-function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120 }: GaugeChartProps) {
+function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120, statusMessage }: GaugeChartProps) {
   const percentage = Math.min((value / max) * 100, 100);
   const strokeWidth = 12;
   const radius = (size - strokeWidth) / 2;
@@ -225,7 +238,10 @@ function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120 }: 
     return color;
   };
 
-  return (
+  // Show tooltip only when value is 0 and we have a status message
+  const showTooltip = percentage === 0 && statusMessage;
+
+  const gaugeContent = (
     <div className="flex flex-col items-center">
       <svg width={size} height={size / 2 + 20} className="transform">
         {/* Background arc */}
@@ -260,6 +276,23 @@ function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120 }: 
       <span className="text-sm font-medium text-muted-foreground mt-1">{label}</span>
     </div>
   );
+
+  if (showTooltip) {
+    return (
+      <UITooltip>
+        <TooltipTrigger asChild>
+          <div className="cursor-help">
+            {gaugeContent}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">
+          <p className="text-sm">{statusMessage}</p>
+        </TooltipContent>
+      </UITooltip>
+    );
+  }
+
+  return gaugeContent;
 }
 
 // Node Card Component
@@ -268,6 +301,24 @@ interface NodeCardProps {
 }
 
 function NodeCard({ node }: NodeCardProps) {
+  // Determine status badge color and text based on cluster_status
+  const getStatusBadge = () => {
+    if (node.is_online) {
+      return <Badge variant="default">Online</Badge>;
+    }
+    
+    switch (node.cluster_status) {
+      case "pending_trust":
+        return <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Pending Trust</Badge>;
+      case "offline":
+        return <Badge variant="destructive">Offline</Badge>;
+      case "error":
+        return <Badge variant="destructive">Error</Badge>;
+      default:
+        return <Badge variant="secondary">Offline</Badge>;
+    }
+  };
+
   return (
     <Card className={cn(
       "transition-all hover:shadow-md",
@@ -279,12 +330,23 @@ function NodeCard({ node }: NodeCardProps) {
             <Server className="h-5 w-5 text-muted-foreground" />
             <CardTitle className="text-base">{node.node_name}</CardTitle>
           </div>
-          <Badge variant={node.is_online ? "default" : "secondary"}>
-            {node.is_online ? "Online" : "Offline"}
-          </Badge>
+          {node.status_message && !node.is_online ? (
+            <UITooltip>
+              <TooltipTrigger asChild>
+                <div className="cursor-help">
+                  {getStatusBadge()}
+                </div>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                <p className="text-sm">{node.status_message}</p>
+              </TooltipContent>
+            </UITooltip>
+          ) : (
+            getStatusBadge()
+          )}
         </div>
         <CardDescription>
-          {node.node_type?.toUpperCase() || "LXD"} • {node.instance_count} instances
+          {node.node_type?.toLowerCase() === "incus" ? "Incus" : node.node_type?.toLowerCase() === "microcloud" ? "MicroCloud" : "LXD"} • {node.instance_count} instances
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -332,7 +394,12 @@ function NodeCard({ node }: NodeCardProps) {
         ) : (
           <div className="text-center py-4 text-muted-foreground">
             <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">Node is offline</p>
+            <p className="text-sm font-medium">
+              {node.cluster_status === "pending_trust" ? "Pending Trust" : "Node is offline"}
+            </p>
+            {node.status_message && (
+              <p className="text-xs mt-1 max-w-[200px] mx-auto">{node.status_message}</p>
+            )}
           </div>
         )}
       </CardContent>
@@ -435,31 +502,9 @@ function ChartStats({ min, max, avg, unit = "%", color }: ChartStatsProps) {
   );
 }
 
-// Loading Component with Lottie Animation
+// Loading Component with Enhanced Lottie Animation
 function LoadingSkeleton() {
-  const [animationData, setAnimationData] = useState(null);
-
-  useEffect(() => {
-    // Load Lottie animation data
-    fetch('/loading-lotttie-orca.json')
-      .then(response => response.json())
-      .then(data => setAnimationData(data))
-      .catch(error => console.error('Error loading animation:', error));
-  }, []);
-
-  return (
-    <div className="flex items-center justify-center min-h-[60vh]">
-      <div className="text-center">
-        {animationData && Lottie && (
-          <Lottie 
-            animationData={animationData} 
-            loop={true}
-            style={{ width: 150, height: 150 }}
-          />
-        )}
-      </div>
-    </div>
-  );
+  return <LoadingLottiePage />;
 }
 
 // Colors for charts
@@ -542,6 +587,172 @@ const StorageChartTooltip = ({ active, payload, label, totalStorageBytes }: { ac
   }
   return null;
 };
+
+// Custom tooltip for Resource Metrics chart with cluster status for 0% values
+// Memoized to prevent unnecessary re-renders
+interface ResourceMetricsTooltipProps {
+  active?: boolean;
+  payload?: any[];
+  label?: string;
+  metricType: "cpu" | "memory" | "storage";
+  nodeStatusMap?: Record<string, { status: string; statusMessage?: string; isOnline: boolean }>;
+  nodeNames?: string[];
+  selectedNode?: string;
+}
+
+const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({ 
+  active, 
+  payload, 
+  label, 
+  metricType, 
+  nodeStatusMap = {},
+  nodeNames = [],
+  selectedNode = "all"
+}: ResourceMetricsTooltipProps) {
+  if (!active || !payload || payload.length === 0) return null;
+  
+  const colors = {
+    cpu: CHART_COLORS.cpu,
+    memory: CHART_COLORS.memory,
+    storage: CHART_COLORS.storage,
+  };
+  
+  const labels = {
+    cpu: "CPU Usage",
+    memory: "Memory Usage",
+    storage: "Storage Usage",
+  };
+
+  // Helper to get status badge for a node - INFER from historical data point
+  // If node has data at this timestamp, it was online at that time
+  // Only show badge when value is 0 or node has no data at this timestamp
+  const getStatusBadge = (nodeName: string, value: number, dataPoint?: any) => {
+    // For historical data: infer status from whether node has data at this timestamp
+    // If the node has a value > 0 at this timestamp, it was online/connected
+    // If value is 0 or undefined, the node was likely offline/disconnected
+    
+    const hasDataAtTimestamp = value !== undefined && value > 0;
+    
+    // Only show status badge if there's an issue (value is 0 or missing)
+    if (hasDataAtTimestamp) {
+      return null; // Node was working fine at this timestamp, no badge needed
+    }
+    
+    // Value is 0 or missing - check if we can determine why
+    // Check if other metrics exist for this node at this timestamp
+    const otherMetricValue = dataPoint?.[`cpu_${nodeName}`] ?? dataPoint?.[`memory_${nodeName}`] ?? dataPoint?.[`storage_${nodeName}`];
+    const nodeHadAnyData = otherMetricValue !== undefined && otherMetricValue > 0;
+    
+    if (nodeHadAnyData) {
+      // Node had data for other metrics, so it was online but this specific metric was 0
+      return null; // This is normal (ex; 0% CPU usage)
+    }
+    
+    // Node had no data at this timestamp - it was offline/disconnected
+    return (
+      <div className="flex items-center gap-1.5 mt-1">
+        <span className="text-xs text-muted-foreground italic">Not connected at this time</span>
+      </div>
+    );
+  };
+
+  // Multi-node view (when "All Nodes" selected)
+  if (selectedNode === "all" && payload.length > 1) {
+    const dataPoint = payload[0]?.payload;
+    return (
+      <div className="bg-card border rounded-lg shadow-lg p-3 max-w-xs">
+        <p className="text-xs text-muted-foreground mb-2 font-medium border-b pb-1">{label}</p>
+        {payload.map((entry: any, idx: number) => {
+          const nodeName = entry.dataKey?.replace(`${metricType}_`, '') || 'Unknown';
+          const value = Number(entry.value || 0);
+          
+          return (
+            <div key={idx} className="mb-1.5 last:mb-0">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span 
+                    className="inline-block w-2.5 h-2.5 rounded-sm" 
+                    style={{ backgroundColor: entry.color }}
+                  />
+                  <span className="text-sm">{nodeName}</span>
+                </div>
+                <span className="text-sm font-semibold" style={{ color: entry.color }}>
+                  {value.toFixed(1)}%
+                </span>
+              </div>
+              {getStatusBadge(nodeName, value, dataPoint)}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  
+  // Single node view
+  const data = payload[0]?.payload;
+  const value = data?.[metricType] ?? 0;
+  const nodeName = selectedNode !== "all" ? selectedNode : (nodeNames[0] || "");
+  
+  return (
+    <div className="bg-card border rounded-lg shadow-lg p-3">
+      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+      <p className="text-sm font-medium" style={{ color: colors[metricType] }}>
+        {labels[metricType]} : {value.toFixed(1)}%
+      </p>
+      {getStatusBadge(nodeName, value, data)}
+      {metricType === "memory" && data?.memoryUsedBytes > 0 && (
+        <p className="text-xs text-muted-foreground mt-1">
+          Used: {formatBytes(data.memoryUsedBytes)}
+        </p>
+      )}
+      {metricType === "storage" && data?.storageUsedBytes > 0 && (
+        <p className="text-xs text-muted-foreground mt-1">
+          Used: {formatBytes(data.storageUsedBytes)}
+        </p>
+      )}
+    </div>
+  );
+});
+
+// Downsample data for better performance with large datasets
+// Uses LTTB (Largest-Triangle-Three-Buckets) inspired algorithm
+function downsampleData<T extends Record<string, any>>(
+  data: T[], 
+  targetPoints: number, 
+  valueKey: string = 'cpu'
+): T[] {
+  if (data.length <= targetPoints) return data;
+  
+  const result: T[] = [];
+  const bucketSize = (data.length - 2) / (targetPoints - 2);
+  
+  // Always include first point
+  result.push(data[0]);
+  
+  for (let i = 0; i < targetPoints - 2; i++) {
+    const bucketStart = Math.floor((i) * bucketSize) + 1;
+    const bucketEnd = Math.min(Math.floor((i + 1) * bucketSize) + 1, data.length - 1);
+    
+    // Find point with max value in bucket (preserves peaks)
+    let maxIdx = bucketStart;
+    let maxVal = Number(data[bucketStart]?.[valueKey]) || 0;
+    
+    for (let j = bucketStart + 1; j < bucketEnd; j++) {
+      const val = Number(data[j]?.[valueKey]) || 0;
+      if (val > maxVal) {
+        maxVal = val;
+        maxIdx = j;
+      }
+    }
+    
+    result.push(data[maxIdx]);
+  }
+  
+  // Always include last point
+  result.push(data[data.length - 1]);
+  
+  return result;
+}
 
 // Alarm severity colors
 const ALARM_COLORS = {
@@ -692,6 +903,11 @@ export default function MonitoringPage() {
   // Visible nodes for multi-line graph (when "all" is selected)
   const [visibleNodes, setVisibleNodes] = useState<Record<string, boolean>>({});
   
+  // Zoom and pan state for charts
+  const [zoomLevel, setZoomLevel] = useState(1); // 1 = 100%, 2 = 50% of data (zoomed in), etc.
+  const [brushStartIndex, setBrushStartIndex] = useState<number | undefined>(undefined);
+  const [brushEndIndex, setBrushEndIndex] = useState<number | undefined>(undefined);
+  
   const { 
     data: dashboardData, 
     isLoading: dashboardLoading, 
@@ -706,6 +922,71 @@ export default function MonitoringPage() {
     isLoading: historyLoading,
     isFetching: historyFetching,
   } = useMonitoringHistory(timeRange, !isPaused);
+
+  // Fetch warnings from all nodes (same as Warnings page)
+  const { data: warningsData } = useWarnings();
+  const { data: systemWarnings } = useSystemWarnings();
+  const actualWarnings = (warningsData as any)?.warnings || [];
+  const certWarnings = systemWarnings?.certificate_warnings || [];
+  const nodeWarnings = systemWarnings?.node_warnings || [];
+  
+  // Count warnings by severity (including cert and node warnings)
+  // Filter by selectedNode if a specific node is selected
+  const warningsCounts = useMemo(() => {
+    const counts = { critical: 0, high: 0, warning: 0, low: 0, info: 0, total: 0, certIssues: 0, inactiveNodes: 0 };
+    
+    // Filter LXD warnings by selected node
+    const filteredWarnings = selectedNode === "all" 
+      ? actualWarnings 
+      : actualWarnings.filter((w: any) => {
+          const warningNode = w.location || w.source_node || w.host || "";
+          return warningNode === selectedNode || warningNode.includes(selectedNode);
+        });
+    
+    // LXD warnings
+    filteredWarnings.forEach((w: any) => {
+      counts.total++;
+      const severity = (w.severity || '').toLowerCase();
+      if (severity === 'critical' || severity === 'error') counts.critical++;
+      else if (severity === 'high') counts.high++;
+      else if (severity === 'warning' || severity === 'medium') counts.warning++;
+      else if (severity === 'low') counts.low++;
+      else counts.info++;
+    });
+    
+    // Certificate warnings - filter by cluster_id matching selected node
+    const filteredCertWarnings = selectedNode === "all"
+      ? certWarnings
+      : certWarnings.filter((w: any) => {
+          const clusterId = w.cluster_id || "";
+          return clusterId === selectedNode || clusterId.includes(selectedNode);
+        });
+    
+    filteredCertWarnings.forEach((w: any) => {
+      counts.total++;
+      counts.certIssues++;
+      const severity = (w.severity || '').toLowerCase();
+      if (severity === 'critical') counts.critical++;
+      else if (severity === 'high') counts.high++;
+      else counts.warning++;
+    });
+    
+    // Inactive node warnings - filter by node_id matching selected node
+    const filteredNodeWarnings = selectedNode === "all"
+      ? nodeWarnings
+      : nodeWarnings.filter((w: any) => {
+          const nodeId = w.node_id || w.cluster_id || "";
+          return nodeId === selectedNode;
+        });
+    
+    filteredNodeWarnings.forEach(() => {
+      counts.total++;
+      counts.inactiveNodes++;
+      counts.critical++;
+    });
+    
+    return counts;
+  }, [actualWarnings, certWarnings, nodeWarnings, selectedNode]);
 
   // Fetch instances for dialog
   const fetchInstances = async (filterType: "running" | "stopped" | "other" | "container" | "vm") => {
@@ -773,6 +1054,69 @@ export default function MonitoringPage() {
     }));
   };
   
+  // Node status map for tooltip - shows cluster status when hovering on 0% metrics
+  const nodeStatusMap = useMemo(() => {
+    if (!dashboardData?.nodes) return {};
+    const map: Record<string, { status: string; statusMessage?: string; isOnline: boolean }> = {};
+    dashboardData.nodes.forEach(node => {
+      map[node.node_name] = {
+        status: node.cluster_status || (node.is_online ? "online" : "offline"),
+        statusMessage: node.status_message,
+        isOnline: node.is_online,
+      };
+    });
+    return map;
+  }, [dashboardData?.nodes]);
+  
+  // Zoom and pan helper functions
+  const handleZoomIn = () => {
+    setZoomLevel(prev => Math.min(prev * 2, 8)); // Max 8x zoom
+  };
+  
+  const handleZoomOut = () => {
+    setZoomLevel(prev => Math.max(prev / 2, 1)); // Min 1x (no zoom)
+  };
+  
+  const handleResetZoom = () => {
+    setZoomLevel(1);
+    setBrushStartIndex(undefined);
+    setBrushEndIndex(undefined);
+  };
+  
+  const handlePanLeft = () => {
+    const totalPoints = chartData.length;
+    const visiblePoints = Math.ceil(totalPoints / zoomLevel);
+    const step = Math.max(1, Math.floor(visiblePoints / 4));
+    
+    setBrushStartIndex(prev => {
+      const current = prev ?? 0;
+      const newStart = Math.max(0, current - step);
+      setBrushEndIndex(newStart + visiblePoints - 1);
+      return newStart;
+    });
+  };
+  
+  const handlePanRight = () => {
+    const totalPoints = chartData.length;
+    const visiblePoints = Math.ceil(totalPoints / zoomLevel);
+    const step = Math.max(1, Math.floor(visiblePoints / 4));
+    
+    setBrushEndIndex(prev => {
+      const current = prev ?? (totalPoints - 1);
+      const newEnd = Math.min(totalPoints - 1, current + step);
+      setBrushStartIndex(newEnd - visiblePoints + 1);
+      return newEnd;
+    });
+  };
+  
+  // Handle brush change
+  const handleBrushChange = (params: { startIndex?: number; endIndex?: number }) => {
+    if (params.startIndex !== undefined && params.endIndex !== undefined) {
+      setBrushStartIndex(params.startIndex);
+      setBrushEndIndex(params.endIndex);
+    }
+  };
+  
   // Filtered nodes for Node Status section
   const filteredNodes = useMemo(() => {
     if (!dashboardData?.nodes) return [];
@@ -792,7 +1136,7 @@ export default function MonitoringPage() {
         container_count: dashboardData.container_count,
         vm_count: dashboardData.vm_count,
         online_nodes: dashboardData.online_nodes,
-        offline_nodes: dashboardData.offline_nodes,
+        inactive_nodes: dashboardData.inactive_nodes,
         total_nodes: dashboardData.total_nodes,
         cpu_usage_percent: dashboardData.cpu_usage_percent,
         realtime_cpu_percent: dashboardData.realtime_cpu_percent,
@@ -830,7 +1174,7 @@ export default function MonitoringPage() {
       container_count: nodeContainers,
       vm_count: nodeVMs,
       online_nodes: node.is_online ? 1 : 0,
-      offline_nodes: node.is_online ? 0 : 1,
+      inactive_nodes: node.is_online ? 0 : 1,
       total_nodes: 1,
       cpu_usage_percent: node.cpu_usage_percent || 0,
       realtime_cpu_percent: node.cpu_usage_percent || 0,
@@ -845,6 +1189,9 @@ export default function MonitoringPage() {
       total_gpu: node.gpu_total || 0,
       used_gpu: node.gpu_used || 0,
       warnings: dashboardData.warnings, // Keep global warnings
+      // Status message for troubleshooting when metrics are 0
+      cluster_status: node.cluster_status,
+      status_message: node.status_message,
     };
   }, [dashboardData, selectedNode]);
 
@@ -965,6 +1312,14 @@ export default function MonitoringPage() {
       };
     });
   }, [historyData, dashboardData, selectedNode, filteredStats]);
+  
+  // Downsample chart data for performance - limit to ~200 points for smooth rendering
+  // This significantly improves hover/tooltip performance for large time ranges (6h, 24h)
+  const MAX_DISPLAY_POINTS = 200;
+  const displayChartData = useMemo(() => {
+    if (chartData.length <= MAX_DISPLAY_POINTS) return chartData;
+    return downsampleData(chartData, MAX_DISPLAY_POINTS, chartTab);
+  }, [chartData, chartTab]);
   
   // Filter data by selected node
   const filterByNode = (items: any[]) => {
@@ -1221,20 +1576,18 @@ export default function MonitoringPage() {
               Updated: {lastUpdated}
             </span>
           )}
-          <TooltipProvider>
-            <UITooltip>
-              <TooltipTrigger asChild>
-                <Button 
-                  variant="outline" 
-                  size="sm"
-                  onClick={() => setIsPaused(!isPaused)}
-                >
-                  {isPaused ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{isPaused ? "Resume" : "Pause"} updates</TooltipContent>
-            </UITooltip>
-          </TooltipProvider>
+          <UITooltip>
+            <TooltipTrigger asChild>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => setIsPaused(!isPaused)}
+              >
+                {isPaused ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{isPaused ? "Resume" : "Pause"} updates</TooltipContent>
+          </UITooltip>
           <Button 
             variant="outline" 
             size="sm" 
@@ -1280,10 +1633,10 @@ export default function MonitoringPage() {
         <MetricCard
           title="Nodes Online"
           value={`${filteredStats.online_nodes} / ${filteredStats.total_nodes}`}
-          subtitle={filteredStats.offline_nodes > 0 ? `${filteredStats.offline_nodes} offline` : "All nodes healthy"}
+          subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} inactive` : "All nodes healthy"}
           icon={<Server className="h-6 w-6 text-purple-500" />}
           color="bg-purple-500/10"
-          trend={filteredStats.offline_nodes > 0 ? "down" : "neutral"}
+          trend={filteredStats.inactive_nodes > 0 ? "down" : "neutral"}
         />
         <MetricCard
           title="Warnings"
@@ -1320,6 +1673,7 @@ export default function MonitoringPage() {
                 value={filteredStats.realtime_cpu_percent || 0} 
                 label="CPU Usage" 
                 color={CHART_COLORS.cpu}
+                statusMessage={filteredStats.realtime_cpu_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
                 Allocated: {filteredStats.used_cpu} / {filteredStats.total_cpu} cores
@@ -1330,6 +1684,7 @@ export default function MonitoringPage() {
                 value={filteredStats.memory_usage_percent} 
                 label="Memory Usage" 
                 color={CHART_COLORS.memory}
+                statusMessage={filteredStats.memory_usage_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
                 {formatBytes(filteredStats.used_memory_bytes)} / {formatBytes(filteredStats.total_memory_bytes)}
@@ -1340,6 +1695,7 @@ export default function MonitoringPage() {
                 value={filteredStats.storage_usage_percent} 
                 label="Storage Usage" 
                 color={CHART_COLORS.storage}
+                statusMessage={filteredStats.storage_usage_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
                 {formatBytes(filteredStats.used_storage_bytes)} / {formatBytes(filteredStats.total_storage_bytes)}
@@ -1350,6 +1706,7 @@ export default function MonitoringPage() {
                 value={(filteredStats.used_gpu / Math.max(filteredStats.total_gpu, 1)) * 100} 
                 label="GPU Allocation" 
                 color="#8b5cf6"
+                statusMessage={filteredStats.used_gpu === 0 && filteredStats.total_gpu === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
                 {filteredStats.used_gpu} / {filteredStats.total_gpu} GPUs
@@ -1371,7 +1728,90 @@ export default function MonitoringPage() {
               </CardTitle>
               <CardDescription>Real-time resource usage over time</CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Zoom/Pan Controls */}
+              <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+                <UITooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={handlePanLeft}
+                      disabled={zoomLevel === 1 || (brushStartIndex !== undefined && brushStartIndex <= 0)}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Pan Left (Earlier)</TooltipContent>
+                </UITooltip>
+                
+                <UITooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={handleZoomOut}
+                      disabled={zoomLevel <= 1}
+                    >
+                      <ZoomOut className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Zoom Out</TooltipContent>
+                </UITooltip>
+                
+                <span className="text-xs text-muted-foreground px-1 min-w-[40px] text-center">
+                  {zoomLevel > 1 ? `${Math.round(100 / zoomLevel)}%` : '100%'}
+                </span>
+                
+                <UITooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={handleZoomIn}
+                      disabled={zoomLevel >= 8}
+                    >
+                      <ZoomIn className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Zoom In</TooltipContent>
+                </UITooltip>
+                
+                <UITooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 w-7 p-0"
+                      onClick={handlePanRight}
+                      disabled={zoomLevel === 1 || (brushEndIndex !== undefined && brushEndIndex >= displayChartData.length - 1)}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Pan Right (Recent)</TooltipContent>
+                </UITooltip>
+                
+                {zoomLevel > 1 && (
+                  <UITooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        onClick={handleResetZoom}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>Reset Zoom</TooltipContent>
+                  </UITooltip>
+                )}
+              </div>
+              
               {/* Time Range Selector */}
               <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
                 {TIME_RANGES.map((range) => (
@@ -1385,7 +1825,10 @@ export default function MonitoringPage() {
                         ? "bg-primary text-primary-foreground shadow-sm" 
                         : "hover:bg-muted-foreground/10"
                     )}
-                    onClick={() => setTimeRange(range.value)}
+                    onClick={() => {
+                      setTimeRange(range.value);
+                      handleResetZoom(); // Reset zoom when changing time range
+                    }}
                   >
                     {range.label}
                   </Button>
@@ -1447,8 +1890,11 @@ export default function MonitoringPage() {
                   ))}
                 </div>
               )}
-              <ResponsiveContainer width="100%" height={350}>
-                <AreaChart data={chartData}>
+              <ResponsiveContainer width="100%" height={400}>
+                <AreaChart 
+                  data={displayChartData}
+                  margin={{ top: 10, right: 80, left: 20, bottom: 40 }}
+                >
                   <defs>
                     <linearGradient id="cpuGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={CHART_COLORS.cpu} stopOpacity={0.3}/>
@@ -1478,15 +1924,14 @@ export default function MonitoringPage() {
                     className="text-muted-foreground"
                   />
                   <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px"
-                    }}
-                    formatter={(value, name) => {
-                      const displayName = String(name).startsWith('cpu_') ? String(name).replace('cpu_', '') : 'Average';
-                      return [`${Number(value || 0).toFixed(1)}%`, displayName];
-                    }}
+                    content={
+                      <ResourceMetricsTooltip 
+                        metricType="cpu" 
+                        nodeStatusMap={nodeStatusMap}
+                        nodeNames={nodeNames}
+                        selectedNode={selectedNode}
+                      />
+                    }
                   />
                   {selectedNode === "all" && nodeNames.length > 1 ? (
                     /* Multi-node lines when "All Nodes" selected */
@@ -1501,6 +1946,7 @@ export default function MonitoringPage() {
                             fill={`url(#cpuGradient_${nodeName})`}
                             strokeWidth={2}
                             name={`cpu_${nodeName}`}
+                            isAnimationActive={false}
                           />
                         )
                       ))}
@@ -1514,6 +1960,7 @@ export default function MonitoringPage() {
                       fill="url(#cpuGradient)"
                       strokeWidth={2}
                       name="CPU Usage"
+                      isAnimationActive={false}
                     />
                   )}
                   {selectedNode === "all" && nodeNames.length > 1 && (
@@ -1522,6 +1969,18 @@ export default function MonitoringPage() {
                       wrapperStyle={{ paddingTop: "10px" }}
                     />
                   )}
+                  {/* Brush for pan/zoom */}
+                  <Brush
+                    dataKey="time"
+                    height={30}
+                    stroke="hsl(var(--primary))"
+                    fill="hsl(var(--muted))"
+                    startIndex={brushStartIndex}
+                    endIndex={brushEndIndex}
+                    onChange={handleBrushChange}
+                    tickFormatter={(value) => value}
+                    padding={{ top: 0, bottom: 0, left: 20, right: 70 }}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             </TabsContent>
@@ -1557,8 +2016,11 @@ export default function MonitoringPage() {
                   ))}
                 </div>
               )}
-              <ResponsiveContainer width="100%" height={350}>
-                <AreaChart data={chartData}>
+              <ResponsiveContainer width="100%" height={400}>
+                <AreaChart 
+                  data={displayChartData}
+                  margin={{ top: 10, right: 80, left: 20, bottom: 40 }}
+                >
                   <defs>
                     <linearGradient id="memoryGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={CHART_COLORS.memory} stopOpacity={0.3}/>
@@ -1588,15 +2050,14 @@ export default function MonitoringPage() {
                     className="text-muted-foreground"
                   />
                   <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px"
-                    }}
-                    formatter={(value, name) => {
-                      const displayName = String(name).startsWith('memory_') ? String(name).replace('memory_', '') : 'Average';
-                      return [`${Number(value || 0).toFixed(1)}%`, displayName];
-                    }}
+                    content={
+                      <ResourceMetricsTooltip 
+                        metricType="memory" 
+                        nodeStatusMap={nodeStatusMap}
+                        nodeNames={nodeNames}
+                        selectedNode={selectedNode}
+                      />
+                    }
                   />
                   {selectedNode === "all" && nodeNames.length > 1 ? (
                     <>
@@ -1610,6 +2071,7 @@ export default function MonitoringPage() {
                             fill={`url(#memoryGradient_${nodeName})`}
                             strokeWidth={2}
                             name={`memory_${nodeName}`}
+                            isAnimationActive={false}
                           />
                         )
                       ))}
@@ -1622,6 +2084,7 @@ export default function MonitoringPage() {
                       fill="url(#memoryGradient)"
                       strokeWidth={2}
                       name="Memory Usage"
+                      isAnimationActive={false}
                     />
                   )}
                   {selectedNode === "all" && nodeNames.length > 1 && (
@@ -1630,6 +2093,18 @@ export default function MonitoringPage() {
                       wrapperStyle={{ paddingTop: "10px" }}
                     />
                   )}
+                  {/* Brush for pan/zoom */}
+                  <Brush
+                    dataKey="time"
+                    height={30}
+                    stroke="hsl(var(--primary))"
+                    fill="hsl(var(--muted))"
+                    startIndex={brushStartIndex}
+                    endIndex={brushEndIndex}
+                    onChange={handleBrushChange}
+                    tickFormatter={(value) => value}
+                    padding={{ top: 0, bottom: 0, left: 20, right: 70 }}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             </TabsContent>
@@ -1665,8 +2140,11 @@ export default function MonitoringPage() {
                   ))}
                 </div>
               )}
-              <ResponsiveContainer width="100%" height={350}>
-                <AreaChart data={chartData}>
+              <ResponsiveContainer width="100%" height={400}>
+                <AreaChart 
+                  data={displayChartData}
+                  margin={{ top: 10, right: 80, left: 20, bottom: 40 }}
+                >
                   <defs>
                     <linearGradient id="storageGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={CHART_COLORS.storage} stopOpacity={0.3}/>
@@ -1696,15 +2174,14 @@ export default function MonitoringPage() {
                     className="text-muted-foreground"
                   />
                   <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "8px"
-                    }}
-                    formatter={(value, name) => {
-                      const displayName = String(name).startsWith('storage_') ? String(name).replace('storage_', '') : 'Average';
-                      return [`${Number(value || 0).toFixed(1)}%`, displayName];
-                    }}
+                    content={
+                      <ResourceMetricsTooltip 
+                        metricType="storage" 
+                        nodeStatusMap={nodeStatusMap}
+                        nodeNames={nodeNames}
+                        selectedNode={selectedNode}
+                      />
+                    }
                   />
                   {selectedNode === "all" && nodeNames.length > 1 ? (
                     <>
@@ -1718,6 +2195,7 @@ export default function MonitoringPage() {
                             fill={`url(#storageGradient_${nodeName})`}
                             strokeWidth={2}
                             name={`storage_${nodeName}`}
+                            isAnimationActive={false}
                           />
                         )
                       ))}
@@ -1730,6 +2208,7 @@ export default function MonitoringPage() {
                       fill="url(#storageGradient)"
                       strokeWidth={2}
                       name="Storage Usage"
+                      isAnimationActive={false}
                     />
                   )}
                   {selectedNode === "all" && nodeNames.length > 1 && (
@@ -1738,6 +2217,18 @@ export default function MonitoringPage() {
                       wrapperStyle={{ paddingTop: "10px" }}
                     />
                   )}
+                  {/* Brush for pan/zoom */}
+                  <Brush
+                    dataKey="time"
+                    height={30}
+                    stroke="hsl(var(--primary))"
+                    fill="hsl(var(--muted))"
+                    startIndex={brushStartIndex}
+                    endIndex={brushEndIndex}
+                    onChange={handleBrushChange}
+                    tickFormatter={(value) => value}
+                    padding={{ top: 0, bottom: 0, left: 20, right: 70 }}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             </TabsContent>
@@ -1788,8 +2279,11 @@ export default function MonitoringPage() {
                   <span className="text-muted-foreground">↑ Outbound (TX)</span>
                 </div>
               </div>
-              <ResponsiveContainer width="100%" height={320}>
-                <AreaChart data={chartData}>
+              <ResponsiveContainer width="100%" height={370}>
+                <AreaChart 
+                  data={displayChartData}
+                  margin={{ top: 10, right: 80, left: 20, bottom: 40 }}
+                >
                   <defs>
                     <linearGradient id="networkRxGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={CHART_COLORS.network} stopOpacity={0.3}/>
@@ -1834,6 +2328,7 @@ export default function MonitoringPage() {
                     fill="url(#networkRxGradient)"
                     strokeWidth={2}
                     name="networkRxRate"
+                    isAnimationActive={false}
                   />
                   <Area
                     type="monotone"
@@ -1842,6 +2337,19 @@ export default function MonitoringPage() {
                     fill="url(#networkTxGradient)"
                     strokeWidth={2}
                     name="networkTxRate"
+                    isAnimationActive={false}
+                  />
+                  {/* Brush for pan/zoom */}
+                  <Brush
+                    dataKey="time"
+                    height={30}
+                    stroke="hsl(var(--primary))"
+                    fill="hsl(var(--muted))"
+                    startIndex={brushStartIndex}
+                    endIndex={brushEndIndex}
+                    onChange={handleBrushChange}
+                    tickFormatter={(value) => value}
+                    padding={{ top: 0, bottom: 0, left: 20, right: 70 }}
                   />
                 </AreaChart>
               </ResponsiveContainer>
@@ -1943,33 +2451,31 @@ export default function MonitoringPage() {
                     <SelectItem value="20">Top 20</SelectItem>
                   </SelectContent>
                 </Select>
-                <TooltipProvider>
-                  <UITooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setSortDescending(!sortDescending)}
-                        className="flex items-center gap-1.5 h-8 px-2.5 sm:px-3 shrink-0"
-                      >
-                        {sortDescending ? (
-                          <>
-                            <ArrowDown className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                            <span className="text-xs">Highest</span>
-                          </>
-                        ) : (
-                          <>
-                            <ArrowUp className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
-                            <span className="text-xs">Lowest</span>
-                          </>
-                        )}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent>
-                      {sortDescending ? "Click to show lowest first" : "Click to show highest first"}
-                    </TooltipContent>
-                  </UITooltip>
-                </TooltipProvider>
+                <UITooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSortDescending(!sortDescending)}
+                      className="flex items-center gap-1.5 h-8 px-2.5 sm:px-3 shrink-0"
+                    >
+                      {sortDescending ? (
+                        <>
+                          <ArrowDown className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                          <span className="text-xs">Highest</span>
+                        </>
+                      ) : (
+                        <>
+                          <ArrowUp className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                          <span className="text-xs">Lowest</span>
+                        </>
+                      )}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>
+                    {sortDescending ? "Click to show lowest first" : "Click to show highest first"}
+                  </TooltipContent>
+                </UITooltip>
               </div>
             </div>
           </CardHeader>
@@ -2024,55 +2530,118 @@ export default function MonitoringPage() {
 
       {/* Alarm Statistics */}
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Bell className="h-5 w-5" />
-            Alarm Statistics
-          </CardTitle>
-          <CardDescription>System alerts and warnings overview</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Bell className="h-5 w-5" />
+              Alarm Statistics
+            </CardTitle>
+            <CardDescription>System alerts and warnings overview</CardDescription>
+          </div>
+          {warningsCounts.total > 0 && (
+            <Link 
+              href="/inventory/warnings" 
+              className="text-sm text-primary hover:underline flex items-center gap-1"
+            >
+              View All ({warningsCounts.total})
+              <ChevronRight className="h-4 w-4" />
+            </Link>
+          )}
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="flex items-center gap-3 p-4 rounded-lg border bg-red-500/5 border-red-500/20">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10">
+            <Link 
+              href="/inventory/warnings?severity=critical" 
+              className="flex items-center gap-3 p-4 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
                 <Flame className="h-5 w-5 text-red-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-red-600">{filteredStats?.warnings?.critical || 0}</p>
+                <p className="text-2xl font-bold text-red-600">{warningsCounts.critical}</p>
                 <p className="text-xs text-muted-foreground">Critical</p>
               </div>
-            </div>
-            <div className="flex items-center gap-3 p-4 rounded-lg border bg-orange-500/5 border-orange-500/20">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10">
+            </Link>
+            <Link 
+              href="/inventory/warnings?severity=high" 
+              className="flex items-center gap-3 p-4 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
                 <ShieldAlert className="h-5 w-5 text-orange-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-orange-600">{Math.max(0, (filteredStats?.warnings?.warning || 0))}</p>
+                <p className="text-2xl font-bold text-orange-600">{warningsCounts.high}</p>
                 <p className="text-xs text-muted-foreground">Major</p>
               </div>
-            </div>
-            <div className="flex items-center gap-3 p-4 rounded-lg border bg-yellow-500/5 border-yellow-500/20">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-yellow-500/10">
+            </Link>
+            <Link 
+              href="/inventory/warnings?severity=warning" 
+              className="flex items-center gap-3 p-4 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
                 <AlertTriangle className="h-5 w-5 text-yellow-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-yellow-600">{filteredStats?.warnings?.warning || 0}</p>
+                <p className="text-2xl font-bold text-yellow-600">{warningsCounts.warning}</p>
                 <p className="text-xs text-muted-foreground">Warning</p>
               </div>
-            </div>
-            <div className="flex items-center gap-3 p-4 rounded-lg border bg-blue-500/5 border-blue-500/20">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
+            </Link>
+            <Link 
+              href="/inventory/warnings?severity=low" 
+              className="flex items-center gap-3 p-4 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
+            >
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
                 <Info className="h-5 w-5 text-blue-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-blue-600">{filteredStats?.warnings?.info || 0}</p>
+                <p className="text-2xl font-bold text-blue-600">{warningsCounts.low + warningsCounts.info}</p>
                 <p className="text-xs text-muted-foreground">Info</p>
               </div>
-            </div>
+            </Link>
           </div>
-          {(filteredStats?.warnings?.total || 0) === 0 && (
+          
+          {/* Certificate Issues & Inactive Nodes */}
+          {(warningsCounts.certIssues > 0 || warningsCounts.inactiveNodes > 0) && (
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              {warningsCounts.certIssues > 0 && (
+                <Link 
+                  href="/inventory/clusters/certificates"
+                  className="flex items-center gap-3 p-4 rounded-lg border bg-purple-500/5 border-purple-500/20 hover:bg-purple-500/10 hover:border-purple-500/40 transition-all cursor-pointer group"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/10 group-hover:bg-purple-500/20 transition-colors">
+                    <Shield className="h-5 w-5 text-purple-500" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-purple-600">{warningsCounts.certIssues}</p>
+                    <p className="text-xs text-muted-foreground">Cert Issues</p>
+                  </div>
+                </Link>
+              )}
+              {warningsCounts.inactiveNodes > 0 && (
+                <Link 
+                  href="/inventory/warnings"
+                  className="flex items-center gap-3 p-4 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
+                >
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">
+                    <WifiOff className="h-5 w-5 text-rose-500" />
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-rose-600">{warningsCounts.inactiveNodes}</p>
+                    <p className="text-xs text-muted-foreground">Inactive Nodes</p>
+                  </div>
+                </Link>
+              )}
+            </div>
+          )}
+          
+          {warningsCounts.total === 0 && (
             <div className="mt-4 text-center py-4 bg-green-500/5 rounded-lg border border-green-500/20">
               <p className="text-green-600 font-medium">✓ All systems operational - No active alarms</p>
+            </div>
+          )}
+          {warningsCounts.total > 0 && (
+            <div className="mt-4 text-xs text-muted-foreground">
+              <span>Click any category to view details</span>
             </div>
           )}
         </CardContent>

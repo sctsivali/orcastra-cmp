@@ -3,8 +3,11 @@ LXD Service - Main integration module.
 Provides unified interface for all LXD operations.
 """
 
+import asyncio
 import logging
+import time
 from typing import List, Tuple, Optional, Dict, Any
+from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
     VMInfo,
@@ -23,6 +26,13 @@ from app.core.vault_client import VaultClient
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# Shared thread pool for blocking operations
+_blocking_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_blocking")
+
+# Cache failed nodes for 60 seconds to avoid repeated reconnection attempts
+_failed_nodes_cache: Dict[str, float] = {}
+_FAILED_NODE_CACHE_TTL = 60.0
 
 
 class LXDService:
@@ -92,49 +102,105 @@ class LXDService:
         return self.cert_manager.list_clusters()
     
     def check_nodes_status(self) -> List[NodeStatus]:
-        """Check connection status for all nodes.
-        Uses Vault as source of truth for node list and supports auto-reconnection.
-        """
+        """Check connection status for all nodes (sync version - deprecated, use async version)."""
         statuses = []
         settings = get_settings()
-        
-        # Use Vault as source of truth - not just cached connections
         node_names = self.get_node_names()
-        
+
         for node_name in node_names:
-            try:
-                # Get endpoint from Vault metadata
-                endpoint = "unknown"
-                try:
-                    metadata = self.cert_manager.vault.vault_read(
-                        f"{settings.vault_clusters_path}/{node_name}/metadata"
-                    )
-                    endpoint = metadata.get("endpoint", "unknown")
-                except Exception:
-                    pass
-                
-                # Use get_client_with_reconnect for automatic reconnection
-                client = self.get_client_with_reconnect(node_name)
-                if client:
-                    status = self.resource_manager.check_node_status(client, node_name, endpoint)
-                    statuses.append(status)
-                else:
-                    status = NodeStatus(
-                        name=node_name,
-                        endpoint=endpoint,
-                        connected=False,
-                        error="Client not connected"
-                    )
-                    statuses.append(status)
-            except Exception as e:
-                status = NodeStatus(
+            status = self._check_single_node_status(node_name, settings)
+            statuses.append(status)
+        
+        return statuses
+    
+    def _check_single_node_status(self, node_name: str, settings) -> NodeStatus:
+        """Check status for a single node (internal helper)."""
+        global _failed_nodes_cache
+        
+        # Check failed node cache first - skip recently failed nodes
+        if node_name in _failed_nodes_cache:
+            if time.time() - _failed_nodes_cache[node_name] < _FAILED_NODE_CACHE_TTL:
+                logger.debug(f"Skipping {node_name} - recently failed (cached)")
+                return NodeStatus(
                     name=node_name,
                     endpoint="unknown",
                     connected=False,
-                    error=str(e)
+                    error="Node recently failed - retry later"
                 )
-                statuses.append(status)
-                logger.warning(f"Node {node_name} health check failed: {e}")
+            else:
+                del _failed_nodes_cache[node_name]
+        
+        try:
+            # Get endpoint from Vault metadata
+            endpoint = "unknown"
+            try:
+                metadata = self.cert_manager.vault.vault_read(
+                    f"{settings.vault_clusters_path}/{node_name}/metadata"
+                )
+                endpoint = metadata.get("endpoint", "unknown")
+            except Exception:
+                pass
+            
+            # Use get_client_with_reconnect for automatic reconnection
+            client = self.get_client_with_reconnect(node_name)
+            if client:
+                status = self.resource_manager.check_node_status(client, node_name, endpoint)
+                return status
+            else:
+                _failed_nodes_cache[node_name] = time.time()
+                return NodeStatus(
+                    name=node_name,
+                    endpoint=endpoint,
+                    connected=False,
+                    error="Client not connected"
+                )
+        except Exception as e:
+            logger.warning(f"Node {node_name} health check failed: {e}")
+            _failed_nodes_cache[node_name] = time.time()
+            return NodeStatus(
+                name=node_name,
+                endpoint="unknown",
+                connected=False,
+                error=str(e)
+            )
+    
+    async def check_nodes_status_async(self) -> List[NodeStatus]:
+        """Check connection status for all nodes in parallel (async version)."""
+        settings = get_settings()
+        node_names = self.get_node_names()
+        
+        if not node_names:
+            return []
+        
+        # Run all node checks in parallel using thread pool
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(
+                _blocking_executor,
+                self._check_single_node_status,
+                node_name,
+                settings
+            )
+            for node_name in node_names
+        ]
+        
+        statuses = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Filter out exceptions and log them
+        result = []
+        for i, status in enumerate(statuses):
+            if isinstance(status, Exception):
+                logger.warning(f"Node check failed for {node_names[i]}: {status}")
+                result.append(NodeStatus(
+                    name=node_names[i],
+                    endpoint="unknown",
+                    connected=False,
+                    error=str(status)
+                ))
+            else:
+                result.append(status)
+        
+        return result
         
         return statuses
     

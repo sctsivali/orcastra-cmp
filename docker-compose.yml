@@ -1,6 +1,26 @@
-
-
 services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-postgres
+    restart: always
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - orcastra-dashboard
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # Redis Cache
   redis:
     image: redis:7-alpine
@@ -20,13 +40,13 @@ services:
     volumes:
       - redis-data:/data
 
-  # Backend API
+  # Backend API (api.orcastra.io)
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
       args:
-        - APP_VERSION=${APP_VERSION:-0.2.0}
+        - APP_VERSION=${APP_VERSION:-0.3.0}
     image: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-backend:${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-backend
     restart: always
@@ -35,11 +55,17 @@ services:
     env_file:
       - .env
     environment:
-      - APP_VERSION=${APP_VERSION:-0.2.0}
-      - API_VERSION=${API_VERSION:-0.2.0}
+      - APP_VERSION=${APP_VERSION:-0.3.0}
+      - API_VERSION=${API_VERSION:-0.3.0}
       - DEBUG=${DEBUG:-false}
+      - DATABASE_URL=${DATABASE_URL}
+
+      # JWT validation (if used)
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
+      - AUTHENTIK_AUDIENCE=${AUTHENTIK_CLIENT_ID}
+
     volumes:
-      - ./config:/app/config:rw  # Read-write for node_metadata.json
+      - ./config:/app/config:rw
     networks:
       - orcastra-dashboard
     extra_hosts:
@@ -47,34 +73,53 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 10s
+      retries: 5
+      start_period: 120s
+
     # Security hardening
     security_opt:
       - no-new-privileges:true
-    read_only: false  # Set true for production (requires tmpfs mounts)
+    read_only: false
     tmpfs:
-      - /tmp:mode=1777,size=100m  # Temp files in tmpfs (RAM), more secure
+      - /tmp:mode=1777,size=100m
 
-  # Frontend
+  # Frontend (app.orcastra.io)
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4050}
-        - APP_VERSION=${APP_VERSION:-0.2.0}
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+        - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
+        - APP_VERSION=${APP_VERSION:-0.3.0}
+        - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
+        - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
+        - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
+        - NEXTAUTH_URL=${NEXTAUTH_URL}
+        - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
     image: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-frontend:${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-frontend
     restart: always
     ports:
       - "${FRONTEND_PORT:-2025}:2025"
     environment:
-      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:4050}
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
+
+      # Auth.js runtime
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - AUTH_TRUST_HOST=true
+
     networks:
       - orcastra-dashboard
     depends_on:
@@ -93,3 +138,4 @@ networks:
 
 volumes:
   redis-data:
+  postgres-data:

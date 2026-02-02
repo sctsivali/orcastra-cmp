@@ -45,20 +45,17 @@ async def get_nodes_status(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get status of all LXD nodes including Vault-registered clusters."""
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
     
-    # Try to get from cache first (30 second cache)
+    # Try to get from cache first (180 second cache for enterprise)
     cache = get_cache_manager()
     cache_key = "nodes:status:all"
     cached_response = cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached nodes status")
-        # Reconstruct from cached dict
         return NodesStatusResponse(**cached_response)
     
-    # Not in cache, fetch fresh data
-    statuses = lxd_service.check_nodes_status()
+    # Not in cache - fetch fresh data using ASYNC PARALLEL version
+    statuses = await lxd_service.check_nodes_status_async()
     
     # Also fetch clusters from Vault if enabled
     settings = get_settings()
@@ -78,93 +75,94 @@ async def get_nodes_status(
             existing_names = {s.name for s in statuses}
             new_cluster_ids = [cid for cid in cluster_ids if cid not in existing_names]
             
-            # Helper function to fetch cluster status
-            def fetch_cluster_status(cluster_id: str) -> NodeStatus:
-                try:
-                    cluster_info = cert_manager.get_cluster_info(cluster_id)
-                    metadata = cluster_info.get("metadata", {})
-                    certificate_info = cluster_info.get("certificate", {})
-                    endpoint = metadata.get("endpoint", "")
-                    
-                    # Try to connect with certificate and get full node status
-                    node_status = None
-                    if certificate_info.get("has_certificate"):
-                        try:
-                            # Get certificate content from Vault
-                            cert_data = cert_manager.vault.vault_read(
-                                f"{settings.vault_clusters_path}/{cluster_id}/certs"
-                            )
-                            
-                            cert_content = cert_data.get("client.crt", "")
-                            key_content = cert_data.get("client.key", "")
-                            
-                            if cert_content and key_content:
-                                # Try to connect using Vault certificate
-                                from app.services.lxd.connection import LXDConnectionManager
-                                conn_manager = LXDConnectionManager()
-                                client = conn_manager.connect_with_vault_cert(
-                                    cluster_id=cluster_id,
-                                    endpoint=endpoint,
-                                    cert_content=cert_content,
-                                    key_content=key_content
-                                )
-                                
-                                # Get resources using the connected client
-                                from app.services.lxd.resources import ResourceManager
-                                resource_manager = ResourceManager()
-                                node_status = resource_manager.check_node_status(
-                                    client=client,
-                                    node_name=cluster_id,
-                                    endpoint=endpoint
-                                )
-                                
-                                # Override display name from metadata
-                                node_status.display_name = metadata.get("display_name", cluster_id)
-                            
-                        except Exception as e:
-                            logger.warning(f"Failed to connect to {cluster_id} with certificate: {e}")
-                    
-                    # If connection failed or no certificate, create basic status
-                    if node_status is None:
-                        is_connected = False
-                        if not certificate_info.get("has_certificate"):
-                            try:
-                                import requests
-                                response = requests.get(
-                                    f"{endpoint}/1.0",
-                                    verify=False,
-                                    timeout=2
-                                )
-                                is_connected = response.ok
-                            except:
-                                pass
+            if new_cluster_ids:
+                # Helper function to fetch cluster status
+                def fetch_cluster_status(cluster_id: str) -> NodeStatus:
+                    try:
+                        cluster_info = cert_manager.get_cluster_info(cluster_id)
+                        metadata = cluster_info.get("metadata", {})
+                        certificate_info = cluster_info.get("certificate", {})
+                        endpoint = metadata.get("endpoint", "")
                         
-                        node_status = NodeStatus(
-                            name=cluster_id,
-                            display_name=metadata.get("display_name", cluster_id),
-                            endpoint=endpoint,
-                            connected=is_connected,
-                            node_type=None,
-                            tags=[],
-                            error=None if is_connected or certificate_info.get("has_certificate") else "Not reachable"
-                        )
-                    
-                    return node_status
-                except Exception as e:
-                    logger.warning(f"Failed to get info for cluster {cluster_id}: {e}")
-                    return None
-            
-            # Fetch all cluster statuses in parallel
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor(max_workers=min(len(new_cluster_ids), 5)) as executor:
-                results = await asyncio.gather(
-                    *[loop.run_in_executor(executor, fetch_cluster_status, cid) for cid in new_cluster_ids]
-                )
-            
-            # Add valid results to statuses
-            for result in results:
-                if result is not None:
-                    statuses.append(result)
+                        # Try to connect with certificate and get full node status
+                        node_status = None
+                        if certificate_info.get("has_certificate"):
+                            try:
+                                # Get certificate content from Vault
+                                cert_data = cert_manager.vault.vault_read(
+                                    f"{settings.vault_clusters_path}/{cluster_id}/certs"
+                                )
+                                
+                                cert_content = cert_data.get("client.crt", "")
+                                key_content = cert_data.get("client.key", "")
+                                
+                                if cert_content and key_content:
+                                    # Try to connect using Vault certificate
+                                    from app.services.lxd.connection import LXDConnectionManager
+                                    conn_manager = LXDConnectionManager()
+                                    client = conn_manager.connect_with_vault_cert(
+                                        cluster_id=cluster_id,
+                                        endpoint=endpoint,
+                                        cert_content=cert_content,
+                                        key_content=key_content
+                                    )
+                                    
+                                    # Get resources using the connected client
+                                    from app.services.lxd.resources import ResourceManager
+                                    resource_manager = ResourceManager()
+                                    node_status = resource_manager.check_node_status(
+                                        client=client,
+                                        node_name=cluster_id,
+                                        endpoint=endpoint
+                                    )
+                                    
+                                    # Override display name from metadata
+                                    node_status.display_name = metadata.get("display_name", cluster_id)
+                                
+                            except Exception as e:
+                                logger.warning(f"Failed to connect to {cluster_id} with certificate: {e}")
+                        
+                        # If connection failed or no certificate, create basic status
+                        if node_status is None:
+                            is_connected = False
+                            if not certificate_info.get("has_certificate"):
+                                try:
+                                    import requests
+                                    response = requests.get(
+                                        f"{endpoint}/1.0",
+                                        verify=False,
+                                        timeout=2
+                                    )
+                                    is_connected = response.ok
+                                except:
+                                    pass
+                            
+                            node_status = NodeStatus(
+                                name=cluster_id,
+                                display_name=metadata.get("display_name", cluster_id),
+                                endpoint=endpoint,
+                                connected=is_connected,
+                                node_type=None,
+                                tags=[],
+                                error=None if is_connected or certificate_info.get("has_certificate") else "Not reachable"
+                            )
+                        
+                        return node_status
+                    except Exception as e:
+                        logger.warning(f"Failed to get info for cluster {cluster_id}: {e}")
+                        return None
+                
+                # Fetch all cluster statuses in parallel
+                loop = asyncio.get_event_loop()
+                with ThreadPoolExecutor(max_workers=min(len(new_cluster_ids), 5)) as executor:
+                    results = await asyncio.gather(
+                        *[loop.run_in_executor(executor, fetch_cluster_status, cid) for cid in new_cluster_ids]
+                    )
+                
+                # Add valid results to statuses
+                for result in results:
+                    if result is not None:
+                        statuses.append(result)
                     
         except Exception as e:
             logger.warning(f"Failed to fetch Vault clusters: {e}")

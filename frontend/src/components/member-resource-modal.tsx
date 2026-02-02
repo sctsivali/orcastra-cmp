@@ -12,9 +12,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, PlayCircle, StopCircle } from "lucide-react";
+import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, PlayCircle, StopCircle, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
-import type { VMInfo } from "@/types/api";
+import type { VMInfo, GPUCardInfo } from "@/types/api";
 
 interface MemberResources {
   member_name: string;
@@ -29,6 +29,7 @@ interface MemberResources {
   gpu_total: number;
   gpu_used: number;
   gpu_available: number;
+  gpu_cards: GPUCardInfo[];
   storage_total: number;
   storage_used: number;
   storage_available: number;
@@ -266,23 +267,137 @@ export function MemberResourceModal({
             {resources.gpu_total > 0 && (
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">GPU Resources</CardTitle>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-purple-500" />
+                    GPU Resources
+                  </CardTitle>
                   <CardDescription>Graphics processing units available</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <p className="text-sm text-muted-foreground mb-1">Total GPUs</p>
-                      <p className="text-2xl font-bold">{resources.gpu_total}</p>
+                  <div className="space-y-4">
+                    {/* Summary */}
+                    <div className="grid grid-cols-3 gap-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground mb-1">Total GPUs</p>
+                        <p className="text-2xl font-bold">{resources.gpu_total}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground mb-1">Used</p>
+                        <p className="text-2xl font-bold text-orange-500">{resources.gpu_used}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground mb-1">Available</p>
+                        <p className="text-2xl font-bold text-green-500">{resources.gpu_available}</p>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground mb-1">Used</p>
-                      <p className="text-2xl font-bold text-orange-500">{resources.gpu_used}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground mb-1">Available</p>
-                      <p className="text-2xl font-bold text-green-500">{resources.gpu_available}</p>
-                    </div>
+
+                    {/* Detailed GPU Cards */}
+                    {resources.gpu_cards && resources.gpu_cards.length > 0 && (
+                      <div className="pt-4 border-t space-y-3">
+                        <p className="text-sm font-medium text-muted-foreground">GPU Cards</p>
+                        {resources.gpu_cards.map((gpu, index) => (
+                          <div
+                            key={index}
+                            className={`border rounded-lg p-3 space-y-2 ${
+                              gpu.in_use
+                                ? "border-purple-500/50 bg-purple-500/5"
+                                : "border-border"
+                            }`}
+                          >
+                            {/* GPU Header */}
+                            <div className="flex justify-between items-start">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                  <p className="font-semibold">
+                                    {gpu.nvidia?.model || gpu.product || `GPU ${gpu.index}`}
+                                  </p>
+                                  {gpu.in_use ? (
+                                    <Badge variant="default" className="bg-purple-600 text-xs">
+                                      In Use
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="secondary" className="text-xs">
+                                      Available
+                                    </Badge>
+                                  )}
+                                </div>
+                                {gpu.vendor && (
+                                  <p className="text-sm text-muted-foreground">{gpu.vendor}</p>
+                                )}
+                                {gpu.used_by && (
+                                  <p className="text-xs text-purple-500 mt-1">
+                                    Used by: {gpu.used_by}
+                                  </p>
+                                )}
+                              </div>
+                              {gpu.nvidia?.brand && (
+                                <Badge variant="outline" className="text-xs">
+                                  {gpu.nvidia.brand}
+                                </Badge>
+                              )}
+                            </div>
+
+                            {/* GPU Details */}
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
+                              {gpu.driver && (
+                                <div>
+                                  <p className="text-muted-foreground text-xs">Driver</p>
+                                  <p className="font-medium text-xs">{gpu.driver}</p>
+                                </div>
+                              )}
+                              {gpu.pci_address && (
+                                <div>
+                                  <p className="text-muted-foreground text-xs">PCI</p>
+                                  <p className="font-mono text-xs">{gpu.pci_address}</p>
+                                </div>
+                              )}
+                              {gpu.nvidia?.cuda_version && (
+                                <div>
+                                  <p className="text-muted-foreground text-xs">CUDA</p>
+                                  <p className="font-medium text-xs">{gpu.nvidia.cuda_version}</p>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* NVIDIA UUID */}
+                            {gpu.nvidia?.uuid && (
+                              <div className="pt-1 border-t border-dashed">
+                                <p className="text-muted-foreground text-xs">UUID</p>
+                                <p className="font-mono text-xs break-all">{gpu.nvidia.uuid}</p>
+                              </div>
+                            )}
+
+                            {/* SR-IOV info */}
+                            {gpu.sriov && gpu.sriov.maximum_vfs > 0 && (
+                              <div className="pt-1 border-t border-dashed">
+                                <p className="text-muted-foreground text-xs">
+                                  SR-IOV: {gpu.sriov.current_vfs} / {gpu.sriov.maximum_vfs} VFs
+                                </p>
+                              </div>
+                            )}
+
+                            {/* mdev profiles */}
+                            {gpu.mdev_profiles && gpu.mdev_profiles.length > 0 && (
+                              <div className="pt-1 border-t border-dashed">
+                                <p className="text-muted-foreground text-xs mb-1">vGPU Profiles</p>
+                                <div className="flex flex-wrap gap-1">
+                                  {gpu.mdev_profiles.slice(0, 3).map((profile, pIdx) => (
+                                    <Badge key={pIdx} variant="outline" className="text-xs">
+                                      {profile.name}
+                                    </Badge>
+                                  ))}
+                                  {gpu.mdev_profiles.length > 3 && (
+                                    <Badge variant="outline" className="text-xs">
+                                      +{gpu.mdev_profiles.length - 3} more
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </CardContent>
               </Card>

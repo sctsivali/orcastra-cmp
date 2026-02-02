@@ -87,6 +87,10 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const addIdentityMutation = useAddIdentityToGroup();
   const removeIdentityMutation = useRemoveIdentityFromGroup();
   
+  // Track active tab to delay resource fetching
+  const [activeTab, setActiveTab] = useState("basic");
+  const [permissionsTabVisited, setPermissionsTabVisited] = useState(false);
+  
   const [description, setDescription] = useState("");
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [isPermissionsDirty, setIsPermissionsDirty] = useState(false);
@@ -149,13 +153,27 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     ? { ...group, node: group.node || workingNode }
     : null;
   
-  // Fetch resources based on working node
-  const { data: projectsData, isLoading: loadingProjects } = useProjects(workingNode);
-  const { data: instancesData, isLoading: loadingInstances } = useInstances(workingNode);
-  const { data: imagesData, isLoading: loadingImages } = useImages(workingNode);
-  const { data: profilesData, isLoading: loadingProfiles } = useProfiles(workingNode);
-  const { data: networksData, isLoading: loadingNetworks } = useNetworks(workingNode);
-  const { data: poolsData, isLoading: loadingPools } = useStoragePools(workingNode);
+  // Lazy load resources based on selected entity type (only fetch when permissions tab is visited)
+  const entityType = newPermission.entity_type;
+  const shouldFetchResources = permissionsTabVisited;
+  const { data: projectsData, isLoading: loadingProjects } = useProjects(
+    shouldFetchResources && entityType === "project" ? workingNode : ""
+  );
+  const { data: instancesData, isLoading: loadingInstances } = useInstances(
+    shouldFetchResources && entityType === "instance" ? workingNode : undefined
+  );
+  const { data: imagesData, isLoading: loadingImages } = useImages(
+    shouldFetchResources && entityType === "image" ? workingNode : undefined
+  );
+  const { data: profilesData, isLoading: loadingProfiles } = useProfiles(
+    shouldFetchResources && entityType === "profile" ? workingNode : undefined
+  );
+  const { data: networksData, isLoading: loadingNetworks } = useNetworks(
+    shouldFetchResources && entityType === "network" ? workingNode : undefined
+  );
+  const { data: poolsData, isLoading: loadingPools } = useStoragePools(
+    shouldFetchResources && entityType === "storage_pool" ? workingNode : undefined
+  );
   
   // Fetch all identities using the same hook as identities page
   const { data: identitiesData, isLoading: loadingIdentities } = useIdentities(workingNode);
@@ -169,8 +187,10 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     if (open) {
       setDialogJustOpened(true);
     } else {
-      // Reset dirty flag when dialog closes
+      // Reset dirty flag and tab state when dialog closes
       setIsPermissionsDirty(false);
+      setActiveTab("basic");
+      setPermissionsTabVisited(false);
     }
   }, [open]);
 
@@ -620,7 +640,10 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
           </DialogDescription>
         </DialogHeader>
 
-        <Tabs defaultValue="basic" className="w-full flex flex-col flex-1 min-h-0">
+        <Tabs value={activeTab} onValueChange={(value) => {
+          setActiveTab(value);
+          if (value === "permissions") setPermissionsTabVisited(true);
+        }} className="w-full flex flex-col flex-1 min-h-0">
           <TabsList className="grid w-full grid-cols-3 flex-shrink-0 h-auto p-1">
             <TabsTrigger value="basic" className="text-[10px] sm:text-xs px-1.5 sm:px-3 py-1.5">Basic Info</TabsTrigger>
             <TabsTrigger value="permissions" className="text-[10px] sm:text-xs px-1.5 sm:px-3 py-1.5">Permissions</TabsTrigger>
@@ -1070,7 +1093,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     <Label className="text-xs text-muted-foreground">
                       Select Identity from {workingNode}
                     </Label>
-                    <Popover open={identitySearchOpen} onOpenChange={setIdentitySearchOpen}>
+                    <Popover open={identitySearchOpen} onOpenChange={setIdentitySearchOpen} modal={true}>
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
@@ -1088,7 +1111,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-full p-0" align="start">
+                      <PopoverContent className="p-0" align="start" style={{ width: 'var(--radix-popover-trigger-width)' }}>
                         <Command shouldFilter={false}>
                           <CommandInput 
                             placeholder={`Search ${newIdentity.auth_type.toUpperCase()} identities...`}

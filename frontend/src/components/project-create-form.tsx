@@ -210,7 +210,7 @@ export function ProjectCreateForm() {
         variant: "success",
       });
 
-      router.push("/");
+      router.push("/inventory");
     } catch (error) {
       // Check if error is due to read-only mode
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -516,10 +516,7 @@ export function ProjectCreateForm() {
                   Creating...
                 </>
               ) : (
-                <>
-                  <FolderKanban className="mr-2 h-4 w-4" />
-                  Create Project
-                </>
+                "Create Project"
               )}
             </Button>
           </div>

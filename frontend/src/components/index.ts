@@ -10,6 +10,8 @@ export * from "./instance-monitoring-modal";
 export * from "./sidebar";
 export * from "./theme-provider";
 export * from "./layout-provider";
+export * from "./personalization-provider";
+export * from "./personalization-settings";
 export * from "./main-layout";
 export * from "./lxd-version-checker";
 export * from "./microcloud-version-checker";

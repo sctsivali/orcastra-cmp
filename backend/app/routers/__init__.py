@@ -17,6 +17,8 @@ from .lxd_server import router as lxd_server_router
 from .permissions import identities_router, groups_router
 from .ipam import router as ipam_router
 from .my_keys import router as my_keys_router
+from .console import router as console_router
+from .integrations import router as integrations_router
 
 __all__ = [
     "vms_router",
@@ -37,4 +39,6 @@ __all__ = [
     "groups_router",
     "ipam_router",
     "my_keys_router",
+    "console_router",
+    "integrations_router",
 ]

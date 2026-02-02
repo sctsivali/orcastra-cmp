@@ -48,7 +48,8 @@ const DropdownMenuSubContent = React.forwardRef<
     collisionPadding={16}
     avoidCollisions={true}
     className={cn(
-      "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg",
+      // z-[100002] to appear above dialogs (z-[100001])
+      "z-[100002] min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-lg",
       // Max dimensions for mobile
       "max-w-[calc(100vw-2rem)] max-h-[50dvh] max-h-[50vh] overflow-y-auto",
       // Prevent scroll issues
@@ -79,7 +80,8 @@ const DropdownMenuContent = React.forwardRef<
       collisionPadding={16}
       avoidCollisions={true}
       className={cn(
-        "z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
+        // z-[100002] to appear above dialogs (z-[100001])
+        "z-[100002] min-w-[8rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md",
         // Max dimensions for mobile
         "max-w-[calc(100vw-2rem)] max-h-[50dvh] max-h-[50vh] overflow-y-auto",
         // Prevent scroll issues

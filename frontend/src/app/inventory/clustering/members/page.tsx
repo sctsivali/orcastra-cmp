@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
-import { LoadingLottieMedium } from "@/components/loading-lottie";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { 
   Server, 
   CheckCircle, 
@@ -98,6 +98,11 @@ function ClusterMembersContent() {
     router.replace(`/inventory/clustering/members?node=${value}`);
   };
 
+  // Full-page loading state
+  if (isLoading && node) {
+    return <LoadingLottiePage />;
+  }
+
   return (
     <div className="container py-8">
       <div className="mb-6">
@@ -162,11 +167,7 @@ function ClusterMembersContent() {
           </div>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <LoadingLottieMedium />
-            </div>
-          ) : !isClustered ? (
+          {!isClustered ? (
             <div className="text-center py-12">
               <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold mb-2">Not a Clustered Node</h3>

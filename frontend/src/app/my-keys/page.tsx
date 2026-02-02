@@ -50,6 +50,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { KeyInfo, KeyCreateRequest } from "@/types/api";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { ReadOnlyBanner } from "@/components/read-only-banner";
 
 export default function MyKeysPage() {
   const { toast } = useToast();
@@ -57,6 +59,7 @@ export default function MyKeysPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("active");
+  const { isReadOnly } = useReadOnlyMode();
 
   // Fetch keys
   const {
@@ -182,6 +185,7 @@ export default function MyKeysPage() {
 
   return (
     <div className="p-4 sm:p-8 space-y-6">
+      <ReadOnlyBanner />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
@@ -201,7 +205,12 @@ export default function MyKeysPage() {
           </Button>
           <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" className="gap-1.5 shrink-0">
+              <Button 
+                size="sm" 
+                className="gap-1.5 shrink-0"
+                disabled={isReadOnly}
+                title={isReadOnly ? "Disabled in read-only mode" : undefined}
+              >
                 <Plus className="h-4 w-4" />
                 <span className="hidden xs:inline">Generate</span>
                 <span className="hidden sm:inline"> Key</span>
@@ -362,7 +371,8 @@ export default function MyKeysPage() {
                             size="sm"
                             variant="destructive"
                             onClick={() => handleDelete(key.id, key.name)}
-                            title="Delete Key"
+                            title={isReadOnly ? "Disabled in read-only mode" : "Delete Key"}
+                            disabled={isReadOnly}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -455,13 +465,13 @@ function CreateKeyDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label htmlFor="node">Node/Cluster</Label>
+            <Label htmlFor="node">Node</Label>
             <Select
               value={formData.node}
               onValueChange={handleNodeChange}
             >
               <SelectTrigger id="node">
-                <SelectValue placeholder="Select a node/cluster" />
+                <SelectValue placeholder="Select a node" />
               </SelectTrigger>
               <SelectContent>
                 {nodes.length === 0 ? (

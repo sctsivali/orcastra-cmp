@@ -70,6 +70,7 @@ export interface VMListResponse {
   nodes: string[];
   lxd_count: number;
   microcloud_count: number;
+  incus_count: number;
 }
 
 // VM Create Request
@@ -128,6 +129,74 @@ export interface ImageListResponse {
   total: number;
 }
 
+// GPU DRM (Direct Rendering Manager) Info
+export interface GPUDRMInfo {
+  id?: number;
+  card_name?: string;
+  card_device?: string;
+  control_name?: string;
+  control_device?: string;
+  render_name?: string;
+  render_device?: string;
+}
+
+// NVIDIA-specific GPU Information
+export interface GPUNvidiaInfo {
+  cuda_version?: string;
+  nvrm_version?: string;
+  brand?: string;
+  model?: string;
+  uuid?: string;
+  architecture?: string;
+  card_name?: string;
+  card_device?: string;
+}
+
+// SR-IOV GPU Information
+export interface GPUSRIOVInfo {
+  current_vfs: number;
+  maximum_vfs: number;
+  vfs_count: number;
+}
+
+// Mediated Device (mdev) Profile for vGPU
+export interface GPUMdevProfile {
+  name: string;
+  api?: string;
+  available: number;
+  description?: string;
+  devices: string[];
+}
+
+// Detailed GPU Card Information
+export interface GPUCardInfo {
+  // Core identification
+  index: number;
+  driver?: string;
+  driver_version?: string;
+  pci_address?: string;
+  usb_address?: string;
+  
+  // Vendor/Product info
+  vendor?: string;
+  vendor_id?: string;
+  product?: string;
+  product_id?: string;
+  
+  // System topology
+  numa_node?: number;
+  
+  // Usage status
+  in_use: boolean;
+  used_by?: string;
+  
+  // Detailed info
+  drm?: GPUDRMInfo;
+  nvidia?: GPUNvidiaInfo;
+  sriov?: GPUSRIOVInfo;
+  mdev_profiles: GPUMdevProfile[];
+}
+
 // Node Resources
 export interface NodeResources {
   cpu_total: number;
@@ -140,6 +209,7 @@ export interface NodeResources {
   gpu_total: number;
   gpu_used: number;
   gpu_available: number;
+  gpu_cards: GPUCardInfo[];
   storage_total: number;
   storage_available: number;
   storage_pools: Array<{
@@ -151,6 +221,34 @@ export interface NodeResources {
   }>;
 }
 
+// LXD Node Environment Information (from LXD API)
+export interface NodeEnvironment {
+  // Architecture
+  architectures?: string[];
+  kernel?: string;
+  kernel_architecture?: string;
+  kernel_version?: string;
+  // Operating System
+  os_name?: string;
+  os_version?: string;
+  // Server Info
+  server?: string;
+  server_version?: string;
+  server_name?: string;
+  server_pid?: number;
+  server_clustered?: boolean;
+  // Driver Info
+  driver?: string;
+  driver_version?: string;
+  // Storage
+  storage?: string;
+  storage_version?: string;
+  // Other
+  firewall?: string;
+  project?: string;
+  [key: string]: unknown;
+}
+
 // Node Status
 export interface NodeStatus {
   name: string;
@@ -160,7 +258,7 @@ export interface NodeStatus {
   server_version: string | null;
   api_version: string | null;
   auth: string | null;
-  environment: Record<string, unknown> | null;
+  environment: NodeEnvironment | null;
   error: string | null;
   resources: NodeResources | null;
   tags: string[];
@@ -392,6 +490,7 @@ export interface WarningListResponse {
 // Server Types
 export interface ServerInfo {
   node: string;
+  node_type: string;  // LXD, Incus, or MicroCloud
   api_version: string;
   auth: string;
   config: Record<string, any>;
@@ -409,6 +508,7 @@ export interface IdentityInfo {
   id: string;
   name: string;
   type: string;
+  auth_type: string;
   groups: string[];
   node: string;
 }
@@ -517,6 +617,7 @@ export interface MemberResources {
   gpu_total: number;
   gpu_used: number;
   gpu_available: number;
+  gpu_cards: GPUCardInfo[];
   storage_total: number;
   storage_used: number;
   storage_available: number;
@@ -556,6 +657,7 @@ export interface ClusterRegisterResponse {
   certificate_generated: boolean;
   trust_added: boolean;
   certificate?: string;
+  cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus"
 }
 
 export interface ClusterAuthCheckRequest {
@@ -693,7 +795,7 @@ export interface ClusterMetrics {
   cluster_id: string;
   total_nodes: number;
   online_nodes: number;
-  offline_nodes: number;
+  inactive_nodes: number;
   cpu: CPUMetrics;
   memory: MemoryMetrics;
   storage: DiskMetrics;
@@ -751,6 +853,8 @@ export interface ClusterMonitoringMetrics {
   node_name: string;
   node_type: string;
   is_online: boolean;
+  cluster_status?: string; // online, pending_trust, offline, error
+  status_message?: string; // Status message for troubleshooting
   cpu_total: number;
   cpu_used: number;
   cpu_usage_percent: number;
@@ -832,7 +936,7 @@ export interface MonitoringDashboardResponse {
   // Cluster Overview
   total_nodes: number;
   online_nodes: number;
-  offline_nodes: number;
+  inactive_nodes: number;
   
   // Instance Overview
   total_instances: number;
@@ -964,4 +1068,411 @@ export interface SystemResourceUsage {
   process: ProcessInfo | null;
   python: PythonInfo;
   os: OSInfo;
+}
+
+// ========================
+// Certificate Management Types
+// ========================
+
+export enum CertificateStatus {
+  VALID = "valid",
+  EXPIRING = "expiring",
+  EXPIRED = "expired",
+  UNKNOWN = "unknown",
+  PENDING_RENEWAL = "pending_renewal"
+}
+
+export enum CertificateTTLOption {
+  ONE_MONTH = "720h",
+  TWO_MONTHS = "1440h",
+  THREE_MONTHS = "2160h",
+  FOUR_MONTHS = "2880h",
+  FIVE_MONTHS = "3600h",
+  SIX_MONTHS = "4320h",
+  ONE_YEAR = "8760h"
+}
+
+export const TTL_LABELS: Record<CertificateTTLOption, string> = {
+  [CertificateTTLOption.ONE_MONTH]: "1 Month",
+  [CertificateTTLOption.TWO_MONTHS]: "2 Months",
+  [CertificateTTLOption.THREE_MONTHS]: "3 Months",
+  [CertificateTTLOption.FOUR_MONTHS]: "4 Months",
+  [CertificateTTLOption.FIVE_MONTHS]: "5 Months",
+  [CertificateTTLOption.SIX_MONTHS]: "6 Months",
+  [CertificateTTLOption.ONE_YEAR]: "1 Year"
+};
+
+export interface CertificateInfo {
+  cluster_id: string;
+  common_name?: string | null;
+  issuer?: string | null;
+  issued_at?: string | null;
+  expires_at?: string | null;
+  days_until_expiry?: number | null;
+  status: CertificateStatus;
+  fingerprint?: string | null;
+  has_pending_renewal: boolean;
+  serial_number?: string | null;
+}
+
+export interface CertificateListResponse {
+  certificates: CertificateInfo[];
+  total: number;
+  expiring_count: number;
+  expired_count: number;
+}
+
+export interface CertificateRenewalRequest {
+  cluster_id: string;
+  ttl: CertificateTTLOption;
+  trust_password?: string;
+}
+
+export interface CertificateRenewalResponse {
+  success: boolean;
+  message: string;
+  cluster_id: string;
+  auto_renewed: boolean;
+  requires_manual_trust: boolean;
+  certificate?: string;
+  cli_command?: string;
+  pending_cert_id?: string;
+}
+
+export interface CertificateVerifyRequest {
+  cluster_id: string;
+  pending_cert_id?: string;
+}
+
+export interface CertificateVerifyResponse {
+  success: boolean;
+  message: string;
+  cluster_id: string;
+  verified: boolean;
+  activated: boolean;
+}
+
+export interface CertificateWarning {
+  cluster_id: string;
+  display_name: string;
+  warning_type: string;
+  severity: string;
+  message: string;
+  days_until_expiry?: number | null;
+  expires_at?: string | null;
+  endpoint?: string | null;
+}
+
+export interface SystemWarningsResponse {
+  total: number;
+  critical: number;
+  warning: number;
+  info: number;
+  lxd_warnings: WarningInfo[];
+  certificate_warnings: CertificateWarning[];
+  node_warnings: CertificateWarning[];
+  nodes: string[];
+}
+
+// ============================================
+// External Integrations (Orcahub)
+// ============================================
+
+export interface ClusterPermission {
+  cluster_id: string;
+  permissions: string[];  // read, write, admin
+  projects: string[];
+}
+
+export interface ExternalUserMapping {
+  external_user_id: string;
+  external_email: string;
+  external_name?: string | null;
+  orcastra_identity_id?: string | null;
+  permissions: ClusterPermission[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface APIKeyInfo {
+  id: string;
+  name: string;
+  app_name: string;
+  app_type: string;
+  created_at: string;
+  expires_at?: string | null;
+  is_active: boolean;
+  is_revoked: boolean;
+  last_used_at?: string | null;
+  cluster_permissions: ClusterPermission[];
+  user_mappings_count: number;
+}
+
+export interface APIKeyCreateRequest {
+  name: string;
+  app_name: string;
+  app_type?: string;
+  cluster_permissions: ClusterPermission[];
+  expire_days?: number | null;
+}
+
+export interface APIKeyCreateResponse {
+  api_key: APIKeyInfo;
+  api_key_id: string;
+  api_key_secret: string;
+}
+
+export interface APIKeyListResponse {
+  total: number;
+  active: number;
+  revoked: number;
+  keys: APIKeyInfo[];
+}
+
+export interface UserMappingRequest {
+  external_user_id: string;
+  external_email: string;
+  external_name?: string;
+  cluster_permissions: ClusterPermission[];
+}
+
+export interface AvailableCluster {
+  id: string;
+  name: string;
+  endpoint: string;
+  server_type: string;
+}
+
+export interface AvailableClustersResponse {
+  clusters: AvailableCluster[];
+}
+
+// ============================================
+// Tag System Types (Enterprise-Grade)
+// ============================================
+
+export interface TagCategory {
+  id: number;
+  prefix: string;
+  name: string;
+  description: string | null;
+  color: string;
+  icon: string;
+  sort_order: number;
+  is_active: boolean;
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+  tag_count: number;
+}
+
+export interface TagCategoryCreate {
+  prefix: string;
+  name: string;
+  description?: string | null;
+  color?: string;
+  icon?: string;
+  sort_order?: number;
+  is_active?: boolean;
+}
+
+export interface TagCategoryUpdate {
+  name?: string;
+  description?: string | null;
+  color?: string;
+  icon?: string;
+  sort_order?: number;
+  is_active?: boolean;
+}
+
+export interface Tag {
+  id: number;
+  name: string;
+  display_name: string | null;
+  description: string | null;
+  color: string;
+  category_id: number | null;
+  category: TagCategory | null;
+  is_system: boolean;
+  usage_count: number;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TagCreate {
+  name: string;
+  display_name?: string | null;
+  description?: string | null;
+  color?: string | null;
+  category_id?: number | null;
+}
+
+export interface TagUpdate {
+  display_name?: string | null;
+  description?: string | null;
+  color?: string | null;
+  category_id?: number | null;
+}
+
+export interface TagGrouped {
+  location: string[];
+  region: string[];
+  vendor: string[];
+  ownership: string[];
+  environment: string[];
+  application: string[];
+  sla: string[];
+  cost_center: string[];
+  other: string[];
+}
+
+export interface ResourceTagsResponse {
+  resource_type: string;
+  resource_id: string;
+  resource_host: string | null;
+  resource_project: string | null;
+  tags: string[];
+  grouped: TagGrouped;
+}
+
+export interface BulkTagAssignRequest {
+  tags: string[];
+  resource_type?: string;
+  resource_id?: string;
+  resource_host?: string | null;
+  resource_project?: string | null;
+}
+
+export interface BulkTagAssignResponse {
+  success: boolean;
+  message: string;
+  assigned_tags: string[];
+  failed_tags: string[];
+  synced_to_lxd: boolean;
+}
+
+export interface TagListResponse {
+  tags: Tag[];
+  total: number;
+  categories: TagCategory[];
+}
+
+export interface TagStatistics {
+  tag_name: string;
+  display_name: string | null;
+  category: string | null;
+  color: string;
+  node_count: number;
+  project_count: number;
+  instance_count: number;
+  total_usage: number;
+}
+
+export interface TagStatsResponse {
+  total_tags: number;
+  total_assignments: number;
+  categories: TagCategory[];
+  top_tags: TagStatistics[];
+  tags_by_category: Record<string, number>;
+}
+
+export interface UserTagVisibilitySettings {
+  visibility_mode: "all" | "whitelist" | "blacklist";
+  visible_categories: string[];
+  visible_tags: string[];
+  hidden_categories: string[];
+  hidden_tags: string[];
+  default_filter_tags: string[];
+}
+
+export interface UserTagVisibilityResponse extends UserTagVisibilitySettings {
+  user_id: string;
+  updated_at: string;
+}
+
+// Tag category prefix to human-readable name mapping
+export const TAG_CATEGORY_PREFIXES: Record<string, { name: string; color: string; icon: string }> = {
+  "loc_": { name: "Location", color: "#3b82f6", icon: "map-pin" },
+  "reg_": { name: "Region", color: "#06b6d4", icon: "globe" },
+  "vend_": { name: "Vendor", color: "#8b5cf6", icon: "building" },
+  "own_": { name: "Ownership", color: "#f59e0b", icon: "user-check" },
+  "env_": { name: "Environment", color: "#10b981", icon: "layers" },
+  "app_": { name: "Application", color: "#ec4899", icon: "package" },
+  "sla_": { name: "SLA Level", color: "#ef4444", icon: "shield-check" },
+  "cost_": { name: "Cost Center", color: "#84cc16", icon: "wallet" },
+};
+
+// Helper function to classify a tag
+export function classifyTag(tag: string): { prefix: string; value: string; category: string } {
+  const knownPrefixes = ["loc_", "reg_", "vend_", "own_", "env_", "app_", "sla_", "cost_"];
+  
+  for (const prefix of knownPrefixes) {
+    if (tag.startsWith(prefix)) {
+      const categoryInfo = TAG_CATEGORY_PREFIXES[prefix];
+      return {
+        prefix,
+        value: tag.slice(prefix.length),
+        category: categoryInfo?.name || "Unknown",
+      };
+    }
+  }
+  
+  return { prefix: "", value: tag, category: "Other" };
+}
+
+// Helper function to get tag display name
+export function getTagDisplayName(tag: string): string {
+  const { value } = classifyTag(tag);
+  return value.replace(/-/g, " ").replace(/_/g, " ").split(" ")
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+// Helper function to get tag color
+export function getTagColor(tag: string): string {
+  const { prefix } = classifyTag(tag);
+  if (prefix && TAG_CATEGORY_PREFIXES[prefix]) {
+    return TAG_CATEGORY_PREFIXES[prefix].color;
+  }
+  return "#6b7280"; // Gray for uncategorized
+}
+
+// Helper function to group tags
+export function groupTags(tags: string[]): TagGrouped {
+  const grouped: TagGrouped = {
+    location: [],
+    region: [],
+    vendor: [],
+    ownership: [],
+    environment: [],
+    application: [],
+    sla: [],
+    cost_center: [],
+    other: [],
+  };
+
+  const prefixToCategory: Record<string, keyof TagGrouped> = {
+    "loc_": "location",
+    "reg_": "region",
+    "vend_": "vendor",
+    "own_": "ownership",
+    "env_": "environment",
+    "app_": "application",
+    "sla_": "sla",
+    "cost_": "cost_center",
+  };
+
+  for (const tag of tags) {
+    const { prefix, value } = classifyTag(tag);
+    const category = prefixToCategory[prefix];
+    
+    if (category) {
+      grouped[category].push(value);
+    } else {
+      grouped.other.push(tag);
+    }
+  }
+
+  return grouped;
 }

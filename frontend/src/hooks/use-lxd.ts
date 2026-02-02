@@ -46,7 +46,7 @@ export function useVMs(host?: string, status?: string) {
       } catch (error) {
         console.error("Failed to fetch VMs:", error);
         // Return empty response instead of throwing to prevent UI breaking
-        return { total: 0, vms: [], nodes: [], lxd_count: 0, microcloud_count: 0 };
+        return { total: 0, vms: [], nodes: [], lxd_count: 0, microcloud_count: 0, incus_count: 0 };
       }
     },
     refetchInterval: 300000, // Auto-refresh every 5 minutes
@@ -304,9 +304,12 @@ export function useDeleteProject() {
   return useMutation({
     mutationFn: ({ host, projectName }: { host: string; projectName: string }) => 
       projectAPI.delete(host, projectName),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
+    onSuccess: async (_, variables) => {
+      // Invalidate and refetch to ensure UI updates immediately
+      await queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
+      // Force refetch to update the UI immediately
+      await queryClient.refetchQueries({ queryKey: queryKeys.allProjects });
     },
   });
 }
@@ -365,6 +368,314 @@ export function useUpdateNodeTags() {
       tagAPI.updateNodeTags(nodeName, tags),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
+    },
+  });
+}
+
+// ========================================
+// Enterprise Tag System Hooks
+// ========================================
+
+// Query keys for tag system
+export const tagQueryKeys = {
+  categories: ["tagCategories"] as const,
+  tags: ["tags"] as const,
+  tagList: (categoryId?: number, search?: string) => ["tags", "list", { categoryId, search }] as const,
+  tagStats: ["tags", "stats"] as const,
+  resourceTags: (resourceType: string, resourceId: string, host?: string, project?: string) =>
+    ["tags", "resource", resourceType, resourceId, host, project] as const,
+  userVisibility: ["tags", "visibility"] as const,
+};
+
+/**
+ * Hook to fetch all tag categories.
+ * Categories are relatively static, so use longer cache times.
+ */
+export function useTagCategories(includeInactive = false) {
+  return useQuery({
+    queryKey: [...tagQueryKeys.categories, { includeInactive }],
+    queryFn: () => tagAPI.listCategories(includeInactive),
+    staleTime: 10 * 60 * 1000, // 10 minutes - categories rarely change
+    gcTime: 30 * 60 * 1000, // 30 minutes cache
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Hook to fetch all tags with optional filtering.
+ * Supports category filtering and search.
+ */
+export function useTagList(params?: { categoryId?: number; search?: string }) {
+  return useQuery({
+    queryKey: tagQueryKeys.tagList(params?.categoryId, params?.search),
+    queryFn: () => tagAPI.listTags({ category_id: params?.categoryId, search: params?.search }),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 15 * 60 * 1000, // 15 minutes cache
+  });
+}
+
+/**
+ * Hook to fetch tag statistics.
+ */
+export function useTagStats() {
+  return useQuery({
+    queryKey: tagQueryKeys.tagStats,
+    queryFn: () => tagAPI.getStats(),
+    staleTime: 2 * 60 * 1000, // 2 minutes - stats can change more frequently
+    refetchInterval: 5 * 60 * 1000, // Auto-refresh every 5 minutes
+  });
+}
+
+/**
+ * Hook to fetch tags for a specific resource.
+ */
+export function useResourceTags(
+  resourceType: "node" | "project" | "instance",
+  resourceId: string,
+  host?: string,
+  project?: string,
+  enabled = true
+) {
+  return useQuery({
+    queryKey: tagQueryKeys.resourceTags(resourceType, resourceId, host, project),
+    queryFn: () => tagAPI.getResourceTags(resourceType, resourceId, host, project),
+    enabled: enabled && !!resourceId,
+    staleTime: 60 * 1000, // 1 minute
+  });
+}
+
+/**
+ * Hook to fetch user's tag visibility settings.
+ */
+export function useUserTagVisibility() {
+  return useQuery({
+    queryKey: tagQueryKeys.userVisibility,
+    queryFn: () => tagAPI.getUserVisibility(),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 1, // Don't retry too much - user might not have settings yet
+  });
+}
+
+/**
+ * Hook to create a new tag category.
+ */
+export function useCreateTagCategory() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: import("@/types/api").TagCategoryCreate) => tagAPI.createCategory(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.categories });
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
+    },
+  });
+}
+
+/**
+ * Hook to update a tag category.
+ */
+export function useUpdateTagCategory() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ categoryId, data }: { categoryId: number; data: import("@/types/api").TagCategoryUpdate }) =>
+      tagAPI.updateCategory(categoryId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.categories });
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
+    },
+  });
+}
+
+/**
+ * Hook to create a new tag.
+ */
+export function useCreateTag() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: import("@/types/api").TagCreate) => tagAPI.createTag(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
+    },
+  });
+}
+
+/**
+ * Hook to update a tag.
+ */
+export function useUpdateTag() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ tagId, data }: { tagId: number; data: import("@/types/api").TagUpdate }) =>
+      tagAPI.updateTag(tagId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
+    },
+  });
+}
+
+/**
+ * Hook to delete a tag.
+ */
+export function useDeleteTag() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (tagId: number) => tagAPI.deleteTag(tagId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
+    },
+  });
+}
+
+/**
+ * Hook to set tags for a resource (replaces all existing tags).
+ * This is the primary hook for updating resource tags.
+ */
+export function useSetResourceTags() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      resourceType,
+      resourceId,
+      tags,
+      host,
+      project,
+    }: {
+      resourceType: "node" | "project" | "instance";
+      resourceId: string;
+      tags: string[];
+      host?: string;
+      project?: string;
+    }) => tagAPI.setResourceTags(resourceType, resourceId, tags, host, project),
+    onSuccess: (_, variables) => {
+      // Invalidate resource-specific tag cache
+      queryClient.invalidateQueries({
+        queryKey: tagQueryKeys.resourceTags(
+          variables.resourceType,
+          variables.resourceId,
+          variables.host,
+          variables.project
+        ),
+      });
+      // Invalidate related data
+      if (variables.resourceType === "node") {
+        queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
+      } else if (variables.resourceType === "project") {
+        queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
+        if (variables.host) {
+          queryClient.invalidateQueries({ queryKey: queryKeys.projects(variables.host) });
+        }
+      } else if (variables.resourceType === "instance") {
+        queryClient.invalidateQueries({ queryKey: queryKeys.vms });
+      }
+      // Update tag stats
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
+    },
+  });
+}
+
+/**
+ * Hook to add tags to a resource (keeps existing tags).
+ */
+export function useAddResourceTags() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      resourceType,
+      resourceId,
+      tags,
+      host,
+      project,
+    }: {
+      resourceType: "node" | "project" | "instance";
+      resourceId: string;
+      tags: string[];
+      host?: string;
+      project?: string;
+    }) => tagAPI.addResourceTags(resourceType, resourceId, tags, host, project),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: tagQueryKeys.resourceTags(
+          variables.resourceType,
+          variables.resourceId,
+          variables.host,
+          variables.project
+        ),
+      });
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
+    },
+  });
+}
+
+/**
+ * Hook to remove a single tag from a resource.
+ */
+export function useRemoveResourceTag() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      resourceType,
+      resourceId,
+      tagName,
+      host,
+      project,
+    }: {
+      resourceType: "node" | "project" | "instance";
+      resourceId: string;
+      tagName: string;
+      host?: string;
+      project?: string;
+    }) => tagAPI.removeResourceTag(resourceType, resourceId, tagName, host, project),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: tagQueryKeys.resourceTags(
+          variables.resourceType,
+          variables.resourceId,
+          variables.host,
+          variables.project
+        ),
+      });
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tagStats });
+    },
+  });
+}
+
+/**
+ * Hook to update user's tag visibility settings.
+ */
+export function useUpdateUserTagVisibility() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (settings: import("@/types/api").UserTagVisibilitySettings) =>
+      tagAPI.updateUserVisibility(settings),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.userVisibility });
+      // Also invalidate tag list as visibility affects what user sees
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.tags });
+    },
+  });
+}
+
+/**
+ * Hook to initialize default tag categories.
+ * Useful for admin setup or first-time initialization.
+ */
+export function useInitTagCategories() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: () => tagAPI.initCategories(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: tagQueryKeys.categories });
     },
   });
 }
@@ -884,11 +1195,12 @@ export function useMemberResources(node: string, memberName: string) {
 }
 
 // Clusters Hooks
-export function useClusters() {
+export function useClusters(fresh: boolean = false) {
   return useQuery({
-    queryKey: ["clusters"],
-    queryFn: () => api.clusters.list(),
+    queryKey: ["clusters", { fresh }],
+    queryFn: () => api.clusters.list(fresh),
     ...SEMI_STATIC_DATA_CONFIG,
+    staleTime: 0, // Always consider stale to ensure fresh data after deletion
     refetchOnMount: 'always', // Always refetch on mount to ensure fresh data after registration/deletion
   });
 }
@@ -953,9 +1265,11 @@ export function useDeleteCluster() {
   
   return useMutation({
     mutationFn: (clusterId: string) => api.clusters.delete(clusterId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["clusters"] });
-      queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
+    onSuccess: async () => {
+      // Remove cached data and force fresh fetch
+      await queryClient.invalidateQueries({ queryKey: ["clusters"], refetchType: 'all' });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.nodes, refetchType: 'all' });
+      await queryClient.invalidateQueries({ queryKey: ["certificates"], refetchType: 'all' });
     },
   });
 }
@@ -1012,11 +1326,11 @@ export function useMonitoringHistory(points: number = 60, enabled: boolean = tru
     },
     enabled,
     refetchInterval: 10000, // Update history every 10 seconds
-    staleTime: 5000, // Consider data fresh for 5 seconds
-    gcTime: 60000, // Keep unused data for 1 minute (helps with time range switching)
+    staleTime: 8000, // Consider data fresh for 8 seconds (prevents immediate refetch on switch)
+    gcTime: 300000, // Keep cached data for 5 minutes (fast switching between time ranges)
     refetchIntervalInBackground: true, // Keep refetching even when tab is not focused
-    retry: 3, // Retry up to 3 times on failure
-    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000), // Exponential backoff
+    retry: 2, // Retry up to 2 times on failure
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000), // Faster exponential backoff
     placeholderData: (previousData) => previousData, // Keep previous data while fetching new range
   });
 }
@@ -1028,5 +1342,77 @@ export function useMonitoringNetwork(enabled: boolean = true) {
     enabled,
     refetchInterval: 5000,
     staleTime: 0,
+  });
+}
+
+// ========== Certificate Management Hooks ==========
+
+export function useCertificates() {
+  return useQuery({
+    queryKey: ["certificates"],
+    queryFn: () => api.certificates.list(),
+    refetchInterval: 60000, // Refresh every minute
+    staleTime: 30000,
+  });
+}
+
+export function useCertificate(clusterId: string) {
+  return useQuery({
+    queryKey: ["certificate", clusterId],
+    queryFn: () => api.certificates.get(clusterId),
+    enabled: !!clusterId,
+    staleTime: 30000,
+  });
+}
+
+export function useInitiateCertRenewal() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (request: { cluster_id: string; ttl: string; trust_password?: string }) => 
+      api.certificates.initiateRenewal(request as any),
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["certificates"] });
+      queryClient.invalidateQueries({ queryKey: ["certificate", variables.cluster_id] });
+      queryClient.invalidateQueries({ queryKey: ["clusters"] });
+    },
+  });
+}
+
+export function useVerifyCertRenewal() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (request: { cluster_id: string; pending_cert_id?: string }) => 
+      api.certificates.verifyRenewal(request),
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ["certificates"], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ["clusters"], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: 'active' }),
+      ]);
+      queryClient.invalidateQueries({ queryKey: ["certificate", variables.cluster_id] });
+    },
+  });
+}
+
+export function useCancelPendingCert() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: (clusterId: string) => api.certificates.cancelPending(clusterId),
+    onSuccess: (_, clusterId) => {
+      queryClient.invalidateQueries({ queryKey: ["certificates"] });
+      queryClient.invalidateQueries({ queryKey: ["certificate", clusterId] });
+    },
+  });
+}
+
+export function useSystemWarnings() {
+  return useQuery({
+    queryKey: ["systemWarnings"],
+    queryFn: () => api.certificates.getSystemWarnings(),
+    refetchInterval: 60000, // Refresh every minute
+    staleTime: 30000,
   });
 }

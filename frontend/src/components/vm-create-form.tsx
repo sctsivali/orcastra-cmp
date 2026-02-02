@@ -169,7 +169,7 @@ export function VMCreateForm() {
         variant: "success",
       });
 
-      router.push("/");
+      router.push("/inventory");
     } catch (error) {
       // Check if error is due to read-only mode
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";

@@ -15,7 +15,7 @@ const AlertDialogOverlay = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Overlay
     className={cn(
-      "fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "fixed inset-0 z-[100000] bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -34,7 +34,8 @@ const AlertDialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         // Fixed centered positioning - use viewport-relative
-        "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
+        // z-[100001] to be above terminal layer (99999)
+        "fixed left-1/2 top-1/2 z-[100001] -translate-x-1/2 -translate-y-1/2",
         // Responsive width
         "grid w-[calc(100vw-2rem)] max-w-lg gap-4",
         // Styling

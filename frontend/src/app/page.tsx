@@ -9,21 +9,25 @@ import { Badge } from "@/components/ui/badge";
 import { api } from "@/lib/api";
 import { useCounterAnimation } from "@/hooks/use-counter-animation";
 import { STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG, REALTIME_DATA_CONFIG } from "@/lib/query-config";
+import { usePersonalization } from "@/components/personalization-provider";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 
 export default function HomePage() {
-  const { data: nodesData } = useQuery({
+  const { settings } = usePersonalization();
+  
+  const { data: nodesData, isLoading: isLoadingNodes } = useQuery({
     queryKey: ["nodes-status"],
     queryFn: api.nodes.status,
     ...REALTIME_DATA_CONFIG, // Nodes status needs frequent updates
   });
 
-  const { data: vmsData } = useQuery({
-    queryKey: ["vms-count"],
-    queryFn: () => api.vms.list(),
-    ...DYNAMIC_DATA_CONFIG, // VMs change frequently
+  const { data: vmsData, isLoading: isLoadingVMs } = useQuery({
+    queryKey: ["instances", undefined],
+    queryFn: () => api.instances.list(),
+    ...DYNAMIC_DATA_CONFIG, // Instances change frequently
   });
 
-  const { data: projectsData } = useQuery({
+  const { data: projectsData, isLoading: isLoadingProjects } = useQuery({
     queryKey: ["projects-count"],
     queryFn: () => api.projects.listAll(),
     ...STATIC_DATA_CONFIG, // Projects rarely change
@@ -36,11 +40,18 @@ export default function HomePage() {
   const runningVMs = vmsData?.vms?.filter(vm => vm.status === "Running").length || 0;
   const totalProjects = projectsData?.reduce((sum, node) => sum + (node.projects?.length || 0), 0) || 0;
 
-  // Animated counters with faster duration (800ms)
+  // Animated counters with faster duration (800ms) - must be called before any early returns
   const animatedTotalNodes = useCounterAnimation(totalNodes, 800);
   const animatedTotalVMs = useCounterAnimation(totalVMs, 800);
   const animatedRunningVMs = useCounterAnimation(runningVMs, 800);
   const animatedTotalProjects = useCounterAnimation(totalProjects, 800);
+
+  // Show full page loading when any data is still loading
+  const isLoading = isLoadingNodes || isLoadingVMs || isLoadingProjects;
+  
+  if (isLoading) {
+    return <LoadingLottiePage />;
+  }
 
   const features = [
     {
@@ -87,6 +98,11 @@ export default function HomePage() {
     },
   ];
 
+  // Get background settings with defaults
+  const backgroundImage = settings.background.backgroundImage || '/bg_orcastra-scaled-1.jpg';
+  const overlayOpacity = settings.background.backgroundOverlayOpacity / 100;
+  const backgroundBlur = settings.background.backgroundBlur;
+
   return (
     <div className="relative">
       {/* Background Image */}
@@ -94,13 +110,19 @@ export default function HomePage() {
         <div 
           className="absolute inset-0 bg-cover bg-center bg-no-repeat"
           style={{ 
-            backgroundImage: 'url(/bg_orcastra-scaled-1.jpg)',
+            backgroundImage: `url(${backgroundImage})`,
             backgroundAttachment: 'fixed',
-            filter: 'brightness(1.2) contrast(0.9)'
+            filter: `brightness(1.2) contrast(0.9) blur(${backgroundBlur}px)`,
+            transform: backgroundBlur > 0 ? 'scale(1.05)' : 'none', // Prevent blur edge artifacts
           }}
         />
-        {/* Gradient overlay for better readability - lighter in dark mode, more opaque in light mode */}
-        <div className="absolute inset-0 bg-gradient-to-b from-background/85 via-background/75 to-background/85 dark:from-background/90 dark:via-background/85 dark:to-background/90" />
+        {/* Gradient overlay for better readability - uses personalized opacity */}
+        <div 
+          className="absolute inset-0 bg-gradient-to-b from-background via-background to-background"
+          style={{ 
+            opacity: overlayOpacity,
+          }}
+        />
       </div>
       
       {/* Content */}
@@ -113,22 +135,22 @@ export default function HomePage() {
           </Badge>
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight">
             Welcome to{" "}
-            <span className="bg-gradient-to-r from-violet-600 to-purple-600 bg-clip-text text-transparent">
-              Orcastra
+            <span style={{ color: settings.colors.accentColor || "#8b5cf6" }}>
+              {settings.branding.appName || "Orcastra"}
             </span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
-            A unified dashboard for managing hypervisor virtual machines and containers across multiple nodes. Streamline your infrastructure management with powerful tools and real-time insights.
+            {settings.branding.tagline}
           </p>
           <div className="flex items-center justify-center gap-2 pt-2">
             <Badge variant="outline" className="text-xs">
-              Powered by Ubuntu Pro
+              Built on Open Source
             </Badge>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
-          <Button asChild size="lg" className="gap-2 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700">
+          <Button asChild size="lg" className="gap-2">
             <Link href="/inventory">
               View Inventory
               <ArrowRight className="h-5 w-5" />
@@ -147,7 +169,9 @@ export default function HomePage() {
         <Card>
           <CardHeader className="pb-3">
             <CardDescription>Total Nodes</CardDescription>
-            <CardTitle className="text-4xl">{animatedTotalNodes}</CardTitle>
+            <CardTitle className="text-4xl">
+              {animatedTotalNodes}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -159,7 +183,9 @@ export default function HomePage() {
         <Card>
           <CardHeader className="pb-3">
             <CardDescription>Total Instances</CardDescription>
-            <CardTitle className="text-4xl">{animatedTotalVMs}</CardTitle>
+            <CardTitle className="text-4xl">
+              {animatedTotalVMs}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -171,7 +197,9 @@ export default function HomePage() {
         <Card>
           <CardHeader className="pb-3">
             <CardDescription>Running</CardDescription>
-            <CardTitle className="text-4xl">{animatedRunningVMs}</CardTitle>
+            <CardTitle className="text-4xl">
+              {animatedRunningVMs}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -183,7 +211,9 @@ export default function HomePage() {
         <Card>
           <CardHeader className="pb-3">
             <CardDescription>Total Projects</CardDescription>
-            <CardTitle className="text-4xl">{animatedTotalProjects}</CardTitle>
+            <CardTitle className="text-4xl">
+              {animatedTotalProjects}
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -227,7 +257,7 @@ export default function HomePage() {
         <div className="space-y-2">
           <h2 className="text-3xl font-bold">Ready to Get Started?</h2>
           <p className="text-muted-foreground mx-auto text-lg max-w-none px-8">
-            Explore your infrastructure, create new projects, or dive into the technologies powering Orcastra
+            Explore your infrastructure, create new projects, or dive into the technologies powering {settings.branding.appName || "Orcastra"}
           </p>
         </div>
         <div className="flex flex-wrap items-center justify-center gap-4">

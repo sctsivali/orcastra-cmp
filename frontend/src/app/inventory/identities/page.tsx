@@ -41,12 +41,15 @@ import { useToast } from "@/hooks/use-toast";
 import { useIdentities, useDeleteIdentity } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { ReadOnlyBanner } from "@/components/read-only-banner";
 
 export default function IdentitiesPage() {
   const { data, isLoading, refetch, isRefetching } = useIdentities();
   const identities = (data as any)?.identities || [];
   const { toast } = useToast();
   const deleteIdentityMutation = useDeleteIdentity();
+  const { isReadOnly } = useReadOnlyMode();
   
   // Pagination and search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -109,7 +112,7 @@ export default function IdentitiesPage() {
     
     try {
       await deleteIdentityMutation.mutateAsync({
-        authType: identityToDelete.type.toLowerCase(),
+        authType: identityToDelete.auth_type || "tls",
         identityId: identityToDelete.id,
         host: identityToDelete.node,
       });
@@ -136,6 +139,7 @@ export default function IdentitiesPage() {
 
   return (
     <div className="p-8 space-y-6">
+      <ReadOnlyBanner />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
@@ -215,7 +219,7 @@ export default function IdentitiesPage() {
                     <TableHead>ID</TableHead>
                     <TableHead>Name</TableHead>
                     <TableHead>Type</TableHead>
-                    <TableHead>Cluster/Node</TableHead>
+                    <TableHead>Node</TableHead>
                     <TableHead>Groups</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -261,6 +265,7 @@ export default function IdentitiesPage() {
                             <DropdownMenuItem 
                               onClick={() => handleDeleteClick(identity)}
                               className="text-destructive focus:text-destructive"
+                              disabled={isReadOnly}
                             >
                               <Trash2 className="h-4 w-4 mr-2" />
                               Delete Identity

@@ -1,0 +1,14 @@
+/**
+ * Console Components - Barrel export file.
+ * Exports all console-related components.
+ */
+
+export { ConsoleManager } from "./console-manager";
+export { ConsoleWindow } from "./console-window";
+export { ConsoleTabs } from "./console-tabs";
+export { ConsoleToolbar } from "./console-toolbar";
+export { TextConsole } from "./text-console";
+export { GraphicsConsole } from "./graphics-console";
+export { BootPriorityPanel } from "./boot-priority-panel";
+export { ISOManagerPanel } from "./iso-manager-panel";
+export { ConsoleTray } from "./console-tray";

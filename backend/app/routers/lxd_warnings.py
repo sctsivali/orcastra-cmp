@@ -26,7 +26,8 @@ _executor = ThreadPoolExecutor(max_workers=5)
 class WarningInfo(BaseModel):
     """Warning information."""
     uuid: str = Field(..., description="Warning UUID")
-    location: str = Field("", description="Warning location")
+    location: str = Field("", description="Warning location (cluster member)")
+    source_node: str = Field("", description="Source node that reported this warning")
     project: str = Field("", description="Project name")
     type: str = Field("", description="Warning type")
     count: int = Field(0, description="Number of occurrences")
@@ -55,10 +56,18 @@ def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[Wa
             warnings_data = response.json().get('metadata', [])
             for warning_detail in warnings_data:
                 try:
+                    # LXD returns "none" for standalone nodes - replace with actual node name
+                    raw_location = warning_detail.get('location', '')
+                    location = raw_location if raw_location and raw_location.lower() != "none" else node_name
+                    
+                    # LXD returns "default" for global warnings - keep it as is (it's the default project)
+                    project = warning_detail.get('project', '') or 'default'
+                    
                     warnings.append(WarningInfo(
                         uuid=warning_detail.get('uuid', ''),
-                        location=warning_detail.get('location', ''),
-                        project=warning_detail.get('project', ''),
+                        location=location,
+                        source_node=node_name,
+                        project=project,
                         type=warning_detail.get('type', ''),
                         count=warning_detail.get('count', 0),
                         first_seen_at=warning_detail.get('first_seen_at', ''),
@@ -136,10 +145,16 @@ async def get_warning(
         
         if warning_response.status_code == 200:
             warning_data = warning_response.json().get('metadata', {})
+            # LXD returns "none" for standalone nodes - replace with actual node name
+            raw_location = warning_data.get('location', '')
+            location = raw_location if raw_location and raw_location.lower() != "none" else host
+            project = warning_data.get('project', '') or 'default'
+            
             return WarningInfo(
                 uuid=warning_data.get('uuid', ''),
-                location=warning_data.get('location', ''),
-                project=warning_data.get('project', ''),
+                location=location,
+                source_node=host,
+                project=project,
                 type=warning_data.get('type', ''),
                 count=warning_data.get('count', 0),
                 first_seen_at=warning_data.get('first_seen_at', ''),
@@ -184,4 +199,151 @@ async def delete_warning(
         raise
     except Exception as e:
         logger.error(f"Error deleting warning {warning_uuid}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get(
+    "/system/all",
+    response_model=dict,
+    summary="Get all system warnings including certificates",
+    description="Get combined warnings from LXD nodes and certificate/connectivity issues.",
+)
+async def get_all_system_warnings(
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    """Get all system warnings including certificate and node issues."""
+    try:
+        # Get LXD warnings
+        nodes_to_query = lxd_service.connection_manager.get_node_names()
+        
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_executor, _fetch_warnings_for_node, lxd_service, node_name)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        lxd_warnings = []
+        for result in results:
+            if isinstance(result, list):
+                lxd_warnings.extend(result)
+        
+        # Get certificate and node warnings from cert_manager
+        cert_warnings = []
+        node_warnings = []
+        
+        try:
+            from app.core.config import get_settings
+            from app.core.vault_client import get_vault_client
+            from app.services.lxd_cert_manager import LXDCertificateManager
+            from app.routers.cert_manager import (
+                parse_certificate_pem,
+                get_warning_severity,
+                WARNING_THRESHOLDS
+            )
+            from datetime import datetime, timezone
+            
+            settings = get_settings()
+            if settings.vault_enabled and settings.vault_token:
+                vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
+                cert_manager = LXDCertificateManager(
+                    vault_client=vault_client,
+                    clusters_path=settings.vault_clusters_path
+                )
+                
+                cluster_ids = cert_manager.list_clusters(use_cache=False)
+                
+                for cluster_id in cluster_ids:
+                    try:
+                        # Get metadata
+                        metadata = cert_manager.vault.vault_read(
+                            f"{settings.vault_clusters_path}/{cluster_id}/metadata"
+                        )
+                        display_name = metadata.get("display_name", cluster_id)
+                        endpoint = metadata.get("endpoint", "")
+                        
+                        # Check certificate expiry
+                        try:
+                            cert_data = cert_manager.vault.vault_read(
+                                f"{settings.vault_clusters_path}/{cluster_id}/certs"
+                            )
+                            cert_pem = cert_data.get("client.crt", "")
+                            if cert_pem:
+                                cert_info = parse_certificate_pem(cert_pem)
+                                expires_at = cert_info.get("not_after")
+                                
+                                if expires_at:
+                                    now = datetime.now(timezone.utc)
+                                    if expires_at.tzinfo is None:
+                                        expires_at = expires_at.replace(tzinfo=timezone.utc)
+                                    days_until_expiry = (expires_at - now).days
+                                    
+                                    if days_until_expiry <= WARNING_THRESHOLDS["warning"]:
+                                        severity = get_warning_severity(days_until_expiry)
+                                        if days_until_expiry <= 0:
+                                            message = f"Certificate expired {abs(days_until_expiry)} days ago"
+                                            warning_type = "cert_expired"
+                                        else:
+                                            message = f"Certificate expires in {days_until_expiry} days"
+                                            warning_type = "cert_expiring"
+                                        
+                                        cert_warnings.append({
+                                            "cluster_id": cluster_id,
+                                            "display_name": display_name,
+                                            "warning_type": warning_type,
+                                            "severity": severity,
+                                            "message": message,
+                                            "days_until_expiry": days_until_expiry,
+                                            "expires_at": expires_at.isoformat(),
+                                            "endpoint": endpoint,
+                                        })
+                        except Exception:
+                            pass
+                        
+                        # Check node connectivity
+                        connected, error_msg = cert_manager.verify_connection(cluster_id)
+                        if not connected:
+                            from datetime import datetime
+                            node_warnings.append({
+                                "cluster_id": cluster_id,
+                                "display_name": display_name,
+                                "warning_type": "node_offline",
+                                "severity": "critical",
+                                "message": error_msg or "Node is not reachable",
+                                "endpoint": endpoint,
+                                "checked_at": datetime.utcnow().isoformat(),
+                            })
+                            
+                    except Exception as e:
+                        logger.debug(f"Error checking {cluster_id}: {e}")
+                        
+        except Exception as e:
+            logger.warning(f"Could not fetch certificate warnings: {e}")
+        
+        # Calculate totals
+        critical = sum(1 for w in cert_warnings if w.get("severity") == "critical")
+        critical += sum(1 for w in node_warnings if w.get("severity") == "critical")
+        critical += sum(1 for w in lxd_warnings if w.severity.lower() in ["critical", "error", "high"])
+        
+        warning = sum(1 for w in cert_warnings if w.get("severity") in ["high", "warning"])
+        warning += sum(1 for w in node_warnings if w.get("severity") in ["high", "warning"])
+        warning += sum(1 for w in lxd_warnings if w.severity.lower() in ["warning", "medium"])
+        
+        info = sum(1 for w in cert_warnings if w.get("severity") == "info")
+        info += sum(1 for w in node_warnings if w.get("severity") == "info")
+        info += sum(1 for w in lxd_warnings if w.severity.lower() in ["info", "low"])
+        
+        return {
+            "total": len(lxd_warnings) + len(cert_warnings) + len(node_warnings),
+            "critical": critical,
+            "warning": warning,
+            "info": info,
+            "lxd_warnings": [w.model_dump() for w in lxd_warnings],
+            "certificate_warnings": cert_warnings,
+            "node_warnings": node_warnings,
+            "nodes": nodes_to_query,
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting system warnings: {e}")
         raise HTTPException(status_code=500, detail=str(e))

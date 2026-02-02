@@ -134,12 +134,12 @@ export default function ServerPage() {
             <CardContent className="space-y-4">
               <div>
                 <div className="text-sm font-medium text-muted-foreground mb-2">
-                  API Information
+                  Hypervisor API Information
                 </div>
                 <div className="space-y-2">
                   <div className="flex justify-between">
-                    <span className="text-sm">API Version:</span>
-                    <Badge variant="outline">{server.api_version}</Badge>
+                    <span className="text-sm">Hypervisor API Version:</span>
+                    <Badge variant="outline">{server.node_type} {server.api_version}</Badge>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm">Authentication:</span>

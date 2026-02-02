@@ -38,8 +38,8 @@ async def get_version():
     settings = get_settings()
     return VersionInfo(
         app_version=settings.app_version,
-        build_date=settings.build_date if settings.build_date else None,
-        build_commit=settings.build_commit if settings.build_commit else None,
+        build_date=getattr(settings, 'build_date', None),
+        build_commit=getattr(settings, 'build_commit', None),
         environment="development" if settings.debug else "production"
     )
 

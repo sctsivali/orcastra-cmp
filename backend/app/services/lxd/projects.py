@@ -4,13 +4,18 @@ Handles create, update, delete, and list operations for LXD projects.
 """
 
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
+from concurrent.futures import ThreadPoolExecutor
 from pylxd.exceptions import LXDAPIException, NotFound
 
 from .exceptions import LXDOperationError
 from .connection import LXDConnectionManager
 
 logger = logging.getLogger(__name__)
+
+# Thread pool for blocking LXD operations
+_projects_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_projects_")
 
 
 class ProjectManager:
@@ -40,19 +45,26 @@ class ProjectManager:
         return client
     
     async def list_projects(self, host: str) -> List[Dict[str, Any]]:
-        """List all projects on a specific LXD host."""
+        """List all projects on a specific LXD host (async with thread pool)."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _projects_executor,
+            self._list_projects_sync,
+            host
+        )
+    
+    def _list_projects_sync(self, host: str) -> List[Dict[str, Any]]:
+        """Synchronous implementation of list_projects."""
         try:
             client = self._get_client_with_reconnect(host)
             
-            # If client is None, raise specific error
             if client is None:
-                raise LXDOperationError(f"No connection to host: {host}. Client returned None. Please ensure the cluster is properly registered and connected.")
+                raise LXDOperationError(f"No connection to host: {host}. Client returned None.")
             
             projects = client.projects.all()
             
             project_list = []
             for project in projects:
-                # Parse tags from config
                 tags_str = project.config.get("user.tags", "") if project.config else ""
                 tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()] if tags_str else []
                 
@@ -66,7 +78,7 @@ class ProjectManager:
                 }
                 project_list.append(project_info)
             
-            logger.info(f"Listed {len(project_list)} projects from {host}")
+            logger.debug(f"Listed {len(project_list)} projects from {host}")
             return project_list
             
         except Exception as e:

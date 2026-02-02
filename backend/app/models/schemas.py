@@ -83,6 +83,7 @@ class VMListResponse(BaseModel):
     nodes: List[str] = Field(..., description="List of connected node names")
     lxd_count: int = Field(0, description="Number of LXD nodes online")
     microcloud_count: int = Field(0, description="Number of MicroCloud nodes online")
+    incus_count: int = Field(0, description="Number of Incus nodes online")
 
 
 class VMCreateRequest(BaseModel):
@@ -172,6 +173,80 @@ class ImageListResponse(BaseModel):
     total: int
 
 
+class GPUDRMInfo(BaseModel):
+    """Direct Rendering Manager (DRM) info for GPU."""
+    id: Optional[int] = Field(None, description="DRM card ID")
+    card_name: Optional[str] = Field(None, description="Card device name (e.g., 'card0')")
+    card_device: Optional[str] = Field(None, description="Card device number")
+    control_name: Optional[str] = Field(None, description="Control device name")
+    control_device: Optional[str] = Field(None, description="Control device number")
+    render_name: Optional[str] = Field(None, description="Render device name (e.g., 'renderD128')")
+    render_device: Optional[str] = Field(None, description="Render device number")
+
+
+class GPUNvidiaInfo(BaseModel):
+    """NVIDIA-specific GPU information."""
+    cuda_version: Optional[str] = Field(None, description="CUDA API version")
+    nvrm_version: Optional[str] = Field(None, description="NVRM driver version")
+    brand: Optional[str] = Field(None, description="Brand name (e.g., 'GeForce', 'Quadro')")
+    model: Optional[str] = Field(None, description="Model name")
+    uuid: Optional[str] = Field(None, description="GPU UUID")
+    architecture: Optional[str] = Field(None, description="Architecture generation")
+    card_name: Optional[str] = Field(None, description="Card device name (e.g., 'nvidia0')")
+    card_device: Optional[str] = Field(None, description="Card device number")
+
+
+class GPUSRIOVInfo(BaseModel):
+    """SR-IOV information for GPU."""
+    current_vfs: int = Field(0, description="Number of VFs currently configured")
+    maximum_vfs: int = Field(0, description="Maximum number of supported VFs")
+    vfs_count: int = Field(0, description="Number of VF GPU cards available")
+
+
+class GPUMdevProfile(BaseModel):
+    """Mediated device (mdev) profile for vGPU."""
+    name: str = Field(..., description="Profile name")
+    api: Optional[str] = Field(None, description="Mechanism used (e.g., 'vfio-pci')")
+    available: int = Field(0, description="Number of available devices")
+    description: Optional[str] = Field(None, description="Profile description")
+    devices: List[str] = Field(default_factory=list, description="List of existing device UUIDs")
+
+
+class GPUCardInfo(BaseModel):
+    """Detailed GPU card information from LXD resources."""
+    # Core identification
+    index: int = Field(0, description="GPU card index")
+    driver: Optional[str] = Field(None, description="Kernel driver (e.g., 'nvidia', 'i915', 'amdgpu')")
+    driver_version: Optional[str] = Field(None, description="Driver version")
+    pci_address: Optional[str] = Field(None, description="PCI address (e.g., '0000:00:02.0')")
+    usb_address: Optional[str] = Field(None, description="USB address for USB GPUs")
+    
+    # Vendor/Product info
+    vendor: Optional[str] = Field(None, description="Vendor name (e.g., 'NVIDIA Corporation')")
+    vendor_id: Optional[str] = Field(None, description="PCI vendor ID (e.g., '10de')")
+    product: Optional[str] = Field(None, description="Product name (e.g., 'GeForce RTX 3080')")
+    product_id: Optional[str] = Field(None, description="PCI product ID")
+    
+    # System topology
+    numa_node: Optional[int] = Field(None, description="NUMA node number")
+    
+    # Usage status
+    in_use: bool = Field(False, description="Whether this GPU is currently in use by an instance")
+    used_by: Optional[str] = Field(None, description="Instance name using this GPU (if in use)")
+    
+    # DRM info
+    drm: Optional[GPUDRMInfo] = Field(None, description="Direct Rendering Manager info")
+    
+    # NVIDIA-specific info
+    nvidia: Optional[GPUNvidiaInfo] = Field(None, description="NVIDIA-specific information")
+    
+    # SR-IOV info
+    sriov: Optional[GPUSRIOVInfo] = Field(None, description="SR-IOV information")
+    
+    # Mdev profiles
+    mdev_profiles: List[GPUMdevProfile] = Field(default_factory=list, description="Available mdev profiles for vGPU")
+
+
 class NodeResources(BaseModel):
     """Node available resources information."""
     cpu_total: int = Field(0, description="Total CPU cores")
@@ -184,6 +259,7 @@ class NodeResources(BaseModel):
     gpu_total: int = Field(0, description="Total GPU cards")
     gpu_used: int = Field(0, description="Used GPU cards")
     gpu_available: int = Field(0, description="Available GPU cards")
+    gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information")
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
@@ -203,6 +279,7 @@ class MemberResources(BaseModel):
     gpu_total: int = Field(0, description="Total GPU cards")
     gpu_used: int = Field(0, description="Used GPU cards")
     gpu_available: int = Field(0, description="Available GPU cards")
+    gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information")
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_used: int = Field(0, description="Used storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
@@ -416,6 +493,7 @@ class ClusterRegisterResponse(BaseModel):
     status: ClusterStatus = Field(..., description="Current cluster status")
     certificate_generated: bool = Field(False, description="Whether certificate was generated")
     trust_added: bool = Field(False, description="Whether trust was added to LXD")
+    cluster_type: Optional[str] = Field(None, description="Auto-detected hypervisor type (LXD, MicroCloud, or Incus)")
 
 
 class ClusterAuthCheckRequest(BaseModel):
@@ -446,6 +524,118 @@ class ClusterDeleteResponse(BaseModel):
     cluster_id: str = Field(..., description="Deleted cluster identifier")
 
 
+# ========== Certificate Management Models ==========
+
+class CertificateStatus(str, Enum):
+    """Certificate validity status."""
+    VALID = "valid"
+    EXPIRING = "expiring"  # Within warning threshold
+    EXPIRED = "expired"
+    UNKNOWN = "unknown"
+    PENDING_RENEWAL = "pending_renewal"  # New cert generated, awaiting verification
+
+
+class CertificateTTLOption(str, Enum):
+    """Available TTL options for certificate generation."""
+    ONE_MONTH = "720h"      # 30 days
+    TWO_MONTHS = "1440h"    # 60 days
+    THREE_MONTHS = "2160h"  # 90 days
+    FOUR_MONTHS = "2880h"   # 120 days
+    FIVE_MONTHS = "3600h"   # 150 days
+    SIX_MONTHS = "4320h"    # 180 days
+    ONE_YEAR = "8760h"      # 365 days
+
+
+class CertificateInfo(BaseModel):
+    """Certificate information with expiry details."""
+    cluster_id: str = Field(..., description="Cluster identifier")
+    common_name: Optional[str] = Field(None, description="Certificate Common Name")
+    issuer: Optional[str] = Field(None, description="Certificate Issuer (CA)")
+    issued_at: Optional[datetime] = Field(None, description="Certificate issue date")
+    expires_at: Optional[datetime] = Field(None, description="Certificate expiry date")
+    days_until_expiry: Optional[int] = Field(None, description="Days until certificate expires")
+    status: CertificateStatus = Field(CertificateStatus.UNKNOWN, description="Certificate status")
+    fingerprint: Optional[str] = Field(None, description="Certificate SHA256 fingerprint")
+    has_pending_renewal: bool = Field(False, description="Whether there's a pending renewal")
+    serial_number: Optional[str] = Field(None, description="Certificate serial number")
+
+
+class CertificateListResponse(BaseModel):
+    """Response for listing all certificate statuses."""
+    certificates: List[CertificateInfo] = Field(..., description="List of certificate info")
+    total: int = Field(..., description="Total certificates")
+    expiring_count: int = Field(0, description="Certificates expiring soon")
+    expired_count: int = Field(0, description="Expired certificates")
+
+
+class CertificateRenewalRequest(BaseModel):
+    """Request to initiate certificate renewal."""
+    cluster_id: str = Field(..., description="Cluster identifier")
+    ttl: CertificateTTLOption = Field(
+        CertificateTTLOption.SIX_MONTHS,
+        description="Certificate validity period"
+    )
+    trust_password: Optional[str] = Field(
+        None,
+        description="LXD trust password (required if current cert is expired)"
+    )
+
+
+class CertificateRenewalResponse(BaseModel):
+    """Response from certificate renewal initiation."""
+    success: bool = Field(..., description="Whether renewal was successful")
+    message: str = Field(..., description="Status message")
+    cluster_id: str = Field(..., description="Cluster identifier")
+    auto_renewed: bool = Field(False, description="True if cert was auto-added to trust")
+    requires_manual_trust: bool = Field(False, description="True if manual CLI trust is needed")
+    certificate: Optional[str] = Field(None, description="New certificate PEM (for manual trust)")
+    cli_command: Optional[str] = Field(None, description="CLI command for manual trust")
+    pending_cert_id: Optional[str] = Field(None, description="ID for pending verification")
+
+
+class CertificateVerifyRequest(BaseModel):
+    """Request to verify pending certificate renewal."""
+    cluster_id: str = Field(..., description="Cluster identifier")
+    pending_cert_id: Optional[str] = Field(None, description="Pending certificate ID")
+
+
+class CertificateVerifyResponse(BaseModel):
+    """Response from certificate verification."""
+    success: bool = Field(..., description="Whether verification succeeded")
+    message: str = Field(..., description="Status message")
+    cluster_id: str = Field(..., description="Cluster identifier")
+    verified: bool = Field(False, description="Whether new cert is trusted")
+    activated: bool = Field(False, description="Whether new cert replaced old cert")
+
+
+class CertificateWarning(BaseModel):
+    """Warning for certificate issues."""
+    cluster_id: str = Field(..., description="Cluster identifier")
+    display_name: str = Field(..., description="Cluster display name")
+    warning_type: str = Field(..., description="Type: cert_expiring, cert_expired, node_offline")
+    severity: str = Field(..., description="Severity: critical, warning, info")
+    message: str = Field(..., description="Warning message")
+    days_until_expiry: Optional[int] = Field(None, description="Days until expiry")
+    expires_at: Optional[datetime] = Field(None, description="Expiry date")
+    endpoint: Optional[str] = Field(None, description="Cluster endpoint")
+
+
+class SystemWarningsResponse(BaseModel):
+    """Response containing all system warnings including certificate issues."""
+    total: int = Field(..., description="Total warnings")
+    critical: int = Field(0, description="Critical warnings count")
+    warning: int = Field(0, description="Warning level count")
+    info: int = Field(0, description="Info level count")
+    certificate_warnings: List[CertificateWarning] = Field(
+        default_factory=list,
+        description="Certificate-related warnings"
+    )
+    node_warnings: List[CertificateWarning] = Field(
+        default_factory=list,
+        description="Node connectivity warnings"
+    )
+
+
 # ========== Monitoring Dashboard Models ==========
 
 class ClusterMonitoringMetrics(BaseModel):
@@ -453,6 +643,8 @@ class ClusterMonitoringMetrics(BaseModel):
     node_name: str = Field(..., description="Node name")
     node_type: str = Field("lxd", description="Node type (lxd, microcloud)")
     is_online: bool = Field(..., description="Whether node is online")
+    cluster_status: Optional[str] = Field(None, description="Cluster status: online, pending_trust, offline, error")
+    status_message: Optional[str] = Field(None, description="Status message for troubleshooting")
     
     # CPU Metrics
     cpu_total: int = Field(0, description="Total CPU cores")
@@ -541,7 +733,7 @@ class MonitoringDashboardResponse(BaseModel):
     # Cluster Overview
     total_nodes: int = Field(0, description="Total registered nodes")
     online_nodes: int = Field(0, description="Online nodes count")
-    offline_nodes: int = Field(0, description="Offline nodes count")
+    inactive_nodes: int = Field(0, description="Inactive nodes count")
     
     # Instance Overview
     total_instances: int = Field(0, description="Total instances")
@@ -589,3 +781,215 @@ class MonitoringDashboardResponse(BaseModel):
     
     # Collection Metadata
     collection_time_ms: float = Field(0, description="Time taken to collect metrics in ms")
+
+
+# ============================================
+# Tag System Schemas (Enterprise-Grade)
+# ============================================
+
+class TagCategoryBase(BaseModel):
+    """Base schema for tag category."""
+    prefix: str = Field(..., min_length=2, max_length=10, description="Category prefix (e.g., 'loc_', 'vend_')")
+    name: str = Field(..., min_length=1, max_length=50, description="Category display name")
+    description: Optional[str] = Field(None, description="Category description")
+    color: str = Field("#6b7280", description="Hex color for UI display")
+    icon: str = Field("tag", description="Lucide icon name")
+    sort_order: int = Field(0, description="Display order in UI")
+    is_active: bool = Field(True, description="Whether category is active")
+
+
+class TagCategoryCreate(TagCategoryBase):
+    """Schema for creating a new tag category."""
+    pass
+
+
+class TagCategoryUpdate(BaseModel):
+    """Schema for updating a tag category."""
+    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    description: Optional[str] = None
+    color: Optional[str] = None
+    icon: Optional[str] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+class TagCategoryResponse(TagCategoryBase):
+    """Response schema for tag category."""
+    id: int
+    is_system: bool
+    created_at: datetime
+    updated_at: datetime
+    tag_count: int = Field(0, description="Number of tags in this category")
+
+    class Config:
+        from_attributes = True
+
+
+class TagBase(BaseModel):
+    """Base schema for tag."""
+    name: str = Field(..., min_length=1, max_length=100, description="Tag name (e.g., 'loc_jakarta')")
+    display_name: Optional[str] = Field(None, max_length=100, description="Human-readable name")
+    description: Optional[str] = Field(None, description="Tag description")
+    color: Optional[str] = Field(None, description="Override color (uses category color if not set)")
+
+
+class TagCreate(TagBase):
+    """Schema for creating a new tag."""
+    category_id: Optional[int] = Field(None, description="Category ID (auto-detected from prefix if not set)")
+
+
+class TagUpdate(BaseModel):
+    """Schema for updating a tag."""
+    display_name: Optional[str] = Field(None, max_length=100)
+    description: Optional[str] = None
+    color: Optional[str] = None
+    category_id: Optional[int] = None
+
+
+class TagResponse(TagBase):
+    """Response schema for tag."""
+    id: int
+    category_id: Optional[int]
+    category: Optional[TagCategoryResponse] = None
+    is_system: bool
+    usage_count: int
+    created_by: Optional[str]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TagAssignmentBase(BaseModel):
+    """Base schema for tag assignment."""
+    tag_name: str = Field(..., description="Tag name to assign")
+    resource_type: str = Field(..., description="Resource type: node, project, instance")
+    resource_id: str = Field(..., description="Resource identifier")
+    resource_host: Optional[str] = Field(None, description="LXD host (for project/instance)")
+    resource_project: Optional[str] = Field(None, description="LXD project (for instance)")
+
+
+class TagAssignmentCreate(TagAssignmentBase):
+    """Schema for creating a tag assignment."""
+    pass
+
+
+class TagAssignmentResponse(BaseModel):
+    """Response schema for tag assignment."""
+    id: int
+    tag: TagResponse
+    resource_type: str
+    resource_id: str
+    resource_host: Optional[str]
+    resource_project: Optional[str]
+    assigned_by: Optional[str]
+    assigned_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class BulkTagAssignRequest(BaseModel):
+    """Request for bulk tag operations."""
+    tags: List[str] = Field(..., description="List of tag names to assign")
+    resource_type: str = Field(..., description="Resource type: node, project, instance")
+    resource_id: str = Field(..., description="Resource identifier")
+    resource_host: Optional[str] = Field(None, description="LXD host")
+    resource_project: Optional[str] = Field(None, description="LXD project")
+
+
+class BulkTagAssignResponse(BaseModel):
+    """Response for bulk tag operations."""
+    success: bool
+    message: str
+    assigned_tags: List[str]
+    failed_tags: List[str] = Field(default_factory=list)
+    synced_to_lxd: bool = Field(False, description="Whether tags were synced to LXD")
+
+
+class TagGrouped(BaseModel):
+    """Grouped tags by category."""
+    location: List[str] = Field(default_factory=list, description="Location tags (loc_*)")
+    region: List[str] = Field(default_factory=list, description="Region tags (reg_*)")
+    vendor: List[str] = Field(default_factory=list, description="Vendor tags (vend_*)")
+    ownership: List[str] = Field(default_factory=list, description="Ownership tags (own_*)")
+    environment: List[str] = Field(default_factory=list, description="Environment tags (env_*)")
+    application: List[str] = Field(default_factory=list, description="Application tags (app_*)")
+    sla: List[str] = Field(default_factory=list, description="SLA tags (sla_*)")
+    cost_center: List[str] = Field(default_factory=list, description="Cost center tags (cost_*)")
+    other: List[str] = Field(default_factory=list, description="Uncategorized tags")
+
+
+class ResourceTagsResponse(BaseModel):
+    """Response containing tags for a resource."""
+    resource_type: str
+    resource_id: str
+    resource_host: Optional[str]
+    resource_project: Optional[str]
+    tags: List[str] = Field(default_factory=list, description="Raw tag list")
+    grouped: TagGrouped = Field(default_factory=TagGrouped, description="Tags grouped by category")
+
+
+class TagFilterRequest(BaseModel):
+    """Request for filtering resources by tags."""
+    tags: List[str] = Field(..., description="Tags to filter by")
+    match_mode: str = Field("any", description="Match mode: 'any' or 'all'")
+    resource_types: List[str] = Field(default_factory=list, description="Resource types to include")
+
+
+class TagStatistics(BaseModel):
+    """Statistics for a tag."""
+    tag_name: str
+    display_name: Optional[str]
+    category: Optional[str]
+    color: str
+    node_count: int = 0
+    project_count: int = 0
+    instance_count: int = 0
+    total_usage: int = 0
+
+
+class TagListResponse(BaseModel):
+    """Response for listing tags."""
+    tags: List[TagResponse]
+    total: int
+    categories: List[TagCategoryResponse]
+
+
+class TagStatsResponse(BaseModel):
+    """Response for tag statistics."""
+    total_tags: int
+    total_assignments: int
+    categories: List[TagCategoryResponse]
+    top_tags: List[TagStatistics]
+    tags_by_category: Dict[str, int]
+
+
+class UserTagVisibilitySettings(BaseModel):
+    """User's tag visibility settings."""
+    visibility_mode: str = Field("all", description="Mode: 'all', 'whitelist', 'blacklist'")
+    visible_categories: List[str] = Field(default_factory=list)
+    visible_tags: List[str] = Field(default_factory=list)
+    hidden_categories: List[str] = Field(default_factory=list)
+    hidden_tags: List[str] = Field(default_factory=list)
+    default_filter_tags: List[str] = Field(default_factory=list)
+
+
+class UserTagVisibilityUpdate(BaseModel):
+    """Request to update user tag visibility."""
+    visibility_mode: Optional[str] = None
+    visible_categories: Optional[List[str]] = None
+    visible_tags: Optional[List[str]] = None
+    hidden_categories: Optional[List[str]] = None
+    hidden_tags: Optional[List[str]] = None
+    default_filter_tags: Optional[List[str]] = None
+
+
+class UserTagVisibilityResponse(UserTagVisibilitySettings):
+    """Response for user tag visibility."""
+    user_id: str
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True

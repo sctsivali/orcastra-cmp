@@ -3,6 +3,10 @@
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "./theme-provider";
+import { PersonalizationProvider } from "./personalization-provider";
+import { StorageCleanupProvider } from "./storage-cleanup-provider";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthProvider } from "./auth-provider";
 
 function makeQueryClient() {
   return new QueryClient({
@@ -41,10 +45,19 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const queryClient = getQueryClient();
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="dark" storageKey="orcastra-ui-theme">
-        {children}
-      </ThemeProvider>
-    </QueryClientProvider>
+    <AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <StorageCleanupProvider>
+          <ThemeProvider defaultTheme="system" storageKey="orcastra-ui-theme">
+            <PersonalizationProvider>
+              <TooltipProvider delayDuration={150} skipDelayDuration={100}>
+                {children}
+              </TooltipProvider>
+            </PersonalizationProvider>
+          </ThemeProvider>
+        </StorageCleanupProvider>
+      </QueryClientProvider>
+    </AuthProvider>
   );
 }
+

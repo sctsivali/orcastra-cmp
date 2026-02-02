@@ -97,6 +97,7 @@ export function StatsOverview({ data, clustersData, isLoading, clustersLoading }
   // Calculate cluster types from registered clusters
   const lxdClusters = clustersData?.clusters?.filter(c => c.cluster_type?.toUpperCase() === "LXD").length || 0;
   const microcloudClusters = clustersData?.clusters?.filter(c => c.cluster_type?.toUpperCase() === "MICROCLOUD").length || 0;
+  const incusClusters = clustersData?.clusters?.filter(c => c.cluster_type?.toUpperCase() === "INCUS").length || 0;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -128,7 +129,11 @@ export function StatsOverview({ data, clustersData, isLoading, clustersLoading }
         icon={<Cpu className="h-6 w-6 text-blue-600" />}
         label="Registered Clusters"
         value={totalClusters}
-        subtext={`${lxdClusters} LXD, ${microcloudClusters} MicroCloud`}
+        subtext={[
+          lxdClusters > 0 ? `${lxdClusters} LXD` : null,
+          microcloudClusters > 0 ? `${microcloudClusters} MicroCloud` : null,
+          incusClusters > 0 ? `${incusClusters} Incus` : null,
+        ].filter(Boolean).join(", ") || "No clusters"}
         color="bg-blue-100 dark:bg-blue-950"
         delay={150}
       />

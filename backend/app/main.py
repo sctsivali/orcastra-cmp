@@ -39,6 +39,7 @@ from app.routers import (
     ipam_router,
     my_keys_router,
 )
+from app.routers.terminal import router as terminal_router
 from app.routers.system import router as system_router
 from app.routers.cluster_registration import router as cluster_registration_router
 from app.services.lxd_service import get_lxd_service, LXDConnectionError
@@ -60,6 +61,14 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Orcastra Dashboard API...")
     settings = get_settings()
+    
+    # Initialize PostgreSQL database
+    try:
+        from app.core.database import init_db
+        await init_db()
+        logger.info("PostgreSQL database initialized")
+    except Exception as db_err:
+        logger.warning(f"Could not initialize database: {db_err}")
     
     # Initialize LXD service and check connections
     try:
@@ -141,9 +150,24 @@ async def lifespan(app: FastAPI):
             logger.info("Background metrics collector started")
         except Exception as collector_err:
             logger.warning(f"Could not start background metrics collector: {collector_err}")
-            
+    
     except Exception as e:
         logger.error(f"Error during LXD service initialization: {e}")
+    
+    # Initialize default tag categories
+    try:
+        from app.core.database import async_session_maker
+        from app.services.tag_service import TagService
+        
+        async with async_session_maker() as session:
+            tag_service = TagService(db=session)
+            created_count = await tag_service.initialize_default_categories()
+            if created_count > 0:
+                logger.info(f"Initialized {created_count} default tag categories")
+            else:
+                logger.debug("Default tag categories already exist")
+    except Exception as tag_err:
+        logger.warning(f"Could not initialize tag categories: {tag_err}")
     
     logger.info("Orcastra Dashboard API started successfully")
     
@@ -151,6 +175,14 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("Shutting down Orcastra Dashboard API...")
+    
+    # Close database connection
+    try:
+        from app.core.database import close_db
+        await close_db()
+        logger.info("Database connection closed")
+    except Exception:
+        pass
     
     # Stop background collector
     try:
@@ -183,15 +215,44 @@ Ensure your client certificates are properly configured.
     )
     
     # Configure CORS with environment-based origins
+    # When CORS_ORIGINS is "*", we use a custom approach to support credentials
     cors_origins = settings.get_cors_origins()
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True if cors_origins != ["*"] else False,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-    )
+    
+    if cors_origins == ["*"]:
+        # For wildcard CORS with credentials support, we need custom middleware
+        # that echoes back the request origin (more permissive, use only in dev/trusted environments)
+        @app.middleware("http")
+        async def cors_allow_all_with_credentials(request: Request, call_next):
+            # Handle preflight requests
+            if request.method == "OPTIONS":
+                origin = request.headers.get("origin", "*")
+                response = JSONResponse(content={}, status_code=200)
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+                response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+                response.headers["Access-Control-Allow-Headers"] = request.headers.get(
+                    "access-control-request-headers", "*"
+                )
+                response.headers["Access-Control-Max-Age"] = "86400"
+                return response
+            
+            # Handle actual requests
+            response = await call_next(request)
+            origin = request.headers.get("origin")
+            if origin:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+            return response
+    else:
+        # Use standard CORSMiddleware for specific origins
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+            allow_headers=["*"],
+            expose_headers=["*"],
+        )
     
     # Add GZip compression middleware
     app.add_middleware(GZipMiddleware, minimum_size=1000)
@@ -257,8 +318,20 @@ Ensure your client certificates are properly configured.
     app.include_router(groups_router, prefix=settings.api_prefix)
     app.include_router(my_keys_router, prefix=settings.api_prefix)
     
+    # Integrations Router (External Apps - Orcahub)
+    from app.routers.integrations import router as integrations_router
+    app.include_router(integrations_router, prefix=settings.api_prefix)
+    
     # Cluster Registration Router (Vault Integration)
     app.include_router(cluster_registration_router, prefix=settings.api_prefix)
+    
+    # Certificate Manager Router
+    from app.routers.cert_manager import router as cert_manager_router
+    app.include_router(cert_manager_router, prefix=settings.api_prefix)
+    
+    # User Preferences Router (PostgreSQL)
+    from app.routers.user_preferences import router as user_preferences_router
+    app.include_router(user_preferences_router, prefix=settings.api_prefix)
     
     # Cluster Members Router (MicroCloud)
     from app.routers.cluster_members import router as cluster_members_router
@@ -267,6 +340,13 @@ Ensure your client certificates are properly configured.
     # Monitoring Router (Real-time metrics dashboard)
     from app.routers.monitoring import router as monitoring_router
     app.include_router(monitoring_router, prefix=settings.api_prefix)
+    
+    # Terminal Router (WebSocket terminal access)
+    app.include_router(terminal_router, prefix=settings.api_prefix)
+    
+    # Console Router (VGA/Graphics console access)
+    from app.routers.console import router as console_router
+    app.include_router(console_router, prefix=settings.api_prefix)
     
     # Health check endpoint
     @app.get("/health", tags=["Health"])
@@ -281,8 +361,8 @@ Ensure your client certificates are properly configured.
         return {
             "name": settings.api_title,
             "version": settings.app_version,
-            "build_date": settings.build_date if settings.build_date else None,
-            "build_commit": settings.build_commit if settings.build_commit else None,
+            "build_date": getattr(settings, 'build_date', None),
+            "build_commit": getattr(settings, 'build_commit', None),
             "docs": "/docs",
             "health": "/health",
         }

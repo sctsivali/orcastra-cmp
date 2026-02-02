@@ -36,6 +36,9 @@ class OperationInfo(BaseModel):
     err: str = Field("", description="Error message if any")
     may_cancel: bool = Field(False, description="Whether operation can be cancelled")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Operation metadata")
+    node_name: str = Field("", description="Node where operation is running")
+    project: str = Field("default", description="Project for this operation")
+    instance_name: str = Field("", description="Instance name if applicable")
 
 
 class OperationListResponse(BaseModel):
@@ -59,6 +62,25 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
             
             for op_data in running_ops:
                 try:
+                    # Extract project and instance name from resources
+                    project = "default"
+                    instance_name = ""
+                    resources = op_data.get('resources', {})
+                    if resources:
+                        # Try to extract from instance path
+                        instances = resources.get('instances', [])
+                        if instances and len(instances) > 0:
+                            # Path format: /1.0/instances/name?project=xxx
+                            instance_path = instances[0]
+                            # Extract instance name
+                            import re
+                            match = re.search(r'/instances/([^?/]+)', instance_path)
+                            if match:
+                                instance_name = match.group(1)
+                            # Extract project
+                            if 'project=' in instance_path:
+                                project = instance_path.split('project=')[-1].split('&')[0]
+                    
                     operations.append(OperationInfo(
                         id=op_data.get('id', ''),
                         class_name=op_data.get('class', ''),
@@ -69,7 +91,10 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
                         description=op_data.get('description', ''),
                         err=op_data.get('err', ''),
                         may_cancel=op_data.get('may_cancel', False),
-                        metadata=op_data.get('metadata', {})
+                        metadata=op_data.get('metadata', {}),
+                        node_name=node_name,
+                        project=project,
+                        instance_name=instance_name,
                     ))
                 except Exception as e:
                     logger.error(f"Error parsing operation data on {node_name}: {e}")

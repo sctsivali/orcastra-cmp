@@ -21,7 +21,7 @@ const DialogOverlay = React.forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "fixed inset-0 z-[100000] bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className
     )}
     {...props}
@@ -39,7 +39,8 @@ const DialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         // Fixed centered modal - use viewport-relative positioning
-        "fixed left-1/2 top-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
+        // z-[100001] to be above terminal layer (99999)
+        "fixed left-1/2 top-1/2 z-[100001] -translate-x-1/2 -translate-y-1/2",
         // Width with margins - responsive for mobile
         "w-[calc(100vw-2rem)] max-w-lg",
         // Styling - relative for close button positioning

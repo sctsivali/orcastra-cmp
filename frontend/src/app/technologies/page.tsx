@@ -2,13 +2,13 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Cpu, HardDrive, Server, Database, Network, Package, Info } from "lucide-react";
+import { Cpu, HardDrive, Server, Database, Network, Package, Info, Monitor } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
-import type { NodeStatus } from "@/types/api";
+import type { NodeStatus, NodeEnvironment } from "@/types/api";
 
 interface HardwareCategory {
   icon: React.ElementType;
@@ -25,57 +25,71 @@ interface SoftwareItem {
   icon: React.ElementType;
 }
 
-const softwareStack: SoftwareItem[] = [
-  {
-    name: "LXD",
-    version: "",
-    purpose: "System container and virtual machine manager",
-    category: "Virtualization",
-    icon: Server,
-  },
-  {
-    name: "Ubuntu",
-    version: "",
-    purpose: "Enterprise-grade Linux operating system with long-term support",
-    category: "Operating System",
-    icon: Server,
-  },
-  {
-    name: "Linux Kernel",
-    version: "",
-    purpose: "Operating system core providing hardware abstraction",
-    category: "Operating System",
-    icon: Cpu,
-  },
-  {
-    name: "ZFS",
-    version: "",
-    purpose: "Advanced filesystem with data integrity and snapshot capabilities",
-    category: "Storage",
-    icon: Database,
-  },
-  {
-    name: "QEMU/KVM",
-    version: "",
-    purpose: "Kernel-based virtual machine for full virtualization",
-    category: "Virtualization",
-    icon: Server,
-  },
-  {
-    name: "Open vSwitch",
-    version: "",
-    purpose: "Production-quality multilayer virtual switch",
-    category: "Networking",
-    icon: Network,
-  },
-  {
-    name: "containerd",
-    version: "",
-    purpose: "Container runtime for managing container lifecycle",
-    category: "Container Runtime",
-    icon: Package,
-  },
-];
+// Helper function to generate software stack with real versions
+function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
+  // Aggregate environment data from connected nodes
+  const connectedNodes = nodes.filter(n => n.connected && n.environment);
+  const firstEnv: NodeEnvironment | null = connectedNodes[0]?.environment || null;
+  
+  // Get versions from first connected node's environment
+  const lxdVersion = connectedNodes[0]?.server_version || "";
+  const kernelVersion = firstEnv?.kernel_version || "";
+  const osVersion = firstEnv?.os_version || "";
+  const driverVersion = firstEnv?.driver_version || "";
+  const storageVersion = firstEnv?.storage_version || "";
+  
+  return [
+    {
+      name: "LXD",
+      version: lxdVersion,
+      purpose: "System container and virtual machine manager",
+      category: "Virtualization",
+      icon: Server,
+    },
+    {
+      name: "Ubuntu",
+      version: osVersion,
+      purpose: "Enterprise-grade Linux operating system with long-term support",
+      category: "Operating System",
+      icon: Server,
+    },
+    {
+      name: "Linux Kernel",
+      version: kernelVersion,
+      purpose: "Operating system core providing hardware abstraction",
+      category: "Operating System",
+      icon: Cpu,
+    },
+    {
+      name: "ZFS",
+      version: storageVersion && storageVersion.includes("zfs") ? storageVersion : "",
+      purpose: "Advanced filesystem with data integrity and snapshot capabilities",
+      category: "Storage",
+      icon: Database,
+    },
+    {
+      name: "QEMU/KVM",
+      version: driverVersion,
+      purpose: "Kernel-based virtual machine for full virtualization",
+      category: "Virtualization",
+      icon: Server,
+    },
+    {
+      name: "Open vSwitch",
+      version: "",
+      purpose: "Production-quality multilayer virtual switch",
+      category: "Networking",
+      icon: Network,
+    },
+    {
+      name: "containerd",
+      version: "",
+      purpose: "Container runtime for managing container lifecycle",
+      category: "Container Runtime",
+      icon: Package,
+    },
+  ];
+}
 
 export default function TechnologiesPage() {
   const { data: nodesResponse, isLoading } = useQuery<{ nodes: NodeStatus[]; all_connected: boolean }>({
@@ -85,10 +99,15 @@ export default function TechnologiesPage() {
   
   const nodes = nodesResponse?.nodes || [];
 
+  // Generate dynamic software stack with real versions
+  const softwareStack = React.useMemo(() => generateSoftwareStack(nodes), [nodes]);
+
   // Aggregate hardware information from all nodes
   const hardwareInfo = React.useMemo(() => {
     if (!nodes || nodes.length === 0) return null;
 
+    const connectedNodes = nodes.filter(n => n.connected);
+    
     const totalCores = nodes.reduce((sum: number, node: NodeStatus) => {
       return sum + (node.resources?.cpu_total || 0);
     }, 0);
@@ -97,11 +116,26 @@ export default function TechnologiesPage() {
       return sum + (node.resources?.memory_total || 0);
     }, 0);
 
+    // Get real architecture from node environment
     const cpuArchitectures = new Set<string>(
       nodes
-        .map((node: NodeStatus) => "x86_64") // Architecture info not available in NodeStatus
-        .filter(Boolean)
+        .map((node: NodeStatus) => node.environment?.kernel_architecture)
+        .filter((arch): arch is string => Boolean(arch))
     );
+
+    // Get total storage capacity
+    const totalStorageCapacity = nodes.reduce((sum: number, node: NodeStatus) => {
+      return sum + (node.resources?.storage_total || 0);
+    }, 0);
+
+    const totalStorageAvailable = nodes.reduce((sum: number, node: NodeStatus) => {
+      return sum + (node.resources?.storage_available || 0);
+    }, 0);
+
+    // Get GPU totals
+    const totalGPUs = nodes.reduce((sum: number, node: NodeStatus) => {
+      return sum + (node.resources?.gpu_total || 0);
+    }, 0);
 
     const storageBackends = new Set<string>(
       nodes.flatMap((node: NodeStatus) =>
@@ -124,12 +158,12 @@ export default function TechnologiesPage() {
           },
           {
             label: "Architectures",
-            value: Array.from(cpuArchitectures).join(", ") || "x86_64",
+            value: cpuArchitectures.size > 0 ? Array.from(cpuArchitectures).join(", ") : "x86_64",
             detail: "Supported CPU architectures",
           },
           {
             label: "Nodes",
-            value: nodes.length.toString(),
+            value: connectedNodes.length.toString(),
             detail: "Active compute nodes",
           },
         ],
@@ -151,7 +185,7 @@ export default function TechnologiesPage() {
           },
           {
             label: "Memory per Node",
-            value: `~${(totalMemory / nodes.length / (1024 ** 3)).toFixed(2)} GB`,
+            value: connectedNodes.length > 0 ? `~${(totalMemory / connectedNodes.length / (1024 ** 3)).toFixed(2)} GB` : "N/A",
             detail: "Average memory allocation",
           },
         ],
@@ -163,7 +197,7 @@ export default function TechnologiesPage() {
         items: [
           {
             label: "Storage Backends",
-            value: Array.from(storageBackends).join(", ") || "dir, zfs, btrfs",
+            value: storageBackends.size > 0 ? Array.from(storageBackends).join(", ") : "dir, zfs, btrfs",
             detail: "Available storage types",
           },
           {
@@ -208,18 +242,39 @@ export default function TechnologiesPage() {
       },
     ];
 
+    // Add GPU category if GPUs are available
+    if (totalGPUs > 0) {
+      categories.push({
+        icon: Monitor,
+        title: "GPU Resources",
+        description: "Graphics processing units for acceleration",
+        items: [
+          {
+            label: "Total GPUs",
+            value: totalGPUs.toString(),
+            detail: "Aggregate across all nodes",
+          },
+          {
+            label: "GPU Type",
+            value: "NVIDIA/AMD",
+            detail: "Supported GPU vendors",
+          },
+          {
+            label: "Use Cases",
+            value: "AI/ML, Rendering, HPC",
+            detail: "Accelerated computing workloads",
+          },
+        ],
+      });
+    }
+
     return categories;
   }, [nodes]);
 
   if (isLoading) {
     return (
-      <div className="container py-8 space-y-8">
-        <Skeleton className="h-20 w-full" />
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {[1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} className="h-64 w-full" />
-          ))}
-        </div>
+      <div className="container py-8">
+        <LoadingLottiePageEnhanced context="hardware" />
       </div>
     );
   }
@@ -262,7 +317,7 @@ export default function TechnologiesPage() {
               {hardwareInfo.map((category) => {
                 const Icon = category.icon;
                 return (
-                  <Card key={category.title}>
+                  <Card key={category.title} className="hover:shadow-md transition-all duration-200">
                     <CardHeader>
                       <div className="flex items-center gap-3">
                         <div className="p-2 rounded-lg bg-primary/10">
@@ -324,12 +379,12 @@ export default function TechnologiesPage() {
                 ].map((brand) => (
                   <div
                     key={brand.name}
-                    className="flex items-center justify-center p-6 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
+                    className="flex items-center justify-center p-6 rounded-lg border bg-card hover:bg-muted/50 hover:border-primary/20 transition-all duration-200 group"
                   >
                     <img
                       src={brand.logo}
                       alt={brand.name}
-                      className="h-8 w-auto object-contain brightness-0 dark:invert"
+                      className="h-8 w-auto object-contain brightness-0 dark:invert opacity-70 group-hover:opacity-100 transition-opacity"
                       title={brand.name}
                     />
                   </div>
@@ -361,7 +416,7 @@ export default function TechnologiesPage() {
             {softwareStack.map((software) => {
               const Icon = software.icon;
               return (
-                <Card key={software.name} className="hover:shadow-md transition-shadow">
+                <Card key={software.name} className="hover:shadow-md transition-all duration-200 hover:-translate-y-0.5">
                   <CardHeader>
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
@@ -370,6 +425,11 @@ export default function TechnologiesPage() {
                         </div>
                         <div>
                           <CardTitle className="text-lg">{software.name}</CardTitle>
+                          {software.version && (
+                            <Badge variant="secondary" className="mt-1 text-xs font-mono">
+                              v{software.version}
+                            </Badge>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -379,7 +439,7 @@ export default function TechnologiesPage() {
                       <p className="text-xs font-medium text-muted-foreground uppercase mb-1">
                         Category
                       </p>
-                      <p className="text-sm">{software.category}</p>
+                      <Badge variant="outline" className="font-normal">{software.category}</Badge>
                     </div>
                     <div>
                       <p className="text-xs font-medium text-muted-foreground uppercase mb-1">
@@ -404,37 +464,48 @@ export default function TechnologiesPage() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4">
-                <div className="flex gap-3">
-                  <div className="mt-1">
-                    <div className="h-2 w-2 rounded-full bg-green-500" />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="flex gap-3 p-4 rounded-lg bg-green-500/5 border border-green-500/10">
+                  <div className="mt-0.5">
+                    <div className="h-2.5 w-2.5 rounded-full bg-green-500" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Open Source & Community-Driven</p>
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-sm text-muted-foreground mt-1">
                       All core technologies are open-source, ensuring transparency, security, and active community support.
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3">
-                  <div className="mt-1">
-                    <div className="h-2 w-2 rounded-full bg-blue-500" />
+                <div className="flex gap-3 p-4 rounded-lg bg-blue-500/5 border border-blue-500/10">
+                  <div className="mt-0.5">
+                    <div className="h-2.5 w-2.5 rounded-full bg-blue-500" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Enterprise-Grade Reliability</p>
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-sm text-muted-foreground mt-1">
                       Battle-tested in production environments, these tools power some of the world's largest infrastructures.
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3">
-                  <div className="mt-1">
-                    <div className="h-2 w-2 rounded-full bg-violet-500" />
+                <div className="flex gap-3 p-4 rounded-lg bg-violet-500/5 border border-violet-500/10">
+                  <div className="mt-0.5">
+                    <div className="h-2.5 w-2.5 rounded-full bg-violet-500" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Modern Architecture</p>
-                    <p className="text-sm text-muted-foreground">
+                    <p className="text-sm text-muted-foreground mt-1">
                       Built with modern cloud-native principles for scalability, flexibility, and performance.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex gap-3 p-4 rounded-lg bg-orange-500/5 border border-orange-500/10">
+                  <div className="mt-0.5">
+                    <div className="h-2.5 w-2.5 rounded-full bg-orange-500" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Security First</p>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Hardware-level isolation, encrypted storage, and secure networking built into every layer.
                     </p>
                   </div>
                 </div>

@@ -159,8 +159,14 @@ async def start_instance(
 ):
     """Start an instance."""
     try:
-        result = await lxd_service.start_vm(instance_name, request.host, force=False)
-        return result
+        await lxd_service.start_vm(instance_name, request.host, force=False)
+        return VMActionResponse(
+            success=True,
+            message=f"Instance {instance_name} started successfully",
+            vm_name=instance_name,
+            action="start",
+            new_status=VMStatus.RUNNING  # Start always results in Running
+        )
     except Exception as e:
         logger.error(f"Error starting instance {instance_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -180,13 +186,19 @@ async def stop_instance(
 ):
     """Stop an instance."""
     try:
-        result = await lxd_service.stop_vm(
+        await lxd_service.stop_vm(
             instance_name, 
             request.host, 
             force=request.force,
             timeout=request.timeout
         )
-        return result
+        return VMActionResponse(
+            success=True,
+            message=f"Instance {instance_name} stopped successfully",
+            vm_name=instance_name,
+            action="stop",
+            new_status=VMStatus.STOPPED  # Stop always results in Stopped
+        )
     except Exception as e:
         logger.error(f"Error stopping instance {instance_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -206,13 +218,19 @@ async def restart_instance(
 ):
     """Restart an instance."""
     try:
-        result = await lxd_service.restart_vm(
+        await lxd_service.restart_vm(
             instance_name,
             request.host,
             force=request.force,
             timeout=request.timeout
         )
-        return result
+        return VMActionResponse(
+            success=True,
+            message=f"Instance {instance_name} restarted successfully",
+            vm_name=instance_name,
+            action="restart",
+            new_status=VMStatus.RUNNING  # Restart ends in Running
+        )
     except Exception as e:
         logger.error(f"Error restarting instance {instance_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

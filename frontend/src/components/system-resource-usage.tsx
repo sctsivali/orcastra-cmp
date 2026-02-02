@@ -581,6 +581,11 @@ export function SystemResourceUsagePanel() {
           </p>
         </div>
         <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <Badge variant="secondary" className="text-xs">
+              Updated: {lastUpdated}
+            </Badge>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -589,11 +594,6 @@ export function SystemResourceUsagePanel() {
           >
             <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
           </Button>
-          {lastUpdated && (
-            <Badge variant="secondary" className="text-xs">
-              Updated: {lastUpdated}
-            </Badge>
-          )}
         </div>
       </div>
 

@@ -160,7 +160,7 @@ export function ClickableBadge({
                   </div>
                 ))
               ) : typeof items[0] === "string" ? (
-                // String items (e.g., used_by resources)
+                // String items (ex; used_by resources)
                 <div className="space-y-2">
                   {(items as string[]).map((item, index) => {
                     const match = item.match(/\/1\.0\/(\w+)\/([^/?]+)/);

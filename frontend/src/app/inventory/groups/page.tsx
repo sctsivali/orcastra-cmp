@@ -45,13 +45,15 @@ import {
   MoreVertical,
   Search 
 } from "lucide-react";
-import { GroupInfo } from "@/types/api";
+import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
-import { useGroups, useDeleteGroup } from "@/hooks/use-lxd";
+import { useGroups, useDeleteGroup, useIdentities } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { CreateGroupDialog } from "@/components/groups/create-group-dialog";
 import { EditGroupDialog } from "@/components/groups/edit-group-dialog";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { ReadOnlyBanner } from "@/components/read-only-banner";
 
 export default function GroupsPage() {
   const { data, isLoading, refetch, isRefetching } = useGroups();
@@ -59,6 +61,7 @@ export default function GroupsPage() {
   const nodes = (data as any)?.nodes || [];
   const { toast } = useToast();
   const deleteGroupMutation = useDeleteGroup();
+  const { isReadOnly } = useReadOnlyMode();
   
   // Pagination and search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -81,6 +84,16 @@ export default function GroupsPage() {
     });
     return Array.from(nodeSet).sort();
   }, [groups]);
+
+  // Fetch identities for the selected group's node (for view members modal)
+  const { data: identitiesData } = useIdentities(selectedGroup?.node || "");
+  const allIdentities: IdentityInfo[] = (identitiesData as IdentityListResponse)?.identities || [];
+  
+  // Helper to find identity name from ID
+  const getIdentityName = (identityId: string): string | null => {
+    const identity = allIdentities.find(i => i.id === identityId);
+    return identity?.name || null;
+  };
 
   // Filter and search groups
   const filteredGroups = useMemo(() => {
@@ -150,6 +163,7 @@ export default function GroupsPage() {
 
   return (
     <div className="p-8 space-y-6">
+      <ReadOnlyBanner />
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold flex items-center gap-2">
@@ -165,7 +179,13 @@ export default function GroupsPage() {
             <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
-          <Button onClick={() => setCreateDialogOpen(true)} size="sm" className="gap-2">
+          <Button 
+            onClick={() => setCreateDialogOpen(true)} 
+            size="sm" 
+            className="gap-2"
+            disabled={isReadOnly}
+            title={isReadOnly ? "Disabled in read-only mode" : undefined}
+          >
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">Create Group</span>
             <span className="sm:hidden">Create</span>
@@ -228,7 +248,7 @@ export default function GroupsPage() {
                 <TableRow>
                   <TableHead>Name</TableHead>
                   <TableHead>Description</TableHead>
-                  <TableHead>Cluster/Node</TableHead>
+                  <TableHead>Node</TableHead>
                   <TableHead>Identities</TableHead>
                   <TableHead>Permissions</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
@@ -270,7 +290,10 @@ export default function GroupsPage() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={() => handleEdit(group)}>
+                          <DropdownMenuItem 
+                            onClick={() => handleEdit(group)}
+                            disabled={isReadOnly}
+                          >
                             <Edit className="h-4 w-4 mr-2" />
                             Edit Group
                           </DropdownMenuItem>
@@ -286,6 +309,7 @@ export default function GroupsPage() {
                           <DropdownMenuItem 
                             onClick={() => handleDelete(group)}
                             className="text-destructive focus:text-destructive"
+                            disabled={isReadOnly}
                           >
                             <Trash2 className="h-4 w-4 mr-2" />
                             Delete Group
@@ -346,15 +370,25 @@ export default function GroupsPage() {
                   TLS Identities ({selectedGroup.identities.tls.length})
                 </h4>
                 <div className="space-y-2">
-                  {selectedGroup.identities.tls.map((identity: string, index: number) => (
-                    <div 
-                      key={`tls-${index}`}
-                      className="flex items-center gap-2 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
-                    >
-                      <Shield className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-mono text-sm break-all">{identity}</span>
-                    </div>
-                  ))}
+                  {selectedGroup.identities.tls.map((identity: string, index: number) => {
+                    const identityName = getIdentityName(identity);
+                    return (
+                      <div 
+                        key={`tls-${index}`}
+                        className="flex flex-col gap-1 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <span className="font-medium text-sm">
+                            {identityName || "Unknown"}
+                          </span>
+                        </div>
+                        <span className="font-mono text-xs text-muted-foreground ml-6">
+                          {identity}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -367,15 +401,20 @@ export default function GroupsPage() {
                   OIDC Identities ({selectedGroup.identities.oidc.length})
                 </h4>
                 <div className="space-y-2">
-                  {selectedGroup.identities.oidc.map((identity: string, index: number) => (
-                    <div 
-                      key={`oidc-${index}`}
-                      className="flex items-center gap-2 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
-                    >
-                      <Users className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-mono text-sm break-all">{identity}</span>
-                    </div>
-                  ))}
+                  {selectedGroup.identities.oidc.map((identity: string, index: number) => {
+                    const identityName = getIdentityName(identity);
+                    return (
+                      <div 
+                        key={`oidc-${index}`}
+                        className="flex items-center gap-2 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
+                      >
+                        <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <span className="font-medium text-sm">
+                          {identityName || identity}
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}

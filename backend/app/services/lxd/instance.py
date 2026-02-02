@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 # Enterprise setting: 50 workers for high concurrency
 _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="instance_state_")
 
+# Cache failed nodes for 60 seconds to avoid repeated reconnection attempts
+_failed_nodes_cache: Dict[str, float] = {}
+_FAILED_NODE_CACHE_TTL = 60.0
+
 
 class InstanceManager:
     """
@@ -64,7 +68,7 @@ class InstanceManager:
         try:
             state_resp = client.api.instances[instance_name].state.get(
                 params={'project': project_name},
-                timeout=(3, 10)  # Faster timeout for parallel calls
+                timeout=(1, 3)  # Aggressive timeout for parallel calls
             )
             state_data = state_resp.json()['metadata']
             network_data = state_data.get('network', {})
@@ -193,14 +197,9 @@ class InstanceManager:
         """
         List all VMs across all configured LXD nodes and all projects.
         Returns tuple of (vm_list, connected_nodes).
-        Includes retry logic and optimized Vault calls.
-        Uses Vault as source of truth for node list to ensure auto-reconnection.
+        Uses PARALLEL fetching across nodes for better performance.
         """
-        all_vms: List[VMInfo] = []
-        connected_nodes: List[str] = []
-        
-        # Get nodes from Vault (source of truth) - NOT just cached connections
-        # This ensures we always try to connect/reconnect to all registered nodes
+        # Get nodes from Vault (source of truth)
         node_names = []
         if self.cert_manager:
             try:
@@ -208,166 +207,170 @@ class InstanceManager:
                 logger.debug(f"Found {len(node_names)} clusters in Vault: {node_names}")
             except Exception as e:
                 logger.warning(f"Could not list Vault clusters: {e}")
-                # Fallback to cached connections if Vault fails
                 node_names = self.connection_manager.get_node_names()
         else:
             node_names = self.connection_manager.get_node_names()
         
         if not node_names:
             logger.warning("No nodes found in Vault or connection manager")
-            return all_vms, connected_nodes
+            return [], []
         
         # Batch fetch all endpoints upfront to reduce Vault calls
         node_endpoints = self._get_all_node_endpoints(node_names)
         
-        for node_name in node_names:
-            retry_count = 0
-            max_retries = 2
-            client = None
-            
-            while retry_count <= max_retries:
-                try:
-                    client = self.connection_manager.get_client(node_name)
-                    
-                    # If client is None (stale connection), try to reconnect
-                    if client is None and self.cert_manager:
-                        logger.info(f"Connection to {node_name} is stale, attempting reconnect...")
-                        try:
-                            # Get cluster info and reconnect via connection_manager
-                            # This ensures the client is added back to _clients
-                            cluster_info = self.cert_manager.get_cluster_info(node_name)
-                            cert_data = self.cert_manager.get_cluster_certificate(node_name)
-                            
-                            client = self.connection_manager.connect_with_vault_cert(
-                                cluster_id=node_name,
-                                endpoint=cluster_info["metadata"]["endpoint"],
-                                cert_content=cert_data["client.crt"],
-                                key_content=cert_data["client.key"],
-                                verify=False
-                            )
-                            logger.info(f"Reconnected to {node_name} successfully")
-                        except Exception as e:
-                            logger.warning(f"Reconnect failed for {node_name}: {e}")
-                            client = None
-                    
-                    if client is not None:
-                        connected_nodes.append(node_name)
-                        break
-                    else:
-                        raise LXDConnectionError(f"Client is None for {node_name}")
-                        
-                except LXDConnectionError as e:
-                    retry_count += 1
-                    if retry_count > max_retries:
-                        logger.warning(f"Could not connect to node {node_name} after {max_retries} retries: {e}")
-                        break
-                    logger.info(f"Retrying connection to {node_name} ({retry_count}/{max_retries})...")
-                    self.connection_manager.cleanup_connection(node_name)
-                    time.sleep(0.5 * retry_count)
-                    continue
-            
-            if node_name not in connected_nodes:
+        # Fetch from all nodes in PARALLEL using thread pool
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(
+                _instance_executor,
+                self._fetch_vms_from_node,
+                node_name,
+                node_endpoints.get(node_name, "unknown")
+            )
+            for node_name in node_names
+        ]
+        
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Aggregate results
+        all_vms: List[VMInfo] = []
+        connected_nodes: List[str] = []
+        
+        for i, result in enumerate(results):
+            node_name = node_names[i]
+            if isinstance(result, Exception):
+                logger.warning(f"Error fetching VMs from {node_name}: {result}")
                 continue
             
-            try:
-                # client is already set from the loop above, reuse it
-                # Use pre-fetched endpoint to avoid additional Vault call
-                node_endpoint = node_endpoints.get(node_name, "unknown")
-                
-                # Verify client is still valid
-                if client is None:
-                    logger.warning(f"Client for {node_name} is None after connection loop, skipping")
-                    continue
-                
-                # Get all projects on this node
-                try:
-                    projects = client.projects.all()
-                    project_names = [p.name for p in projects]
-                    logger.debug(f"Found {len(project_names)} projects on {node_name}: {project_names}")
-                except Exception as e:
-                    logger.warning(f"Could not list projects on {node_name}, using default: {e}")
-                    project_names = ["default"]
-                
-                # Iterate through all projects
-                for project_name in project_names:
-                    try:
-                        # Get instances list for this project
-                        response = client.api.instances.get(params={'project': project_name, 'recursion': 1})
-                        instances_data = response.json()['metadata']
-                        
-                        logger.debug(f"Found {len(instances_data)} instances in project '{project_name}' on {node_name}")
-                        
-                        # Collect running instances that need state fetch
-                        running_instances = []
-                        for instance_data in instances_data:
-                            instance_status = instance_data.get('status', 'Unknown')
-                            if instance_status == 'Running':
-                                running_instances.append((instance_data.get('name', ''), project_name))
-                        
-                        # PARALLEL FETCH: Get state for all running instances concurrently
-                        instance_states = {}
-                        if running_instances:
-                            instance_states = self._fetch_instance_states_parallel(
-                                client, running_instances, node_name
-                            )
-                        
-                        # Process all instances with pre-fetched states
-                        for instance_data in instances_data:
-                            try:
-                                # Parse tags from config
-                                config_data = instance_data.get('config', {})
-                                tags_str = config_data.get('user.tags', '')
-                                tags = [tag.strip() for tag in tags_str.split(',') if tag.strip()] if tags_str else []
-                                
-                                instance_name = instance_data.get('name', '')
-                                instance_status = instance_data.get('status', 'Unknown')
-                                
-                                # Get pre-fetched IP addresses for running instances
-                                ip_addrs = instance_states.get(instance_name, [])
-                                
-                                vm_info = VMInfo(
-                                    name=instance_name,
-                                    status=parse_vm_status(
-                                        instance_status,
-                                        instance_data.get('status_code', 0)
-                                    ),
-                                    status_code=instance_data.get('status_code', 0),
-                                    ip_addresses=ip_addrs,
-                                    host=node_name,
-                                    host_endpoint=node_endpoint,
-                                    architecture=instance_data.get('architecture', ''),
-                                    created_at=instance_data.get('created_at'),
-                                    last_used_at=instance_data.get('last_used_at'),
-                                    description=instance_data.get('description', ''),
-                                    type=instance_data.get('type', 'container'),
-                                    resources=None,
-                                    config=config_data,
-                                    profiles=instance_data.get('profiles', []),
-                                    tags=tags,
-                                    project=project_name,
-                                )
-                                
-                                if vm_info.config is None:
-                                    vm_info.config = {}
-                                vm_info.config['project'] = project_name
-                                
-                                all_vms.append(vm_info)
-                            except Exception as e:
-                                logger.error(
-                                    f"Error processing instance in project '{project_name}' on {node_name}: {e}"
-                                )
-                    except Exception as e:
-                        logger.error(f"Error listing instances in project '{project_name}' on {node_name}: {e}")
-                        
-            except LXDConnectionError as e:
-                logger.warning(f"Could not connect to node {node_name}: {e}")
-            except Exception as e:
-                logger.error(f"Error listing VMs from {node_name}: {e}")
+            vms, connected = result
+            if connected:
+                connected_nodes.append(node_name)
+                all_vms.extend(vms)
         
-        # No need to check Vault clusters separately - we now use Vault as primary source
-        # All nodes from Vault are already processed in the loop above
-        
+        logger.info(f"Fetched {len(all_vms)} VMs from {len(connected_nodes)} nodes")
         return all_vms, connected_nodes
+    
+    def _fetch_vms_from_node(
+        self, 
+        node_name: str, 
+        node_endpoint: str
+    ) -> Tuple[List[VMInfo], bool]:
+        """
+        Fetch all VMs from a single node (synchronous, for thread pool execution).
+        Returns tuple of (vm_list, is_connected).
+        """
+        global _failed_nodes_cache
+        vms: List[VMInfo] = []
+        
+        # Check failed node cache first - skip recently failed nodes
+        if node_name in _failed_nodes_cache:
+            if time.time() - _failed_nodes_cache[node_name] < _FAILED_NODE_CACHE_TTL:
+                logger.debug(f"Skipping {node_name} - recently failed (cached)")
+                return [], False
+            else:
+                del _failed_nodes_cache[node_name]
+        
+        try:
+            # Try to get or reconnect client
+            client = self.connection_manager.get_client(node_name)
+            
+            if client is None and self.cert_manager:
+                try:
+                    cluster_info = self.cert_manager.get_cluster_info(node_name)
+                    cert_data = self.cert_manager.get_cluster_certificate(node_name)
+                    
+                    client = self.connection_manager.connect_with_vault_cert(
+                        cluster_id=node_name,
+                        endpoint=cluster_info["metadata"]["endpoint"],
+                        cert_content=cert_data["client.crt"],
+                        key_content=cert_data["client.key"],
+                        verify=False
+                    )
+                    logger.info(f"Reconnected to {node_name}")
+                except Exception as e:
+                    logger.warning(f"Reconnect failed for {node_name}: {e}")
+                    _failed_nodes_cache[node_name] = time.time()
+                    return [], False
+            
+            if client is None:
+                _failed_nodes_cache[node_name] = time.time()
+                return [], False
+            
+            # Get all projects on this node
+            try:
+                projects = client.projects.all()
+                project_names = [p.name for p in projects]
+            except Exception as e:
+                logger.warning(f"Could not list projects on {node_name}: {e}")
+                project_names = ["default"]
+            
+            # Iterate through all projects
+            for project_name in project_names:
+                try:
+                    response = client.api.instances.get(params={'project': project_name, 'recursion': 1})
+                    instances_data = response.json()['metadata']
+                    
+                    # Collect running instances for parallel state fetch
+                    running_instances = []
+                    for inst in instances_data:
+                        if inst.get('status') == 'Running':
+                            running_instances.append((inst.get('name', ''), project_name))
+                    
+                    # Parallel fetch states for running instances
+                    instance_states = {}
+                    if running_instances:
+                        instance_states = self._fetch_instance_states_parallel(
+                            client, running_instances, node_name
+                        )
+                    
+                    # Process all instances
+                    for instance_data in instances_data:
+                        try:
+                            config_data = instance_data.get('config', {})
+                            tags_str = config_data.get('user.tags', '')
+                            tags = [t.strip() for t in tags_str.split(',') if t.strip()] if tags_str else []
+                            
+                            instance_name = instance_data.get('name', '')
+                            ip_addrs = instance_states.get(instance_name, [])
+                            
+                            vm_info = VMInfo(
+                                name=instance_name,
+                                status=parse_vm_status(
+                                    instance_data.get('status', 'Unknown'),
+                                    instance_data.get('status_code', 0)
+                                ),
+                                status_code=instance_data.get('status_code', 0),
+                                ip_addresses=ip_addrs,
+                                host=node_name,
+                                host_endpoint=node_endpoint,
+                                architecture=instance_data.get('architecture', ''),
+                                created_at=instance_data.get('created_at'),
+                                last_used_at=instance_data.get('last_used_at'),
+                                description=instance_data.get('description', ''),
+                                type=instance_data.get('type', 'container'),
+                                resources=None,
+                                config=config_data,
+                                profiles=instance_data.get('profiles', []),
+                                tags=tags,
+                                project=project_name,
+                            )
+                            
+                            if vm_info.config is None:
+                                vm_info.config = {}
+                            vm_info.config['project'] = project_name
+                            
+                            vms.append(vm_info)
+                        except Exception as e:
+                            logger.error(f"Error processing instance on {node_name}: {e}")
+                            
+                except Exception as e:
+                    logger.error(f"Error listing instances in project '{project_name}' on {node_name}: {e}")
+            
+            return vms, True
+            
+        except Exception as e:
+            logger.warning(f"Error fetching VMs from {node_name}: {e}")
+            return [], False
     
     async def get_vm(self, name: str, host: str) -> Optional[VMInfo]:
         """Get a specific VM by name and host (searches all projects)."""

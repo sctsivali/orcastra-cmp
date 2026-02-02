@@ -127,6 +127,15 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
     return ((used / total) * 100).toFixed(0);
   };
 
+  // helper to get display name for node type
+  const getNodeTypeDisplay = (nodeType: string | null | undefined): string => {
+    if (!nodeType) return "LXD";
+    const type = nodeType.toLowerCase();
+    if (type === "incus") return "Incus";
+    if (type === "microcloud") return "MicroCloud";
+    return "LXD";
+  };
+
   const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
 
   return (
@@ -165,7 +174,7 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
                 <h3 className="font-semibold truncate">{node.display_name || node.name}</h3>
                 {node.node_type && (
                   <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
-                    {node.node_type.toLowerCase() === "microcloud" ? "MicroCloud" : "LXD"}
+                    {getNodeTypeDisplay(node.node_type)}
                   </Badge>
                 )}
               </div>
@@ -224,11 +233,11 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
             </span>
             {node.api_version && (
               <span>
-                <span className="font-medium">API:</span> {node.api_version}
+                <span className="font-medium">Hypervisor API:</span> {getNodeTypeDisplay(node.node_type)} {node.api_version}
               </span>
             )}
-            {/* LXD Version checker - works for both LXD and MicroCloud (which uses LXD internally) */}
-            <LXDVersionChecker currentVersion={node.server_version} />
+            {/* LXD/Incus Version checker - works for LXD, MicroCloud, and Incus */}
+            <LXDVersionChecker currentVersion={node.server_version} nodeType={node.node_type ?? undefined} />
           </div>
         )}
         {node.connected && node.resources && (
@@ -464,7 +473,7 @@ export function NodeStatusCards() {
                 </Badge>
               ) : (
                 <Badge variant="warning" className="text-xs">
-                  Some Nodes Offline
+                  Some nodes not connected
                 </Badge>
               )
             ) : (

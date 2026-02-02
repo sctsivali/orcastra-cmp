@@ -5,10 +5,12 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Trash2, Check, Key, ChevronRight, Activity, Settings2 } from "lucide-react";
+import { Trash2, Check, Key, ChevronRight, Activity, Settings2, Palette, Shield } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
+import { PersonalizationSettings } from "@/components/personalization-settings";
+import { IntegrationsSettings } from "@/components/integrations-settings";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -21,11 +23,24 @@ export default function SettingsPage() {
     setCleared(false);
     
     try {
-      // Clear all React Query cache
-      await queryClient.invalidateQueries();
+      // Clear backend cache (Redis + in-memory)
+      try {
+        await fetch('/api/system/cache/clear', { method: 'POST' });
+      } catch (backendError) {
+        console.warn("Backend cache clear failed (may be unavailable):", backendError);
+      }
       
-      // Also clear the query cache completely
+      // Clear all React Query cache (frontend)
+      await queryClient.invalidateQueries();
       queryClient.clear();
+      
+      // Clear any localStorage cache keys if exist
+      if (typeof window !== 'undefined') {
+        const keysToRemove = Object.keys(localStorage).filter(
+          key => key.startsWith('cache_') || key.startsWith('query_')
+        );
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+      }
       
       setCleared(true);
       
@@ -54,6 +69,14 @@ export default function SettingsPage() {
           <TabsTrigger value="general" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Settings2 className="h-4 w-4 shrink-0" />
             <span>General</span>
+          </TabsTrigger>
+          <TabsTrigger value="integrations" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
+            <Shield className="h-4 w-4 shrink-0" />
+            <span>Integrations</span>
+          </TabsTrigger>
+          <TabsTrigger value="personalization" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
+            <Palette className="h-4 w-4 shrink-0" />
+            <span>Personalization</span>
           </TabsTrigger>
           <TabsTrigger value="system-info" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Activity className="h-4 w-4 shrink-0" />
@@ -111,8 +134,9 @@ export default function SettingsPage() {
                 <div className="space-y-2">
                   <h3 className="text-sm font-semibold">Clear Application Cache</h3>
                   <p className="text-sm text-muted-foreground">
-                    Clear all cached data including nodes, instances, clusters, networks, and storage information. 
-                    This will force the application to fetch fresh data from all nodes on the next request.
+                    Clear all cached data from both frontend (React Query) and backend (Redis). 
+                    This includes nodes, instances, clusters, networks, and storage information. 
+                    Fresh data will be fetched on the next request.
                   </p>
                   <div className="flex items-center gap-3 pt-2">
                     <Button
@@ -153,6 +177,16 @@ export default function SettingsPage() {
         {/* System Info Tab */}
         <TabsContent value="system-info">
           <SystemResourceUsagePanel />
+        </TabsContent>
+
+        {/* Personalization Tab */}
+        <TabsContent value="personalization">
+          <PersonalizationSettings />
+        </TabsContent>
+
+        {/* Integrations Tab */}
+        <TabsContent value="integrations">
+          <IntegrationsSettings />
         </TabsContent>
       </Tabs>
     </div>

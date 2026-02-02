@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { LoadingLottieMedium } from "@/components/loading-lottie";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { 
   Server, 
   CheckCircle, 
@@ -16,7 +16,8 @@ import {
   Users,
   KeyRound,
   Copy,
-  Terminal
+  Terminal,
+  Shield
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,9 +39,12 @@ import {
 } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
 import { ClusterStatus, type ClusterInfo } from "@/types/api";
 import { useClusters, useCheckClusterAuth, useDeleteCluster, useRegenerateCert } from "@/hooks/use-lxd";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { ReadOnlyBanner } from "@/components/read-only-banner";
 
 const statusConfig = {
   [ClusterStatus.ONLINE]: {
@@ -81,7 +85,10 @@ export default function ClustersPage() {
   const clusters = (data as any)?.clusters || [];
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
   const [regenerateModal, setRegenerateModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
-  const [regeneratedCert, setRegeneratedCert] = React.useState<{identityName: string, certificate: string} | null>(null);
+  const [regeneratedCert, setRegeneratedCert] = React.useState<{identityName: string, certificate: string, cluster_type?: string} | null>(null);
+  const [deleteConfirmModal, setDeleteConfirmModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
+  const [deleteConfirmText, setDeleteConfirmText] = React.useState("");
+  const { isReadOnly } = useReadOnlyMode();
   
   const checkClusterAuth = useCheckClusterAuth();
   const deleteCluster = useDeleteCluster();
@@ -139,12 +146,13 @@ export default function ClustersPage() {
         const identityName = generateIdentityName(cluster.cluster_id);
         setRegeneratedCert({
           identityName,
-          certificate: response.certificate
+          certificate: response.certificate,
+          cluster_type: cluster.cluster_type || response.cluster_type  // Use existing or newly detected type
         });
         setRegenerateModal({open: true, cluster});
         toast({
           title: "Certificate Regenerated",
-          description: "Copy and run the command on your LXD server to add trust",
+          description: "Copy and run the command on your hypervisor server to add trust",
         });
       }
     } catch (error: any) {
@@ -220,19 +228,27 @@ export default function ClustersPage() {
     }
   };
 
-  const handleDelete = async (clusterId: string) => {
-    if (!confirm(`Are you sure you want to remove cluster ${clusterId}?`)) {
-      return;
-    }
+  const handleDeleteClick = (cluster: any) => {
+    setDeleteConfirmModal({ open: true, cluster });
+    setDeleteConfirmText("");
+  };
 
+  const handleDeleteConfirm = async () => {
+    if (!deleteConfirmModal.cluster) return;
+    const clusterId = deleteConfirmModal.cluster.cluster_id;
+    
     try {
       await deleteCluster.mutateAsync(clusterId);
       toast({
         title: "Cluster Removed",
         description: `Cluster ${clusterId} has been removed`,
       });
-      await new Promise(resolve => setTimeout(resolve, 100));
-      await refetch();
+      setDeleteConfirmModal({ open: false, cluster: null });
+      setDeleteConfirmText("");
+      // Wait a bit for backend cache to clear, then force fresh fetch
+      await new Promise(resolve => setTimeout(resolve, 300));
+      // Force page reload to ensure fresh data from backend with bypassed cache
+      window.location.reload();
     } catch (error: any) {
       toast({
         title: "Delete Failed",
@@ -242,8 +258,14 @@ export default function ClustersPage() {
     }
   };
 
+  // Full-page loading state
+  if (isLoading) {
+    return <LoadingLottiePage />;
+  }
+
   return (
     <div className="container py-8">
+      <ReadOnlyBanner />
       {/* Regenerate Certificate Modal */}
       <Dialog open={regenerateModal.open} onOpenChange={(open) => {
         if (!open) {
@@ -270,36 +292,48 @@ export default function ClustersPage() {
                   <p className="text-sm font-medium">
                     Run this command on your hypervisor server:
                   </p>
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs text-muted-foreground">
-                        Add trust with unique identity name <code className="bg-muted px-1 py-0.5 rounded">{regeneratedCert.identityName}</code>
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => {
-                          const cmd = `lxc config trust add --name ${regeneratedCert.identityName} - <<EOF\n${regeneratedCert.certificate}\nEOF`;
-                          copyToClipboard(cmd, "Command");
-                        }}
-                      >
-                        <Copy className="h-3 w-3 mr-1" />
-                        Copy
-                      </Button>
-                    </div>
-                    <pre className="bg-black text-green-400 p-3 rounded text-xs overflow-x-auto select-all cursor-text" onClick={(e) => {
-                      // Allow text selection by clicking anywhere on the pre
-                      const selection = window.getSelection();
-                      const range = document.createRange();
-                      range.selectNodeContents(e.currentTarget);
-                      selection?.removeAllRanges();
-                      selection?.addRange(range);
-                    }}>
-{`lxc config trust add --name ${regeneratedCert.identityName} - <<EOF
+                  
+                  {/* Dynamic CLI Command based on detected type */}
+                  {(() => {
+                    const isIncus = regeneratedCert.cluster_type === "Incus";
+                    const cliTool = isIncus ? "incus" : "lxc";
+                    const trustSubCmd = isIncus ? "add-certificate" : "add";
+                    const typeLabel = regeneratedCert.cluster_type || "LXD";
+                    const badgeVariant = isIncus ? "secondary" : "outline";
+                    
+                    return (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-muted-foreground">
+                            <Badge variant={badgeVariant} className="mr-2">{typeLabel}</Badge>
+                            Identity: <code className="bg-muted px-1 py-0.5 rounded">{regeneratedCert.identityName}</code>
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              const cmd = `cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${regeneratedCert.identityName}"\n${regeneratedCert.certificate}\nEOF`;
+                              copyToClipboard(cmd, `${typeLabel} Command`);
+                            }}
+                          >
+                            <Copy className="h-3 w-3 mr-1" />
+                            Copy
+                          </Button>
+                        </div>
+                        <pre className="bg-black text-green-400 p-3 rounded text-xs overflow-x-auto select-all cursor-text" onClick={(e) => {
+                          const selection = window.getSelection();
+                          const range = document.createRange();
+                          range.selectNodeContents(e.currentTarget);
+                          selection?.removeAllRanges();
+                          selection?.addRange(range);
+                        }}>
+{`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${regeneratedCert.identityName}"
 ${regeneratedCert.certificate}
 EOF`}
-                    </pre>
-                  </div>
+                        </pre>
+                      </div>
+                    );
+                  })()}
                 </AlertDescription>
               </Alert>
               
@@ -323,7 +357,7 @@ EOF`}
                         } else {
                           toast({
                             title: "Not Authenticated Yet",
-                            description: response.message || "Certificate not yet trusted. Please run the command on your LXD server.",
+                            description: response.message || "Certificate not yet trusted. Please run the command on your hypervisor server.",
                             variant: "destructive",
                           });
                           // Keep modal open for retry
@@ -341,7 +375,7 @@ EOF`}
                     }
                   }}
                   disabled={checkingAuth === regenerateModal.cluster?.cluster_id}
-                  className="flex-1 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700"
+                  className="flex-1"
                 >
                   {checkingAuth === regenerateModal.cluster?.cluster_id ? (
                     <>
@@ -377,15 +411,28 @@ EOF`}
             Manage hypervisor clusters
           </p>
         </div>
-        <Button
-          onClick={() => router.push("/register-node")}
-          className="gap-2 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 shrink-0"
-          size="sm"
-        >
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Register Cluster</span>
-          <span className="sm:hidden">Register</span>
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => router.push("/inventory/clusters/certificates")}
+            className="gap-2 shrink-0"
+            size="sm"
+          >
+            <Shield className="h-4 w-4" />
+            <span className="hidden sm:inline">Certificates</span>
+          </Button>
+          <Button
+            onClick={() => router.push("/register-node")}
+            className="gap-2 shrink-0"
+            size="sm"
+            disabled={isReadOnly}
+            title={isReadOnly ? "Disabled in read-only mode" : undefined}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Register Cluster</span>
+            <span className="sm:hidden">Register</span>
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -409,11 +456,7 @@ EOF`}
           </div>
         </CardHeader>
         <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <LoadingLottieMedium />
-            </div>
-          ) : clusters.length === 0 ? (
+          {clusters.length === 0 ? (
             <div className="text-center py-12">
               <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold mb-2">No Clusters Registered</h3>
@@ -522,8 +565,9 @@ EOF`}
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => handleDelete(cluster.cluster_id)}
-                            title="Delete Cluster"
+                            onClick={() => handleDeleteClick(cluster)}
+                            title={isReadOnly ? "Disabled in read-only mode" : "Delete Cluster"}
+                            disabled={isReadOnly}
                           >
                             <Trash2 className="h-4 w-4 text-destructive" />
                           </Button>
@@ -537,6 +581,73 @@ EOF`}
           )}
         </CardContent>
       </Card>
+
+      {/* Delete Confirmation Modal */}
+      <Dialog 
+        open={deleteConfirmModal.open} 
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteConfirmModal({ open: false, cluster: null });
+            setDeleteConfirmText("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Remove Cluster Registration
+            </DialogTitle>
+            <DialogDescription>
+              This will remove the cluster 
+              <strong className="text-foreground"> {deleteConfirmModal.cluster?.display_name || deleteConfirmModal.cluster?.cluster_id}</strong> from 
+              this dashboard. Only the connection settings, certificates, and metadata stored in the dashboard will be deleted.
+              <span className="block mt-2 text-muted-foreground text-xs">
+                Note: Your actual instances, VMs, containers, and data on the hypervisor server will NOT be affected.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-2">
+            <Alert variant="destructive">
+              <AlertDescription>
+                To confirm, type <strong>DELETE {deleteConfirmModal.cluster?.cluster_id?.toUpperCase()}</strong> below.
+              </AlertDescription>
+            </Alert>
+            
+            <div className="space-y-2">
+              <Label htmlFor="confirmDelete">Confirmation</Label>
+              <Input
+                id="confirmDelete"
+                placeholder={`Type DELETE ${deleteConfirmModal.cluster?.cluster_id?.toUpperCase() || ''} to confirm`}
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                className="font-mono"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3 mt-4">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteConfirmModal({ open: false, cluster: null });
+                setDeleteConfirmText("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteConfirm}
+              disabled={deleteConfirmText !== `DELETE ${deleteConfirmModal.cluster?.cluster_id?.toUpperCase()}`}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              Remove Cluster
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

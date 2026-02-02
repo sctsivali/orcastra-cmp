@@ -4,8 +4,10 @@ Provides endpoints for listing and creating projects.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List
+from typing import List, Optional, Tuple
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
     ProjectInfo,
@@ -28,6 +30,9 @@ from app.core.cache import get_cache_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
+
+# Shared thread pool for blocking operations
+_projects_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="projects_")
 
 
 def _parse_size_to_bytes(size_str: str) -> int:
@@ -66,38 +71,50 @@ async def list_all_projects(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all projects across all LXD nodes."""
-    # Try cache first (30 second cache)
+    # Try cache first (180 second cache)
     cache = get_cache_manager()
     cache_key = "projects:list:all"
     cached_response = cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached projects list")
-        # Reconstruct from cached dict
         return [ProjectListResponse(**item) for item in cached_response]
     
     try:
-        all_projects = []
         node_names = lxd_service.get_node_names()
-        logger.info(f"Fetching projects from {len(node_names)} nodes: {node_names}")
+        logger.info(f"Fetching projects from {len(node_names)} nodes in parallel")
         
-        for host in node_names:
+        # Helper to fetch projects for a single host
+        async def fetch_host_projects(host: str) -> Optional[ProjectListResponse]:
             try:
                 projects_data = await lxd_service.list_projects(host)
                 projects = [ProjectInfo(**proj) for proj in projects_data]
-                
-                all_projects.append(ProjectListResponse(
+                return ProjectListResponse(
                     host=host,
                     projects=projects,
                     total=len(projects),
-                ))
+                )
             except Exception as e:
                 logger.warning(f"Could not list projects from {host}: {e}")
-                continue
+                return None
         
-        # Cache for 120 seconds (enterprise TTL)
+        # Fetch from all nodes in parallel
+        results = await asyncio.gather(
+            *[fetch_host_projects(host) for host in node_names],
+            return_exceptions=True
+        )
+        
+        # Filter valid results
+        all_projects = []
+        for result in results:
+            if isinstance(result, ProjectListResponse):
+                all_projects.append(result)
+            elif isinstance(result, Exception):
+                logger.warning(f"Project fetch error: {result}")
+        
+        # Cache for 180 seconds (TTL)
         cache_data = [proj.model_dump() for proj in all_projects]
         cache.set("api_responses", cache_key, cache_data, ttl=180)
-        logger.debug("Cached projects list for 120 seconds")
+        logger.debug("Cached projects list for 180 seconds")
         
         return all_projects
         

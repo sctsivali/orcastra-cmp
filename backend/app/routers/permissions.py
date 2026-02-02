@@ -33,8 +33,10 @@ class IdentityInfo(BaseModel):
     """Identity information."""
     id: str = Field(..., description="Identity ID")
     name: str = Field("", description="Identity name")
-    type: str = Field("", description="Identity type")
+    type: str = Field("", description="Identity type (display name)")
+    auth_type: str = Field("", description="Authentication type for API (tls or oidc)")
     groups: List[str] = Field(default_factory=list, description="Groups this identity belongs to")
+    node: str = Field("", description="Node/cluster this identity belongs to")
 
 
 class GroupIdentities(BaseModel):
@@ -72,6 +74,15 @@ class IdentityAddRequest(BaseModel):
     identity_id: str = Field(..., description="Identity ID or name to add")
 
 
+def _get_auth_type_from_type(identity_type: str) -> str:
+    """Map identity type display name to API auth type."""
+    type_lower = identity_type.lower()
+    if "oidc" in type_lower:
+        return "oidc"
+    # Default to tls for certificate-based types
+    return "tls"
+
+
 def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> List[IdentityInfo]:
     """Fetch identities for a single node - runs in thread pool."""
     identities = []
@@ -88,11 +99,14 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> List[
                     if groups_list is None:
                         groups_list = []
                     
+                    identity_type = identity_data.get('type', '')
                     identities.append(IdentityInfo(
                         id=identity_data.get('id', ''),
                         name=identity_data.get('name', ''),
-                        type=identity_data.get('type', ''),
-                        groups=groups_list
+                        type=identity_type,
+                        auth_type=_get_auth_type_from_type(identity_type),
+                        groups=groups_list,
+                        node=node_name
                     ))
                 except Exception as e:
                     logger.error(f"Error parsing identity data: {e}")

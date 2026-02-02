@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.core.vault_client import get_vault_client, VaultClient, VaultClientError
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
 from app.core.dependencies import check_read_only_mode
-from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type
+from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +102,11 @@ async def register_cluster(
         settings = get_settings()
         cluster_id = request.cluster_id
         
-        # Step 1: No pre-detection for unauthenticated clusters
-        # Type will be properly detected after authentication via check-auth endpoint.
-        # This prevents showing incorrect "LXD" or "MicroCloud" labels before trust is added.
-        cluster_type = None  # Will be detected after authentication
-        logger.info(f"Cluster {request.cluster_id} registered. Type will be detected after authentication/trust is added.")
+        # Step 1: Pre-auth type detection from /1.0 API endpoint
+        # The /1.0 endpoint returns metadata (including api_extensions) even without auth
+        # This allows us to detect Incus vs LXD before trust is established
+        cluster_type, raw_metadata = await detect_hypervisor_type_from_endpoint(request.endpoint)
+        logger.info(f"Pre-auth type detection for {cluster_id}: {cluster_type}")
         
         # Step 2: Save metadata with auto-detected type
         logger.info(f"Saving metadata for cluster {cluster_id}")
@@ -151,14 +151,18 @@ async def register_cluster(
             # Get certificate PEM for user to copy-paste
             certificate_pem = cert_data.get("cert")
             
+            # Build CLI-friendly message based on detected type
+            cli_tool = "incus" if cluster_type == "Incus" else "lxc"
+            
             return ClusterRegisterResponse(
                 success=True,
-                message="Certificate generated! Copy and paste it into your LXD Web UI to complete trust setup. Cluster type will be detected after authentication.",
+                message=f"Certificate generated! Run the {cli_tool} command to add trust. Detected hypervisor: {cluster_type}.",
                 cluster_id=cluster_id,
                 status=ClusterStatus.NOT_AUTHORIZED,
                 certificate_generated=True,
                 trust_added=False,
-                certificate=certificate_pem
+                certificate=certificate_pem,
+                cluster_type=cluster_type
             )
                 
         except LXDCertManagerError as e:
@@ -169,7 +173,8 @@ async def register_cluster(
                 cluster_id=cluster_id,
                 status=ClusterStatus.ERROR,
                 certificate_generated=False,
-                trust_added=False
+                trust_added=False,
+                cluster_type=cluster_type
             )
         
     except LXDCertManagerError as e:
@@ -564,7 +569,7 @@ async def delete_cluster(
         logger.info(f"Starting deletion of cluster {cluster_id}")
         
         # Step 1: Delete data paths (soft delete in KV v2)
-        for subpath in ["metadata", "secrets", "certs"]:
+        for subpath in ["metadata", "secrets", "certs", "pending_certs"]:
             try:
                 vault.vault_delete(f"{base_path}/{cluster_id}/{subpath}")
                 logger.info(f"Deleted data for {subpath} of {cluster_id}")
@@ -573,7 +578,7 @@ async def delete_cluster(
         
         # Step 2: Delete metadata for each subpath to remove from KV v2
         # KV v2 requires deleting BOTH data and metadata paths
-        for subpath in ["metadata", "secrets", "certs"]:
+        for subpath in ["metadata", "secrets", "certs", "pending_certs"]:
             try:
                 metadata_subpath = f"secret/metadata/clusters/{cluster_id}/{subpath}"
                 vault.vault_delete_metadata(metadata_subpath)
@@ -675,6 +680,24 @@ async def regenerate_certificate(
     try:
         settings = get_settings()
         
+        # Get cluster info to retrieve endpoint and detect type
+        info = cert_manager.get_cluster_info(cluster_id)
+        if not info:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Cluster {cluster_id} not found"
+            )
+        
+        endpoint = info.get("metadata", {}).get("endpoint", "")
+        stored_type = info.get("metadata", {}).get("type")
+        
+        # Re-detect type from endpoint for accuracy (in case it changed or wasn't set)
+        cluster_type = stored_type
+        if endpoint:
+            detected_type, _ = await detect_hypervisor_type_from_endpoint(endpoint)
+            cluster_type = detected_type
+            logger.info(f"Regenerate cert: detected type for {cluster_id}: {detected_type}")
+        
         # Generate new certificate
         cert_data = cert_manager.generate_and_store_certificate(
             cluster_id=cluster_id,
@@ -683,17 +706,20 @@ async def regenerate_certificate(
         )
         
         # Get the certificate to return in response
-        # The generate_and_store_certificate returns dict with keys: cert, key, ca
         certificate_pem = cert_data.get("cert", "")
+        
+        # Build CLI-friendly message based on detected type
+        cli_tool = "incus" if cluster_type == "Incus" else "lxc"
         
         return ClusterRegisterResponse(
             success=True,
-            message="Certificate regenerated successfully. Please re-add trust to LXD server.",
+            message=f"Certificate regenerated! Run the {cli_tool} command to re-add trust. Detected: {cluster_type}.",
             cluster_id=cluster_id,
             status=ClusterStatus.NOT_AUTHORIZED,
             certificate_generated=True,
             trust_added=False,
-            certificate=certificate_pem
+            certificate=certificate_pem,
+            cluster_type=cluster_type
         )
         
     except LXDCertManagerError as e:

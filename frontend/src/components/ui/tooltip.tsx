@@ -21,7 +21,8 @@ const TooltipContent = React.forwardRef<
     collisionPadding={8}
     avoidCollisions={true}
     className={cn(
-      "z-50 overflow-hidden rounded-md border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md",
+      // z-[100002] to appear above dialogs (z-[100001])
+      "z-[100002] overflow-hidden rounded-md border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md",
       // Max width for mobile
       "max-w-[calc(100vw-2rem)]",
       // Animations

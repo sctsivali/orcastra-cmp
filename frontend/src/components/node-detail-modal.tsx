@@ -49,6 +49,15 @@ export function NodeDetailModal({
     return ((used / total) * 100).toFixed(1);
   };
 
+  // helper to get display name for node type
+  const getNodeTypeDisplay = (nodeType: string | null | undefined): string => {
+    if (!nodeType) return "LXD";
+    const type = nodeType.toLowerCase();
+    if (type === "incus") return "INCUS";
+    if (type === "microcloud") return "MICROCLOUD";
+    return "LXD";
+  };
+
   const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
   
   // Determine if node is truly connected (authenticated) or just pending trust
@@ -77,7 +86,7 @@ export function NodeDetailModal({
                 {node.display_name || node.name}
                 {node.node_type && (
                   <Badge variant="outline" className="text-xs">
-                    {node.node_type.toLowerCase() === "microcloud" ? "MICROCLOUD" : "LXD"}
+                    {getNodeTypeDisplay(node.node_type)}
                   </Badge>
                 )}
                 {isPendingTrust && (
@@ -315,6 +324,7 @@ export function NodeDetailModal({
               <CardContent>
                 {node.resources && node.resources.gpu_total > 0 ? (
                   <div className="space-y-4">
+                    {/* Summary */}
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <p className="text-sm font-medium text-muted-foreground">
@@ -366,6 +376,170 @@ export function NodeDetailModal({
                         </div>
                       </div>
                     </div>
+
+                    {/* Detailed GPU Cards */}
+                    {node.resources.gpu_cards && node.resources.gpu_cards.length > 0 && (
+                      <div className="pt-4 border-t">
+                        <h4 className="text-sm font-semibold mb-3">
+                          GPU Cards Detail
+                        </h4>
+                        <div className="space-y-4">
+                          {node.resources.gpu_cards.map((gpu, index) => (
+                            <div
+                              key={index}
+                              className={cn(
+                                "border rounded-lg p-4 space-y-3",
+                                gpu.in_use
+                                  ? "border-purple-500/50 bg-purple-500/5"
+                                  : "border-border"
+                              )}
+                            >
+                              {/* GPU Header */}
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2">
+                                    <p className="font-semibold text-base">
+                                      {gpu.nvidia?.model || gpu.product || `GPU ${gpu.index}`}
+                                    </p>
+                                    {gpu.in_use ? (
+                                      <Badge variant="default" className="bg-purple-600 text-xs">
+                                        In Use
+                                      </Badge>
+                                    ) : (
+                                      <Badge variant="secondary" className="text-xs">
+                                        Available
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  {gpu.vendor && (
+                                    <p className="text-sm text-muted-foreground">
+                                      {gpu.vendor}
+                                    </p>
+                                  )}
+                                  {gpu.used_by && (
+                                    <p className="text-xs text-purple-500 mt-1">
+                                      Used by: {gpu.used_by}
+                                    </p>
+                                  )}
+                                </div>
+                                {gpu.nvidia?.brand && (
+                                  <Badge variant="outline" className="text-xs">
+                                    {gpu.nvidia.brand}
+                                  </Badge>
+                                )}
+                              </div>
+
+                              {/* GPU Details Grid */}
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                                {gpu.driver && (
+                                  <div>
+                                    <p className="text-muted-foreground text-xs">Driver</p>
+                                    <p className="font-medium">{gpu.driver}</p>
+                                    {gpu.driver_version && (
+                                      <p className="text-xs text-muted-foreground">v{gpu.driver_version}</p>
+                                    )}
+                                  </div>
+                                )}
+                                {gpu.pci_address && (
+                                  <div>
+                                    <p className="text-muted-foreground text-xs">PCI Address</p>
+                                    <p className="font-mono text-xs">{gpu.pci_address}</p>
+                                  </div>
+                                )}
+                                {gpu.vendor_id && gpu.product_id && (
+                                  <div>
+                                    <p className="text-muted-foreground text-xs">Device ID</p>
+                                    <p className="font-mono text-xs">{gpu.vendor_id}:{gpu.product_id}</p>
+                                  </div>
+                                )}
+                                {gpu.numa_node !== undefined && gpu.numa_node !== null && (
+                                  <div>
+                                    <p className="text-muted-foreground text-xs">NUMA Node</p>
+                                    <p className="font-medium">{gpu.numa_node}</p>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* NVIDIA-specific info */}
+                              {gpu.nvidia && (
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm pt-2 border-t border-dashed">
+                                  {gpu.nvidia.cuda_version && (
+                                    <div>
+                                      <p className="text-muted-foreground text-xs">CUDA</p>
+                                      <p className="font-medium">{gpu.nvidia.cuda_version}</p>
+                                    </div>
+                                  )}
+                                  {gpu.nvidia.architecture && (
+                                    <div>
+                                      <p className="text-muted-foreground text-xs">Architecture</p>
+                                      <p className="font-medium">{gpu.nvidia.architecture}</p>
+                                    </div>
+                                  )}
+                                  {gpu.nvidia.nvrm_version && (
+                                    <div>
+                                      <p className="text-muted-foreground text-xs">NVRM Version</p>
+                                      <p className="font-mono text-xs">{gpu.nvidia.nvrm_version}</p>
+                                    </div>
+                                  )}
+                                  {gpu.nvidia.uuid && (
+                                    <div className="col-span-2 md:col-span-4">
+                                      <p className="text-muted-foreground text-xs">UUID</p>
+                                      <p className="font-mono text-xs break-all">{gpu.nvidia.uuid}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* DRM info */}
+                              {gpu.drm && gpu.drm.card_name && (
+                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-2 border-t border-dashed">
+                                  <div>
+                                    <p className="text-muted-foreground text-xs">DRM Card</p>
+                                    <p className="font-mono text-xs">{gpu.drm.card_name}</p>
+                                  </div>
+                                  {gpu.drm.render_name && (
+                                    <div>
+                                      <p className="text-muted-foreground text-xs">Render Device</p>
+                                      <p className="font-mono text-xs">{gpu.drm.render_name}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* SR-IOV info */}
+                              {gpu.sriov && gpu.sriov.maximum_vfs > 0 && (
+                                <div className="grid grid-cols-3 gap-3 text-sm pt-2 border-t border-dashed">
+                                  <div>
+                                    <p className="text-muted-foreground text-xs">SR-IOV VFs</p>
+                                    <p className="font-medium">{gpu.sriov.current_vfs} / {gpu.sriov.maximum_vfs}</p>
+                                  </div>
+                                  {gpu.sriov.vfs_count > 0 && (
+                                    <div>
+                                      <p className="text-muted-foreground text-xs">Active VFs</p>
+                                      <p className="font-medium">{gpu.sriov.vfs_count}</p>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* mdev profiles */}
+                              {gpu.mdev_profiles && gpu.mdev_profiles.length > 0 && (
+                                <div className="pt-2 border-t border-dashed">
+                                  <p className="text-muted-foreground text-xs mb-2">vGPU Profiles</p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {gpu.mdev_profiles.map((profile, pIdx) => (
+                                      <Badge key={pIdx} variant="outline" className="text-xs">
+                                        {profile.name} ({profile.available} available)
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="text-center py-8">

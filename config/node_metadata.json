@@ -20,24 +20,24 @@
   "test-final": {
     "display_name": "Test Final"
   },
-  "nuc-industrial": {
-    "display_name": "NUC Industrial",
+  "intel-nuc-1": {
+    "display_name": "Intel NUC 1",
     "type": "lxd"
   },
-  "cyber-argon-2": {
-    "display_name": "Central-2",
+  "jetson-sctlab": {
+    "display_name": "Jetson Pandora SCT Lab",
+    "type": "lxd"
+  },
+  "jetson-nx-ecobyteslab": {
+    "display_name": "Jetson NX EcoBytes Lab",
     "type": "microcloud"
   },
-  "hetzner": {
-    "display_name": "Hetzner",
+  "jetson-orin-ecobyteslab": {
+    "display_name": "Jetson Orin EcoBytes Lab",
     "type": "lxd"
   },
-  "nuc-intel-1": {
-    "display_name": "NUC Intel 1",
-    "type": "lxd"
-  },
-  "central1": {
-    "display_name": "central1",
+  "nuc-industrial": {
+    "display_name": "NUC Industrial",
     "type": "lxd"
   }
 }

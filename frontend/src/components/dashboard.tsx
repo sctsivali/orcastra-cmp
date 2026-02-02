@@ -1,9 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag } from "lucide-react";
+import Link from "next/link";
+import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LoadingLottieSmall } from "@/components/loading-lottie";
+import { LoadingLottieSmall, LoadingLottieMediumEnhanced, LoadingLottiePage } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
 import { StatsOverview } from "@/components/stats-overview";
@@ -53,10 +54,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useVMs, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateProject, useUpdateInstanceTags, useUpdateProjectTags, useClusters } from "@/hooks/use-lxd";
+import { useInstances, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateProject, useUpdateInstanceTags, useUpdateProjectTags, useClusters, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useTerminalStore } from "@/lib/terminal-store";
+import { useConsoleStore } from "@/lib/console-store";
 import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
 
 interface ProjectsSectionProps {
@@ -110,7 +113,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
         host: vm.host,
         instanceName: vm.name,
         tags: newTags,
-        project: vm.config?.project || "default",
+        project: vm.project || "default",
       });
       toast({
         title: "Tags Updated",
@@ -363,6 +366,53 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                 </Button>
               </TooltipTrigger>
               <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Restart"}</TooltipContent>
+            </Tooltip>
+
+            {/* Terminal */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => {
+                    useTerminalStore.getState().openTerminal({
+                      instanceName: vm.name,
+                      host: vm.host,
+                      project: vm.project || "default",
+                    });
+                  }}
+                  disabled={!isRunning}
+                  title={!isRunning ? "Instance must be running" : "Open Terminal"}
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{!isRunning ? "Instance must be running" : "Open Terminal"}</TooltipContent>
+            </Tooltip>
+
+            {/* Console */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={() => {
+                    useConsoleStore.getState().openConsole({
+                      instanceName: vm.name,
+                      instanceType: vm.type,
+                      host: vm.host,
+                      project: vm.project || "default",
+                    });
+                  }}
+                  disabled={!isRunning}
+                  title={!isRunning ? "Instance must be running" : "Open Console"}
+                >
+                  <Monitor className="h-3.5 w-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{!isRunning ? "Instance must be running" : "Open Console"}</TooltipContent>
             </Tooltip>
 
             {/* Delete */}
@@ -1046,7 +1096,7 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
 
   const getProjectInstances = (host: string, projectName: string) => {
     return vmsData.filter(vm => 
-      vm.host === host && (vm.config?.project || "default") === projectName
+      vm.host === host && (vm.project || "default") === projectName
     );
   };
 
@@ -1199,9 +1249,9 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {projectsLoading ? (
-          [...Array(6)].map((_, i) => (
-            <Skeleton key={i} className="h-32" />
-          ))
+          <div className="col-span-full">
+            <LoadingLottieMediumEnhanced showProgress={true} />
+          </div>
         ) : (
           <>
             {projectsData?.map((nodeProjects) =>
@@ -1248,8 +1298,162 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
   );
 }
 
+// Alarm Statistics Component
+function AlarmStatistics() {
+  const { data: warningsData } = useWarnings();
+  const { data: systemWarnings } = useSystemWarnings();
+  
+  const actualWarnings = (warningsData as any)?.warnings || [];
+  const certWarnings = systemWarnings?.certificate_warnings || [];
+  const nodeWarnings = systemWarnings?.node_warnings || [];
+  
+  // Count warnings by severity
+  const counts = React.useMemo(() => {
+    const result = { critical: 0, high: 0, warning: 0, info: 0, total: 0, certIssues: 0, inactiveNodes: 0 };
+    
+    actualWarnings.forEach((w: any) => {
+      result.total++;
+      const severity = (w.severity || '').toLowerCase();
+      if (severity === 'critical' || severity === 'error') result.critical++;
+      else if (severity === 'high') result.high++;
+      else if (severity === 'warning' || severity === 'medium') result.warning++;
+      else result.info++;
+    });
+    
+    certWarnings.forEach((w: any) => {
+      result.total++;
+      result.certIssues++;
+      if (w.severity === 'critical') result.critical++;
+      else if (w.severity === 'high') result.high++;
+      else result.warning++;
+    });
+    
+    nodeWarnings.forEach(() => {
+      result.total++;
+      result.inactiveNodes++;
+      result.critical++;
+    });
+    
+    return result;
+  }, [actualWarnings, certWarnings, nodeWarnings]);
+
+  // Don't render if no warnings
+  if (counts.total === 0) {
+    return null;
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <div>
+          <CardTitle className="text-lg">System Alerts</CardTitle>
+          <p className="text-sm text-muted-foreground">Active warnings requiring attention</p>
+        </div>
+        <Link 
+          href="/inventory/warnings" 
+          className="text-sm text-primary hover:underline flex items-center gap-1"
+        >
+          View All ({counts.total})
+          <ChevronRight className="h-4 w-4" />
+        </Link>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {/* Critical */}
+          <Link 
+            href="/inventory/warnings?severity=critical" 
+            className="flex items-center gap-3 p-3 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
+              <Flame className="h-4 w-4 text-red-500" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-red-600">{counts.critical}</p>
+              <p className="text-xs text-muted-foreground">Critical</p>
+            </div>
+          </Link>
+
+          {/* Major/High */}
+          <Link 
+            href="/inventory/warnings?severity=high" 
+            className="flex items-center gap-3 p-3 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
+              <ShieldAlert className="h-4 w-4 text-orange-500" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-orange-600">{counts.high}</p>
+              <p className="text-xs text-muted-foreground">Major</p>
+            </div>
+          </Link>
+
+          {/* Warning */}
+          <Link 
+            href="/inventory/warnings?severity=warning" 
+            className="flex items-center gap-3 p-3 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
+              <AlertTriangle className="h-4 w-4 text-yellow-500" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-yellow-600">{counts.warning}</p>
+              <p className="text-xs text-muted-foreground">Warning</p>
+            </div>
+          </Link>
+
+          {/* Info */}
+          <Link 
+            href="/inventory/warnings?severity=low" 
+            className="flex items-center gap-3 p-3 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
+              <Info className="h-4 w-4 text-blue-500" />
+            </div>
+            <div>
+              <p className="text-xl font-bold text-blue-600">{counts.info}</p>
+              <p className="text-xs text-muted-foreground">Info</p>
+            </div>
+          </Link>
+
+          {/* Cert Issues */}
+          {counts.certIssues > 0 && (
+            <Link 
+              href="/inventory/clusters/certificates"
+              className="flex items-center gap-3 p-3 rounded-lg border bg-purple-500/5 border-purple-500/20 hover:bg-purple-500/10 hover:border-purple-500/40 transition-all cursor-pointer group"
+            >
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-500/10 group-hover:bg-purple-500/20 transition-colors">
+                <Shield className="h-4 w-4 text-purple-500" />
+              </div>
+              <div>
+                <p className="text-xl font-bold text-purple-600">{counts.certIssues}</p>
+                <p className="text-xs text-muted-foreground">Cert Issues</p>
+              </div>
+            </Link>
+          )}
+
+          {/* Inactive Nodes */}
+          {counts.inactiveNodes > 0 && (
+            <Link 
+              href="/inventory/warnings"
+              className="flex items-center gap-3 p-3 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
+            >
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">
+                <WifiOff className="h-4 w-4 text-rose-500" />
+              </div>
+              <div>
+                <p className="text-xl font-bold text-rose-600">{counts.inactiveNodes}</p>
+                <p className="text-xs text-muted-foreground">Inactive</p>
+              </div>
+            </Link>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function Dashboard() {
-  const { data: vmsData, isLoading: vmsLoading, refetch, isRefetching, dataUpdatedAt } = useVMs();
+  const { data: vmsData, isLoading: vmsLoading, refetch, isRefetching, dataUpdatedAt } = useInstances();
   const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
   const { data: clustersData, isLoading: clustersLoading } = useClusters();
 
@@ -1265,14 +1469,22 @@ export function Dashboard() {
   // calculate instance count per project
   const projectInstanceCounts = new Map<string, number>();
   vmsData?.vms.forEach((vm) => {
-    const projectKey = `${vm.host}:${vm.config?.project || "default"}`;
+    const projectKey = `${vm.host}:${vm.project || "default"}`;
     projectInstanceCounts.set(projectKey, (projectInstanceCounts.get(projectKey) || 0) + 1);
   });
+
+  // Full-page loading state when initial data is loading
+  if (vmsLoading && projectsLoading && clustersLoading) {
+    return <LoadingLottiePage />;
+  }
 
   return (
     <div className="space-y-8">
       {/* Stats Overview */}
       <StatsOverview data={vmsData} clustersData={clustersData} isLoading={vmsLoading} clustersLoading={clustersLoading} />
+
+      {/* Alarm Statistics - Only shows when there are warnings */}
+      <AlarmStatistics />
 
       {/* Nodes Status */}
       <NodeStatusCards />

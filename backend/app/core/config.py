@@ -36,9 +36,9 @@ class Settings(BaseSettings):
     
     # CORS Settings
     cors_origins: str = Field(
-        default="http://localhost:2025,http://localhost:3000",
+        default="",
         alias="CORS_ORIGINS",
-        description="Comma-separated list of allowed origins for CORS"
+        description="Comma-separated list of allowed origins for CORS (REQUIRED in production)"
     )
     
     # Security Settings
@@ -66,9 +66,9 @@ class Settings(BaseSettings):
         description="Enable Vault integration for certificate management"
     )
     vault_addr: str = Field(
-        default="http://10.62.42.122:8200",
+        default="",
         alias="VAULT_ADDR",
-        description="HashiCorp Vault server address"
+        description="HashiCorp Vault server address (REQUIRED when VAULT_ENABLED=true)"
     )
     vault_token: Optional[str] = Field(
         default=None,
@@ -113,9 +113,9 @@ class Settings(BaseSettings):
         description="Base64-encoded Fernet encryption key for Redis cache. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
     )
     secret_key: str = Field(
-        default="orcastra-dashboard-secret-change-in-production",
+        default="",
         alias="SECRET_KEY",
-        description="Secret key for general encryption (used to derive Redis encryption key if REDIS_ENCRYPTION_KEY not set)"
+        description="Secret key for general encryption (REQUIRED - generate with: openssl rand -hex 32)"
     )
     cache_ttl_vault_metadata: int = Field(
         default=600,

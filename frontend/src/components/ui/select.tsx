@@ -72,9 +72,10 @@ const SelectContent = React.forwardRef<
     <SelectPrimitive.Content
       ref={ref}
       className={cn(
-        "relative z-50 min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md",
-        // Max height with dvh for mobile compatibility
-        "max-h-[50dvh] max-h-96",
+        // z-[100002] to appear above dialogs (z-[100001])
+        "relative z-[100002] min-w-[8rem] overflow-hidden rounded-md border bg-popover text-popover-foreground shadow-md",
+        // Max height - use min() for browser compatibility (dvh with fallback)
+        "max-h-[min(50dvh,24rem)]",
         // Max width for mobile
         "max-w-[calc(100vw-2rem)]",
         // Prevent scroll issues

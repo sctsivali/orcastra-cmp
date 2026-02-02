@@ -53,12 +53,12 @@ export default function IPAMPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
 
   const networks = useMemo(() => {
-    const networkSet = new Set(allocations.map((a: any) => a.network));
+    const networkSet = new Set(allocations.map((a: any) => a.network).filter(Boolean));
     return Array.from(networkSet).sort();
   }, [allocations]);
 
   const types = useMemo(() => {
-    const typeSet = new Set(allocations.map((a: any) => a.type));
+    const typeSet = new Set(allocations.map((a: any) => a.type).filter(Boolean));
     return Array.from(typeSet).sort();
   }, [allocations]);
 
