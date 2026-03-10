@@ -13,13 +13,20 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/storage/volumes", tags=["Storage Volumes"])
+router = APIRouter(
+    prefix="/storage/volumes",
+    tags=["Storage Volumes"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -98,9 +105,11 @@ async def list_storage_volumes(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all storage volumes."""
+    if host:
+        verify_cluster_access(host)
     # Try cache first (30 second cache)
     cache = get_cache_manager()
-    cache_key = f"storage_volumes:list:host={host}:pool={pool}"
+    cache_key = get_scope_cache_key(f"storage_volumes:list:host={host}:pool={pool}")
     cached_data = cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached storage volumes for host={host}, pool={pool}")
@@ -157,6 +166,7 @@ async def get_storage_volume(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific storage volume."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         storage_pool = client.storage_pools.get(pool)
@@ -187,8 +197,10 @@ async def create_storage_volume(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new storage volume."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         storage_pool = client.storage_pools.get(request.pool)
@@ -201,6 +213,16 @@ async def create_storage_volume(
             "content_type": request.content_type
         })
         
+        # Log activity: storage volume creation success
+        activity_logger.log_activity(
+            action="storage.volume.create",
+            target_type="storage_volume",
+            target_id=request.name,
+            target_host=host,
+            result="success",
+            details={"pool": request.pool, "type": request.type, "content_type": request.content_type}
+        )
+        
         return {
             "success": True,
             "message": f"Storage volume {request.name} created successfully",
@@ -211,11 +233,21 @@ async def create_storage_volume(
                 description=getattr(volume, 'description', '') or "",
                 config=volume.config or {},
                 used_by=volume.used_by or [],
-                content_type=getattr(volume, 'content_type', '')
+                content_type=getattr(volume, 'content_type', ''),
+                node=host
             )
         }
     except Exception as e:
         logger.error(f"Error creating storage volume: {e}")
+        # Log activity: storage volume creation failure
+        activity_logger.log_activity(
+            action="storage.volume.create",
+            target_type="storage_volume",
+            target_id=request.name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -234,8 +266,10 @@ async def update_storage_volume(
     description: Optional[str] = Body(None),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a storage volume."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         storage_pool = client.storage_pools.get(pool)
@@ -270,13 +304,25 @@ async def delete_storage_volume(
     pool: str = Query(..., description="Storage pool name"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a storage volume."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
         volume.delete()
+        
+        # Log activity: storage volume deletion success
+        activity_logger.log_activity(
+            action="storage.volume.delete",
+            target_type="storage_volume",
+            target_id=volume_name,
+            target_host=host,
+            result="success",
+            details={"pool": pool, "type": volume_type}
+        )
         
         return {
             "success": True,
@@ -284,4 +330,13 @@ async def delete_storage_volume(
         }
     except Exception as e:
         logger.error(f"Error deleting storage volume {volume_name}: {e}")
+        # Log activity: storage volume deletion failure
+        activity_logger.log_activity(
+            action="storage.volume.delete",
+            target_type="storage_volume",
+            target_id=volume_name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))

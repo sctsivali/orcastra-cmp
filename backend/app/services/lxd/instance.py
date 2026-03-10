@@ -16,6 +16,7 @@ from .exceptions import LXDConnectionError, LXDOperationError
 from .utils import parse_vm_status, extract_ip_addresses, find_instance_in_projects
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
+from .audit import audit_operation
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,14 @@ class InstanceManager:
     
     def _get_client_with_reconnect(self, node_name: str):
         """Get LXD client with automatic reconnection if stale.
+        Respects org-scope: returns None for clusters outside user's org.
         """
+        # Org-scope guard: prevent reconnecting to clusters outside the user's org
+        from app.core.org_scope import get_current_allowed_clusters
+        allowed = get_current_allowed_clusters()
+        if allowed is not None and node_name not in allowed:
+            return None
+
         client = self.connection_manager.get_client(node_name)
         
         # If client is None (stale connection), try to reconnect via cert_manager
@@ -396,6 +404,7 @@ class InstanceManager:
             logger.error(f"Error getting VM {name} from {host}: {e}")
             raise LXDOperationError(f"Failed to get VM: {str(e)}")
     
+    @audit_operation("lxd.instance.start", "instance")
     async def start_vm(self, name: str, host: str, force: bool = False) -> VMInfo:
         """Start a VM (searches all projects)."""
         try:
@@ -426,6 +435,7 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to start VM: {str(e)}")
     
+    @audit_operation("lxd.instance.stop", "instance")
     async def stop_vm(
         self, 
         name: str, 
@@ -462,6 +472,7 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to stop VM: {str(e)}")
     
+    @audit_operation("lxd.instance.restart", "instance")
     async def restart_vm(
         self, 
         name: str, 
@@ -496,6 +507,7 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to restart VM: {str(e)}")
     
+    @audit_operation("lxd.instance.delete", "instance")
     async def delete_vm(
         self, 
         name: str, 
@@ -530,6 +542,14 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to delete VM: {str(e)}")
     
+    @audit_operation(
+        "lxd.instance.create", "instance",
+        extract_details=lambda args, kwargs, result: {
+            "image": kwargs.get("image"),
+            "instance_type": kwargs.get("instance_type", "virtual-machine"),
+            "profiles": kwargs.get("profiles"),
+        }
+    )
     async def create_vm(
         self,
         name: str,

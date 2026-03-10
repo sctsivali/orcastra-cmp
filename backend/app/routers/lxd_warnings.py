@@ -13,11 +13,17 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/warnings", tags=["Warnings"])
+router = APIRouter(
+    prefix="/warnings",
+    tags=["Warnings"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -182,6 +188,8 @@ async def delete_warning(
     warning_uuid: str,
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a warning."""
     try:

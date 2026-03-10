@@ -54,7 +54,8 @@ class LXDCertificateManager:
         endpoint: str,
         zone: str = "",
         cluster_type: Optional[str] = None,
-        merchant_id: str = ""
+        merchant_id: str = "",
+        location: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
         Save cluster metadata to Vault.
@@ -65,13 +66,15 @@ class LXDCertificateManager:
             zone: Geographical or logical zone
             cluster_type: Type of cluster (auto-detected from hypervisor)
             merchant_id: Merchant/organization identifier
+            location: Geographic location information (region, country, coordinates)
         """
         metadata = {
             "display_name": display_name,
             "endpoint": endpoint,
             "zone": zone,
             "type": cluster_type,
-            "merchant_id": merchant_id
+            "merchant_id": merchant_id,
+            "location": location or {}
         }
         
         try:
@@ -114,7 +117,9 @@ class LXDCertificateManager:
         Generate certificate via Vault PKI and store it.
         """
         if common_name is None:
-            common_name = f"{cluster_id}.orcastra.io"
+            from app.core.config import get_settings
+            domain = get_settings().orcastra_domain
+            common_name = f"{cluster_id}.{domain}"
         
         try:
             # Generate certificate (FQDN required for Vault PKI validation)
@@ -439,6 +444,10 @@ class LXDCertificateManager:
     def list_clusters(self, use_cache: bool = True) -> list:
         """
         List all registered clusters.
+
+        Results are automatically filtered by the current request's
+        org-scope context variable (set by ``org_scope_dependency``).
+        Admin / background tasks see all clusters.
         """
         try:
             # Convert secret/data/clusters to secret/metadata/clusters for LIST operation
@@ -447,6 +456,11 @@ class LXDCertificateManager:
             # Remove trailing slashes from cluster IDs
             cluster_ids = [cid.rstrip('/') for cid in cluster_ids]
             logger.debug(f"Found {len(cluster_ids)} clusters in Vault (cached: {use_cache})")
+
+            # apply org-scope filter (no-op for admin / background tasks)
+            from app.core.org_scope import apply_cluster_filter
+            cluster_ids = apply_cluster_filter(cluster_ids)
+
             return cluster_ids
         except Exception as e:
             logger.warning(f"Failed to list clusters: {e}")
@@ -560,7 +574,7 @@ class LXDCertificateManager:
                 logger.info(f"Certificate already trusted for {cluster_id}")
                 return True
             else:
-                logger.warning(f"Failed to add trust: HTTP {response.status_code} - {response.text}")
+                logger.warning(f"Failed to add trust: HTTP {response.status_code}")
                 return False
                 
         except requests.exceptions.RequestException as e:

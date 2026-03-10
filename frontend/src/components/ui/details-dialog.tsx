@@ -129,7 +129,7 @@ export function DevicesDialog({ open, onOpenChange, devices }: DevicesDialogProp
                       </div>
                     </div>
                     <Badge variant="outline" className="text-sm">
-                      {deviceConfig.type || "unknown"}
+                      {deviceConfig.type || "N/A"}
                     </Badge>
                   </div>
 

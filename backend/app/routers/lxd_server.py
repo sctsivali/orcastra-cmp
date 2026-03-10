@@ -13,14 +13,19 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_admin, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.core.type_utils import detect_cluster_type_from_metadata
 from app.core.node_metadata import get_node_metadata_store
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/server", tags=["Server"])
+router = APIRouter(
+    prefix="/server",
+    tags=["Server"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -223,6 +228,7 @@ async def update_server_config(
     node_name: str,
     config: Dict[str, Any] = Body(..., description="Configuration to update"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """Update server configuration."""
     try:

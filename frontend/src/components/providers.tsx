@@ -7,6 +7,7 @@ import { PersonalizationProvider } from "./personalization-provider";
 import { StorageCleanupProvider } from "./storage-cleanup-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./auth-provider";
+import { APIError } from "@/types";
 
 function makeQueryClient() {
   return new QueryClient({
@@ -20,8 +21,15 @@ function makeQueryClient() {
         refetchOnWindowFocus: false, // Don't refetch when switching tabs
         refetchOnMount: false, // Don't refetch on component mount if data is fresh
         refetchOnReconnect: true, // Still refetch on reconnect
-        // Retry failed requests once
-        retry: 1,
+        // Smart retry: skip 401/403/429 (won't resolve by retrying)
+        retry: (failureCount, error) => {
+          if (error instanceof APIError) {
+            if (error.status === 401 || error.status === 429 || error.status === 403) {
+              return false;
+            }
+          }
+          return failureCount < 1;
+        },
         retryDelay: 1000,
       },
     },
@@ -48,13 +56,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <AuthProvider>
       <QueryClientProvider client={queryClient}>
         <StorageCleanupProvider>
-          <ThemeProvider defaultTheme="system" storageKey="orcastra-ui-theme">
-            <PersonalizationProvider>
+          <PersonalizationProvider>
+            <ThemeProvider>
               <TooltipProvider delayDuration={150} skipDelayDuration={100}>
                 {children}
               </TooltipProvider>
-            </PersonalizationProvider>
-          </ThemeProvider>
+            </ThemeProvider>
+          </PersonalizationProvider>
         </StorageCleanupProvider>
       </QueryClientProvider>
     </AuthProvider>

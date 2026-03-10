@@ -12,7 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, PlayCircle, StopCircle, Sparkles } from "lucide-react";
+import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VMInfo, GPUCardInfo } from "@/types/api";
 
@@ -126,8 +126,7 @@ export function MemberResourceModal({
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Server className="h-5 w-5" />
+          <DialogTitle>
             {memberName || "Member Resources"}
           </DialogTitle>
           <DialogDescription>
@@ -483,12 +482,7 @@ export function MemberResourceModal({
       <Dialog open={showInstanceModal} onOpenChange={setShowInstanceModal}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {instanceFilter === "running" ? (
-                <PlayCircle className="h-5 w-5 text-green-500" />
-              ) : (
-                <StopCircle className="h-5 w-5 text-gray-500" />
-              )}
+            <DialogTitle>
               {instanceFilter === "running" ? "Running" : "Stopped"} Instances on {memberName}
             </DialogTitle>
             <DialogDescription>

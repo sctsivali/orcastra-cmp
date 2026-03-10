@@ -1,0 +1,167 @@
+# =============================================================================
+# Orcastra Dashboard - Production Docker Compose
+# =============================================================================
+# USE THIS for on-prem deployment (pulls pre-built images from Docker Hub)
+# DO NOT use docker-compose.yml (that's for development/building from source)
+#
+# Production ports:
+#   Frontend: 4321
+#   Backend:  8765
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+#   docker compose -f docker-compose.prod.yml down
+#   docker compose -f docker-compose.prod.yml logs -f
+# =============================================================================
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:17-alpine
+    container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-postgres
+    restart: always
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - orcastra-dashboard
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Redis Cache
+  redis:
+    image: redis:8-alpine
+    container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-redis
+    restart: always
+    ports:
+      - "${REDIS_PORT:-6381}:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - orcastra-dashboard
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - redis-data:/data
+
+  # Backend API (port: 8765)
+  backend:
+    image: svlct/orcastra-dashboard:backend-${APP_VERSION:-1.0.0-RC1}
+    container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-backend
+    restart: always
+    ports:
+      - "${BACKEND_PORT:-8765}:4050"
+    env_file:
+      - .env
+    environment:
+      - APP_VERSION=${APP_VERSION:-1.0.0-RC1}
+      - API_VERSION=${API_VERSION:-1.0.0-RC1}
+      - DEBUG=${DEBUG:-false}
+      - DATABASE_URL=${DATABASE_URL}
+      - AUTH_ENABLED=${AUTH_ENABLED:-true}
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
+      - AUTHENTIK_AUDIENCE=${AUTHENTIK_CLIENT_ID}
+      - AUTHENTIK_API_URL=${AUTHENTIK_API_URL:-}
+      - AUTHENTIK_API_TOKEN=${AUTHENTIK_API_TOKEN:-}
+      - ORCASTRA_DOMAIN=${ORCASTRA_DOMAIN:-orcastra.io}
+    volumes:
+      - ./config:/app/config:rw
+    networks:
+      - orcastra-dashboard
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    security_opt:
+      - no-new-privileges:true
+    read_only: false
+    tmpfs:
+      - /tmp:mode=1777,size=100m
+
+  # Frontend (port: 4321)
+  frontend:
+    image: svlct/orcastra-dashboard:frontend-${APP_VERSION:-1.0.0-RC1}
+    container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-frontend
+    restart: always
+    ports:
+      - "${FRONTEND_PORT:-4321}:2025"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+      - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
+      - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
+      - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
+      - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - AUTH_TRUST_HOST=true
+    networks:
+      - orcastra-dashboard
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2025"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Fluent Bit Log Collector (Sidecar)
+  fluent-bit:
+    image: fluent/fluent-bit:4.2.2-debug
+    container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-fluent-bit
+    restart: always
+    volumes:
+      - ./config/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf:ro
+      - ./config/fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf:ro
+      - ./config/fluent-bit/parse_json.lua:/fluent-bit/etc/parse_json.lua:ro
+      - fluent-bit-data:/fluent-bit/data
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/log/containers:/var/log/containers:ro
+    environment:
+      - OPENSEARCH_HOST=${OPENSEARCH_HOST:?OPENSEARCH_HOST is required}
+      - OPENSEARCH_PORT=${OPENSEARCH_PORT:-9200}
+      - OPENSEARCH_USER=${OPENSEARCH_USER:-fluentbit}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:?OPENSEARCH_PASSWORD is required}
+    networks:
+      - orcastra-dashboard
+    depends_on:
+      - backend
+      - frontend
+    healthcheck:
+      # -debug image includes curl for proper HTTP health check
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:2020/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  orcastra-dashboard:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:
+  fluent-bit-data:

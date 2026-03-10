@@ -27,6 +27,7 @@ import {
   ChevronDown,
   Pin,
   PinOff,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,6 +44,7 @@ import {
 } from "@/lib/terminal-store";
 import { TerminalInstance, TerminalInstanceHandle } from "./terminal-instance";
 import { InstanceOperations } from "./instance-operations";
+import { FileUploadDialog } from "./file-upload-dialog";
 
 interface TerminalWindowProps {
   terminal: TerminalInstanceType;
@@ -80,6 +82,11 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
   const [showSearch, setShowSearch] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const terminalInstanceRef = useRef<TerminalInstanceHandle | null>(null);
+  
+  // File upload state
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
+  const [droppedFiles, setDroppedFiles] = useState<File[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
   
   // Track scroll offset for unpinned terminals
   const [scrollOffset, setScrollOffset] = useState({ x: 0, y: 0 });
@@ -214,6 +221,38 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [terminal.focused]);
+
+  // File drag-and-drop handlers for the terminal content area
+  const handleFileDragOver = useCallback((e: React.DragEvent) => {
+    // Only handle file drags, not text/terminal content drags
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragOver(true);
+    }
+  }, []);
+
+  const handleFileDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleFileDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    if (e.dataTransfer.files.length > 0) {
+      setDroppedFiles(Array.from(e.dataTransfer.files));
+      setShowUploadDialog(true);
+    }
+  }, []);
+
+  // Handle upload button click
+  const handleUploadClick = useCallback(() => {
+    setDroppedFiles([]);
+    setShowUploadDialog(true);
+  }, []);
 
   // Render terminal window with react-rnd for drag/resize
   // Calculate actual position (base position + scroll offset for unpinned)
@@ -363,6 +402,22 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
                 <TooltipContent>Search (Ctrl+Shift+F)</TooltipContent>
               </Tooltip>
 
+              {/* Upload File */}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-white hover:bg-white/10 touch-manipulation active:scale-95"
+                    onClick={handleUploadClick}
+                    onTouchEnd={(e) => { e.preventDefault(); handleUploadClick(); }}
+                  >
+                    <Upload className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Upload File to Instance</TooltipContent>
+              </Tooltip>
+
               {/* Expand to new tab */}
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -476,8 +531,13 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
           </div>
         )}
 
-        {/* Terminal Content */}
-        <div className="flex-1 overflow-hidden">
+        {/* Terminal Content with drag-and-drop overlay */}
+        <div
+          className="flex-1 overflow-hidden relative"
+          onDragOver={handleFileDragOver}
+          onDragLeave={handleFileDragLeave}
+          onDrop={handleFileDrop}
+        >
           <TerminalInstance
             ref={terminalInstanceRef}
             terminalId={terminal.id}
@@ -485,7 +545,27 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
             host={terminal.host}
             project={terminal.project}
           />
+
+          {/* Drag overlay */}
+          {isDragOver && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-blue-500/20 border-2 border-dashed border-blue-400 rounded pointer-events-none">
+              <div className="flex flex-col items-center gap-2 text-blue-300">
+                <Upload className="h-10 w-10" />
+                <span className="text-sm font-medium">Drop files to upload</span>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* File Upload Dialog */}
+        <FileUploadDialog
+          open={showUploadDialog}
+          onOpenChange={setShowUploadDialog}
+          instanceName={terminal.instanceName}
+          host={terminal.host}
+          project={terminal.project}
+          initialFiles={droppedFiles}
+        />
       </div>
     </Rnd>
   );

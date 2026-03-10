@@ -4,7 +4,7 @@ Provides endpoints for real-time cluster and instance metrics monitoring.
 Based on LXD metrics API specification: CPU, memory, disk, network, processes.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, WebSocket, WebSocketDisconnect
 from typing import Optional, List, Dict, Any, Tuple
 import logging
 import time
@@ -29,10 +29,16 @@ from app.services.lxd_service import (
 )
 from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
+from app.core.dependencies import require_tenant
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/monitoring", tags=["Monitoring"])
+router = APIRouter(
+    prefix="/monitoring",
+    tags=["Monitoring"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel instance state fetching
 _executor = ThreadPoolExecutor(max_workers=10)
@@ -336,11 +342,12 @@ async def _get_running_instance_metrics(
     return instance_metrics, current_time
 
 
-# Cache for dashboard response - set slightly longer than background collector interval (30s)
-# This ensures cache is always warm from background collection
-_dashboard_cache: Dict[str, Any] = {}
-_dashboard_cache_time: float = 0
+# Cache for dashboard response - keyed by org-scope suffix
+# This ensures partner users never get admin-cached data
+_dashboard_cache: Dict[str, Dict[str, Any]] = {}
+_dashboard_cache_times: Dict[str, float] = {}
 _dashboard_cache_ttl: float = 35.0  # Cache dashboard for 35 seconds (background collector runs every 30s)
+_dashboard_cache_lock = asyncio.Lock()  # Prevent thundering herd on concurrent requests
 
 
 @router.get(
@@ -359,13 +366,27 @@ async def get_monitoring_dashboard(
     Uses background collector caching (35s TTL) - cache is pre-warmed on startup.
     Set fresh=true to bypass cache.
     """
-    global _dashboard_cache, _dashboard_cache_time
+    global _dashboard_cache, _dashboard_cache_times
     
-    # Check if we have a valid cached response (warm from background collector)
+    # Build a scope key so each org gets its own cached snapshot
+    scope_key = get_scope_cache_key("dashboard")
+    
+    # Check cache outside lock first (fast path)
     current_time = time.time()
-    if not fresh and _dashboard_cache and (current_time - _dashboard_cache_time) < _dashboard_cache_ttl:
+    cached_time = _dashboard_cache_times.get(scope_key, 0)
+    if not fresh and scope_key in _dashboard_cache and (current_time - cached_time) < _dashboard_cache_ttl:
         logger.debug("Returning cached dashboard response (background collector)")
-        return _dashboard_cache
+        return _dashboard_cache[scope_key]
+    
+    # Acquire lock to prevent thundering herd - only one request fetches fresh data
+    async with _dashboard_cache_lock:
+        # Double-check cache inside lock (another request may have populated it)
+        current_time = time.time()
+        cached_time = _dashboard_cache_times.get(scope_key, 0)
+        if not fresh and scope_key in _dashboard_cache and (current_time - cached_time) < _dashboard_cache_ttl:
+            return _dashboard_cache[scope_key]
+        # Pre-set timestamp to prevent other requests from also starting computation
+        _dashboard_cache_times[scope_key] = current_time
     
     try:
         start_time = time.time()
@@ -378,6 +399,17 @@ async def get_monitoring_dashboard(
         (all_vms, connected_nodes), node_statuses_list = await asyncio.gather(
             all_vms_task, node_statuses_task
         )
+        
+        # apply tenant ACL filtering
+        all_vms = [
+            vm for vm in all_vms
+            if check_tenant_permission(
+                vm.host,
+                vm.project or "default",
+                vm.name,
+                "view",
+            )
+        ]
         
         # Calculate instance statistics
         total_instances = len(all_vms)
@@ -579,28 +611,38 @@ async def get_monitoring_dashboard(
         )
         
         try:
-            # Try to get warnings from each connected node
-            for node in node_statuses_list:
-                if node.connected:
-                    try:
-                        # Use get_client_with_reconnect for resilience
-                        client = lxd_service.get_client_with_reconnect(node.name)
-                        if client:
-                            # Use recursion=1 to get full warning objects, not just URLs
-                            warnings_response = client.api.warnings.get(params={'recursion': '1'})
-                            warnings_data = warnings_response.json().get("metadata", [])
-                            for warning in warnings_data:
-                                if isinstance(warning, dict):
-                                    warnings_summary.total += 1
-                                    severity = warning.get("severity", "").lower()
-                                    if severity in ["critical", "error"]:
-                                        warnings_summary.critical += 1
-                                    elif severity == "warning":
-                                        warnings_summary.warning += 1
-                                    else:
-                                        warnings_summary.info += 1
-                    except Exception as warn_err:
-                        logger.debug(f"Could not get warnings for node {node.name}: {warn_err}")
+            # fetch warnings from all connected nodes in parallel
+            def _fetch_node_warnings(node_name: str) -> List[Dict[str, Any]]:
+                """Fetch warnings for a single node (runs in thread pool)."""
+                try:
+                    client = lxd_service.get_client_with_reconnect(node_name)
+                    if client:
+                        warnings_response = client.api.warnings.get(params={'recursion': '1'})
+                        return warnings_response.json().get("metadata", [])
+                except Exception as warn_err:
+                    logger.debug(f"Could not get warnings for node {node_name}: {warn_err}")
+                return []
+
+            connected_node_names = [n.name for n in node_statuses_list if n.connected]
+            if connected_node_names:
+                loop = asyncio.get_event_loop()
+                warning_tasks = [
+                    loop.run_in_executor(_executor, _fetch_node_warnings, name)
+                    for name in connected_node_names
+                ]
+                warning_results = await asyncio.gather(*warning_tasks, return_exceptions=True)
+                for result in warning_results:
+                    if isinstance(result, list):
+                        for warning in result:
+                            if isinstance(warning, dict):
+                                warnings_summary.total += 1
+                                severity = warning.get("severity", "").lower()
+                                if severity in ["critical", "error"]:
+                                    warnings_summary.critical += 1
+                                elif severity == "warning":
+                                    warnings_summary.warning += 1
+                                else:
+                                    warnings_summary.info += 1
         except Exception as e:
             logger.debug(f"Could not fetch warnings: {e}")
         
@@ -659,16 +701,19 @@ async def get_monitoring_dashboard(
         )
         
         # Store metrics in history for charts (append to rolling buffer)
-        # Rate-limited to avoid duplicate entries from concurrent calls
+        # Only write from admin/background scope (scope=all) to ensure continuous
+        # history without gaps. Scoped user requests read from this same key.
+        # This fixes the issue where history had gaps when users navigated away,
+        # because user-scoped history was only written during active sessions.
         global _last_history_store_time
         current_time = time.time()
         
-        if current_time - _last_history_store_time >= _history_min_interval:
+        if scope_key == "dashboard:scope=all" and current_time - _last_history_store_time >= _history_min_interval:
             try:
                 _last_history_store_time = current_time
                 
                 cache = get_cache_manager()
-                history_key = "monitoring:history"
+                history_key = "monitoring:history:scope=all"
                 history = cache.get("monitoring_history", history_key) or []
                 
                 # Calculate aggregate real-time CPU usage from all instances
@@ -718,22 +763,28 @@ async def get_monitoring_dashboard(
                     history = history[-8640:]
                 
                 cache.set("monitoring_history", history_key, history, ttl=86400)  # 24 hour TTL
+                
+                # Persist to PostgreSQL (fire-and-forget, non-blocking)
+                # DB is source of truth; cache is hot-path for performance
+                asyncio.create_task(_persist_snapshot(new_point))
+                
             except Exception as hist_err:
                 logger.debug(f"Could not update history: {hist_err}")
         
         logger.debug(f"Monitoring dashboard collected in {elapsed_time*1000:.0f}ms")
         
-        # Cache the response for subsequent requests
-        _dashboard_cache.clear()
-        _dashboard_cache.update(response.model_dump())
-        _dashboard_cache_time = time.time()
+        # Cache the response for subsequent requests (per-scope)
+        _dashboard_cache[scope_key] = response.model_dump()
+        _dashboard_cache_times[scope_key] = time.time()
         
         return response
         
     except LXDConnectionError as e:
+        _dashboard_cache_times.pop(scope_key, None)  # Allow retry on next request
         logger.error(f"LXD connection error in monitoring: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
+        _dashboard_cache_times.pop(scope_key, None)  # Allow retry on next request
         logger.error(f"Error getting monitoring dashboard: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -748,10 +799,22 @@ async def get_node_metrics(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Get detailed metrics for a specific node."""
+    """Get detailed metrics for a specific node. Cached for 30 seconds."""
+    verify_cluster_access(node_name)
+    
+    # check cache first
+    cache = get_cache_manager()
+    cache_key = get_scope_cache_key(f"monitoring:node:{node_name}")
+    cached = cache.get("api_responses", cache_key)
+    if cached is not None:
+        return ClusterMonitoringMetrics(**cached)
+
     try:
-        node_statuses_list = lxd_service.check_nodes_status()
-        
+        # run node status + VM list in parallel to eliminate waterfall
+        node_statuses_task = _get_all_node_statuses_parallel(lxd_service)
+        vms_task = lxd_service.list_all_vms()
+        node_statuses_list, (all_vms, _) = await asyncio.gather(node_statuses_task, vms_task)
+
         node = next((n for n in node_statuses_list if n.name == node_name), None)
         if not node:
             raise HTTPException(status_code=404, detail=f"Node '{node_name}' not found")
@@ -780,11 +843,10 @@ async def get_node_metrics(
         if not resources:
             raise HTTPException(status_code=500, detail="Node resources not available")
         
-        # Get instance count for this node
-        all_vms, _ = await lxd_service.list_all_vms()
+        # instance count already fetched in parallel above
         node_instances = [vm for vm in all_vms if vm.host == node_name]
         
-        return ClusterMonitoringMetrics(
+        result = ClusterMonitoringMetrics(
             node_name=node_name,
             node_type=node.node_type or "lxd",
             is_online=True,
@@ -809,11 +871,35 @@ async def get_node_metrics(
             running_instances=len([vm for vm in node_instances if vm.status.value == "Running"]),
         )
         
+        # cache for 30 seconds
+        cache.set("api_responses", cache_key, result.model_dump(), ttl=30)
+        return result
+        
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting node metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ──────────────────────────────────────────────
+# DB persistence helper (fire-and-forget)
+# ──────────────────────────────────────────────
+
+async def _persist_snapshot(point: Dict[str, Any]) -> None:
+    """Non-blocking write to PostgreSQL. Errors are logged, never raised."""
+    try:
+        from app.services.metrics_history_service import persist_metrics_snapshot
+        await persist_metrics_snapshot(point, scope="all")
+    except Exception as e:
+        logger.debug(f"Snapshot DB write failed (cache still has the data): {e}")
+
+
+# Cache for history endpoint responses to avoid repeated Pydantic model creation
+# Key: (scope_key, points) -> Value: (history_len, list of MetricsHistoryPoint)
+# Bounded to 50 entries to prevent unbounded memory growth
+_history_response_cache: Dict[str, Tuple[int, List[MetricsHistoryPoint]]] = {}
+_HISTORY_CACHE_MAX_SIZE = 50
 
 
 @router.get(
@@ -828,32 +914,58 @@ async def get_metrics_history(
 ):
     """
     Get historical metrics for graphing.
-    History is updated by the dashboard endpoint, this just reads from cache.
+
+    Data flow (hot -> cold):
+      1. In-memory cache (instant, populated by background collector)
+      2. PostgreSQL (survives restarts, 7-day retention)
+      3. Empty list (first startup, dashboard will populate on next cycle)
+
+    All users read from the global 'scope=all' stream so charts are
+    gap-free regardless of individual session activity.
     """
     cache = get_cache_manager()
-    history_key = "monitoring:history"
-    
-    # Get existing history from cache (written by dashboard endpoint)
+    history_key = "monitoring:history:scope=all"
     history = cache.get("monitoring_history", history_key) or []
     
     if not history:
-        # If no history, return empty list - dashboard will populate it
+        # Cache empty (backend just restarted?) - hydrate from PostgreSQL
+        try:
+            from app.services.metrics_history_service import load_metrics_history
+            history = await load_metrics_history(points=points, scope="all")
+            if history:
+                # Re-populate the in-memory cache so subsequent requests are instant
+                cache.set("monitoring_history", history_key, history, ttl=86400)
+                logger.info(f"Hydrated metrics cache from DB ({len(history)} points)")
+        except Exception as db_err:
+            logger.warning(f"DB history fallback failed: {db_err}")
+    
+    if not history:
         return []
     
     try:
-        # Return requested number of points
+        # Check response cache: avoid re-creating Pydantic models if history hasn't changed
+        cache_key = f"{history_key}:{points}"
+        current_len = len(history)
+        cached_entry = _history_response_cache.get(cache_key)
+        if cached_entry and cached_entry[0] == current_len:
+            return cached_entry[1]
+        
+        # Create Pydantic models and cache the result
         result = [MetricsHistoryPoint(**p) for p in history[-points:]]
+        # Evict oldest entries if cache exceeds max size
+        if len(_history_response_cache) >= _HISTORY_CACHE_MAX_SIZE:
+            oldest_key = next(iter(_history_response_cache))
+            del _history_response_cache[oldest_key]
+        _history_response_cache[cache_key] = (current_len, result)
         return result
     except Exception as e:
         logger.error(f"Error parsing metrics history: {e}")
-        return []
-        
-    except Exception as e:
-        logger.error(f"Error getting metrics history: {e}")
-        # Return existing history if available
         if history:
-            return [MetricsHistoryPoint(**p) for p in history[-points:]]
-        raise HTTPException(status_code=500, detail=str(e))
+            try:
+                return [MetricsHistoryPoint(**p) for p in history[-points:]]
+            except Exception:
+                pass
+        return []
 
 
 @router.get(
@@ -865,7 +977,14 @@ async def get_metrics_history(
 async def get_network_metrics(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Get aggregated network metrics."""
+    """Get aggregated network metrics. Cached for 30 seconds."""
+    # check cache first
+    cache = get_cache_manager()
+    cache_key = get_scope_cache_key("monitoring:network")
+    cached = cache.get("api_responses", cache_key)
+    if cached is not None:
+        return NetworkMetrics(**cached)
+
     try:
         all_vms, _ = await lxd_service.list_all_vms()
         
@@ -901,7 +1020,7 @@ async def get_network_metrics(
                     interface_stats[iface]["rx_packets"] += rx_packets
                     interface_stats[iface]["tx_packets"] += tx_packets
         
-        return NetworkMetrics(
+        response = NetworkMetrics(
             total_rx_bytes=total_rx,
             total_tx_bytes=total_tx,
             total_rx_packets=total_rx_packets,
@@ -910,6 +1029,35 @@ async def get_network_metrics(
             timestamp=datetime.now(timezone.utc),
         )
         
+        # cache for 30 seconds
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+        return response
+        
     except Exception as e:
         logger.error(f"Error getting network metrics: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.websocket("/ws")
+async def monitoring_websocket(ws: WebSocket):
+    """
+    WebSocket endpoint for real-time monitoring push.
+    Clients connect here to receive dashboard updates pushed by the
+    background metrics collector, eliminating the need for polling.
+    The server sends JSON-serialized MonitoringDashboardResponse on each cycle.
+    """
+    from app.services.ws_broadcast import get_monitoring_broadcaster
+
+    broadcaster = get_monitoring_broadcaster()
+    await broadcaster.connect(ws)
+    try:
+        # Keep connection alive; ignore incoming messages (server-push only)
+        while True:
+            # Wait for pings/close frames from the client
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        await broadcaster.disconnect(ws)

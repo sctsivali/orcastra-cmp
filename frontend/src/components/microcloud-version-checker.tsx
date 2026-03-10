@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, CheckCircle, Cloud } from "lucide-react";
+import { AlertCircle, CheckCircle } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -120,8 +120,7 @@ export function MicroCloudVersionChecker({ currentVersion }: MicroCloudVersionCh
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Cloud className="h-5 w-5" />
+          <DialogTitle>
             MicroCloud Update Available
           </DialogTitle>
           <DialogDescription>

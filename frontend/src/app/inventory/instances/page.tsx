@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Box, Play, Square, RotateCw, Trash2, Search, Filter, ArrowUp, ArrowDown, Terminal, Monitor } from "lucide-react";
+import { Play, Square, RotateCw, Trash2, Search, Filter, ArrowUp, ArrowDown, Terminal, Monitor } from "lucide-react";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -35,6 +35,7 @@ import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal"
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { useTenantAccess } from "@/hooks/use-tenant-access";
 
 type SortField = "name" | "host" | "project" | "status";
 type SortDirection = "asc" | "desc";
@@ -60,6 +61,7 @@ export default function InstancesPage() {
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
+  const { hasPermission } = useTenantAccess();
 
   const handleInstanceClick = (instance: VMInfo) => {
     setSelectedInstance(instance);
@@ -207,8 +209,7 @@ export default function InstancesPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Box className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Instances
           </h1>
           <p className="text-muted-foreground mt-2">
@@ -362,8 +363,8 @@ export default function InstancesPage() {
                           onClick={() =>
                             handleAction(instance.name, instance.host, "start")
                           }
-                          disabled={actionLoading === `${instance.name}-start` || isReadOnly}
-                          title={isReadOnly ? "Action disabled in read-only mode" : "Start instance"}
+                          disabled={actionLoading === `${instance.name}-start` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
+                          title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Start instance"}
                         >
                           <Play className="h-4 w-4" />
                         </Button>
@@ -376,8 +377,8 @@ export default function InstancesPage() {
                             onClick={() =>
                               handleAction(instance.name, instance.host, "stop")
                             }
-                            disabled={actionLoading === `${instance.name}-stop` || isReadOnly}
-                            title={isReadOnly ? "Action disabled in read-only mode" : "Stop instance"}
+                            disabled={actionLoading === `${instance.name}-stop` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
+                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Stop instance"}
                           >
                             <Square className="h-4 w-4" />
                           </Button>
@@ -387,8 +388,8 @@ export default function InstancesPage() {
                             onClick={() =>
                               handleAction(instance.name, instance.host, "restart")
                             }
-                            disabled={actionLoading === `${instance.name}-restart` || isReadOnly}
-                            title={isReadOnly ? "Action disabled in read-only mode" : "Restart instance"}
+                            disabled={actionLoading === `${instance.name}-restart` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
+                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Restart instance"}
                           >
                             <RotateCw className="h-4 w-4" />
                           </Button>
@@ -402,7 +403,8 @@ export default function InstancesPage() {
                                 project: instance.project || "default",
                               });
                             }}
-                            title="Open Terminal"
+                            disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
+                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "console") ? "No console permission" : "Open Terminal"}
                           >
                             <Terminal className="h-4 w-4" />
                           </Button>
@@ -417,7 +419,8 @@ export default function InstancesPage() {
                                 project: instance.project || "default",
                               });
                             }}
-                            title="Open Console"
+                            disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
+                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "console") ? "No console permission" : "Open Console"}
                           >
                             <Monitor className="h-4 w-4" />
                           </Button>

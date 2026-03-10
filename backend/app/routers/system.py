@@ -9,8 +9,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, Dict, List, Any
 from app.core.config import get_settings
+from fastapi import Depends
+from app.core.dependencies import require_tenant, require_admin, AuthenticatedUser
 
-router = APIRouter(prefix="/system", tags=["system"])
+router = APIRouter(
+    prefix="/system",
+    tags=["system"],
+    dependencies=[Depends(require_tenant())],
+)
 
 
 class SystemSettings(BaseModel):
@@ -89,7 +95,10 @@ async def get_cache_stats():
 
 
 @router.post("/cache/clear")
-async def clear_cache(namespace: str = None):
+async def clear_cache(
+    namespace: str = None,
+    _rbac: AuthenticatedUser = Depends(require_admin()),
+):
     """
     Clear cache for a specific namespace or all caches.
     """

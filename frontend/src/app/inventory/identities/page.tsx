@@ -36,7 +36,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { RotateCw, UserCircle, Search, Trash2, MoreVertical } from "lucide-react";
+import { RotateCw, Search, Trash2, MoreVertical } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useIdentities, useDeleteIdentity } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -142,8 +142,7 @@ export default function IdentitiesPage() {
       <ReadOnlyBanner />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <UserCircle className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Identities
           </h1>
           <p className="text-muted-foreground mt-2">

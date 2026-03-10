@@ -5,6 +5,7 @@ Provides Redis caching with fallback to in-memory cache.
 
 import logging
 import json
+import os
 import time
 from typing import Optional, Any, Dict
 from functools import wraps
@@ -86,6 +87,11 @@ class LRUCache:
         }
 
 
+# Default memory cache size, tunable via CACHE_MEMORY_SIZE env var.
+# 5000 supports ~50 tenants each with dashboard + history + nodes + misc.
+_DEFAULT_MEMORY_CACHE_SIZE = int(os.environ.get("CACHE_MEMORY_SIZE", "5000"))
+
+
 class CacheManager:
     """
     Unified cache manager with Redis support and in-memory fallback.
@@ -96,7 +102,7 @@ class CacheManager:
         self, 
         redis_url: Optional[str] = None,
         default_ttl: int = 300,  # 5 minutes default
-        memory_cache_size: int = 1000,
+        memory_cache_size: int = _DEFAULT_MEMORY_CACHE_SIZE,
         sensitive_namespaces: Optional[list] = None
     ):
         self.default_ttl = default_ttl
@@ -130,7 +136,11 @@ class CacheManager:
                 )
                 # Test connection
                 self.redis_client.ping()
-                logger.info(f"Connected to Redis cache at {redis_url} with connection pooling (50 max connections)")
+                # sanitize URL - never log credentials
+                from urllib.parse import urlparse
+                _parsed = urlparse(redis_url)
+                _safe_url = f"{_parsed.scheme}://{_parsed.hostname}:{_parsed.port or 6379}"
+                logger.info(f"Connected to Redis cache at {_safe_url} with connection pooling (50 max connections)")
             except Exception as e:
                 logger.warning(f"Could not connect to Redis: {e}. Using in-memory cache only.")
                 self.redis_client = None
@@ -318,9 +328,20 @@ class CacheManager:
             except Exception as e:
                 logger.warning(f"Redis delete pattern error: {e}")
         
-        # Clear memory cache (simplified - clears all)
+        # Clear matching keys from memory cache
         if pattern == "*":
             self.memory_cache.clear()
+        else:
+            # convert glob pattern to prefix match for memory cache
+            prefix = self._make_key(namespace, pattern.rstrip("*"))
+            keys_to_delete = [
+                k for k in list(self.memory_cache.cache.keys())
+                if k.startswith(prefix)
+            ]
+            for k in keys_to_delete:
+                self.memory_cache.delete(k)
+            if keys_to_delete:
+                logger.debug(f"Deleted {len(keys_to_delete)} memory cache keys matching {full_pattern}")
     
     def invalidate_cluster_cache(self, cluster_id: str = None):
         """

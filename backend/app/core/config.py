@@ -47,9 +47,16 @@ class Settings(BaseSettings):
         alias="RATE_LIMIT_ENABLED"
     )
     rate_limit_requests: int = Field(
-        default=100,
+        default=500,
         alias="RATE_LIMIT_REQUESTS",
-        description="Number of requests allowed per minute"
+        description="Number of requests allowed per minute per client"
+    )
+    
+    # Domain Configuration
+    orcastra_domain: str = Field(
+        default="orcastra.io",
+        alias="ORCASTRA_DOMAIN",
+        description="Base domain for PKI certificate common names (ex; orcastra.io)"
     )
     
     # Read-Only Mode
@@ -57,6 +64,40 @@ class Settings(BaseSettings):
         default=False,
         alias="READ_ONLY_MODE",
         description="When True, disable all create, update, delete operations"
+    )
+    
+    # Authentication / Authentik OIDC Configuration
+    auth_enabled: bool = Field(
+        default=True,
+        alias="AUTH_ENABLED",
+        description="Enable JWT authentication. Disable only for local development."
+    )
+    authentik_issuer: str = Field(
+        default="",
+        alias="AUTHENTIK_ISSUER",
+        description="Authentik OIDC issuer URL (ex; https://auth.example.com/application/o/app/)"
+    )
+    authentik_audience: str = Field(
+        default="",
+        alias="AUTHENTIK_AUDIENCE",
+        description="Expected JWT audience (typically the Authentik client ID)"
+    )
+    auth_jwks_cache_ttl: int = Field(
+        default=3600,
+        alias="AUTH_JWKS_CACHE_TTL",
+        description="JWKS cache TTL in seconds (default: 1 hour)"
+    )
+
+    # Authentik Admin API (for pushing user group updates from Orcastra)
+    authentik_api_url: str = Field(
+        default="",
+        alias="AUTHENTIK_API_URL",
+        description="Authentik Admin API base URL (ex; https://auth.example.com/api/v3)"
+    )
+    authentik_api_token: str = Field(
+        default="",
+        alias="AUTHENTIK_API_TOKEN",
+        description="Authentik Admin API token for user/group management"
     )
     
     # Vault Configuration
@@ -88,7 +129,39 @@ class Settings(BaseSettings):
     vault_cert_ttl: str = Field(
         default="87600h",
         alias="VAULT_CERT_TTL",
-        description="Default TTL for generated certificates (e.g., 87600h = 10 years, 720h = 30 days)"
+        description="Default TTL for generated certificates (ex; 87600h = 10 years, 720h = 30 days)"
+    )
+    
+    # OpenSearch Archive Configuration
+    opensearch_archive_enabled: bool = Field(
+        default=False,
+        alias="OPENSEARCH_ARCHIVE_ENABLED",
+        description="Enable OpenSearch archive management API (requires OpenSearch connectivity)"
+    )
+    opensearch_url: str = Field(
+        default="",
+        alias="OPENSEARCH_URL",
+        description="OpenSearch base URL (ex; https://logging-vm:9200)"
+    )
+    opensearch_admin_user: str = Field(
+        default="admin",
+        alias="OPENSEARCH_ADMIN_USER",
+        description="OpenSearch admin user for archive operations"
+    )
+    opensearch_admin_password: str = Field(
+        default="",
+        alias="OPENSEARCH_ADMIN_PASSWORD",
+        description="OpenSearch admin password"
+    )
+    opensearch_ssl_verify: bool = Field(
+        default=False,
+        alias="OPENSEARCH_SSL_VERIFY",
+        description="Verify SSL certs when connecting to OpenSearch"
+    )
+    opensearch_snapshot_repo: str = Field(
+        default="orcastra-archive",
+        alias="OPENSEARCH_SNAPSHOT_REPO",
+        description="Name of the snapshot repository in OpenSearch"
     )
     
     # Cache Configuration

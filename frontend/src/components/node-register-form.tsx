@@ -2,12 +2,12 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { 
-  Server, ArrowLeft, Info, CheckCircle, AlertCircle, 
-  Copy, Terminal, RefreshCw, Loader2 
+  ArrowLeft, Info, CheckCircle, 
+  Copy, Terminal, RefreshCw, Loader2, MapPin, Building2, ChevronsUpDown, Check 
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,10 +15,25 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 
 import { toast } from "@/hooks/use-toast";
-import { ClusterStatus } from "@/types/api";
-import { useRegisterCluster, useCheckClusterAuth } from "@/hooks/use-lxd";
+import { formatHypervisorType } from "@/lib/utils";
+import { ClusterStatus, APIError } from "@/types/api";
+import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
+import { getRegionById, REGIONS_DATA, type Region } from "@/lib/regions-data";
 
 const nodeRegisterSchema = z.object({
   cluster_id: z
@@ -35,12 +50,31 @@ const nodeRegisterSchema = z.object({
     .min(1, "Endpoint is required")
     .refine(
       (val) => {
-        // Check if it's a valid URL
+        // Reject obviously invalid characters (commas, spaces, etc.)
+        if (/[,\s<>{}|\\^`]/.test(val)) {
+          return false;
+        }
         try {
           const url = new URL(val);
-          // If hostname is an IP address, require port
-          const isIP = /^(\d{1,3}\.){3}\d{1,3}$/.test(url.hostname);
-          if (isIP && !url.port) {
+          // Enforce http or https scheme only
+          if (url.protocol !== "https:" && url.protocol !== "http:") {
+            return false;
+          }
+          // Validate IP address format if hostname looks like an IP
+          const ipMatch = url.hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+          if (ipMatch) {
+            // Validate each octet is 0-255
+            const octets = [ipMatch[1], ipMatch[2], ipMatch[3], ipMatch[4]];
+            if (octets.some(o => parseInt(o) > 255)) {
+              return false;
+            }
+            // Require port for IP addresses
+            if (!url.port) {
+              return false;
+            }
+          }
+          // Validate hostname has valid characters (no commas, etc.)
+          if (!/^[a-zA-Z0-9.-]+$/.test(url.hostname)) {
             return false;
           }
           return true;
@@ -49,10 +83,12 @@ const nodeRegisterSchema = z.object({
         }
       },
       {
-        message: "Endpoint must be a valid URL with port (e.g., https://192.168.10.187:8443)"
+        message: "Endpoint must be a valid URL (e.g., https://192.168.10.187:8443). Only http/https allowed, no commas or invalid characters."
       }
     ),
-  zone: z.string().optional(),
+  region_id: z.string().min(1, "Region is required"),
+  facility_name: z.string().optional(),
+  facility_provider: z.string().optional(),
 });
 
 type NodeRegisterFormData = z.infer<typeof nodeRegisterSchema>;
@@ -63,9 +99,11 @@ export function NodeRegisterForm() {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = React.useState(false);
   const [identityName, setIdentityName] = React.useState<string>("");
+  const [regionOpen, setRegionOpen] = React.useState(false);
   
   const registerCluster = useRegisterCluster();
   const checkClusterAuth = useCheckClusterAuth();
+  const { data: facilitySuggestions } = useFacilitySuggestions();
   const [registrationResult, setRegistrationResult] = React.useState<{
     success: boolean;
     message: string;
@@ -75,6 +113,12 @@ export function NodeRegisterForm() {
     cluster_id?: string;
     cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus"
   } | null>(null);
+
+  // Get Indonesia regions only
+  const indonesiaRegions = React.useMemo(
+    () => REGIONS_DATA.filter((r) => r.country_code === "ID"),
+    []
+  );
 
   // Generate unique identity name: orca-{clustername}-{datetime}
   const generateIdentityName = (clusterId: string): string => {
@@ -99,6 +143,7 @@ export function NodeRegisterForm() {
     register,
     handleSubmit,
     watch,
+    control,
     formState: { errors },
   } = useForm<NodeRegisterFormData>({
     resolver: zodResolver(nodeRegisterSchema),
@@ -106,7 +151,9 @@ export function NodeRegisterForm() {
       cluster_id: "",
       display_name: "",
       endpoint: "",
-      zone: "",
+      region_id: "",
+      facility_name: "",
+      facility_provider: "",
     },
   });
 
@@ -116,7 +163,6 @@ export function NodeRegisterForm() {
   const handleCheckAuth = async (clusterId: string) => {
     setIsCheckingAuth(true);
     try {
-      // mutateAsync now waits for cache refetch to complete in onSuccess
       const response = await checkClusterAuth.mutateAsync(clusterId);
       
       if (response.authenticated) {
@@ -127,24 +173,28 @@ export function NodeRegisterForm() {
         setRegistrationResult(prev => prev ? {
           ...prev,
           status: ClusterStatus.ONLINE,
-          message: "Node authenticated successfully"
+          message: "Node authenticated successfully",
+          ...(response.cluster_type && { cluster_type: response.cluster_type }),
         } : null);
         
-        // Redirect to inventory page - data is already refreshed by mutation onSuccess
         setTimeout(() => {
           router.push("/inventory");
-        }, 1000); // Reduced delay since cache is already refreshed
+        }, 1000);
       } else {
         toast({
           title: "Not Authenticated",
-          description: response.message || "Certificate not yet trusted by hypervisor node.",
+          description: response.message || "Certificate not yet trusted by hypervisor node. Please run the trust command first.",
           variant: "destructive",
         });
       }
     } catch (error: any) {
+      // distinguish timeout (504) from other errors for better UX
+      const isTimeout = error instanceof APIError && error.status === 504;
       toast({
-        title: "Check Failed",
-        description: error.message || "Failed to check authentication",
+        title: isTimeout ? "Connection Timed Out" : "Check Failed",
+        description: isTimeout
+          ? "The node did not respond in time. Please verify the trust certificate command has been executed on the node, then try again."
+          : (error.message || "Failed to check authentication"),
         variant: "destructive",
       });
     } finally {
@@ -204,12 +254,29 @@ export function NodeRegisterForm() {
     const uniqueIdentityName = generateIdentityName(data.cluster_id);
     setIdentityName(uniqueIdentityName);
 
+    // Get region info for location data
+    const regionInfo = getRegionById(data.region_id);
+    const locationData = regionInfo ? {
+      region_id: regionInfo.id,
+      country_code: regionInfo.country_code,
+      country_name: regionInfo.country_name,
+      region_name: regionInfo.name,
+      city: regionInfo.city,
+      latitude: regionInfo.latitude,
+      longitude: regionInfo.longitude,
+      timezone: regionInfo.timezone,
+      continent: regionInfo.continent,
+      ...(data.facility_name?.trim() && { facility_name: data.facility_name.trim() }),
+      ...(data.facility_provider?.trim() && { facility_provider: data.facility_provider.trim() }),
+    } : undefined;
+
     try {
       const response = await registerCluster.mutateAsync({
         cluster_id: data.cluster_id,
         display_name: data.display_name,
         endpoint: data.endpoint,
-        zone: data.zone || undefined,
+        zone: regionInfo?.name || undefined,  // use region name as zone for backwards compat
+        location: locationData,
       });
 
       setRegistrationResult({
@@ -219,7 +286,7 @@ export function NodeRegisterForm() {
         certificate_generated: response.certificate_generated,
         certificate: response.certificate,
         cluster_id: data.cluster_id,
-        cluster_type: response.cluster_type,  // Include auto-detected type
+        cluster_type: undefined,  // Don't use pre-auth type; check-auth will detect the real type
       });
 
       if (response.success && response.certificate) {
@@ -277,8 +344,7 @@ export function NodeRegisterForm() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <div className="flex items-center gap-3 mb-2">
-          <Server className="h-8 w-8 text-violet-600" />
+        <div className="mb-2">
           <h1 className="text-3xl font-bold">Register Node</h1>
         </div>
         <p className="text-muted-foreground">
@@ -316,14 +382,13 @@ export function NodeRegisterForm() {
                     const isIncus = registrationResult.cluster_type === "Incus";
                     const cliTool = isIncus ? "incus" : "lxc";
                     const trustSubCmd = isIncus ? "add-certificate" : "add";
-                    const typeLabel = registrationResult.cluster_type || "LXD";
-                    const badgeVariant = isIncus ? "secondary" : "outline";
+                    const typeLabel = registrationResult.cluster_type ? formatHypervisorType(registrationResult.cluster_type) : null; // only show badge when type is detected
                     
                     return (
                       <div className="space-y-2">
                         <div className="flex items-center justify-between">
                           <p className="text-xs text-muted-foreground">
-                            <Badge variant={badgeVariant} className="mr-2">{typeLabel}</Badge>
+                            {typeLabel && <Badge variant={isIncus ? "secondary" : "outline"} className="mr-2">{typeLabel}</Badge>}
                             Identity: <code className="text-xs bg-muted px-1 py-0.5 rounded">{identityName}</code>
                           </p>
                           <Button
@@ -331,7 +396,7 @@ export function NodeRegisterForm() {
                             variant="ghost"
                             onClick={() => {
                               const cmd = `cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${identityName}"\n${registrationResult.certificate}\nEOF`;
-                              copyToClipboard(cmd, `${typeLabel} Command`);
+                              copyToClipboard(cmd, "CLI Command");
                             }}
                           >
                             <Copy className="h-3 w-3 mr-1" />
@@ -448,18 +513,126 @@ EOF`}
               </p>
             </div>
 
-            {/* Zone */}
-            <div className="space-y-2">
-              <Label htmlFor="zone">Zone / Location</Label>
-              <Input
-                id="zone"
-                placeholder="e.g., Jakarta-DC1, us-west-2"
-                disabled={isSubmitting}
-                {...register("zone")}
-              />
-              <p className="text-xs text-muted-foreground">
-                Geographical or logical zone (optional)
-              </p>
+            {/* Location - Region Selector */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <MapPin className="h-4 w-4 text-muted-foreground" />
+                <Label className="text-base font-semibold">Location <span className="text-destructive">*</span></Label>
+              </div>
+
+              {/* Region / City Selector */}
+              <div className="space-y-2">
+                <Label htmlFor="region_id">Region / City</Label>
+                <Controller
+                  name="region_id"
+                  control={control}
+                  render={({ field }) => {
+                    const selectedRegion = indonesiaRegions.find((r) => r.id === field.value);
+                    return (
+                      <Popover open={regionOpen} onOpenChange={setRegionOpen}>
+                        <PopoverTrigger asChild>
+                          <Button
+                            variant="outline"
+                            role="combobox"
+                            aria-expanded={regionOpen}
+                            disabled={isSubmitting}
+                            className="w-full justify-between font-normal"
+                          >
+                            {selectedRegion ? (
+                              <span className="flex items-center gap-2 truncate">
+                                <MapPin className="h-3 w-3 shrink-0 text-muted-foreground" />
+                                {selectedRegion.city} ({selectedRegion.name})
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">Search or select a region...</span>
+                            )}
+                            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                          </Button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+                          <Command>
+                            <CommandInput placeholder="Type to search city or region..." />
+                            <CommandList>
+                              <CommandEmpty>No region found.</CommandEmpty>
+                              <CommandGroup>
+                                {indonesiaRegions.map((region) => (
+                                  <CommandItem
+                                    key={region.id}
+                                    value={`${region.city} ${region.name}`}
+                                    onSelect={() => {
+                                      field.onChange(region.id);
+                                      setRegionOpen(false);
+                                    }}
+                                  >
+                                    <Check
+                                      className={`mr-2 h-4 w-4 ${
+                                        field.value === region.id ? "opacity-100" : "opacity-0"
+                                      }`}
+                                    />
+                                    <MapPin className="mr-2 h-3 w-3 text-muted-foreground" />
+                                    {region.city} ({region.name})
+                                  </CommandItem>
+                                ))}
+                              </CommandGroup>
+                            </CommandList>
+                          </Command>
+                        </PopoverContent>
+                      </Popover>
+                    );
+                  }}
+                />
+                {errors.region_id && (
+                  <p className="text-sm text-destructive">{errors.region_id.message}</p>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Select the geographical location of this node for the regions map
+                </p>
+              </div>
+
+              {/* Facility / Data Center (optional, free text + autocomplete) */}
+              <div className="space-y-3 rounded-md border border-dashed p-3">
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-4 w-4 text-muted-foreground" />
+                  <Label className="text-sm font-medium">Data Center / Facility <span className="text-xs text-muted-foreground font-normal">(optional)</span></Label>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="facility_name" className="text-xs">Facility Name</Label>
+                    <Input
+                      id="facility_name"
+                      placeholder="e.g. Main Data Center"
+                      disabled={isSubmitting}
+                      list="facility-name-suggestions"
+                      autoComplete="off"
+                      {...register("facility_name")}
+                    />
+                    <datalist id="facility-name-suggestions">
+                      {facilitySuggestions?.map((f, i) => (
+                        <option key={i} value={f.facility_name} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="facility_provider" className="text-xs">Provider / Operator</Label>
+                    <Input
+                      id="facility_provider"
+                      placeholder="e.g. Acme Corporation"
+                      disabled={isSubmitting}
+                      list="facility-provider-suggestions"
+                      autoComplete="off"
+                      {...register("facility_provider")}
+                    />
+                    <datalist id="facility-provider-suggestions">
+                      {[...new Set(facilitySuggestions?.map((f) => f.facility_provider).filter(Boolean))].map((p, i) => (
+                        <option key={i} value={p!} />
+                      ))}
+                    </datalist>
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Name and provider of the data center where this node is hosted. Start typing to see suggestions from existing nodes.
+                </p>
+              </div>
             </div>
 
             {/* Info Alert */}

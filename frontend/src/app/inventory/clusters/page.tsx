@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { formatHypervisorType } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { 
   Server, 
@@ -17,7 +18,9 @@ import {
   KeyRound,
   Copy,
   Terminal,
-  Shield
+  Shield,
+  MapPin,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,6 +48,8 @@ import { ClusterStatus, type ClusterInfo } from "@/types/api";
 import { useClusters, useCheckClusterAuth, useDeleteCluster, useRegenerateCert } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
+import { ClusterLocationDialog } from "@/components/cluster-location-dialog";
+import { usePermissions } from "@/hooks/use-permissions";
 
 const statusConfig = {
   [ClusterStatus.ONLINE]: {
@@ -88,11 +93,21 @@ export default function ClustersPage() {
   const [regeneratedCert, setRegeneratedCert] = React.useState<{identityName: string, certificate: string, cluster_type?: string} | null>(null);
   const [deleteConfirmModal, setDeleteConfirmModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const [deleteConfirmText, setDeleteConfirmText] = React.useState("");
+  const [locationModal, setLocationModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const { isReadOnly } = useReadOnlyMode();
-  
+  const { isPartner } = usePermissions();
   const checkClusterAuth = useCheckClusterAuth();
   const deleteCluster = useDeleteCluster();
   const regenerateCert = useRegenerateCert();
+  
+  // redirect if not Partner+
+  React.useEffect(() => {
+    if (!isPartner) {
+      router.replace("/");
+    }
+  }, [isPartner, router]);
+
+  if (!isPartner) return null;
 
   const handleCheckAuth = async (clusterId: string) => {
     setCheckingAuth(clusterId);
@@ -166,12 +181,8 @@ export default function ClustersPage() {
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
-      // Log what we're trying to copy for debugging
-      console.log('Copying to clipboard:', text.substring(0, 100) + '...');
-      
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
-        console.log('Successfully copied using Clipboard API');
         toast({
           title: "Copied!",
           description: `${label} copied to clipboard`,
@@ -200,7 +211,6 @@ export default function ClustersPage() {
           textArea.remove();
           
           if (successful) {
-            console.log('Successfully copied using execCommand');
             toast({
               title: "Copied!",
               description: `${label} copied to clipboard`,
@@ -275,8 +285,7 @@ export default function ClustersPage() {
       }}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <KeyRound className="h-5 w-5 text-amber-500" />
+            <DialogTitle>
               Certificate Regenerated
             </DialogTitle>
             <DialogDescription>
@@ -298,7 +307,7 @@ export default function ClustersPage() {
                     const isIncus = regeneratedCert.cluster_type === "Incus";
                     const cliTool = isIncus ? "incus" : "lxc";
                     const trustSubCmd = isIncus ? "add-certificate" : "add";
-                    const typeLabel = regeneratedCert.cluster_type || "LXD";
+                    const typeLabel = formatHypervisorType(regeneratedCert.cluster_type);
                     const badgeVariant = isIncus ? "secondary" : "outline";
                     
                     return (
@@ -379,14 +388,11 @@ EOF`}
                 >
                   {checkingAuth === regenerateModal.cluster?.cluster_id ? (
                     <>
-                      <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                       Checking...
                     </>
                   ) : (
-                    <>
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Verify Connection
-                    </>
+                    "Verify Connection"
                   )}
                 </Button>
                 <Button
@@ -511,7 +517,7 @@ EOF`}
                         </a>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{cluster.cluster_type}</Badge>
+                        <Badge variant="outline">{formatHypervisorType(cluster.cluster_type)}</Badge>
                       </TableCell>
                       <TableCell>
                         {cluster.zone ? (
@@ -549,6 +555,15 @@ EOF`}
                               <KeyRound className="h-4 w-4" />
                             </Button>
                           )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setLocationModal({ open: true, cluster })}
+                            title={cluster.location ? `Location: ${cluster.location.city}` : "Set Location"}
+                            className={cluster.location ? "text-emerald-600 hover:text-emerald-700" : "text-muted-foreground"}
+                          >
+                            <MapPin className="h-4 w-4" />
+                          </Button>
                           <Button
                             variant="outline"
                             size="sm"
@@ -594,8 +609,7 @@ EOF`}
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-5 w-5" />
+            <DialogTitle className="text-destructive">
               Remove Cluster Registration
             </DialogTitle>
             <DialogDescription>
@@ -642,12 +656,19 @@ EOF`}
               onClick={handleDeleteConfirm}
               disabled={deleteConfirmText !== `DELETE ${deleteConfirmModal.cluster?.cluster_id?.toUpperCase()}`}
             >
-              <Trash2 className="h-4 w-4 mr-2" />
               Remove Cluster
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Location Edit Modal */}
+      <ClusterLocationDialog
+        open={locationModal.open}
+        onOpenChange={(open) => setLocationModal({ open, cluster: locationModal.cluster })}
+        cluster={locationModal.cluster}
+        onSuccess={() => refetch()}
+      />
     </div>
   );
 }

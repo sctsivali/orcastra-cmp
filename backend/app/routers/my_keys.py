@@ -24,14 +24,21 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_admin, require_partner, AuthenticatedUser
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
+from app.core.org_scope import org_scope_dependency, get_scope_cache_key
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/my-keys", tags=["My Keys"])
+router = APIRouter(
+    prefix="/my-keys",
+    tags=["My Keys"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Vault path for storing keys (without secret/data prefix - will be added by vault methods)
 VAULT_KEYS_PATH = "my_keys"
@@ -96,7 +103,7 @@ def list_keys_from_vault(vault_client) -> List[Dict[str, Any]]:
             return []
         
         if response.status_code != 200:
-            logger.error(f"Failed to list keys from Vault: {response.text}")
+            logger.error(f"Failed to list keys from Vault: HTTP {response.status_code}")
             return []
         
         keys_list = response.json().get("data", {}).get("keys", [])
@@ -250,6 +257,7 @@ async def create_key(
     request: KeyCreateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Generate a new TLS identity key."""
     vault_client = get_vault_keys_client()
@@ -287,7 +295,7 @@ async def create_key(
                 json=identity_data,
                 timeout=(5, 30)
             )
-            logger.info(f"Identity creation response: status={identity_response.status_code}, body={identity_response.text[:500]}")
+            logger.info(f"Identity creation response: status={identity_response.status_code}")
         except lxd_exceptions.Conflict:
             # Identity with this name already exists, generate a unique name with timestamp
             common_name = f"{request.name}_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}@orcastra"
@@ -299,12 +307,12 @@ async def create_key(
                 json=identity_data,
                 timeout=(5, 30)
             )
-            logger.info(f"Identity creation response (retry with unique name): status={identity_response.status_code}, body={identity_response.text[:500]}")
+            logger.info(f"Identity creation response (retry with unique name): status={identity_response.status_code}")
         
         if identity_response.status_code not in [200, 201, 202]:
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to create identity: {identity_response.text}"
+                detail=f"Failed to create identity: HTTP {identity_response.status_code}"
             )
         
         # Extract identity ID from response
@@ -448,7 +456,7 @@ async def create_key(
             )
             
             if identity_patch_response.status_code not in [200, 201, 202]:
-                raise Exception(f"Identity PATCH failed: status={identity_patch_response.status_code}, body={identity_patch_response.text}")
+                raise Exception(f"Identity PATCH failed: HTTP {identity_patch_response.status_code}")
             
             logger.info(f"Successfully added group {group_name} to identity {identity_id}")
             
@@ -496,9 +504,25 @@ async def create_key(
         # Save to Vault (secure storage)
         save_key_to_vault(vault_client, key_id, cert_pem, key_pem, key_metadata)
         
+        # Log activity for audit trail (HIGH severity - SSH key creation)
+        activity_logger.log_activity(
+            action="user.ssh_key.create",
+            target_type="ssh_key",
+            target_id=key_id,
+            target_host=request.node,
+            target_project=request.project,
+            result="success",
+            details={
+                "name": request.name,
+                "auth_level": request.auth_level,
+                "expire_days": request.expire_days,
+                "fingerprint": fingerprint[:16] + "...",  # Truncated for security
+            }
+        )
+        
         # Clear cache
         cache = get_cache_manager()
-        cache.delete("api_responses", "my_keys:list")
+        cache.delete("api_responses", get_scope_cache_key("my_keys:list"))
         
         return KeyInfo(
             id=key_id,
@@ -537,7 +561,7 @@ async def list_keys(
     try:
         # Try cache first
         cache = get_cache_manager()
-        cache_key = "my_keys:list"
+        cache_key = get_scope_cache_key("my_keys:list")
         cached_data = cache.get("api_responses", cache_key)
         
         if cached_data is None:
@@ -657,6 +681,7 @@ async def delete_key(
     key_id: str,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a key."""
     vault_client = get_vault_keys_client()
@@ -685,7 +710,7 @@ async def delete_key(
                     
                     if identity_response.status_code not in [200, 202, 204]:
                         cleanup_errors.append(f"Identity deletion returned status {identity_response.status_code}")
-                        logger.warning(f"Identity deletion warning: {identity_response.text}")
+                        logger.warning(f"Identity deletion warning: HTTP {identity_response.status_code}")
                     else:
                         logger.info(f"Successfully deleted identity: {identity_id}")
                         
@@ -726,9 +751,25 @@ async def delete_key(
         # Delete from Vault
         delete_key_from_vault(vault_client, key_id)
         
+        # Log activity for audit trail (HIGH severity - SSH key deletion)
+        activity_logger.log_activity(
+            action="user.ssh_key.delete",
+            target_type="ssh_key",
+            target_id=key_id,
+            target_host=key_meta.get("node", "unknown"),
+            target_project=key_meta.get("project", "default"),
+            result="success",
+            details={
+                "name": key_meta.get("name"),
+                "identity_id": key_meta.get("identity_id"),
+                "group_name": key_meta.get("group_name"),
+                "cleanup_errors": len(cleanup_errors) if cleanup_errors else 0,
+            }
+        )
+        
         # Clear cache
         cache = get_cache_manager()
-        cache.delete("api_responses", "my_keys:list")
+        cache.delete("api_responses", get_scope_cache_key("my_keys:list"))
         
         return {
             "success": True,
@@ -739,6 +780,14 @@ async def delete_key(
         raise
     except Exception as e:
         logger.error(f"Error deleting key: {e}")
+        activity_logger.log_activity(
+            action="user.ssh_key.delete",
+            target_type="ssh_key",
+            target_id=key_id,
+            result="failure",
+            error_code=type(e).__name__,
+            error_message=str(e),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -751,6 +800,7 @@ async def delete_key(
 async def cleanup_orphaned_groups(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """Cleanup orphaned groups from LXD."""
     vault_client = get_vault_keys_client()
@@ -766,8 +816,8 @@ async def cleanup_orphaned_groups(
         
         logger.info(f"Found {len(valid_groups)} valid groups in Vault")
         
-        # Get all nodes
-        nodes = list(lxd_service.connection_manager._clients.keys())
+        # Get all nodes (org-scope filtered via get_node_names)
+        nodes = lxd_service.connection_manager.get_node_names()
         
         deleted_count = 0
         errors = []

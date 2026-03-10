@@ -22,6 +22,7 @@ import {
   limitSessionCount,
   STORAGE_KEYS,
 } from './storage-utils';
+import { getAccessToken } from './api';
 
 // Console window position and size
 export interface ConsolePosition {
@@ -234,7 +235,9 @@ export const useConsoleStore = create<ConsoleState>()(
         
         // Check max limit
         if (state.consoles.length >= state.maxConsoles) {
-          console.warn(`Maximum console limit (${state.maxConsoles}) reached`);
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn(`Maximum console limit (${state.maxConsoles}) reached`);
+          }
           return null;
         }
         
@@ -283,13 +286,13 @@ export const useConsoleStore = create<ConsoleState>()(
           const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4050/api/v1';
           fetch(`${apiUrl}/console/${encodeURIComponent(consoleToClose.instanceName)}/kill-all-sessions?host=${encodeURIComponent(consoleToClose.host)}`, {
             method: 'POST',
-          }).then((res) => res.json()).then((data) => {
-            // eslint-disable-next-line no-console
-            console.log(`[Console] Kill sessions result:`, data?.message || 'done');
-          }).catch((err) => {
+            headers: {
+              ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+            },
+          }).then((res) => res.json()).then(() => {
+            // Silent
+          }).catch(() => {
             // Silent fail - sessions might already be closed
-            // eslint-disable-next-line no-console
-            console.log(`[Console] Failed to kill sessions: ${err}`);
           });
         }
         

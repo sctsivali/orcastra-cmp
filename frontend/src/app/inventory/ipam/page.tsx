@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Network, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useIPAM } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 
@@ -152,8 +152,7 @@ export default function IPAMPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Network className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             IPAM
           </h1>
           <p className="text-muted-foreground mt-2">

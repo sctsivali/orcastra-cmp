@@ -71,6 +71,10 @@ export interface VMListResponse {
   lxd_count: number;
   microcloud_count: number;
   incus_count: number;
+  // Pagination metadata
+  offset: number;
+  limit: number;
+  has_more: boolean;
 }
 
 // VM Create Request
@@ -579,6 +583,17 @@ export interface ClusterRegisterRequest {
   endpoint: string;
   zone?: string;
   merchant_id?: string;
+  location?: {
+    region_id: string;
+    country_code: string;
+    country_name: string;
+    region_name: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+    timezone: string;
+    continent: string;
+  };
 }
 
 // ========== Cluster Members Types ==========
@@ -647,6 +662,7 @@ export interface ClusterInfo {
   created_at?: string;
   last_checked?: string;
   error_message?: string;
+  location?: GeoLocation;
 }
 
 export interface ClusterRegisterResponse {
@@ -671,6 +687,7 @@ export interface ClusterAuthCheckResponse {
   status: ClusterStatus;
   message: string;
   server_info?: Record<string, any>;
+  cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus" - updated post-auth
 }
 
 export interface ClusterListResponse {
@@ -1105,6 +1122,7 @@ export const TTL_LABELS: Record<CertificateTTLOption, string> = {
 export interface CertificateInfo {
   cluster_id: string;
   common_name?: string | null;
+  endpoint?: string | null;
   issuer?: string | null;
   issued_at?: string | null;
   expires_at?: string | null;
@@ -1475,4 +1493,297 @@ export function groupTags(tags: string[]): TagGrouped {
   }
 
   return grouped;
+}
+
+// ==================== Regions / Geo Types ====================
+
+export interface GeoLocation {
+  region_id: string;
+  region_name: string;
+  country_code: string;
+  country_name: string;
+  city: string;
+  latitude: number;
+  longitude: number;
+  timezone: string;
+  continent: string;
+  facility_name?: string;
+  facility_provider?: string;
+}
+
+export interface ClusterGeoInfo extends ClusterInfo {
+  location?: GeoLocation;
+}
+
+// Extended hardware info for regions page
+export interface ExtendedHardwareInfo {
+  // CPU details
+  cpu_total: number;
+  cpu_sockets: number;
+  cpu_architecture: string;
+  cpu_vendor?: string;  // Intel, AMD, Apple, ARM
+  cpu_model?: string;   // e.g., "Intel Xeon Gold 6248"
+  
+  // Memory
+  memory_total: number;
+  memory_used: number;
+  
+  // GPU
+  gpu_total: number;
+  gpu_vendors: string[];  // e.g., ["NVIDIA", "AMD"]
+  gpu_models: string[];   // e.g., ["RTX 4090", "A100"]
+  
+  // Storage
+  storage_total: number;
+  storage_used: number;
+  storage_types: string[];  // e.g., ["NVMe", "SATA", "SSD"]
+  storage_drivers: string[];  // e.g., ["zfs", "btrfs", "ceph"]
+  
+  // Network
+  network_interfaces?: string[];
+}
+
+export interface RegionSummary {
+  region_id: string;
+  region_name: string;
+  country_code: string;
+  country_name: string;
+  city: string;
+  latitude: number;
+  longitude: number;
+  continent: string;
+  facility_name?: string;
+  facility_provider?: string;
+  
+  // Aggregated stats
+  node_count: number;
+  instance_count: number;
+  instance_running: number;
+  
+  // Hardware summary (aggregated from all nodes)
+  hardware: ExtendedHardwareInfo;
+  
+  // Node details
+  nodes: Array<{
+    cluster_id: string;
+    display_name: string;
+    status: ClusterStatus;
+    node_type?: string;
+    hardware: ExtendedHardwareInfo;
+  }>;
+}
+
+export interface RegionsOverviewResponse {
+  regions: RegionSummary[];
+  total_nodes: number;
+  total_instances: number;
+  total_cpu: number;
+  total_memory: number;
+  total_storage: number;
+  total_gpu: number;
+}
+
+// Cluster location update
+export interface ClusterLocationUpdateRequest {
+  location: GeoLocation;
+}
+
+export interface ClusterLocationUpdateResponse {
+  success: boolean;
+  cluster_id: string;
+  message: string;
+  location: GeoLocation;
+}
+
+// ── Organization types ──
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  created_by: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  member_count: number;
+  cluster_count: number;
+}
+
+/** Organization synced from external app (OrcaHub) */
+export interface IntegrationOrganization {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  source: string;
+  external_id: string | null;
+  api_key_id: string | null;
+  app_name: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface OrganizationCreateRequest {
+  name: string;
+  description?: string;
+}
+
+export interface OrganizationUpdateRequest {
+  name?: string;
+  description?: string;
+  is_active?: boolean;
+}
+
+export interface OrganizationMember {
+  id: string;
+  organization_id: string;
+  user_email: string;
+  role: string;
+  invited_by: string;
+  joined_at: string;
+}
+
+export interface OrganizationCluster {
+  id: string;
+  organization_id: string;
+  cluster_id: string;
+  registered_by: string;
+  registered_at: string;
+}
+
+// ── User Groups types ──
+
+export interface UserGroupEntry {
+  user_email: string;
+  role: string;
+  organizations: { id: string; name: string; slug: string }[];
+}
+
+export interface UserGroupAssignRequest {
+  user_email: string;
+  role: string;
+  organization_id?: string;
+}
+
+export interface UserGroupAssignResponse {
+  message: string;
+  user_email: string;
+  role: string;
+  authentik_synced: boolean;
+}
+
+export interface AuthentikSyncStatus {
+  authentik_configured: boolean;
+  authentik_reachable: boolean;
+  groups_exist: boolean;
+  details: string;
+}
+
+// ========== Tenant Access Policy Types (ACL) ==========
+
+/** Valid permission types for tenant policies */
+export type TenantPermission = "view" | "operate" | "console" | "snapshot" | "file_transfer";
+
+export const TENANT_PERMISSION_LABELS: Record<TenantPermission, string> = {
+  view: "View",
+  operate: "Operate (Start/Stop/Restart)",
+  console: "Console & Terminal",
+  snapshot: "Snapshots",
+  file_transfer: "File Transfer",
+};
+
+export const TENANT_PERMISSION_DESCRIPTIONS: Record<TenantPermission, string> = {
+  view: "See resources in dashboards and monitoring",
+  operate: "Start, stop, restart, freeze/unfreeze VMs",
+  console: "Open graphical console or terminal to VM",
+  snapshot: "Create, restore, and delete snapshots",
+  file_transfer: "Upload and download files to/from VM",
+};
+
+export const ALL_TENANT_PERMISSIONS: TenantPermission[] = [
+  "view", "operate", "console", "snapshot", "file_transfer",
+];
+
+export interface PolicyRule {
+  id?: number;
+  cluster_id: string;
+  project_name: string;
+  instance_name: string;
+  permissions: TenantPermission[];
+}
+
+export interface AccessPolicy {
+  id: number;
+  organization_id: number;
+  name: string;
+  description?: string | null;
+  is_default: boolean;
+  source: string;
+  external_id?: string | null;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  rules: PolicyRule[];
+  assignments_count: number;
+}
+
+export interface PolicyListResponse {
+  policies: AccessPolicy[];
+  total: number;
+}
+
+export interface PolicyCreateRequest {
+  name: string;
+  description?: string;
+  organization_id: number;
+  is_default?: boolean;
+  rules: Omit<PolicyRule, "id">[];
+}
+
+export interface PolicyUpdateRequest {
+  name?: string;
+  description?: string;
+  is_default?: boolean;
+  rules?: Omit<PolicyRule, "id">[];
+}
+
+export interface PolicyAssignment {
+  id: number;
+  policy_id: number;
+  policy_name: string;
+  org_member_id: number;
+  user_email: string;
+  organization_id: number;
+  organization_name: string;
+  assigned_by: string;
+  assigned_at: string;
+  expires_at?: string | null;
+  source: string;
+}
+
+export interface AssignmentListResponse {
+  assignments: PolicyAssignment[];
+  total: number;
+}
+
+export interface AssignmentCreateRequest {
+  policy_id: number;
+  user_email: string;
+  organization_id: number;
+  expires_at?: string | null;
+}
+
+export interface ResolvedAccess {
+  cluster_id: string;
+  project_name: string;
+  instance_name: string;
+  permissions: TenantPermission[];
+  policy_name: string;
+}
+
+export interface MyAccessResponse {
+  access: ResolvedAccess[];
+  total_clusters: number;
+  total_rules: number;
 }

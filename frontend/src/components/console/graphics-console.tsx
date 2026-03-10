@@ -48,17 +48,9 @@ interface SpiceConnection {
   sendCtrlAltDel?: () => void;
 }
 
-// Get WebSocket URL for graphics console
-function getWebSocketUrl(instanceName: string, host: string, project: string): string {
-  // Use current page hostname for WebSocket connection (same host, different port)
-  // This ensures WebSocket works regardless of how the page is accessed
-  const pageHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
-  const apiPort = "4050"; // Backend API port
-  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-  const url = `${protocol}//${pageHost}:${apiPort}/api/v1/console/${encodeURIComponent(instanceName)}/ws?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}&console_type=vga`;
-  console.log('[GraphicsConsole] WebSocket URL:', url);
-  return url;
-}
+// WebSocket URL builder - uses NEXT_PUBLIC_API_URL so connections
+// work through reverse proxies / tunnels (not just localhost:4050)
+import { getGraphicsWsUrl } from "@/lib/ws-url";
 
 // Correct script loading order for spice-html5
 // Based on spice-html5-rails.js manifest
@@ -161,7 +153,6 @@ async function loadSpiceScripts(): Promise<void> {
     }
     
     spiceLoaded = true;
-    console.log('[SPICE] All scripts loaded successfully');
   })();
   
   return spiceLoadingPromise;
@@ -351,8 +342,6 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         canvasEl.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true });
         canvasEl.addEventListener('touchcancel', handleTouchEnd, { passive: false, capture: true });
         
-        console.log('[GraphicsConsole] Touch handlers attached to canvas');
-      
         return () => {
           canvasEl.removeEventListener('touchstart', handleTouchStart, { capture: true });
           canvasEl.removeEventListener('touchmove', handleTouchMove, { capture: true });
@@ -401,7 +390,6 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       // Block ALL keyboard events until stabilized
       const blockKeyboard = (e: KeyboardEvent) => {
         if (!isStabilizedRef.current) {
-          console.log('[GraphicsConsole] Blocking keyboard event during stabilization:', e.key);
           e.preventDefault();
           e.stopPropagation();
           e.stopImmediatePropagation();
@@ -518,7 +506,6 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         .then(() => {
           if (mounted) {
             setScriptsReady(true);
-            console.log('[GraphicsConsole] SPICE scripts ready');
           }
         })
         .catch((err) => {
@@ -559,7 +546,6 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       
       connectionAttemptRef.current += 1;
       isConnectingRef.current = true;
-      console.log(`[GraphicsConsole] Connection attempt ${connectionAttemptRef.current}/${MAX_CONNECTION_ATTEMPTS}`);
 
       // Disconnect any existing connection
       if (spiceConnectionRef.current) {
@@ -576,15 +562,13 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       setErrorMessage('');
 
       try {
-        const wsUrl = getWebSocketUrl(instanceName, host, project);
+        const wsUrl = getGraphicsWsUrl(instanceName, host, project);
         const SpiceMainConn = (window as any).SpiceMainConn;
 
         if (!SpiceMainConn) {
           isConnectingRef.current = false;
           throw new Error('SpiceMainConn not available');
         }
-
-        console.log('[GraphicsConsole] Creating SPICE connection to:', wsUrl);
 
         // Reset stabilization flag - will be set after 500ms delay
         isStabilizedRef.current = false;
@@ -607,6 +591,8 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
               msg = 'Cannot connect to console server. Please check if the backend is running.';
             } else if (msg.includes('Bad password')) {
               msg = 'Authentication failed for console session.';
+            } else if (msg.includes('Permission denied')) {
+              msg = 'Console session expired or access denied. Please reconnect.';
             }
             
             console.error('[GraphicsConsole] SPICE error:', msg);
@@ -618,20 +604,18 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
           onsuccess: () => {
             isConnectingRef.current = false;
             connectionAttemptRef.current = 0; // Reset on success
-            console.log('[GraphicsConsole] SPICE connected successfully');
             setStatus('connected');
             updateConnectionStatus(consoleId, 'connected');
             
             // Set stabilization flag after 500ms to prevent backtick spam on first input
             setTimeout(() => {
               isStabilizedRef.current = true;
-              console.log('[GraphicsConsole] Connection stabilized - keyboard input enabled');
             }, 500);
             
             onReady?.();
           },
           onagent: () => {
-            console.log('[GraphicsConsole] SPICE agent connected');
+            // SPICE agent connected
           },
         });
 
@@ -679,7 +663,6 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       
       // Don't send keys until connection is stabilized (prevents backtick spam on open)
       if (!isStabilizedRef.current) {
-        console.log('[GraphicsConsole] Ignoring key - not stabilized yet');
         return false;
       }
       

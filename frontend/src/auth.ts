@@ -61,19 +61,16 @@ const authentikProvider = {
   },
   // Map Authentik user info to NextAuth user object
   profile(profile: any) {
-    // DEBUG: Log Authentik profile to see what sub is being sent
-    console.log("[AUTH DEBUG] Authentik profile received:", JSON.stringify({
-      sub: profile.sub,
-      email: profile.email,
-      name: profile.name,
-      preferred_username: profile.preferred_username,
-    }, null, 2));
+    // Resolve email: use profile.email, fallback to preferred_username (if it looks like email), then sub
+    const resolvedEmail = profile.email || profile.preferred_username || "";
+    // Resolve ID: must be non-empty for NextAuth to accept the account
+    const resolvedId = resolvedEmail || profile.sub;
     
     return {
-      // Use email as primary ID since Authentik sub can change per session
-      id: profile.email,
+      // Use email as primary ID, fallback to preferred_username or sub
+      id: resolvedId,
       name: profile.name || profile.preferred_username,
-      email: profile.email,
+      email: resolvedEmail,
       image: profile.picture,
       groups: profile.groups || [],
       roles: profile.groups?.filter((g: string) => g.startsWith("role_")) || [],
@@ -83,18 +80,33 @@ const authentikProvider = {
   },
 };
 
+// Cooldown period (seconds) before retrying a failed token refresh.
+// Prevents flooding the IdP with requests when it's unreachable.
+const TOKEN_REFRESH_COOLDOWN_SECONDS = 60;
+
+// Timeout for outbound fetch calls to the IdP (ms)
+const IDP_FETCH_TIMEOUT_MS = 10_000;
+
+// Cached OIDC token endpoint to avoid re-fetching discovery on every refresh
+let _cachedTokenEndpoint: string | null = null;
+
 // Token refresh function for handling expired tokens
 async function refreshAccessToken(token: JWT): Promise<JWT> {
   try {
     const issuer = process.env.AUTHENTIK_ISSUER;
     if (!issuer) throw new Error("AUTHENTIK_ISSUER not configured");
 
-    // Fetch OIDC discovery document to get token endpoint
-    const discoveryUrl = `${issuer}.well-known/openid-configuration`;
-    const discoveryResponse = await fetch(discoveryUrl);
-    const discovery = await discoveryResponse.json();
+    // Resolve token endpoint (cache discovery to avoid extra round-trip)
+    if (!_cachedTokenEndpoint) {
+      const discoveryUrl = `${issuer}.well-known/openid-configuration`;
+      const discoveryResponse = await fetch(discoveryUrl, {
+        signal: AbortSignal.timeout(IDP_FETCH_TIMEOUT_MS),
+      });
+      const discovery = await discoveryResponse.json();
+      _cachedTokenEndpoint = discovery.token_endpoint;
+    }
 
-    const response = await fetch(discovery.token_endpoint, {
+    const response = await fetch(_cachedTokenEndpoint!, {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -105,6 +117,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
         grant_type: "refresh_token",
         refresh_token: token.refreshToken || "",
       }),
+      signal: AbortSignal.timeout(IDP_FETCH_TIMEOUT_MS),
     });
 
     const tokens = await response.json();
@@ -121,10 +134,19 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       error: undefined,
     };
   } catch (error) {
-    console.error("Error refreshing access token:", error);
+    // Compact log - avoid dumping the full stack on every request
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`[AUTH] Token refresh failed: ${reason}`);
+
+    // Invalidate cached endpoint in case discovery changed
+    _cachedTokenEndpoint = null;
+
     return {
       ...token,
       error: "RefreshAccessTokenError",
+      // Set a cooldown: pretend the token is valid for N seconds so we
+      // don't retry on every single incoming request while the IdP is down.
+      expiresAt: Math.floor(Date.now() / 1000) + TOKEN_REFRESH_COOLDOWN_SECONDS,
     };
   }
 }
@@ -149,13 +171,6 @@ export const authConfig: NextAuthConfig = {
     async jwt({ token, user, account }) {
       // Initial sign in
       if (account && user) {
-        // DEBUG: Log what's being stored in token
-        console.log("[AUTH DEBUG] JWT callback - Initial sign in:", JSON.stringify({
-          "user.id": user.id,
-          "user.email": user.email,
-          "token.sub (before)": token.sub,
-        }, null, 2));
-        
         // Use EMAIL as the persistent user identifier
         // This is more reliable than Authentik sub which can change per session
         const persistentUserId = user.email || user.id;
@@ -171,14 +186,19 @@ export const authConfig: NextAuthConfig = {
           // Authentik sub changes per session, email is stable
           authentikId: persistentUserId,
         };
-        
-        console.log("[AUTH DEBUG] JWT callback - Token created with authentikId (email):", newToken.authentikId);
         return newToken;
       }
 
       // Return previous token if the access token has not expired yet
       if (token.expiresAt && Date.now() < token.expiresAt * 1000) {
         return token;
+      }
+
+      // If a previous refresh already failed and we're still in cooldown,
+      // skip retrying to avoid flooding the IdP with requests.
+      if (token.error === "RefreshAccessTokenError") {
+        // expiresAt was set to now + cooldown; this branch only triggers
+        // when the cooldown period has also elapsed, so proceed to retry.
       }
 
       // Access token has expired, try to refresh it
@@ -225,7 +245,38 @@ export const authConfig: NextAuthConfig = {
       }
 
       // Require authentication for all other pages
-      return isLoggedIn;
+      if (!isLoggedIn) {
+        return false;
+      }
+
+      // ---- Three-Tier Role-based route protection ----
+      // Extract role groups from session
+      const userGroups: string[] = (auth?.user as any)?.groups ?? [];
+      const groupsLower = userGroups.map((g) => g.toLowerCase().trim());
+
+      // resolve admin/partner using same mapping as rbac.ts
+      const adminGroups = ["role_admin", "admin", "admins", "authentik admins", "orcastra-admins"];
+      const partnerGroups = [...adminGroups, "role_partner", "partner", "orcastra-partners"];
+
+      const isAdmin = groupsLower.some((g) => adminGroups.includes(g));
+      const isPartner = groupsLower.some((g) => partnerGroups.includes(g));
+
+      // Admin-only routes (Identities & Groups moved to Admin+Partner in sidebar,
+      // but middleware also allows Partner)
+      const adminOrPartnerPaths = [
+        "/inventory/identities",
+        "/inventory/groups",
+      ];
+
+      const isAdminOrPartnerRoute = adminOrPartnerPaths.some(
+        (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/")
+      );
+
+      if (isAdminOrPartnerRoute && !isPartner) {
+        return Response.redirect(new URL("/", nextUrl));
+      }
+
+      return true;
     },
   },
 

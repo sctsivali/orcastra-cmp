@@ -50,7 +50,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { cn, formatHypervisorType } from "@/lib/utils";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
@@ -211,7 +211,7 @@ function CreateAPIKeyDialog({
                       const clusterId = String(cluster.id);
                       const clusterName = String(cluster.name || '');
                       const clusterEndpoint = String(cluster.endpoint || '');
-                      const clusterType = String(cluster.server_type || 'unknown');
+                      const clusterType = formatHypervisorType(cluster.server_type);
                       const isSelected = selectedClusterIds.includes(clusterId);
                       
                       return (
@@ -300,8 +300,7 @@ function APIKeySecretDialog({
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <CheckCircle2 className="h-5 w-5 text-green-500" />
+          <DialogTitle>
             API Key Created Successfully
           </DialogTitle>
           <DialogDescription>
@@ -558,7 +557,7 @@ export function IntegrationsSettings() {
                     <div className="space-y-1">
                       <CardTitle className="text-lg flex items-center gap-2">
                         <Key className="h-5 w-5" />
-                        {String(apiKey.name || 'Unnamed')}
+                        {String(apiKey.name || 'N/A')}
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
                         <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">

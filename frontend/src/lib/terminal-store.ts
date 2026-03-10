@@ -81,6 +81,7 @@ interface TerminalState {
   closeAllTerminals: () => void;
   minimizeTerminal: (id: string) => void;
   restoreTerminal: (id: string) => void;
+  restoreAllTerminals: () => void;
   focusTerminal: (id: string) => void;
   updateTerminalPosition: (id: string, position: Partial<TerminalPosition>) => void;
   updateTerminalStatus: (id: string, status: TerminalStatus, errorMessage?: string) => void;
@@ -160,7 +161,9 @@ export const useTerminalStore = create<TerminalState>()(
         
         // Check max terminals limit
         if (state.terminals.length >= state.maxTerminals) {
-          console.warn(`Maximum terminals (${state.maxTerminals}) reached`);
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn(`Maximum terminals (${state.maxTerminals}) reached`);
+          }
           return null;
         }
         
@@ -238,7 +241,9 @@ export const useTerminalStore = create<TerminalState>()(
         set(s => {
           const terminal = s.terminals.find(t => t.id === id);
           if (!terminal) {
-            console.warn('[TerminalStore] restoreTerminal: terminal not found', id);
+            if (process.env.NODE_ENV !== 'production') {
+              console.warn('[TerminalStore] restoreTerminal: terminal not found', id);
+            }
             return s;
           }
           
@@ -261,6 +266,25 @@ export const useTerminalStore = create<TerminalState>()(
             ),
             focusedTerminalId: id,
             zIndexOrder: [...s.zIndexOrder.filter(zId => zId !== id), id],
+          };
+        });
+      },
+
+      restoreAllTerminals: () => {
+        set(s => {
+          const minimized = s.terminals.filter(t => t.minimized);
+          if (minimized.length === 0) return s;
+          
+          // Restore all minimized terminals
+          const lastRestoredId = minimized[minimized.length - 1].id;
+          return {
+            terminals: s.terminals.map(t =>
+              t.minimized
+                ? { ...t, minimized: false, focused: t.id === lastRestoredId, lastActiveAt: Date.now() }
+                : { ...t, focused: false }
+            ),
+            focusedTerminalId: lastRestoredId,
+            zIndexOrder: [...s.zIndexOrder],
           };
         });
       },

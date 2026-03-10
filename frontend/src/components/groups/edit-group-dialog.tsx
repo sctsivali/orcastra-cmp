@@ -36,7 +36,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Plus, X, Shield, Users, Trash2, Loader2, Check, ChevronsUpDown, Search } from "lucide-react";
+import { Plus, X, Trash2, Loader2, Check, ChevronsUpDown, Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { 
@@ -225,7 +225,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
           ? imagesData.flatMap((host: any) => host?.images || [])
           : (imagesData as any)?.images || [];
         return images.map((img: any) => ({ 
-          name: img.properties?.description || img.fingerprint?.substring(0, 12) || 'unnamed', 
+          name: img.properties?.description || img.fingerprint?.substring(0, 12) || 'N/A', 
           path: `/1.0/images/${img.fingerprint}` 
         }));
       case "profile":
@@ -500,9 +500,6 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     }
 
     if (!currentGroup || !workingNode) {
-      console.error("Debug - currentGroup:", currentGroup);
-      console.error("Debug - workingNode:", workingNode);
-      console.error("Debug - availableClusters:", availableClusters);
       toast({
         title: "Configuration Error",
         description: `No valid node available. Current: ${currentGroup?.node || 'undefined'}, Fallback: ${fallbackNode || 'none'}`,
@@ -631,8 +628,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
     <Dialog open={open} onOpenChange={handleDialogChange}>
       <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
         <DialogHeader className="flex-shrink-0">
-          <DialogTitle className="flex items-center gap-2">
-            <Shield className="h-5 w-5" />
+          <DialogTitle>
             Edit Group: {currentGroup.name}
           </DialogTitle>
           <DialogDescription>
@@ -957,8 +953,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
             {/* TLS Identities */}
             <div className="space-y-2">
-              <Label className="text-sm font-semibold flex items-center gap-2">
-                <Shield className="h-4 w-4" />
+              <Label className="text-sm font-semibold">
                 TLS Identities ({groupedIdentities.tls.length})
               </Label>
               {groupedIdentities.tls.length > 0 ? (
@@ -1008,8 +1003,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
             {/* OIDC Identities */}
             <div className="space-y-2">
-              <Label className="text-sm font-semibold flex items-center gap-2">
-                <Users className="h-4 w-4" />
+              <Label className="text-sm font-semibold">
                 OIDC Identities ({groupedIdentities.oidc.length})
               </Label>
               {groupedIdentities.oidc.length > 0 ? (
@@ -1176,7 +1170,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                                     />
                                     <div className="flex-1 overflow-hidden">
                                       <div className="font-medium text-sm truncate">
-                                        {identity.name || "Unnamed"}
+                                        {identity.name || "N/A"}
                                       </div>
                                       <div className="font-mono text-xs text-muted-foreground truncate">
                                         {identity.id}
@@ -1209,10 +1203,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                         Adding...
                       </>
                     ) : (
-                      <>
-                        <Plus className="h-4 w-4 mr-2" />
-                        Add Selected Identity
-                      </>
+                      "Add Selected Identity"
                     )}
                   </Button>
 
@@ -1236,8 +1227,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       <Dialog open={showUnsavedWarning} onOpenChange={setShowUnsavedWarning}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-amber-600">
-              <Shield className="h-5 w-5" />
+            <DialogTitle className="text-amber-600">
               Unsaved Changes
             </DialogTitle>
             <DialogDescription>
@@ -1259,8 +1249,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       <Dialog open={!!identityToRemove} onOpenChange={(open) => !open && setIdentityToRemove(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <Trash2 className="h-5 w-5" />
+            <DialogTitle className="text-destructive">
               Remove Identity
             </DialogTitle>
             <DialogDescription className="space-y-2">

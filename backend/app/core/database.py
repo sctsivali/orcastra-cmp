@@ -8,7 +8,7 @@ import logging
 from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import AsyncAdaptedQueuePool
 
 logger = logging.getLogger(__name__)
 
@@ -20,11 +20,23 @@ if not DATABASE_URL:
         "Format: postgresql+asyncpg://user:password@host:port/database"
     )
 
-# Create async engine
+# Connection pool config (tunable via env)
+_POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "20"))
+_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "30"))
+_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+_POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE", "1800"))  # 30 min
+
+# Create async engine with proper connection pooling
 engine = create_async_engine(
     DATABASE_URL,
-    echo=os.getenv("DEBUG", "false").lower() == "true",
-    poolclass=NullPool,  # Disable connection pooling for better async compatibility
+    echo=(os.getenv("DEBUG", "false").lower() == "true"
+          and os.getenv("ENVIRONMENT", "development") == "development"),
+    poolclass=AsyncAdaptedQueuePool,
+    pool_size=_POOL_SIZE,
+    max_overflow=_MAX_OVERFLOW,
+    pool_timeout=_POOL_TIMEOUT,
+    pool_recycle=_POOL_RECYCLE,
+    pool_pre_ping=True,  # verify connection health before checkout
 )
 
 # Create async session factory
@@ -61,7 +73,7 @@ async def init_db() -> None:
     try:
         async with engine.begin() as conn:
             # Import all models here to ensure they're registered
-            from app.models import db_models  # noqa: F401
+            from app.models import db_models
             
             # Create all tables
             await conn.run_sync(Base.metadata.create_all)

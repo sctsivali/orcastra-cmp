@@ -135,7 +135,7 @@ export function ClickableBadge({
                         </div>
                       </div>
                       <Badge variant="outline" className="text-sm">
-                        {device.type || "unknown"}
+                        {device.type || "N/A"}
                       </Badge>
                     </div>
 

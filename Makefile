@@ -329,5 +329,41 @@ quick-restart: down up ## Quick restart all services
 
 quick-rebuild: down build-nc up ## Quick rebuild without cache and restart
 
+##@ Deployment
+
+deploy-package: ## Create deployment package (tar.gz) for on-prem installation
+	@echo "$(COLOR_GREEN)Creating deployment package...$(COLOR_RESET)"
+	@DEPLOY_DIR=orcastra-dashboard-$(APP_VERSION) && \
+	rm -rf /tmp/$$DEPLOY_DIR && \
+	mkdir -p /tmp/$$DEPLOY_DIR/config/fluent-bit && \
+	mkdir -p /tmp/$$DEPLOY_DIR/config/opensearch-dashboards && \
+	mkdir -p /tmp/$$DEPLOY_DIR/scripts && \
+	cp docker-compose.prod.yml /tmp/$$DEPLOY_DIR/ && \
+	cp config/fluent-bit/fluent-bit.conf /tmp/$$DEPLOY_DIR/config/fluent-bit/ && \
+	cp config/fluent-bit/parsers.conf /tmp/$$DEPLOY_DIR/config/fluent-bit/ && \
+	cp config/fluent-bit/parse_json.lua /tmp/$$DEPLOY_DIR/config/fluent-bit/ && \
+	cp config/opensearch-dashboards/access-logs-dashboard-v3.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
+	cp config/opensearch-dashboards/audit-logs-dashboard-v3.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
+	cp config/opensearch-dashboards/logs-overview-dashboard.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
+	cp scripts/setup_opensearch_dashboards.sh /tmp/$$DEPLOY_DIR/scripts/ && \
+	chmod +x /tmp/$$DEPLOY_DIR/scripts/*.sh && \
+	cp docs/DEPLOY_SINGLE_VM.md /tmp/$$DEPLOY_DIR/ && \
+	cp docs/DEPLOY_MULTI_VM.md /tmp/$$DEPLOY_DIR/ && \
+	cd /tmp && tar -czf $$DEPLOY_DIR.tar.gz $$DEPLOY_DIR/ && \
+	mv -f /tmp/$$DEPLOY_DIR.tar.gz $(CURDIR)/$$DEPLOY_DIR.tar.gz && \
+	rm -rf /tmp/$$DEPLOY_DIR && \
+	echo "$(COLOR_GREEN)✓ Deployment package created: $$DEPLOY_DIR.tar.gz$(COLOR_RESET)" && \
+	echo "" && \
+	echo "$(COLOR_BOLD)Package contents:$(COLOR_RESET)" && \
+	echo "  docker-compose.prod.yml        — Production compose file" && \
+	echo "  config/fluent-bit/             — Fluent Bit log pipeline configs" && \
+	echo "  config/opensearch-dashboards/  — Pre-built dashboard templates" && \
+	echo "  scripts/                       — Setup scripts (OpenSearch dashboards)" && \
+	echo "  DEPLOY_SINGLE_VM.md           — Single VM deployment guide" && \
+	echo "  DEPLOY_MULTI_VM.md            — Multi VM deployment guide" && \
+	echo "" && \
+	echo "$(COLOR_YELLOW)Transfer to deployment VM:$(COLOR_RESET)" && \
+	echo "  scp $$DEPLOY_DIR.tar.gz user@<VM_IP>:/opt/orcastra-dashboard/"
+
 # Default target
 .DEFAULT_GOAL := help

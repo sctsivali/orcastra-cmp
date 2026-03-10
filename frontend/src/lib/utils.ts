@@ -17,7 +17,7 @@ export function formatBytes(bytes: number, decimals = 2): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
 }
 
-export function formatDate(dateString: string | null): string {
+export function formatDate(dateString: string | null | undefined): string {
   if (!dateString) return "N/A";
   
   try {
@@ -34,7 +34,34 @@ export function formatDate(dateString: string | null): string {
   }
 }
 
+// Format datetime to DD/MM/YYYY, HH:MM:SS
+export function formatDateTime(dateString: string | null | undefined): string {
+  if (!dateString) return "N/A";
+  try {
+    const date = new Date(dateString);
+    if (isNaN(date.getTime())) return "N/A";
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}`;
+  } catch {
+    return "N/A";
+  }
+}
+
 export function truncateFingerprint(fingerprint: string, length = 12): string {
   if (fingerprint.length <= length) return fingerprint;
   return fingerprint.substring(0, length) + "...";
+}
+
+// standardize hypervisor type display: LXD, MicroCloud, Incus
+export function formatHypervisorType(type: string | null | undefined): string {
+  if (!type) return "LXD";
+  const t = type.toLowerCase();
+  if (t === "incus") return "Incus";
+  if (t === "microcloud") return "MicroCloud";
+  return "LXD";
 }

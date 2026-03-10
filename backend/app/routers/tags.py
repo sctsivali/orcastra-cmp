@@ -19,6 +19,8 @@ from typing import List, Optional
 import logging
 
 from app.core.database import get_db
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency
 from app.services.tag_service import TagService, get_tag_service
 from app.services.lxd_service import get_lxd_service, LXDService, LXDConnectionError
 from app.models.schemas import (
@@ -37,7 +39,11 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tags", tags=["Tags"])
+router = APIRouter(
+    prefix="/tags",
+    tags=["Tags"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 
 # ============================================
@@ -90,6 +96,8 @@ async def list_categories(
 async def create_category(
     data: TagCategoryCreate,
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new tag category."""
     try:
@@ -107,6 +115,8 @@ async def update_category(
     category_id: int,
     data: TagCategoryUpdate,
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a tag category."""
     try:
@@ -150,6 +160,8 @@ async def create_tag(
     data: TagCreate,
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new tag."""
     try:
@@ -167,6 +179,8 @@ async def update_tag(
     tag_id: int,
     data: TagUpdate,
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a tag."""
     try:
@@ -184,6 +198,8 @@ async def update_tag(
 async def delete_tag(
     tag_id: int,
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a tag."""
     try:
@@ -255,6 +271,8 @@ async def set_resource_tags(
     project: Optional[str] = Query(None, description="LXD project (for instance)"),
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Set (replace) all tags for a resource."""
     if resource_type not in ["node", "project", "instance"]:
@@ -287,6 +305,8 @@ async def add_resource_tags(
     project: Optional[str] = Query(None, description="LXD project (for instance)"),
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Add tags to a resource."""
     if resource_type not in ["node", "project", "instance"]:
@@ -319,6 +339,8 @@ async def remove_resource_tag(
     host: Optional[str] = Query(None, description="LXD host (for project/instance)"),
     project: Optional[str] = Query(None, description="LXD project (for instance)"),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Remove a single tag from a resource."""
     if resource_type not in ["node", "project", "instance"]:
@@ -353,6 +375,8 @@ async def update_instance_tags_legacy(
     project: str = Query("default", description="LXD project"),
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for an instance (legacy endpoint)."""
     return await tag_service.set_resource_tags(
@@ -376,6 +400,8 @@ async def update_project_tags_legacy(
     request: BulkTagAssignRequest,
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for a project (legacy endpoint)."""
     return await tag_service.set_resource_tags(
@@ -397,6 +423,8 @@ async def update_node_tags_legacy(
     request: BulkTagAssignRequest,
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for a node (legacy endpoint)."""
     return await tag_service.set_resource_tags(
@@ -459,6 +487,7 @@ async def update_user_visibility(
     settings: UserTagVisibilitySettings,
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
 ):
     """Update current user's tag visibility settings."""
     if not user_id:
@@ -487,6 +516,8 @@ async def import_from_lxd(
     project: Optional[str] = Query(None, description="LXD project"),
     user_id: Optional[str] = Depends(get_user_id),
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Import tags from LXD."""
     if resource_type not in ["node", "project", "instance"]:
@@ -546,6 +577,8 @@ async def validate_tags(
 )
 async def init_default_categories(
     tag_service: TagService = Depends(get_tag_service_dep),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """Initialize default tag categories."""
     count = await tag_service.initialize_default_categories()

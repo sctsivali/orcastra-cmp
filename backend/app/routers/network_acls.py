@@ -13,12 +13,19 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.services.activity_logger import get_activity_logger
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/network-acls", tags=["Network ACLs"])
+router = APIRouter(
+    prefix="/network-acls",
+    tags=["Network ACLs"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -164,6 +171,7 @@ async def create_network_acl(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new network ACL."""
     try:
@@ -180,16 +188,47 @@ async def create_network_acl(
         response = client.api.post('/1.0/network-acls', json=acl_data)
         
         if response.status_code in [200, 201, 202]:
+            # Log activity for audit trail
+            activity_logger.log_activity(
+                action="network.acl.create",
+                target_type="network_acl",
+                target_id=request.name,
+                target_host=host,
+                result="success",
+                details={
+                    "description": request.description,
+                    "ingress_rules": len(request.ingress),
+                    "egress_rules": len(request.egress),
+                }
+            )
             return {
                 "success": True,
                 "message": f"Network ACL {request.name} created successfully"
             }
         else:
+            activity_logger.log_activity(
+                action="network.acl.create",
+                target_type="network_acl",
+                target_id=request.name,
+                target_host=host,
+                result="failure",
+                error_code="LXDError",
+                error_message="Failed to create network ACL",
+            )
             raise HTTPException(status_code=500, detail="Failed to create network ACL")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error creating network ACL: {e}")
+        activity_logger.log_activity(
+            action="network.acl.create",
+            target_type="network_acl",
+            target_id=request.name,
+            target_host=host,
+            result="failure",
+            error_code=type(e).__name__,
+            error_message=str(e),
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -208,6 +247,7 @@ async def update_network_acl(
     config: Optional[Dict[str, str]] = Body(None),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a network ACL."""
     try:
@@ -258,6 +298,7 @@ async def delete_network_acl(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a network ACL."""
     try:
@@ -265,14 +306,40 @@ async def delete_network_acl(
         response = client.api.delete(f'/1.0/network-acls/{acl_name}')
         
         if response.status_code in [200, 202]:
+            # Log activity for audit trail
+            activity_logger.log_activity(
+                action="network.acl.delete",
+                target_type="network_acl",
+                target_id=acl_name,
+                target_host=host,
+                result="success",
+            )
             return {
                 "success": True,
                 "message": f"Network ACL {acl_name} deleted successfully"
             }
         else:
+            activity_logger.log_activity(
+                action="network.acl.delete",
+                target_type="network_acl",
+                target_id=acl_name,
+                target_host=host,
+                result="failure",
+                error_code="LXDError",
+                error_message="Failed to delete network ACL",
+            )
             raise HTTPException(status_code=500, detail="Failed to delete network ACL")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error deleting network ACL {acl_name}: {e}")
+        activity_logger.log_activity(
+            action="network.acl.delete",
+            target_type="network_acl",
+            target_id=acl_name,
+            target_host=host,
+            result="failure",
+            error_code=type(e).__name__,
+            error_message=str(e),
+        )
         raise HTTPException(status_code=500, detail=str(e))

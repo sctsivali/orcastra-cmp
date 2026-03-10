@@ -3,10 +3,12 @@ Pydantic models for Orcastra Dashboard API.
 Defines request/response schemas for VMs and operations.
 """
 
-from pydantic import BaseModel, Field, computed_field
+from pydantic import BaseModel, Field, computed_field, field_validator
 from typing import Optional, Dict, Any, List
 from enum import Enum
 from datetime import datetime
+import re
+from urllib.parse import urlparse
 
 
 class VMStatus(str, Enum):
@@ -78,12 +80,16 @@ class VMInfo(BaseModel):
 
 class VMListResponse(BaseModel):
     """Response for listing all VMs."""
-    total: int = Field(..., description="Total number of VMs")
+    total: int = Field(..., description="Total number of VMs (before pagination)")
     vms: List[VMInfo] = Field(..., description="List of VMs")
     nodes: List[str] = Field(..., description="List of connected node names")
     lxd_count: int = Field(0, description="Number of LXD nodes online")
     microcloud_count: int = Field(0, description="Number of MicroCloud nodes online")
     incus_count: int = Field(0, description="Number of Incus nodes online")
+    # Pagination metadata (optional - present when limit > 0)
+    offset: int = Field(0, description="Offset of the returned page")
+    limit: int = Field(0, description="Page size (0 = all)")
+    has_more: bool = Field(False, description="Whether more items exist beyond this page")
 
 
 class VMCreateRequest(BaseModel):
@@ -176,11 +182,11 @@ class ImageListResponse(BaseModel):
 class GPUDRMInfo(BaseModel):
     """Direct Rendering Manager (DRM) info for GPU."""
     id: Optional[int] = Field(None, description="DRM card ID")
-    card_name: Optional[str] = Field(None, description="Card device name (e.g., 'card0')")
+    card_name: Optional[str] = Field(None, description="Card device name (ex;, 'card0')")
     card_device: Optional[str] = Field(None, description="Card device number")
     control_name: Optional[str] = Field(None, description="Control device name")
     control_device: Optional[str] = Field(None, description="Control device number")
-    render_name: Optional[str] = Field(None, description="Render device name (e.g., 'renderD128')")
+    render_name: Optional[str] = Field(None, description="Render device name (ex;, 'renderD128')")
     render_device: Optional[str] = Field(None, description="Render device number")
 
 
@@ -188,11 +194,11 @@ class GPUNvidiaInfo(BaseModel):
     """NVIDIA-specific GPU information."""
     cuda_version: Optional[str] = Field(None, description="CUDA API version")
     nvrm_version: Optional[str] = Field(None, description="NVRM driver version")
-    brand: Optional[str] = Field(None, description="Brand name (e.g., 'GeForce', 'Quadro')")
+    brand: Optional[str] = Field(None, description="Brand name (ex;, 'GeForce', 'Quadro')")
     model: Optional[str] = Field(None, description="Model name")
     uuid: Optional[str] = Field(None, description="GPU UUID")
     architecture: Optional[str] = Field(None, description="Architecture generation")
-    card_name: Optional[str] = Field(None, description="Card device name (e.g., 'nvidia0')")
+    card_name: Optional[str] = Field(None, description="Card device name (ex;, 'nvidia0')")
     card_device: Optional[str] = Field(None, description="Card device number")
 
 
@@ -206,7 +212,7 @@ class GPUSRIOVInfo(BaseModel):
 class GPUMdevProfile(BaseModel):
     """Mediated device (mdev) profile for vGPU."""
     name: str = Field(..., description="Profile name")
-    api: Optional[str] = Field(None, description="Mechanism used (e.g., 'vfio-pci')")
+    api: Optional[str] = Field(None, description="Mechanism used (ex;, 'vfio-pci')")
     available: int = Field(0, description="Number of available devices")
     description: Optional[str] = Field(None, description="Profile description")
     devices: List[str] = Field(default_factory=list, description="List of existing device UUIDs")
@@ -216,15 +222,15 @@ class GPUCardInfo(BaseModel):
     """Detailed GPU card information from LXD resources."""
     # Core identification
     index: int = Field(0, description="GPU card index")
-    driver: Optional[str] = Field(None, description="Kernel driver (e.g., 'nvidia', 'i915', 'amdgpu')")
+    driver: Optional[str] = Field(None, description="Kernel driver (ex;, 'nvidia', 'i915', 'amdgpu')")
     driver_version: Optional[str] = Field(None, description="Driver version")
-    pci_address: Optional[str] = Field(None, description="PCI address (e.g., '0000:00:02.0')")
+    pci_address: Optional[str] = Field(None, description="PCI address (ex;, '0000:00:02.0')")
     usb_address: Optional[str] = Field(None, description="USB address for USB GPUs")
     
     # Vendor/Product info
-    vendor: Optional[str] = Field(None, description="Vendor name (e.g., 'NVIDIA Corporation')")
-    vendor_id: Optional[str] = Field(None, description="PCI vendor ID (e.g., '10de')")
-    product: Optional[str] = Field(None, description="Product name (e.g., 'GeForce RTX 3080')")
+    vendor: Optional[str] = Field(None, description="Vendor name (ex;, 'NVIDIA Corporation')")
+    vendor_id: Optional[str] = Field(None, description="PCI vendor ID (ex;, '10de')")
+    product: Optional[str] = Field(None, description="Product name (ex;, 'GeForce RTX 3080')")
     product_id: Optional[str] = Field(None, description="PCI product ID")
     
     # System topology
@@ -382,11 +388,11 @@ class ProjectCreateRequest(BaseModel):
     description: Optional[str] = Field(None, description="Project description")
     config: Optional[Dict[str, str]] = Field(
         default_factory=dict,
-        description="Project configuration (e.g., features.images, features.profiles)"
+        description="Project configuration (ex;, features.images, features.profiles)"
     )
     max_cpu: int = Field(..., ge=1, description="Maximum CPU cores")
-    max_ram: str = Field(..., min_length=1, description="Maximum RAM (e.g., '2GiB', '512MiB')")
-    max_storage: str = Field(..., min_length=1, description="Maximum storage (e.g., '10GiB', '500MiB')")
+    max_ram: str = Field(..., min_length=1, description="Maximum RAM (ex;, '2GiB', '512MiB')")
+    max_storage: str = Field(..., min_length=1, description="Maximum storage (ex;, '10GiB', '500MiB')")
 
     class Config:
         json_schema_extra = {
@@ -416,9 +422,9 @@ class ProjectCreateResponse(BaseModel):
 class ProjectUpdateRequest(BaseModel):
     """Request body for updating a project."""
     description: Optional[str] = Field(None, description="Project description")
-    max_cpu: Optional[int] = Field(None, ge=1, description="Maximum CPU cores")
-    max_ram: Optional[str] = Field(None, min_length=1, description="Maximum RAM (e.g., '2GiB', '512MiB')")
-    max_storage: Optional[str] = Field(None, min_length=1, description="Maximum storage (e.g., '10GiB', '500MiB')")
+    max_cpu: Optional[int] = Field(None, ge=0, description="Maximum CPU cores (0 = unlimited/clear limit)")
+    max_ram: Optional[str] = Field(None, description="Maximum RAM (ex;, '2GiB', '512MiB', '0' = unlimited)")
+    max_storage: Optional[str] = Field(None, description="Maximum storage (ex;, '10GiB', '500MiB', '0' = unlimited)")
 
     class Config:
         json_schema_extra = {
@@ -449,13 +455,60 @@ class ClusterStatus(str, Enum):
     ERROR = "error"
 
 
+# ========== Geo Location Models ==========
+
+class GeoLocation(BaseModel):
+    """Geographic location information for a node/cluster."""
+    region_id: str = Field(..., description="Region identifier (ex;, 'id-jkt', 'us-iad')")
+    region_name: str = Field(..., description="Region display name (ex;, 'Jakarta')")
+    country_code: str = Field(..., min_length=2, max_length=2, description="ISO 3166-1 alpha-2 country code")
+    country_name: str = Field(..., description="Country name")
+    city: str = Field(..., description="City name")
+    latitude: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
+    longitude: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
+    timezone: str = Field(..., description="Timezone (ex;, 'Asia/Jakarta')")
+    continent: str = Field(..., description="Continent code (ex;, 'AS', 'EU', 'NA')")
+    facility_name: Optional[str] = Field(None, description="Data center or facility name (ex;, 'Main Data Center')")
+    facility_provider: Optional[str] = Field(None, description="Facility provider/operator (ex;, 'Acme Corporation')")
+
+
 class ClusterRegisterRequest(BaseModel):
     """Request to register a new LXD cluster."""
     cluster_id: str = Field(..., min_length=1, max_length=63, description="Unique cluster identifier")
     display_name: str = Field(..., min_length=1, description="Human-readable display name for the node")
-    endpoint: str = Field(..., description="LXD API endpoint (e.g., https://192.168.10.187:8443)")
-    zone: Optional[str] = Field(None, description="Geographical or logical zone")
+    endpoint: str = Field(..., min_length=1, description="LXD API endpoint (ex;, https://192.168.10.187:8443)")
+    zone: Optional[str] = Field(None, description="Geographical or logical zone (legacy, use location instead)")
     merchant_id: Optional[str] = Field(None, description="Merchant/organization identifier")
+    # New geo location fields
+    location: Optional[GeoLocation] = Field(None, description="Geographic location information")
+
+    @field_validator("endpoint")
+    @classmethod
+    def validate_endpoint(cls, v: str) -> str:
+        """Validate endpoint is a proper URL with valid scheme, host, and format."""
+        v = v.strip()
+        # Reject obviously invalid characters
+        if re.search(r'[,\s<>{}|\\^`]', v):
+            raise ValueError("Endpoint contains invalid characters (commas, spaces, etc.)")
+        parsed = urlparse(v)
+        # Enforce http/https scheme
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("Endpoint must use http:// or https:// scheme")
+        # Validate hostname exists
+        if not parsed.hostname:
+            raise ValueError("Endpoint must include a valid hostname or IP address")
+        # Validate hostname characters (no commas, unicode, etc.)
+        if not re.match(r'^[a-zA-Z0-9.\-]+$', parsed.hostname):
+            raise ValueError("Endpoint hostname contains invalid characters")
+        # Validate IP address octets if hostname is an IP
+        ip_match = re.match(r'^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$', parsed.hostname)
+        if ip_match:
+            octets = [int(ip_match.group(i)) for i in range(1, 5)]
+            if any(o > 255 for o in octets):
+                raise ValueError("IP address octets must be between 0 and 255")
+            if not parsed.port:
+                raise ValueError("Port is required when using an IP address")
+        return v
     
     class Config:
         json_schema_extra = {
@@ -463,7 +516,20 @@ class ClusterRegisterRequest(BaseModel):
                 "cluster_id": "node-jkt-01",
                 "display_name": "Jakarta DC1 Node",
                 "endpoint": "https://192.168.10.187:8443",
-                "zone": "Jakarta-DC1"
+                "zone": "Jakarta-DC1",
+                "location": {
+                    "region_id": "us-east-dc1",
+                    "region_name": "US East - Virginia",
+                    "country_code": "US",
+                    "country_name": "United States",
+                    "city": "Ashburn, Virginia",
+                    "latitude": 39.0438,
+                    "longitude": -77.4874,
+                    "timezone": "America/New_York",
+                    "continent": "NA",
+                    "facility_name": "Main Data Center",
+                    "facility_provider": "Acme Corporation"
+                }
             }
         }
 
@@ -473,15 +539,29 @@ class ClusterInfo(BaseModel):
     cluster_id: str = Field(..., description="Unique cluster identifier")
     display_name: str = Field(..., description="Human-readable display name")
     endpoint: str = Field(..., description="LXD API endpoint")
-    zone: Optional[str] = Field(None, description="Zone/location")
+    zone: Optional[str] = Field(None, description="Zone/location (legacy)")
     cluster_type: Optional[str] = Field(None, description="Cluster type (auto-detected after authentication)")
     merchant_id: Optional[str] = Field(None, description="Merchant ID")
     status: ClusterStatus = Field(..., description="Current connection status")
     has_certificate: bool = Field(False, description="Whether certificate is configured")
+    location: Optional[GeoLocation] = Field(None, description="Geographic location information")
     certificate_common_name: Optional[str] = Field(None, description="Certificate CN")
     created_at: Optional[datetime] = Field(None, description="Registration timestamp")
     last_checked: Optional[datetime] = Field(None, description="Last status check")
     error_message: Optional[str] = Field(None, description="Error details if status is ERROR")
+
+
+class ClusterLocationUpdateRequest(BaseModel):
+    """Request to update cluster location."""
+    location: GeoLocation = Field(..., description="New geographic location information")
+
+
+class ClusterLocationUpdateResponse(BaseModel):
+    """Response after updating cluster location."""
+    success: bool = Field(..., description="Whether the update was successful")
+    message: str = Field(..., description="Status message")
+    cluster_id: str = Field(..., description="Cluster identifier")
+    location: GeoLocation = Field(..., description="Updated location information")
 
 
 class ClusterRegisterResponse(BaseModel):
@@ -509,6 +589,7 @@ class ClusterAuthCheckResponse(BaseModel):
     status: ClusterStatus = Field(..., description="Current status")
     message: str = Field(..., description="Status message")
     server_info: Optional[Dict[str, Any]] = Field(None, description="LXD server information if connected")
+    cluster_type: Optional[str] = Field(None, description="Auto-detected cluster type (LXD, MicroCloud, Incus) - updated after authenticated detection")
 
 
 class ClusterListResponse(BaseModel):
@@ -550,6 +631,7 @@ class CertificateInfo(BaseModel):
     """Certificate information with expiry details."""
     cluster_id: str = Field(..., description="Cluster identifier")
     common_name: Optional[str] = Field(None, description="Certificate Common Name")
+    endpoint: Optional[str] = Field(None, description="Cluster endpoint address")
     issuer: Optional[str] = Field(None, description="Certificate Issuer (CA)")
     issued_at: Optional[datetime] = Field(None, description="Certificate issue date")
     expires_at: Optional[datetime] = Field(None, description="Certificate expiry date")
@@ -789,7 +871,7 @@ class MonitoringDashboardResponse(BaseModel):
 
 class TagCategoryBase(BaseModel):
     """Base schema for tag category."""
-    prefix: str = Field(..., min_length=2, max_length=10, description="Category prefix (e.g., 'loc_', 'vend_')")
+    prefix: str = Field(..., min_length=2, max_length=10, description="Category prefix (ex;, 'loc_', 'vend_')")
     name: str = Field(..., min_length=1, max_length=50, description="Category display name")
     description: Optional[str] = Field(None, description="Category description")
     color: str = Field("#6b7280", description="Hex color for UI display")
@@ -827,7 +909,7 @@ class TagCategoryResponse(TagCategoryBase):
 
 class TagBase(BaseModel):
     """Base schema for tag."""
-    name: str = Field(..., min_length=1, max_length=100, description="Tag name (e.g., 'loc_jakarta')")
+    name: str = Field(..., min_length=1, max_length=100, description="Tag name (ex;, 'loc_jakarta')")
     display_name: Optional[str] = Field(None, max_length=100, description="Human-readable name")
     description: Optional[str] = Field(None, description="Tag description")
     color: Optional[str] = Field(None, description="Override color (uses category color if not set)")
@@ -964,6 +1046,81 @@ class TagStatsResponse(BaseModel):
     categories: List[TagCategoryResponse]
     top_tags: List[TagStatistics]
     tags_by_category: Dict[str, int]
+
+
+# ========== Region/Geographic Models ==========
+
+class ExtendedHardwareInfo(BaseModel):
+    """Extended hardware information for regions summary."""
+    # CPU details
+    cpu_total: int = Field(0, description="Total CPU cores")
+    cpu_sockets: int = Field(0, description="Number of CPU sockets")
+    cpu_architecture: str = Field("x86_64", description="CPU architecture")
+    cpu_vendor: Optional[str] = Field(None, description="CPU vendor (Intel, AMD, Apple, ARM)")
+    cpu_model: Optional[str] = Field(None, description="CPU model name")
+    
+    # Memory
+    memory_total: int = Field(0, description="Total memory in bytes")
+    memory_used: int = Field(0, description="Used memory in bytes")
+    
+    # GPU
+    gpu_total: int = Field(0, description="Total GPU cards")
+    gpu_vendors: List[str] = Field(default_factory=list, description="GPU vendors")
+    gpu_models: List[str] = Field(default_factory=list, description="GPU models")
+    
+    # Storage
+    storage_total: int = Field(0, description="Total storage in bytes")
+    storage_used: int = Field(0, description="Used storage in bytes")
+    storage_types: List[str] = Field(default_factory=list, description="Storage types (NVMe, SATA, SSD)")
+    storage_drivers: List[str] = Field(default_factory=list, description="Storage drivers (zfs, btrfs, ceph)")
+    
+    # Network
+    network_interfaces: List[str] = Field(default_factory=list, description="Network interfaces")
+
+
+class RegionNodeInfo(BaseModel):
+    """Node information within a region."""
+    cluster_id: str
+    display_name: str
+    status: ClusterStatus
+    node_type: Optional[str] = None
+    hardware: ExtendedHardwareInfo
+
+
+class RegionSummary(BaseModel):
+    """Summary information for a geographic region."""
+    region_id: str = Field(..., description="Region identifier")
+    region_name: str = Field(..., description="Region display name")
+    country_code: str = Field(..., description="ISO country code")
+    country_name: str = Field(..., description="Country name")
+    city: str = Field(..., description="City name")
+    latitude: float = Field(..., description="Latitude coordinate")
+    longitude: float = Field(..., description="Longitude coordinate")
+    continent: str = Field(..., description="Continent code")
+    facility_name: Optional[str] = Field(None, description="Data center or facility name")
+    facility_provider: Optional[str] = Field(None, description="Facility provider/operator")
+    
+    # Aggregated stats
+    node_count: int = Field(0, description="Number of nodes in this region")
+    instance_count: int = Field(0, description="Total instances across all nodes")
+    instance_running: int = Field(0, description="Running instances")
+    
+    # Hardware summary
+    hardware: ExtendedHardwareInfo
+    
+    # Node details
+    nodes: List[RegionNodeInfo] = Field(default_factory=list)
+
+
+class RegionsOverviewResponse(BaseModel):
+    """Response for regions overview with aggregated data."""
+    regions: List[RegionSummary] = Field(default_factory=list)
+    total_nodes: int = Field(0)
+    total_instances: int = Field(0)
+    total_cpu: int = Field(0)
+    total_memory: int = Field(0)
+    total_storage: int = Field(0)
+    total_gpu: int = Field(0)
 
 
 class UserTagVisibilitySettings(BaseModel):

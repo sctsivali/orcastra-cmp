@@ -71,10 +71,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { API_URL } from "@/lib/api";
+import { API_URL, getAccessToken } from "@/lib/api";
 import { OnScreenKeyboard } from "@/components/console/on-screen-keyboard";
 import { OnScreenCursor } from "@/components/console/on-screen-cursor";
 import { ClipboardManager } from "@/components/console/clipboard-manager";
+import { ConsoleResourceBar } from "@/components/console/resource-bar";
 import "@xterm/xterm/css/xterm.css";
 
 type ConsoleStatus = "loading" | "connecting" | "connected" | "disconnected" | "error";
@@ -126,24 +127,13 @@ async function loadSpiceScripts(): Promise<void> {
       throw new Error("SpiceMainConn not available");
     }
     spiceLoaded = true;
-    console.log("[SPICE] All scripts loaded");
   })();
 
   return spiceLoadingPromise;
 }
 
-// WebSocket URLs
-function getTerminalWsUrl(instanceName: string, host: string, project: string): string {
-  const pageHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
-  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${pageHost}:4050/api/v1/terminal/ws/${instanceName}?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
-}
-
-function getGraphicsWsUrl(instanceName: string, host: string, project: string): string {
-  const pageHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
-  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${pageHost}:4050/api/v1/console/${encodeURIComponent(instanceName)}/ws?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}&console_type=vga`;
-}
+// WebSocket URL builders - shared utility for proxy-safe URLs
+import { getTerminalWsUrl, getGraphicsWsUrl } from "@/lib/ws-url";
 
 // Loading fallback
 function ConsoleLoading() {
@@ -249,7 +239,6 @@ function ConsoleContent() {
     
     // Don't send keys until connection is stabilized (prevents backtick spam on open)
     if (!isStabilizedRef.current) {
-      console.log('[Console] Ignoring key - not stabilized yet');
       return false;
     }
     
@@ -294,7 +283,12 @@ function ConsoleContent() {
       try {
         const response = await fetch(
           `${API_URL}/console/${encodeURIComponent(instanceName)}/active-sessions` +
-            `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`
+            `?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
+          {
+            headers: {
+              ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+            },
+          }
         );
         if (response.ok) {
           const data = await response.json();
@@ -319,7 +313,12 @@ function ConsoleContent() {
       const response = await fetch(
         `${API_URL}/console/${encodeURIComponent(instanceName)}/active-sessions/${operationId}` +
           `?host=${encodeURIComponent(host)}`,
-        { method: "DELETE" }
+        {
+          method: "DELETE",
+          headers: {
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+          },
+        }
       );
       if (response.ok) {
         setSessionConflict((prev) => ({
@@ -356,7 +355,12 @@ function ConsoleContent() {
         const response = await fetch(
           `${API_URL}/console/${encodeURIComponent(instanceName)}/capabilities` +
             `?host=${encodeURIComponent(host)}` +
-            `&project=${encodeURIComponent(project)}`
+            `&project=${encodeURIComponent(project)}`,
+          {
+            headers: {
+              ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+            },
+          }
         );
         
         if (response.ok) {
@@ -461,7 +465,6 @@ function ConsoleContent() {
     }
 
     const wsUrl = getTerminalWsUrl(instanceName, host, project);
-    console.log("[Console] Connecting text console:", wsUrl);
 
     setTextStatus("connecting");
     const ws = new WebSocket(wsUrl);
@@ -554,8 +557,6 @@ function ConsoleContent() {
         const SpiceMainConn = (window as any).SpiceMainConn;
         if (!SpiceMainConn) throw new Error("SpiceMainConn not available");
 
-        console.log("[Console] Connecting graphics console:", wsUrl);
-
         const sc = new SpiceMainConn({
           uri: wsUrl,
           screen_id: screenId,
@@ -569,18 +570,16 @@ function ConsoleContent() {
             graphicsConnectingRef.current = false; // Allow retry
           },
           onsuccess: () => {
-            console.log("[Console] SPICE connected");
             setGraphicsStatus("connected");
             graphicsConnectingRef.current = false; // Connection complete
             
             // Set stabilization flag after 500ms to prevent backtick spam on first input
             setTimeout(() => {
               isStabilizedRef.current = true;
-              console.log('[Console] Connection stabilized - keyboard input enabled');
             }, 500);
           },
           onagent: () => {
-            console.log("[Console] SPICE agent connected");
+            // SPICE agent connected
           },
         });
 
@@ -889,7 +888,10 @@ function ConsoleContent() {
         `${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+          },
           body: JSON.stringify({ host, force: false, timeout: 30 }),
         }
       );
@@ -1157,8 +1159,6 @@ function ConsoleContent() {
       canvasEl.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true });
       canvasEl.addEventListener('touchcancel', handleTouchEnd, { passive: false, capture: true });
       
-      console.log('[Console] Touch handlers attached to canvas');
-    
       return () => {
         canvasEl.removeEventListener('touchstart', handleTouchStart, { capture: true });
         canvasEl.removeEventListener('touchmove', handleTouchMove, { capture: true });
@@ -1206,7 +1206,6 @@ function ConsoleContent() {
     // Block ALL keyboard events until stabilized
     const blockKeyboard = (e: KeyboardEvent) => {
       if (!isStabilizedRef.current) {
-        console.log('[Console] Blocking keyboard event during stabilization:', e.key);
         e.preventDefault();
         e.stopPropagation();
         e.stopImmediatePropagation();
@@ -1714,8 +1713,7 @@ function ConsoleContent() {
       >
         <AlertDialogContent className="bg-[#1a1b26] border-[#292e42]">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-gray-200">
-              <AlertTriangle className="h-5 w-5 text-yellow-400" />
+            <AlertDialogTitle className="text-gray-200">
               {confirmDialog.title}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">
@@ -1743,8 +1741,7 @@ function ConsoleContent() {
       <AlertDialog open={sessionConflict.show}>
         <AlertDialogContent className="bg-[#1a1b26] border-[#292e42] max-w-lg">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-yellow-400">
-              <AlertTriangle className="h-5 w-5" />
+            <AlertDialogTitle className="text-yellow-400">
               Active Console Session Detected
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-300">
@@ -1771,7 +1768,7 @@ function ConsoleContent() {
                   <div className="text-gray-500 text-xs">{session.description}</div>
                 </div>
                 <div className="text-gray-400 text-xs ml-2">
-                  {new Date(session.created_at).toLocaleTimeString()}
+                  {new Date(session.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                 </div>
               </div>
             ))}
@@ -1961,6 +1958,16 @@ function ConsoleContent() {
             onClose={() => setShowKeyboard(false)}
           />
         )}
+
+        {/* Session Intelligence & Resource Display Bar */}
+        <ConsoleResourceBar
+          sessionId={sessionId || null}
+          instanceName={instanceName}
+          host={host}
+          project={project}
+          connectionStatus={currentStatus}
+          protocol={activeTab === "graphics" ? "graphics" : "terminal"}
+        />
       </div>
     </div>
   );

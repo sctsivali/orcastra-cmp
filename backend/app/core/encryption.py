@@ -74,20 +74,32 @@ class DataEncryption:
             except Exception as e:
                 logger.warning(f"Invalid REDIS_ENCRYPTION_KEY in environment: {e}")
         
-        # Priority 3: Derive key from a secret or generate new one (FALLBACK ONLY)
-        secret = os.environ.get('SECRET_KEY', 'orcastra-dashboard-default-secret-change-in-production')
+        # Priority 3: Derive key from SECRET_KEY (MUST be set explicitly)
+        secret = os.environ.get('SECRET_KEY', '')
+        if not secret:
+            raise EncryptionError(
+                "No encryption key configured. Set one of: "
+                "VAULT_ENABLED=true (recommended), REDIS_ENCRYPTION_KEY, or SECRET_KEY. "
+                "Generate SECRET_KEY with: openssl rand -hex 32"
+            )
+        
+        # derive a per-deployment salt from SECRET_KEY to avoid fixed salt weakness
+        # but keep it deterministic for the same SECRET_KEY
+        import hashlib
+        salt = hashlib.sha256(f"orcastra-salt-{secret[:8]}".encode()).digest()[:16]
         
         # Use PBKDF2HMAC to derive a key from the secret
+        # 600k iterations per OWASP 2024 recommendation for SHA-256
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
-            salt=b'orcastra-salt-v1',  # Fixed salt for deterministic key generation
-            iterations=100000,
+            salt=salt,
+            iterations=600000,
         )
         key = base64.urlsafe_b64encode(kdf.derive(secret.encode()))
         
         logger.warning(
-            "Generated encryption key from SECRET_KEY. "
+            "Derived encryption key from SECRET_KEY. "
             "For production, store key in Vault at secret/data/orcastra/encryption-key!"
         )
         return key

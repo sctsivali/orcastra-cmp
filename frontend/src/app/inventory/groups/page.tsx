@@ -43,7 +43,8 @@ import {
   Edit, 
   Trash2, 
   MoreVertical,
-  Search 
+  Search,
+  Loader2,
 } from "lucide-react";
 import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
@@ -75,6 +76,9 @@ export default function GroupsPage() {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<any>(null);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [groupToDelete, setGroupToDelete] = useState<any>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Get unique nodes for filter
   const availableNodes = useMemo((): string[] => {
@@ -132,19 +136,23 @@ export default function GroupsPage() {
   };
 
   const handleDelete = async (group: any) => {
-    if (!confirm(`Are you sure you want to delete group "${group.name}"?`)) {
-      return;
-    }
+    setGroupToDelete(group);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!groupToDelete) return;
+    setIsDeleting(true);
 
     try {
       await deleteGroupMutation.mutateAsync({
-        name: group.name,
-        host: group.node,
+        name: groupToDelete.name,
+        host: groupToDelete.node,
       });
 
       toast({
         title: "Success",
-        description: `Group "${group.name}" deleted successfully`,
+        description: `Group "${groupToDelete.name}" deleted successfully`,
       });
 
       refetch();
@@ -154,6 +162,10 @@ export default function GroupsPage() {
         description: error.message || "Failed to delete group",
         variant: "destructive",
       });
+    } finally {
+      setIsDeleting(false);
+      setDeleteDialogOpen(false);
+      setGroupToDelete(null);
     }
   };
 
@@ -166,8 +178,7 @@ export default function GroupsPage() {
       <ReadOnlyBanner />
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Users className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Groups
           </h1>
           <p className="text-muted-foreground mt-2">
@@ -353,8 +364,7 @@ export default function GroupsPage() {
       <Dialog open={identitiesModalOpen} onOpenChange={setIdentitiesModalOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <UserCheck className="h-5 w-5" />
+            <DialogTitle>
               Group Members: {selectedGroup?.name}
             </DialogTitle>
             <DialogDescription>
@@ -380,7 +390,7 @@ export default function GroupsPage() {
                         <div className="flex items-center gap-2">
                           <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
                           <span className="font-medium text-sm">
-                            {identityName || "Unknown"}
+                            {identityName || "N/A"}
                           </span>
                         </div>
                         <span className="font-mono text-xs text-muted-foreground ml-6">
@@ -433,8 +443,7 @@ export default function GroupsPage() {
       <Dialog open={permissionsModalOpen} onOpenChange={setPermissionsModalOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Shield className="h-5 w-5" />
+            <DialogTitle>
               Permissions: {selectedGroup?.name}
             </DialogTitle>
             <DialogDescription>
@@ -472,6 +481,56 @@ export default function GroupsPage() {
                 No permissions configured for this group
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Group Confirmation Dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={(open) => {
+        if (!open && !isDeleting) {
+          setDeleteDialogOpen(false);
+          setGroupToDelete(null);
+        }
+      }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-destructive">Delete Group</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete group
+              <strong className="text-foreground"> {groupToDelete?.name}</strong>
+              {groupToDelete?.node && (
+                <> from node <strong className="text-foreground">{groupToDelete.node}</strong></>
+              )}?
+              <span className="block mt-2 text-muted-foreground text-xs">
+                This action cannot be undone. All identities and permissions assigned to this group will be removed.
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-3 mt-4">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                setGroupToDelete(null);
+              }}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={confirmDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete Group"
+              )}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

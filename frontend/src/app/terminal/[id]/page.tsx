@@ -48,19 +48,16 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { API_URL } from "@/lib/api";
+import { API_URL, getAccessToken } from "@/lib/api";
+import { ConsoleResourceBar } from "@/components/console/resource-bar";
 import "@xterm/xterm/css/xterm.css";
 
 type TerminalStatus = "connecting" | "connected" | "disconnected" | "error";
 type InstanceStatus = "Running" | "Stopped" | "Starting" | "Stopping" | "Restarting" | "Unknown" | "Error";
 type OperationType = 'start' | 'stop' | 'restart';
 
-// Get WebSocket URL
-function getWebSocketUrl(instanceName: string, host: string, project: string): string {
-  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-  const apiHost = process.env.NEXT_PUBLIC_API_URL?.replace(/^https?:\/\//, "") || "localhost:4050";
-  return `${protocol}//${apiHost}/api/v1/terminal/ws/${instanceName}?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
-}
+// WebSocket URL builder - shared utility for proxy-safe URLs
+import { getTerminalWsUrl } from "@/lib/ws-url";
 
 // Loading fallback
 function TerminalLoading() {
@@ -184,15 +181,13 @@ function TerminalContent() {
     if (!instanceName || !host) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const wsUrl = getWebSocketUrl(instanceName, host, project);
-    console.log("[Terminal] Connecting to:", wsUrl);
+    const wsUrl = getTerminalWsUrl(instanceName, host, project);
 
     setStatus("connecting");
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log("[Terminal] WebSocket connected");
       if (xtermRef.current) {
         const { cols, rows } = xtermRef.current;
         ws.send(JSON.stringify({ width: cols, height: rows }));
@@ -292,7 +287,7 @@ function TerminalContent() {
     try {
       const response = await fetch(`${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
         body: JSON.stringify({
           host,
           force: false,
@@ -387,7 +382,8 @@ function TerminalContent() {
         const response = await fetch(
           `${API_URL}/console/${encodeURIComponent(instanceName)}/capabilities` +
             `?host=${encodeURIComponent(host)}` +
-            `&project=${encodeURIComponent(project)}`
+            `&project=${encodeURIComponent(project)}`,
+          { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
         );
         
         if (response.ok) {
@@ -617,8 +613,7 @@ function TerminalContent() {
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, open }))}>
         <AlertDialogContent className="bg-[#1a1b26] border-[#292e42]">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-gray-200">
-              <AlertTriangle className="h-5 w-5 text-yellow-400" />
+            <AlertDialogTitle className="text-gray-200">
               {confirmDialog.title}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">
@@ -679,6 +674,16 @@ function TerminalContent() {
         ref={terminalRef}
         className="flex-1 p-2 overflow-hidden"
         onClick={() => xtermRef.current?.focus()}
+      />
+
+      {/* Session Intelligence & Resource Display Bar */}
+      <ConsoleResourceBar
+        sessionId={sessionId || null}
+        instanceName={instanceName}
+        host={host}
+        project={project}
+        connectionStatus={status}
+        protocol="terminal"
       />
     </div>
   );

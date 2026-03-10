@@ -49,7 +49,7 @@ import {
 import { cn } from "@/lib/utils";
 import { InstanceStatus, useConsoleStore } from "@/lib/console-store";
 import { toast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { API_URL, getAccessToken } from "@/lib/api";
 
 interface ConsoleToolbarProps {
   consoleId: string;
@@ -145,7 +145,10 @@ export function ConsoleToolbar({
         `${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+          },
           body: JSON.stringify({
             host,
             force: false,

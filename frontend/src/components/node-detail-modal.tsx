@@ -21,7 +21,7 @@ import { Badge } from "./ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { NodeStatus } from "@/types";
-import { cn } from "@/lib/utils";
+import { cn, formatHypervisorType } from "@/lib/utils";
 
 interface NodeDetailModalProps {
   node: NodeStatus | null;
@@ -50,13 +50,7 @@ export function NodeDetailModal({
   };
 
   // helper to get display name for node type
-  const getNodeTypeDisplay = (nodeType: string | null | undefined): string => {
-    if (!nodeType) return "LXD";
-    const type = nodeType.toLowerCase();
-    if (type === "incus") return "INCUS";
-    if (type === "microcloud") return "MICROCLOUD";
-    return "LXD";
-  };
+  const getNodeTypeDisplay = formatHypervisorType;
 
   const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
   

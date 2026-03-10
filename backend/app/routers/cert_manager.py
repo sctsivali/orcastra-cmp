@@ -27,12 +27,17 @@ from app.models.schemas import (
 from app.core.config import get_settings
 from app.core.vault_client import get_vault_client, VaultClientError
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_admin, require_partner, AuthenticatedUser
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand, build_trust_add_command
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/certificates", tags=["Certificate Management"])
+router = APIRouter(
+    prefix="/certificates",
+    tags=["Certificate Management"],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
+)
 
 # Warning thresholds in days
 WARNING_THRESHOLDS = {
@@ -172,6 +177,12 @@ async def list_certificates(
                 cert_path = f"{settings.vault_clusters_path}/{cluster_id}/certs"
                 cert_data = cert_manager.vault.vault_read(cert_path)
                 
+                # Skip clusters with no valid certificate (ex; Pending Trust)
+                cert_pem = cert_data.get("client.crt", "")
+                if not cert_pem:
+                    logger.debug(f"Skipping {cluster_id}: no certificate data (pending trust)")
+                    continue
+                
                 # Get metadata
                 metadata_path = f"{settings.vault_clusters_path}/{cluster_id}/metadata"
                 metadata = cert_manager.vault.vault_read(metadata_path)
@@ -208,6 +219,7 @@ async def list_certificates(
                 certificates.append(CertificateInfo(
                     cluster_id=cluster_id,
                     common_name=cert_data.get("common_name") or cert_info_parsed.get("subject"),
+                    endpoint=metadata.get("endpoint") if metadata else None,
                     issuer=cert_info_parsed.get("issuer"),
                     issued_at=cert_info_parsed.get("not_before"),
                     expires_at=expires_at,
@@ -257,6 +269,7 @@ async def get_certificate(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager)
 ):
     """Get certificate info for a specific cluster."""
+    verify_cluster_access(cluster_id)
     try:
         settings = get_settings()
         
@@ -334,6 +347,7 @@ async def initiate_renewal(
     _: None = Depends(check_read_only_mode)
 ):
     """Initiate certificate renewal."""
+    verify_cluster_access(request.cluster_id)
     try:
         settings = get_settings()
         cluster_id = request.cluster_id
@@ -367,8 +381,9 @@ async def initiate_renewal(
         
         # Generate new certificate
         logger.info(f"Generating new certificate for {cluster_id} with TTL {request.ttl.value}")
+        domain = settings.orcastra_domain
         new_cert_data = cert_manager.vault.generate_lxd_certificate(
-            common_name=f"{cluster_id}.orcastra.io",
+            common_name=f"{cluster_id}.{domain}",
             ttl=request.ttl.value
         )
         
@@ -430,7 +445,7 @@ async def initiate_renewal(
             "client.crt": new_cert_data["cert"],
             "client.key": new_cert_data["key"],
             "ca.pem": new_cert_data["ca"],
-            "common_name": f"{cluster_id}.orcastra.io",
+            "common_name": f"{cluster_id}.{domain}",
             "pending_cert_id": pending_cert_id,
             "identity_name": identity_name,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -444,7 +459,7 @@ async def initiate_renewal(
                 "client.crt": new_cert_data["cert"],
                 "client.key": new_cert_data["key"],
                 "ca.pem": new_cert_data["ca"],
-                "common_name": f"{cluster_id}.orcastra.io",
+                "common_name": f"{cluster_id}.{domain}",
             })
             
             # Clean up pending
@@ -504,6 +519,7 @@ async def verify_renewal(
     _: None = Depends(check_read_only_mode)
 ):
     """Verify pending certificate and activate if trusted."""
+    verify_cluster_access(request.cluster_id)
     try:
         settings = get_settings()
         cluster_id = request.cluster_id
@@ -607,6 +623,7 @@ async def cancel_renewal(
     _: None = Depends(check_read_only_mode)
 ):
     """Cancel pending certificate renewal."""
+    verify_cluster_access(cluster_id)
     try:
         settings = get_settings()
         pending_path = f"{settings.vault_clusters_path}/{cluster_id}/pending_certs"

@@ -426,7 +426,7 @@ SpiceConn.prototype =
     log_warn: function()
     {
         var msg = Array.prototype.join.call(arguments, " ");
-        console.log("WARNING: " + msg);
+        console.debug("SPICE WARNING: " + msg);
         if (this.message_id)
         {
             var p = document.createElement("p");
@@ -439,7 +439,7 @@ SpiceConn.prototype =
     log_err: function()
     {
         var msg = Array.prototype.join.call(arguments, " ");
-        console.log("ERROR: " + msg);
+        console.warn("SPICE ERROR: " + msg);
         if (this.message_id)
         {
             var p = document.createElement("p");
@@ -467,7 +467,7 @@ SpiceConn.prototype =
         if (this.onerror != undefined)
             this.onerror(e);
         else
-            throw(e);
+            console.warn("SPICE unhandled error:", e.message || e);
     },
 
     report_success: function(m)

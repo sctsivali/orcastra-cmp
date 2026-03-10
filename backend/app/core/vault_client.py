@@ -2,9 +2,16 @@
 Vault Client Module
 Provides secure interaction with HashiCorp Vault for storing cluster metadata,
 certificates, and secrets.
+
+All operations are audit-logged via ActivityLogger with:
+- vault.secret.read / vault.secret.write / vault.secret.delete
+- vault.kv.put / vault.kv.list
+- vault.cert.generate / vault.cert.list
+Secret VALUES are NEVER logged - only access paths and operation results.
 """
 
 import logging
+import time
 from typing import Dict, Any, Optional
 import requests
 from requests.adapters import HTTPAdapter
@@ -14,6 +21,8 @@ logger = logging.getLogger(__name__)
 
 # Import cache manager - will be lazy loaded to avoid circular imports
 _cache_manager = None
+# Lazy-loaded audit logger to avoid circular imports
+_audit_logger = None
 
 
 def get_cache():
@@ -27,6 +36,55 @@ def get_cache():
             logger.warning(f"Cache not available: {e}")
             _cache_manager = False  # Mark as unavailable
     return _cache_manager if _cache_manager else None
+
+
+def _get_audit_logger():
+    """Lazy load activity logger for audit trail."""
+    global _audit_logger
+    if _audit_logger is None:
+        try:
+            from app.services.activity_logger import get_activity_logger
+            _audit_logger = get_activity_logger()
+        except Exception:
+            return None
+    return _audit_logger
+
+
+def _audit_vault_operation(
+    action: str,
+    path: str,
+    result: str = "success",
+    error_code: Optional[str] = None,
+    error_message: Optional[str] = None,
+    duration_ms: Optional[float] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Emit a vault audit event. Never blocks the caller on failure.
+    SECURITY: Only logs the path - never logs secret values.
+    """
+    try:
+        audit = _get_audit_logger()
+        if audit is None:
+            return
+
+        # sanitize path for audit (remove Vault addr prefix, just path)
+        safe_details = {"vault_path": path}
+        if details:
+            safe_details.update(details)
+
+        audit.log_activity(
+            action=action,
+            target_type="vault",
+            target_id=path,
+            result=result,
+            error_code=error_code,
+            error_message=error_message,
+            duration_ms=duration_ms,
+            details=safe_details,
+        )
+    except Exception:
+        pass  # NEVER block vault operations on audit failure
 
 
 class VaultClientError(Exception):
@@ -98,6 +156,7 @@ class VaultClient:
         in Redis, regardless of use_cache parameter.
         This is to prevent credential leakage via cache.
         """
+        start = time.perf_counter()
         # SECURITY: Never cache sensitive paths in Redis
         is_sensitive = self._is_sensitive_path(path)
         should_cache = use_cache and not is_sensitive
@@ -128,10 +187,25 @@ class VaultClient:
                 # Determine TTL based on path
                 ttl = self._get_cache_ttl(path)
                 cache.set("vault", path, data, ttl)
-            
+
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.read", path,
+                duration_ms=duration,
+                details={"cached": False, "sensitive": is_sensitive},
+            )
+
             return data
             
         except requests.exceptions.RequestException as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.read", path,
+                result="failure",
+                error_code="VaultReadError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.error(f"Failed to read from Vault path {path}: {e}")
             raise VaultClientError(f"Vault read failed: {str(e)}")
     
@@ -156,21 +230,36 @@ class VaultClient:
                 return 0  # Never cache
             else:
                 return 300  # Default 5 minutes
-        except:
+        except Exception:
             return 300  # Default fallback
     
     def vault_write(self, path: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """
         Write data to Vault (general purpose, including PKI operations).
         """
+        start = time.perf_counter()
         url = f"{self.vault_addr}/v1/{path}"
         
         try:
             response = self.session.post(url, headers=self.headers, json=data, timeout=(2, 3))
             response.raise_for_status()
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.write", path,
+                duration_ms=duration,
+                details={"keys_written": list(data.keys()) if data else []},
+            )
             return response.json()
             
         except requests.exceptions.RequestException as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.write", path,
+                result="failure",
+                error_code="VaultWriteError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.error(f"Failed to write to Vault path {path}: {e}")
             raise VaultClientError(f"Vault write failed: {str(e)}")
     
@@ -179,6 +268,7 @@ class VaultClient:
         Put data into Vault KV v2 store.
         Invalidates cache for the path.
         """
+        start = time.perf_counter()
         url = f"{self.vault_addr}/v1/{path}"
         
         payload = {"data": data}
@@ -194,10 +284,25 @@ class VaultClient:
                 # Also invalidate parent list cache
                 parent_path = "/".join(path.split("/")[:-1])
                 cache.delete("vault_list", parent_path)
-            
+
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.kv.put", path,
+                duration_ms=duration,
+                details={"keys_written": list(data.keys()) if data else []},
+            )
+
             return response.json()
             
         except requests.exceptions.RequestException as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.kv.put", path,
+                result="failure",
+                error_code="VaultKVPutError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.error(f"Failed to put KV data to Vault path {path}: {e}")
             raise VaultClientError(f"Vault KV put failed: {str(e)}")
     
@@ -206,6 +311,7 @@ class VaultClient:
         Delete data from Vault.
         Invalidates cache for the path.
         """
+        start = time.perf_counter()
         url = f"{self.vault_addr}/v1/{path}"
         
         try:
@@ -228,10 +334,24 @@ class VaultClient:
                         cache.delete("vault_list", metadata_path)
                 
                 logger.debug(f"Invalidated cache for path: {path} and all parent lists")
-            
+
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.delete", path,
+                duration_ms=duration,
+            )
+
             return True
             
         except requests.exceptions.RequestException as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.delete", path,
+                result="failure",
+                error_code="VaultDeleteError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.error(f"Failed to delete from Vault path {path}: {e}")
             raise VaultClientError(f"Vault delete failed: {str(e)}")
     
@@ -242,6 +362,7 @@ class VaultClient:
         
             path: Vault metadata path to delete (ex; "secret/metadata/clusters/cluster-id")
         """
+        start = time.perf_counter()
         url = f"{self.vault_addr}/v1/{path}"
         
         try:
@@ -260,10 +381,25 @@ class VaultClient:
                     cache.delete("vault_list", f"{parent_path}/")
                 
                 logger.debug(f"Invalidated list caches after metadata deletion: {path}")
-            
+
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.delete", path,
+                duration_ms=duration,
+                details={"delete_type": "metadata"},
+            )
+
             return True
             
         except requests.exceptions.RequestException as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.secret.delete", path,
+                result="failure",
+                error_code="VaultMetadataDeleteError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.error(f"Failed to delete metadata from Vault path {path}: {e}")
             raise VaultClientError(f"Vault metadata delete failed: {str(e)}")
     
@@ -273,6 +409,7 @@ class VaultClient:
         
             path: Vault path to list (ex; "secret/metadata/clusters")
         """
+        start = time.perf_counter()
         # Try cache first
         cache = get_cache()
         if use_cache and cache:
@@ -291,10 +428,25 @@ class VaultClient:
             # Cache the result with longer TTL for list operations
             if use_cache and cache:
                 cache.set("vault_list", path, keys, 600)  # Cache list for 10 minutes
-            
+
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.kv.list", path,
+                duration_ms=duration,
+                details={"key_count": len(keys)},
+            )
+
             return keys
             
         except requests.exceptions.RequestException as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.kv.list", path,
+                result="failure",
+                error_code="VaultListError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.error(f"Failed to list Vault path {path}: {e}")
             raise VaultClientError(f"Vault list failed: {str(e)}")
     
@@ -313,16 +465,28 @@ class VaultClient:
         """
         # Ensure common_name is FQDN for hostname validation
         if '.' not in common_name:
-            common_name = f"{common_name}.orcastra.io"
+            # domain injected at call site via settings.orcastra_domain
+            raise ValueError(
+                f"common_name '{common_name}' must be a FQDN (ex; cluster1.example.com). "
+                "Pass full FQDN from the caller using settings.orcastra_domain."
+            )
         
         payload = {
             "common_name": common_name,
             "ttl": ttl
         }
         
+        start = time.perf_counter()
         try:
             result = self.vault_write(f"pki_int/issue/{role}", payload)
-            
+
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.cert.generate", f"pki_int/issue/{role}",
+                duration_ms=duration,
+                details={"common_name": common_name, "ttl": ttl, "role": role},
+            )
+
             return {
                 "cert": result["data"]["certificate"],
                 "key": result["data"]["private_key"],
@@ -330,6 +494,15 @@ class VaultClient:
             }
             
         except Exception as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.cert.generate", f"pki_int/issue/{role}",
+                result="failure",
+                error_code="CertGenerationError",
+                error_message=str(e),
+                duration_ms=duration,
+                details={"common_name": common_name, "role": role},
+            )
             logger.error(f"Failed to generate LXD certificate for {common_name}: {e}")
             raise VaultClientError(f"Certificate generation failed: {str(e)}")
     
@@ -337,10 +510,26 @@ class VaultClient:
         """
         List certificates issued by a PKI role.
         """
+        start = time.perf_counter()
         try:
             result = self.vault_read(f"pki_int/certs")
-            return result.get("keys", [])
+            certs = result.get("keys", [])
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.cert.list", "pki_int/certs",
+                duration_ms=duration,
+                details={"cert_count": len(certs), "role": role},
+            )
+            return certs
         except Exception as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.cert.list", "pki_int/certs",
+                result="failure",
+                error_code="CertListError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.warning(f"Failed to list certificates: {e}")
             return []
     
@@ -348,6 +537,7 @@ class VaultClient:
         """
         Check if Vault is accessible and healthy.
         """
+        start = time.perf_counter()
         try:
             url = f"{self.vault_addr}/v1/sys/health"
             response = self.session.get(url, timeout=5)
@@ -358,8 +548,24 @@ class VaultClient:
             # 473 = performance standby
             # 501 = not initialized
             # 503 = sealed
-            return response.status_code in [200, 429, 472, 473]
+            healthy = response.status_code in [200, 429, 472, 473]
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.health.check", "sys/health",
+                result="success" if healthy else "failure",
+                duration_ms=duration,
+                details={"status_code": response.status_code, "healthy": healthy},
+            )
+            return healthy
         except Exception as e:
+            duration = round((time.perf_counter() - start) * 1000, 2)
+            _audit_vault_operation(
+                "vault.health.check", "sys/health",
+                result="failure",
+                error_code="HealthCheckError",
+                error_message=str(e),
+                duration_ms=duration,
+            )
             logger.error(f"Vault health check failed: {e}")
             return False
 

@@ -24,12 +24,19 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, verify_tenant_permission
 from app.core.cache import get_cache_manager
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/instances", tags=["Instances"])
+router = APIRouter(
+    prefix="/instances",
+    tags=["Instances"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 
 @router.get(
@@ -42,12 +49,16 @@ async def list_instances(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     status: Optional[VMStatus] = Query(None, description="Filter by instance status"),
     instance_type: Optional[str] = Query(None, description="Filter by type: container or virtual-machine"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    limit: int = Query(0, ge=0, le=1000, description="Page size (0 = return all)"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all instances across all nodes with optional filters."""
-    # Try cache first (30 second cache for instances list)
+    if host:
+        verify_cluster_access(host)
+    # Try cache first (scope+ACL aware, 30s TTL)
     cache = get_cache_manager()
-    cache_key = f"instances:list:host={host}:status={status}:type={instance_type}"
+    cache_key = get_scope_cache_key(f"instances:list:host={host}:status={status}:type={instance_type}:o={offset}:l={limit}")
     cached_response = cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug(f"Returning cached instances list for {cache_key}")
@@ -68,15 +79,29 @@ async def list_instances(
         if instance_type:
             all_vms = [vm for vm in all_vms if vm.type == instance_type]
         
+        # Apply tenant ACL filtering (project + instance level)
+        all_vms = [
+            vm for vm in all_vms
+            if check_tenant_permission(
+                vm.host,
+                vm.project or "default",
+                vm.name,
+                "view",
+            )
+        ]
+        
         response = VMListResponse(
             total=len(all_vms),
-            vms=all_vms,
-            nodes=connected_nodes
+            vms=all_vms[offset:offset + limit] if limit > 0 else all_vms,
+            nodes=connected_nodes,
+            offset=offset,
+            limit=limit,
+            has_more=(offset + limit < len(all_vms)) if limit > 0 else False,
         )
         
-        # Cache for 120 seconds (enterprise TTL)
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug(f"Cached instances list for 120 seconds: {cache_key}")
+        # Cache for 30 seconds (short TTL - ACL-filtered data)
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+        logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
         
         return response
     except LXDConnectionError as e:
@@ -99,10 +124,13 @@ async def get_instance(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific instance."""
+    verify_cluster_access(host)
     try:
         vm = await lxd_service.get_vm(instance_name, host)
         if not vm:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
+        # enforce tenant ACL on individual instance access
+        verify_tenant_permission(host, vm.project or "default", vm.name, "view")
         return vm
     except LXDConnectionError as e:
         logger.error(f"LXD connection error: {e}")
@@ -122,8 +150,10 @@ async def create_instance(
     request: VMCreateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new instance."""
+    verify_cluster_access(request.host)
     try:
         result = await lxd_service.create_vm(
             name=request.name,
@@ -136,12 +166,53 @@ async def create_instance(
             devices=request.devices,
             start_on_create=request.start_on_create,
         )
+        
+        # Log activity: instance creation success
+        activity_logger.log_activity(
+            action="instance.create",
+            target_type="instance",
+            target_id=request.name,
+            target_host=request.host,
+            result="success",
+            details={
+                "image": request.image,
+                "instance_type": request.instance_type,
+                "profiles": request.profiles,
+                "start_on_create": request.start_on_create,
+            }
+        )
+        
         return result
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
+        
+        # Log activity: instance creation failure
+        activity_logger.log_activity(
+            action="instance.create",
+            target_type="instance",
+            target_id=request.name,
+            target_host=request.host,
+            result="failure",
+            error_code="LXD_OPERATION_ERROR",
+            error_message=str(e),
+            details={"image": request.image, "instance_type": request.instance_type}
+        )
+        
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating instance: {e}")
+        
+        # Log activity: instance creation failure
+        activity_logger.log_activity(
+            action="instance.create",
+            target_type="instance",
+            target_id=request.name,
+            target_host=request.host,
+            result="failure",
+            error_code="UNEXPECTED_ERROR",
+            error_message=str(e)
+        )
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -158,8 +229,19 @@ async def start_instance(
     _: None = Depends(check_read_only_mode),
 ):
     """Start an instance."""
+    verify_cluster_access(request.host)
     try:
         await lxd_service.start_vm(instance_name, request.host, force=False)
+        
+        # Log activity: instance start success
+        activity_logger.log_activity(
+            action="instance.start",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="success"
+        )
+        
         return VMActionResponse(
             success=True,
             message=f"Instance {instance_name} started successfully",
@@ -169,6 +251,17 @@ async def start_instance(
         )
     except Exception as e:
         logger.error(f"Error starting instance {instance_name}: {e}")
+        
+        # Log activity: instance start failure
+        activity_logger.log_activity(
+            action="instance.start",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -185,6 +278,7 @@ async def stop_instance(
     _: None = Depends(check_read_only_mode),
 ):
     """Stop an instance."""
+    verify_cluster_access(request.host)
     try:
         await lxd_service.stop_vm(
             instance_name, 
@@ -192,6 +286,17 @@ async def stop_instance(
             force=request.force,
             timeout=request.timeout
         )
+        
+        # Log activity: instance stop success
+        activity_logger.log_activity(
+            action="instance.stop",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="success",
+            details={"force": request.force, "timeout": request.timeout}
+        )
+        
         return VMActionResponse(
             success=True,
             message=f"Instance {instance_name} stopped successfully",
@@ -201,6 +306,17 @@ async def stop_instance(
         )
     except Exception as e:
         logger.error(f"Error stopping instance {instance_name}: {e}")
+        
+        # Log activity: instance stop failure
+        activity_logger.log_activity(
+            action="instance.stop",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -217,6 +333,7 @@ async def restart_instance(
     _: None = Depends(check_read_only_mode),
 ):
     """Restart an instance."""
+    verify_cluster_access(request.host)
     try:
         await lxd_service.restart_vm(
             instance_name,
@@ -224,6 +341,17 @@ async def restart_instance(
             force=request.force,
             timeout=request.timeout
         )
+        
+        # Log activity: instance restart success
+        activity_logger.log_activity(
+            action="instance.restart",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="success",
+            details={"force": request.force, "timeout": request.timeout}
+        )
+        
         return VMActionResponse(
             success=True,
             message=f"Instance {instance_name} restarted successfully",
@@ -233,6 +361,17 @@ async def restart_instance(
         )
     except Exception as e:
         logger.error(f"Error restarting instance {instance_name}: {e}")
+        
+        # Log activity: instance restart failure
+        activity_logger.log_activity(
+            action="instance.restart",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -247,13 +386,36 @@ async def delete_instance(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete an instance."""
+    verify_cluster_access(host)
     try:
         result = await lxd_service.delete_vm(instance_name, host)
+        
+        # Log activity: instance deletion success
+        activity_logger.log_activity(
+            action="instance.delete",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=host,
+            result="success"
+        )
+        
         return result
     except Exception as e:
         logger.error(f"Error deleting instance {instance_name}: {e}")
+        
+        # Log activity: instance deletion failure
+        activity_logger.log_activity(
+            action="instance.delete",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -269,6 +431,7 @@ async def get_instance_metrics(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get metrics for a specific instance."""
+    verify_cluster_access(host)
     try:
         metrics = await lxd_service.get_instance_metrics(host, instance_name)
         if not metrics:

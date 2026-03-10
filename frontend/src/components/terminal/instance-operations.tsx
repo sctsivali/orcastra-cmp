@@ -34,7 +34,7 @@ import {
 import { cn } from "@/lib/utils";
 import { LXDInstanceStatus, useTerminalStore } from "@/lib/terminal-store";
 import { toast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { API_URL, getAccessToken } from "@/lib/api";
 
 interface InstanceOperationsProps {
   terminalId: string;
@@ -84,7 +84,10 @@ export function InstanceOperations({
     try {
       const response = await fetch(`${API_URL}/instances/${encodeURIComponent(instanceName)}/${operation}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+        },
         body: JSON.stringify({
           host,
           force: false,
@@ -301,8 +304,7 @@ export function InstanceOperations({
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, open }))}>
         <AlertDialogContent className="bg-[#1a1b26] border-[#292e42]">
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-gray-100">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+            <AlertDialogTitle className="text-gray-100">
               {confirmDialog.title}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">

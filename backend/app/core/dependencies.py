@@ -1,9 +1,29 @@
 """
-Dependencies for read-only mode checks.
+Dependencies for read-only mode checks, authentication, and RBAC.
 """
 
 from fastapi import HTTPException, status
 from app.core.config import get_settings
+
+# re-export auth dependencies for convenient imports
+from app.core.auth import (
+    get_current_user,
+    get_optional_user,
+    get_ws_user,
+    AuthenticatedUser,
+)
+
+# re-export RBAC dependencies for convenient imports
+from app.core.rbac import (
+    Role,
+    Permission,
+    require_roles,
+    require_permissions,
+    require_authenticated,
+    require_admin,
+    require_partner,
+    require_tenant,
+)
 
 
 def check_read_only_mode():

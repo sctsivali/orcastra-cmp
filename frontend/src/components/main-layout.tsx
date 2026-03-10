@@ -53,7 +53,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const appName = settings?.branding?.appName || "Orcastra";
 
   return (
-    <div className="relative flex min-h-screen min-h-[100dvh]">
+    <div className="relative flex min-h-[100dvh]">
       {/* Hide sidebar/header on full-page terminal/console views */}
       {!isFullPageTerminalOrConsole && <Sidebar />}
       <div
@@ -62,8 +62,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           // Prevent content from affecting sidebar positioning
           "overflow-x-hidden",
           // On full-page views, no margin. Otherwise apply sidebar margins
-          isFullPageTerminalOrConsole ? "" : "md:ml-16 lg:ml-16",
-          !sidebarCollapsed && !isFullPageTerminalOrConsole && "lg:ml-64"
+          // Use clean conditional to avoid tailwind-merge breakpoint conflicts
+          !isFullPageTerminalOrConsole && (sidebarCollapsed ? "md:ml-16" : "md:ml-64")
         )}
       >
         {/* Hide header on full-page terminal/console views */}
@@ -71,7 +71,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         <main className={cn(
           "flex-1",
           // Full-page terminal/console views need no padding - they manage their own layout
-          isFullPageTerminalOrConsole ? "" : "container py-4 px-4 md:py-6 md:px-6 lg:py-8"
+          isFullPageTerminalOrConsole ? "" : "container py-4 px-4 md:py-6 md:px-6 lg:py-8 lg:px-8"
         )}>{children}</main>
         {/* Hide footer on full-page terminal/console views */}
         {!isFullPageTerminalOrConsole && (

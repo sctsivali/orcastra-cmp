@@ -22,7 +22,6 @@ import {
   Grip,
   ExternalLink,
   AlertTriangle,
-  XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +37,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useConsoleStore, ConsoleTab } from "@/lib/console-store";
-import { API_URL } from "@/lib/api";
+import { API_URL, getAccessToken } from "@/lib/api";
 import { ConsoleTabs } from "./console-tabs";
 import { ConsoleToolbar } from "./console-toolbar";
 import { TextConsole, TextConsoleHandle } from "./text-console";
@@ -48,6 +47,7 @@ import { ISOManagerPanel } from "./iso-manager-panel";
 import { OnScreenKeyboard } from "./on-screen-keyboard";
 import { OnScreenCursor } from "./on-screen-cursor";
 import { ClipboardManager } from "./clipboard-manager";
+import { ConsoleResourceBar } from "./resource-bar";
 
 import "react-resizable/css/styles.css";
 
@@ -128,7 +128,7 @@ export function ConsoleWindow({
       const response = await fetch(
         `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/active-sessions/${operationId}` +
           `?host=${encodeURIComponent(consoleInstance.host)}`,
-        { method: "DELETE" }
+        { method: "DELETE", headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
       
       if (response.ok) {
@@ -158,7 +158,8 @@ export function ConsoleWindow({
         const response = await fetch(
           `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/capabilities` +
             `?host=${encodeURIComponent(consoleInstance.host)}` +
-            `&project=${encodeURIComponent(consoleInstance.project)}`
+            `&project=${encodeURIComponent(consoleInstance.project)}`,
+          { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
         );
 
         if (!response.ok) {
@@ -376,8 +377,7 @@ export function ConsoleWindow({
       <AlertDialog open={sessionConflict.show} onOpenChange={(open) => setSessionConflict((prev) => ({ ...prev, show: open }))}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+            <AlertDialogTitle>
               Active Console Session Detected
             </AlertDialogTitle>
             <AlertDialogDescription className="space-y-2">
@@ -426,10 +426,7 @@ export function ConsoleWindow({
                   Killing...
                 </>
               ) : (
-                <>
-                  <XCircle className="h-4 w-4 mr-2" />
-                  Kill & Continue
-                </>
+                "Kill & Continue"
               )}
             </Button>
             <AlertDialogAction onClick={() => setSessionConflict({ show: false, sessions: [] })}>
@@ -503,7 +500,7 @@ export function ConsoleWindow({
               try {
                 await fetch(
                   `${API_URL}/console/${encodeURIComponent(consoleInstance.instanceName)}/kill-all-sessions?host=${encodeURIComponent(consoleInstance.host)}`,
-                  { method: 'POST' }
+                  { method: 'POST', headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
                 );
               } catch (err) {
                 // Ignore - sessions might already be closed
@@ -764,6 +761,17 @@ export function ConsoleWindow({
             )}
           </div>
           {/* End of Console content with sidebar panels */}
+
+          {/* Session Intelligence & Resource Display Bar */}
+          <ConsoleResourceBar
+            sessionId={consoleInstance.sessionId ?? null}
+            instanceName={consoleInstance.instanceName}
+            host={consoleInstance.host}
+            project={consoleInstance.project}
+            connectionStatus={consoleInstance.connectionStatus}
+            protocol={consoleInstance.activeTab === "graphics" ? "graphics" : "terminal"}
+            compact={!isFullPage}
+          />
         </>
       )}
     </div>

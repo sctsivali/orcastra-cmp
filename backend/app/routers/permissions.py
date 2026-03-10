@@ -13,17 +13,26 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_admin, require_partner
+from app.core.org_scope import org_scope_dependency
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
 # Identities Router
-identities_router = APIRouter(prefix="/identities", tags=["Identities"])
+identities_router = APIRouter(
+    prefix="/identities",
+    tags=["Identities"],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
+)
 
 # Groups Router
-groups_router = APIRouter(prefix="/groups", tags=["Groups"])
+groups_router = APIRouter(
+    prefix="/groups",
+    tags=["Groups"],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -376,7 +385,7 @@ async def create_group(
             "permissions": permissions
         }
         
-        response = client.api.post('/1.0/auth/groups', json=group_data)
+        response = client.api.auth.groups.post(json=group_data, timeout=(5, 30))
         
         if response.status_code in [200, 201, 202]:
             return {
@@ -384,7 +393,21 @@ async def create_group(
                 "message": f"Group {name} created successfully"
             }
         else:
-            raise HTTPException(status_code=500, detail="Failed to create group")
+            # extract LXD error detail for debugging
+            try:
+                lxd_error = response.json()
+                error_msg = lxd_error.get("error", "Unknown LXD error")
+                error_code = lxd_error.get("error_code", response.status_code)
+                logger.error(f"LXD create group failed ({error_code}): {error_msg}")
+            except Exception:
+                error_msg = response.text or "Unknown error from LXD"
+                error_code = response.status_code
+                logger.error(f"LXD create group failed ({error_code}): {error_msg}")
+            
+            raise HTTPException(
+                status_code=error_code if 400 <= error_code < 600 else 500,
+                detail=error_msg,
+            )
     except HTTPException:
         raise
     except Exception as e:
@@ -654,7 +677,7 @@ async def delete_group(
                 logger.error(f"Failed to reconnect to {host}: {e}")
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
-        response = client.api.delete(f'/1.0/auth/groups/{group_name}')
+        response = client.api.auth.groups[group_name].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:
             return {

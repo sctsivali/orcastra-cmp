@@ -2,7 +2,7 @@
 FROM python:3.12-slim as base
 
 # Build arguments for version management
-ARG APP_VERSION=0.1.0
+ARG APP_VERSION=1.0.0-RC1
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -32,6 +32,9 @@ WORKDIR /app
 # Create non-root user first
 RUN useradd --create-home --shell /bin/bash appuser
 
+# Create config directory and set ownership (for node_metadata.json etc.)
+RUN mkdir -p /app/config && chown appuser:appuser /app/config
+
 # Copy installed dependencies from builder and set ownership
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
@@ -52,4 +55,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')" || exit 1
 
 # Run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4050", "--workers", "1"]
+# Multiple workers for concurrency; use --workers=1 for debugging
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4050", "--workers", "4"]

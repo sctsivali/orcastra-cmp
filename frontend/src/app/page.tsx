@@ -6,19 +6,23 @@ import { Server, Database, Cloud, Zap, Shield, TrendingUp, ArrowRight } from "lu
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/lib/api";
 import { useCounterAnimation } from "@/hooks/use-counter-animation";
-import { STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG, REALTIME_DATA_CONFIG } from "@/lib/query-config";
+import { STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG } from "@/lib/query-config";
 import { usePersonalization } from "@/components/personalization-provider";
-import { LoadingLottiePage } from "@/components/loading-lottie";
+import { usePermissions } from "@/hooks/use-permissions";
+import { queryKeys } from "@/hooks/use-lxd";
 
 export default function HomePage() {
   const { settings } = usePersonalization();
+  const { isPartner } = usePermissions();
   
+  // use canonical query keys so cache is shared with dashboard/inventory pages
   const { data: nodesData, isLoading: isLoadingNodes } = useQuery({
-    queryKey: ["nodes-status"],
+    queryKey: queryKeys.nodes,
     queryFn: api.nodes.status,
-    ...REALTIME_DATA_CONFIG, // Nodes status needs frequent updates
+    ...STATIC_DATA_CONFIG, // Nodes status rarely changes, use static config
   });
 
   const { data: vmsData, isLoading: isLoadingVMs } = useQuery({
@@ -28,7 +32,7 @@ export default function HomePage() {
   });
 
   const { data: projectsData, isLoading: isLoadingProjects } = useQuery({
-    queryKey: ["projects-count"],
+    queryKey: queryKeys.allProjects,
     queryFn: () => api.projects.listAll(),
     ...STATIC_DATA_CONFIG, // Projects rarely change
   });
@@ -46,12 +50,8 @@ export default function HomePage() {
   const animatedRunningVMs = useCounterAnimation(runningVMs, 800);
   const animatedTotalProjects = useCounterAnimation(totalProjects, 800);
 
-  // Show full page loading when any data is still loading
-  const isLoading = isLoadingNodes || isLoadingVMs || isLoadingProjects;
-  
-  if (isLoading) {
-    return <LoadingLottiePage />;
-  }
+  // Progressive loading: show skeleton placeholders per section instead of full-page block
+  const isStatsLoading = isLoadingNodes || isLoadingVMs || isLoadingProjects;
 
   const features = [
     {
@@ -156,11 +156,13 @@ export default function HomePage() {
               <ArrowRight className="h-5 w-5" />
             </Link>
           </Button>
+          {isPartner && (
           <Button asChild variant="outline" size="lg" className="gap-2">
             <Link href="/create">
               Create Project
             </Link>
           </Button>
+          )}
         </div>
       </section>
 
@@ -170,12 +172,12 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Total Nodes</CardDescription>
             <CardTitle className="text-4xl">
-              {animatedTotalNodes}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedTotalNodes}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              {connectedNodes} connected
+              {isStatsLoading ? <Skeleton className="h-4 w-24 inline-block" /> : `${connectedNodes} connected`}
             </p>
           </CardContent>
         </Card>
@@ -184,7 +186,7 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Total Instances</CardDescription>
             <CardTitle className="text-4xl">
-              {animatedTotalVMs}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedTotalVMs}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -198,7 +200,7 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Running</CardDescription>
             <CardTitle className="text-4xl">
-              {animatedRunningVMs}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedRunningVMs}
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -212,7 +214,7 @@ export default function HomePage() {
           <CardHeader className="pb-3">
             <CardDescription>Total Projects</CardDescription>
             <CardTitle className="text-4xl">
-              {animatedTotalProjects}
+              {isStatsLoading ? <Skeleton className="h-10 w-12 inline-block" /> : animatedTotalProjects}
             </CardTitle>
           </CardHeader>
           <CardContent>

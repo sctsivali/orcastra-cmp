@@ -41,7 +41,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { API_URL, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useConsoleStore, AttachedISO } from "@/lib/console-store";
 
@@ -94,7 +94,8 @@ export function ISOManagerPanel({
   const fetchAttachedISO = useCallback(async () => {
     try {
       const response = await fetch(
-        `${API_URL}/console/${encodeURIComponent(instanceName)}/iso?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`
+        `${API_URL}/console/${encodeURIComponent(instanceName)}/iso?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
+        { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
 
       if (!response.ok) throw new Error('Failed to fetch attached ISO');
@@ -123,7 +124,8 @@ export function ISOManagerPanel({
   const fetchAvailableISOs = useCallback(async () => {
     try {
       const response = await fetch(
-        `${API_URL}/console/isos?host=${encodeURIComponent(host)}`
+        `${API_URL}/console/isos?host=${encodeURIComponent(host)}`,
+        { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
 
       if (!response.ok) throw new Error('Failed to fetch available ISOs');
@@ -164,7 +166,7 @@ export function ISOManagerPanel({
         `${API_URL}/console/${encodeURIComponent(instanceName)}/iso/attach?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
           body: JSON.stringify({
             pool: selectedISO.pool,
             volume: selectedISO.volume,
@@ -210,7 +212,7 @@ export function ISOManagerPanel({
     try {
       const response = await fetch(
         `${API_URL}/console/${encodeURIComponent(instanceName)}/iso/eject?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}&device_name=${encodeURIComponent(attachedISO.deviceName)}`,
-        { method: 'POST' }
+        { method: 'POST', headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
 
       if (!response.ok) throw new Error('Failed to eject ISO');

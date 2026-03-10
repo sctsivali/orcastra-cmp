@@ -27,7 +27,7 @@ import { Label } from "@/components/ui/label";
 import { NodeStatus } from "@/types";
 import { useNodesStatus, useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import { cn } from "@/lib/utils";
+import { cn, formatHypervisorType } from "@/lib/utils";
 import { NodeDetailModal } from "./node-detail-modal";
 import { TagManager, TagFilter } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
@@ -128,13 +128,7 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
   };
 
   // helper to get display name for node type
-  const getNodeTypeDisplay = (nodeType: string | null | undefined): string => {
-    if (!nodeType) return "LXD";
-    const type = nodeType.toLowerCase();
-    if (type === "incus") return "Incus";
-    if (type === "microcloud") return "MicroCloud";
-    return "LXD";
-  };
+  const getNodeTypeDisplay = formatHypervisorType;
 
   const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
 

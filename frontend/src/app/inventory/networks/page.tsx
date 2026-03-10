@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Network, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworks } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -150,8 +150,7 @@ export default function NetworksPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Network className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Networks
           </h1>
           <p className="text-muted-foreground mt-2">
@@ -268,8 +267,10 @@ export default function NetworksPage() {
                 </TableRow>
               ) : (
                 paginatedNetworks.map((network: any, idx: number) => {
-                  const ipv4 = network.config?.["ipv4.address"] || "N/A";
-                  const ipv6 = network.config?.["ipv6.address"] || "N/A";
+                  const rawIpv4 = network.config?.["ipv4.address"];
+                  const ipv4 = (!rawIpv4 || rawIpv4 === "none") ? "N/A" : rawIpv4;
+                  const rawIpv6 = network.config?.["ipv6.address"];
+                  const ipv6 = (!rawIpv6 || rawIpv6 === "none") ? "N/A" : rawIpv6;
                   
                   return (
                     <TableRow key={`${network.node}-${network.name}-${idx}`}>
@@ -290,7 +291,7 @@ export default function NetworksPage() {
                       </TableCell>
                       <TableCell>
                         <Badge variant={network.status === "Created" ? "default" : "secondary"}>
-                          {network.status}
+                          {network.status || "N/A"}
                         </Badge>
                       </TableCell>
                       <TableCell>

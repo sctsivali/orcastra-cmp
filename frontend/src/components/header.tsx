@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LayoutGrid, Plus, ChevronDown, Menu } from "lucide-react";
+import { FolderKanban, Plus, ChevronDown, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,19 +9,15 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
-import Image from "next/image";
-import { useTheme } from "./theme-provider";
 import { useLayout } from "./layout-provider";
 import { UserNav } from "./user-nav";
+import { usePermissions } from "@/hooks/use-permissions";
 
 export function Header() {
   const pathname = usePathname();
   const router = useRouter();
-  const { theme } = useTheme();
-  const { setSidebarOpen } = useLayout();
-  
-  const logoSrc = theme === "light" ? "/orca-logo-black.png" : "/orca-logo-white.png";
+  const { sidebarOpen, setSidebarOpen } = useLayout();
+  const { isPartner } = usePermissions();
 
   // Hide dropdown on create or register routes
   const hideCreateButton = pathname === "/create" || pathname === "/register-node";
@@ -42,14 +37,12 @@ export function Header() {
               <Menu className="h-5 w-5" />
             </Button>
 
-            <Link href="/" className="flex items-center gap-3 group">
-              {/* Logo/Home link - no text in header */}
-            </Link>
+
           </div>
 
           {/* Actions - Desktop only */}
           <div className="hidden sm:flex items-center gap-3">
-            {!hideCreateButton && (
+            {!hideCreateButton && isPartner && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -65,7 +58,7 @@ export function Header() {
                     className="cursor-pointer"
                     onClick={() => router.push("/create")}
                   >
-                    <LayoutGrid className="mr-2 h-4 w-4" />
+                    <FolderKanban className="mr-2 h-4 w-4" />
                     Create Project
                   </DropdownMenuItem>
                   <DropdownMenuItem 
@@ -90,8 +83,8 @@ export function Header() {
         </div>
       </header>
 
-      {/* Mobile FAB - Floating Action Button */}
-      {!hideCreateButton && (
+      {/* Mobile FAB - Floating Action Button (Partner+ only) */}
+      {!hideCreateButton && isPartner && !sidebarOpen && (
         <div className="sm:hidden fixed bottom-6 right-6 z-50">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -108,7 +101,7 @@ export function Header() {
                 className="cursor-pointer"
                 onClick={() => router.push("/create")}
               >
-                <LayoutGrid className="mr-2 h-4 w-4" />
+                <FolderKanban className="mr-2 h-4 w-4" />
                 Create Project
               </DropdownMenuItem>
               <DropdownMenuItem 

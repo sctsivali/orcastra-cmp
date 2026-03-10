@@ -24,12 +24,19 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.cache import get_cache_manager
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/vms", tags=["Virtual Machines"])
+router = APIRouter(
+    prefix="/vms",
+    tags=["Virtual Machines"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 
 @router.get(
@@ -51,12 +58,16 @@ async def list_vms(
         None, 
         description="Filter by VM status"
     ),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    limit: int = Query(0, ge=0, le=1000, description="Page size (0 = return all)"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all VMs across all LXD nodes with optional filtering."""
+    if host:
+        verify_cluster_access(host)
     # Try cache first (30 second cache for VM list)
     cache = get_cache_manager()
-    cache_key = f"vms:list:host={host}:status={status}"
+    cache_key = get_scope_cache_key(f"vms:list:host={host}:status={status}:o={offset}:l={limit}")
     cached_response = cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug(f"Returning cached VMs list for {cache_key}")
@@ -80,41 +91,54 @@ async def list_vms(
         microcloud_count = 0
         incus_count = 0
         
-        # Config nodes are LXD
+        # Config nodes are LXD - classify non-config nodes via Vault in parallel
         config_nodes = lxd_service.get_node_names()
-        for node in connected_nodes:
-            if node in config_nodes:
-                lxd_count += 1
-            else:
-                # Check if it's MicroCloud/Incus from Vault
-                try:
-                    # Read metadata directly from Vault
-                    metadata_path = f"secret/data/clusters/{node}/metadata"
-                    metadata = lxd_service.cert_manager.vault.vault_read(metadata_path)
-                    if metadata:
-                        # Key in Vault is 'type' not 'cluster_type'
-                        cluster_type = metadata.get('type', 'lxd').lower()
-                        if cluster_type == 'microcloud':
-                            microcloud_count += 1
-                        elif cluster_type == 'incus':
-                            incus_count += 1
-                        else:
-                            lxd_count += 1
+        non_config_nodes = [n for n in connected_nodes if n not in config_nodes]
+        lxd_count = len(connected_nodes) - len(non_config_nodes)
+        
+        def _classify_node(node_name: str) -> str:
+            """Read node type from Vault metadata (runs in thread pool)."""
+            try:
+                metadata_path = f"secret/data/clusters/{node_name}/metadata"
+                metadata = lxd_service.cert_manager.vault.vault_read(metadata_path)
+                if metadata:
+                    return metadata.get('type', 'lxd').lower()
+            except Exception:
+                pass
+            return 'lxd'
+
+        if non_config_nodes:
+            import asyncio
+            from concurrent.futures import ThreadPoolExecutor
+            loop = asyncio.get_event_loop()
+            _classify_executor = ThreadPoolExecutor(max_workers=min(len(non_config_nodes), 10))
+            classify_tasks = [loop.run_in_executor(_classify_executor, _classify_node, n) for n in non_config_nodes]
+            classify_results = await asyncio.gather(*classify_tasks, return_exceptions=True)
+            _classify_executor.shutdown(wait=False)
+            for result in classify_results:
+                if isinstance(result, str):
+                    if result == 'microcloud':
+                        microcloud_count += 1
+                    elif result == 'incus':
+                        incus_count += 1
                     else:
                         lxd_count += 1
-                except:
-                    lxd_count += 1  # Default to LXD if unknown
+                else:
+                    lxd_count += 1
         
         response = VMListResponse(
             total=len(filtered_vms),
-            vms=filtered_vms,
+            vms=filtered_vms[offset:offset + limit] if limit > 0 else filtered_vms,
             nodes=connected_nodes,
             lxd_count=lxd_count,
             microcloud_count=microcloud_count,
             incus_count=incus_count,
+            offset=offset,
+            limit=limit,
+            has_more=(offset + limit < len(filtered_vms)) if limit > 0 else False,
         )
         
-        # Cache for 120 seconds (enterprise TTL)
+        # Cache for 120 seconds (TTL)
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
         logger.debug(f"Cached VMs list for 120 seconds: {cache_key}")
         
@@ -145,6 +169,7 @@ async def get_vm(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get detailed information about a specific VM."""
+    verify_cluster_access(host)
     try:
         vm = await lxd_service.get_vm(vm_name, host)
         
@@ -181,8 +206,10 @@ async def create_vm(
     request: VMCreateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new VM on the specified host."""
+    verify_cluster_access(request.host)
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()
@@ -204,6 +231,21 @@ async def create_vm(
             start_on_create=request.start_on_create,
         )
         
+        # Log activity: VM creation success
+        activity_logger.log_activity(
+            action="vm.create",
+            target_type="vm",
+            target_id=request.name,
+            target_host=request.host,
+            result="success",
+            details={
+                "image": request.image,
+                "instance_type": request.instance_type,
+                "profiles": request.profiles,
+                "start_on_create": request.start_on_create
+            }
+        )
+        
         return VMCreateResponse(
             success=True,
             message=f"VM '{request.name}' created successfully on {request.host}",
@@ -211,11 +253,42 @@ async def create_vm(
         )
         
     except LXDOperationError as e:
+        # Log activity: VM creation failure
+        activity_logger.log_activity(
+            action="vm.create",
+            target_type="vm",
+            target_id=request.name,
+            target_host=request.host,
+            result="failure",
+            error_code="LXD_OPERATION_ERROR",
+            error_message=str(e),
+            details={"image": request.image, "instance_type": request.instance_type}
+        )
         raise HTTPException(status_code=400, detail=str(e))
     except LXDConnectionError as e:
+        # Log activity: VM creation failure
+        activity_logger.log_activity(
+            action="vm.create",
+            target_type="vm",
+            target_id=request.name,
+            target_host=request.host,
+            result="failure",
+            error_code="LXD_CONNECTION_ERROR",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating VM: {e}")
+        # Log activity: VM creation failure
+        activity_logger.log_activity(
+            action="vm.create",
+            target_type="vm",
+            target_id=request.name,
+            target_host=request.host,
+            result="failure",
+            error_code="UNEXPECTED_ERROR",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -237,11 +310,21 @@ async def start_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Start a VM."""
+    verify_cluster_access(request.host)
     try:
         vm = await lxd_service.start_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
+        )
+        
+        # Log activity: VM start success
+        activity_logger.log_activity(
+            action="vm.start",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="success"
         )
         
         return VMActionResponse(
@@ -253,11 +336,29 @@ async def start_vm(
         )
         
     except LXDOperationError as e:
+        # Log activity: VM start failure
+        activity_logger.log_activity(
+            action="vm.start",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error starting VM {vm_name}: {e}")
+        # Log activity: VM start failure
+        activity_logger.log_activity(
+            action="vm.start",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -279,12 +380,23 @@ async def stop_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Stop a VM."""
+    verify_cluster_access(request.host)
     try:
         vm = await lxd_service.stop_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
             timeout=request.timeout,
+        )
+        
+        # Log activity: VM stop success
+        activity_logger.log_activity(
+            action="vm.stop",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="success",
+            details={"force": request.force, "timeout": request.timeout}
         )
         
         return VMActionResponse(
@@ -296,11 +408,29 @@ async def stop_vm(
         )
         
     except LXDOperationError as e:
+        # Log activity: VM stop failure
+        activity_logger.log_activity(
+            action="vm.stop",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error stopping VM {vm_name}: {e}")
+        # Log activity: VM stop failure
+        activity_logger.log_activity(
+            action="vm.stop",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -322,12 +452,23 @@ async def restart_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Restart a VM."""
+    verify_cluster_access(request.host)
     try:
         vm = await lxd_service.restart_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
             timeout=request.timeout,
+        )
+        
+        # Log activity: VM restart success
+        activity_logger.log_activity(
+            action="vm.restart",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="success",
+            details={"force": request.force, "timeout": request.timeout}
         )
         
         return VMActionResponse(
@@ -339,11 +480,29 @@ async def restart_vm(
         )
         
     except LXDOperationError as e:
+        # Log activity: VM restart failure
+        activity_logger.log_activity(
+            action="vm.restart",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error restarting VM {vm_name}: {e}")
+        # Log activity: VM restart failure
+        activity_logger.log_activity(
+            action="vm.restart",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -364,13 +523,25 @@ async def delete_vm(
     force: bool = Query(False, description="Force delete running VM"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a VM."""
+    verify_cluster_access(host)
     try:
         await lxd_service.delete_vm(
             name=vm_name,
             host=host,
             force=force,
+        )
+        
+        # Log activity: VM delete success
+        activity_logger.log_activity(
+            action="vm.delete",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=host,
+            result="success",
+            details={"force": force}
         )
         
         return VMActionResponse(
@@ -381,11 +552,29 @@ async def delete_vm(
         )
         
     except LXDOperationError as e:
+        # Log activity: VM delete failure
+        activity_logger.log_activity(
+            action="vm.delete",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error deleting VM {vm_name}: {e}")
+        # Log activity: VM delete failure
+        activity_logger.log_activity(
+            action="vm.delete",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -407,6 +596,7 @@ async def get_instance_metrics(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get real-time metrics for an instance."""
+    verify_cluster_access(host)
     try:
         metrics = await lxd_service.get_instance_metrics(
             host=host,

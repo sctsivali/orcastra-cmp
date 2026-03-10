@@ -30,9 +30,6 @@ class MetricsCollector:
     def __init__(self, collection_interval: int = 60):
         """
         Initialize the metrics collector.
-        
-        Args:
-            collection_interval: Time between collections in seconds (default: 60)
         """
         self.collection_interval = collection_interval
         self._running = False
@@ -136,11 +133,25 @@ class MetricsCollector:
             
             # Call the dashboard endpoint - it handles all metrics collection and history storage
             # This ensures a single code path for metrics collection, avoiding race conditions
-            await get_monitoring_dashboard(lxd_service=self._lxd_service)
+            # fresh=True bypasses the 35s dashboard cache so the collector always
+            # performs a full collection and stores a history point every cycle
+            result = await get_monitoring_dashboard(lxd_service=self._lxd_service, fresh=True)
             logger.debug("Background collector triggered dashboard metrics collection")
             
+            # Push to WebSocket subscribers (if any connected)
+            try:
+                from app.services.ws_broadcast import get_monitoring_broadcaster
+                broadcaster = get_monitoring_broadcaster()
+                if broadcaster.client_count > 0:
+                    # result is a Pydantic model or dict
+                    data = result.model_dump() if hasattr(result, 'model_dump') else result
+                    await broadcaster.broadcast(data)
+                    logger.debug(f"Pushed monitoring data to {broadcaster.client_count} WS clients")
+            except Exception as ws_err:
+                logger.debug(f"WS broadcast skipped: {ws_err}")
+            
         except Exception as e:
-            logger.debug(f"Background metrics collection: {e}")
+            logger.warning(f"Background metrics collection: {e}")
     
     async def _prewarm_instances_cache(self):
         """
@@ -175,6 +186,20 @@ class MetricsCollector:
                 cache,
                 "nodes:status",
                 self._fetch_nodes
+            )
+            
+            # Pre-warm regions cache (slowest endpoint, 15-45s cold)
+            await self._prewarm_single_cache(
+                cache,
+                "regions:overview",
+                self._fetch_regions
+            )
+            
+            # Pre-warm storage pool resources cache
+            await self._prewarm_single_cache(
+                cache,
+                "storage_pool_resources:all",
+                self._fetch_storage_pool_resources
             )
             
         except Exception as e:
@@ -229,6 +254,44 @@ class MetricsCollector:
         nodes = self._lxd_service.connection_manager.get_node_names()
         # Return basic structure - the actual nodes endpoint will fill in details
         return {"nodes": nodes, "count": len(nodes)}
+    
+    async def _fetch_regions(self):
+        """Fetch regions overview for cache warming."""
+        try:
+            from app.routers.regions import get_regions_overview
+            result = await get_regions_overview(lxd_service=self._lxd_service)
+            # result is a dict or Pydantic model
+            if hasattr(result, 'model_dump'):
+                return result.model_dump()
+            return result
+        except Exception as e:
+            logger.debug(f"Regions pre-warm fetch failed: {e}")
+            return None
+    
+    async def _fetch_storage_pool_resources(self):
+        """Fetch storage pool resources for cache warming."""
+        try:
+            from app.routers.storage_pools import _serialize_pool_resources
+            all_resources = {}
+            nodes = self._lxd_service.connection_manager.get_node_names()
+            for node_name in nodes:
+                try:
+                    client = self._lxd_service.get_client_with_reconnect(node_name)
+                    if client is None:
+                        continue
+                    pools = client.storage_pools.all()
+                    for pool in pools:
+                        try:
+                            resources = pool.resources.get()
+                            all_resources[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            return {"resources": all_resources}
+        except Exception as e:
+            logger.debug(f"Storage pool resources pre-warm failed: {e}")
+            return None
     
     async def _ensure_cluster_connections(self):
         """

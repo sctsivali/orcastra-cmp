@@ -29,6 +29,25 @@ import {
   VersionInfo,
   SystemSettings,
   SystemResourceUsage,
+  GeoLocation,
+  ClusterLocationUpdateResponse,
+  Organization,
+  OrganizationCreateRequest,
+  OrganizationUpdateRequest,
+  OrganizationMember,
+  OrganizationCluster,
+  UserGroupEntry,
+  UserGroupAssignRequest,
+  UserGroupAssignResponse,
+  AuthentikSyncStatus,
+  PolicyListResponse,
+  AccessPolicy,
+  PolicyCreateRequest,
+  PolicyUpdateRequest,
+  AssignmentListResponse,
+  PolicyAssignment,
+  AssignmentCreateRequest,
+  MyAccessResponse,
 } from "@/types";
 
 const API_PREFIX = "/api/v1";
@@ -36,6 +55,74 @@ const API_PREFIX = "/api/v1";
 // Export for direct use in components
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4050";
 export const API_URL = `${API_BASE_URL}${API_PREFIX}`;
+
+/**
+ * Token store for Bearer auth.
+ * Components call setAccessToken() after session load;
+ * fetchAPI() automatically attaches it to all backend requests.
+ */
+let _accessToken: string | null = null;
+
+export function setAccessToken(token: string | null | undefined) {
+  _accessToken = token ?? null;
+}
+
+export function getAccessToken(): string | null {
+  return _accessToken;
+}
+
+/**
+ * 401 redirect guard - prevents redirect loops during token refresh.
+ * On first 401, triggers a session refresh. Only redirects after
+ * multiple consecutive 401s with a cooldown (true session death).
+ */
+let _401Count = 0;
+let _401RedirectPending = false;
+const _401_THRESHOLD = 5; // require 5 consecutive 401s before hard redirect
+const _401_RESET_MS = 8000; // reset counter after 8s of no 401s
+let _401ResetTimer: ReturnType<typeof setTimeout> | null = null;
+let _sessionRefreshFn: (() => Promise<void>) | null = null;
+let _sessionRefreshInFlight = false;
+
+/**
+ * Register a callback for requesting a session refresh (called by auth-provider).
+ * When the API layer sees a 401, it calls this to trigger useSession().update()
+ * instead of immediately redirecting.
+ */
+export function onSessionRefreshNeeded(fn: () => Promise<void>) {
+  _sessionRefreshFn = fn;
+}
+
+function handle401() {
+  if (_401RedirectPending) return false; // already redirecting
+  _401Count++;
+
+  // Reset counter after a quiet period
+  if (_401ResetTimer) clearTimeout(_401ResetTimer);
+  _401ResetTimer = setTimeout(() => { _401Count = 0; }, _401_RESET_MS);
+
+  // First few 401s: try to refresh the session token silently
+  if (_401Count <= 2 && _sessionRefreshFn && !_sessionRefreshInFlight) {
+    _sessionRefreshInFlight = true;
+    _sessionRefreshFn().finally(() => {
+      _sessionRefreshInFlight = false;
+    });
+    return true; // signal: refresh triggered, caller may retry
+  }
+
+  if (_401Count >= _401_THRESHOLD) {
+    _401RedirectPending = true;
+    console.warn(`Session expired (${_401Count} consecutive 401s) — redirecting to login`);
+    window.location.href = '/api/auth/signin';
+  }
+  return false;
+}
+
+/** Reset 401 counter on successful token set (called by auth-provider). */
+export function reset401Counter() {
+  _401Count = 0;
+  _401RedirectPending = false;
+}
 
 // Timeout wrapper for fetch with AbortController
 async function fetchWithTimeout(
@@ -45,19 +132,15 @@ async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
-    console.error(`Request timeout after ${timeoutMs}ms for ${url}`);
     controller.abort();
   }, timeoutMs);
 
   try {
-    const startTime = Date.now();
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
-    const duration = Date.now() - startTime;
-    console.log(`Request completed in ${duration}ms: ${url}`);
     return response;
   } catch (error) {
     clearTimeout(timeoutId);
@@ -68,20 +151,61 @@ async function fetchWithTimeout(
   }
 }
 
+/**
+ * In-flight GET request deduplication.
+ * Prevents duplicate concurrent GET requests to the same endpoint.
+ */
+const _inflightGets = new Map<string, Promise<unknown>>();
+
 async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {},
-  timeoutMs: number = 90000
+  timeoutMs: number = 90000,
+  _isRetry: boolean = false,
 ): Promise<T> {
   const url = `${API_BASE_URL}${API_PREFIX}${endpoint}`;
+  const method = (options.method || "GET").toUpperCase();
+
+  // Deduplicate concurrent GET requests to the same endpoint
+  if (method === "GET" && !_isRetry) {
+    const existing = _inflightGets.get(endpoint);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+  }
+
+  const request = _fetchAPIInternal<T>(endpoint, url, options, timeoutMs, _isRetry);
+
+  // Track in-flight GET requests for deduplication
+  if (method === "GET") {
+    _inflightGets.set(endpoint, request);
+    request.finally(() => _inflightGets.delete(endpoint));
+  }
+
+  return request;
+}
+
+async function _fetchAPIInternal<T>(
+  endpoint: string,
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+  _isRetry: boolean,
+): Promise<T> {
 
   try {
+    // build headers with auth token
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      ...(options.headers as Record<string, string>),
+    };
+    if (_accessToken) {
+      headers["Authorization"] = `Bearer ${_accessToken}`;
+    }
+
     const response = await fetchWithTimeout(url, {
       ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
+      headers,
     }, timeoutMs);
 
     if (!response.ok) {
@@ -93,9 +217,47 @@ async function fetchAPI<T>(
         errorDetail = response.statusText;
       }
       
-      // Create more informative error message
-      const errorMessage = errorDetail || `HTTP ${response.status}`;
-      throw new Error(errorMessage);
+      // handle non-string error details (e.g. FastAPI validation errors return arrays)
+      let errorMessage: string;
+      if (!errorDetail) {
+        errorMessage = `HTTP ${response.status}`;
+      } else if (typeof errorDetail === 'string') {
+        errorMessage = errorDetail;
+      } else {
+        errorMessage = JSON.stringify(errorDetail);
+      }
+
+      // On 401, trigger session refresh and retry once after token is refreshed
+      if (response.status === 401 && typeof window !== 'undefined') {
+        const refreshTriggered = handle401();
+
+        // Retry once after waiting for session refresh to complete
+        if (refreshTriggered && !_isRetry) {
+          // Wait for the session refresh to complete (up to 5s)
+          await new Promise<void>((resolve) => {
+            let elapsed = 0;
+            const interval = setInterval(() => {
+              elapsed += 200;
+              if (!_sessionRefreshInFlight || elapsed >= 5000) {
+                clearInterval(interval);
+                resolve();
+              }
+            }, 200);
+          });
+
+          // Retry with potentially refreshed token
+          return fetchAPI<T>(endpoint, options, timeoutMs, true);
+        }
+
+        throw new APIError(errorMessage, response.status, errorDetail);
+      }
+
+      throw new APIError(errorMessage, response.status, errorDetail);
+    }
+
+    // handle 204 No Content (no body to parse)
+    if (response.status === 204) {
+      return undefined as unknown as T;
     }
 
     return response.json();
@@ -115,11 +277,15 @@ async function fetchAPI<T>(
 export const vmAPI = {
   list: async (
     host?: string,
-    status?: string
+    status?: string,
+    offset?: number,
+    limit?: number,
   ): Promise<VMListResponse> => {
     const params = new URLSearchParams();
     if (host) params.append("host", host);
     if (status) params.append("status", status);
+    if (offset && offset > 0) params.append("offset", String(offset));
+    if (limit && limit > 0) params.append("limit", String(limit));
     
     const queryString = params.toString();
     const endpoint = queryString ? `/vms?${queryString}` : "/vms";
@@ -582,11 +748,13 @@ const systemAPI = {
 
 // Instance Operations (similar to VMs but more comprehensive)
 export const instanceAPI = {
-  list: async (host?: string, status?: string, type?: string): Promise<VMListResponse> => {
+  list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number): Promise<VMListResponse> => {
     const params = new URLSearchParams();
     if (host) params.append("host", host);
     if (status) params.append("status", status);
     if (type) params.append("instance_type", type);
+    if (offset && offset > 0) params.append("offset", String(offset));
+    if (limit && limit > 0) params.append("limit", String(limit));
     
     const queryString = params.toString();
     const endpoint = queryString ? `/instances?${queryString}` : "/instances";
@@ -716,6 +884,10 @@ export const storagePoolAPI = {
 
   getResources: async (name: string, host: string) => {
     return fetchAPI(`/storage/pools/${name}/resources?host=${encodeURIComponent(host)}`);
+  },
+
+  getResourcesAll: async () => {
+    return fetchAPI("/storage/pools/resources-all");
   },
 
   create: async (data: any, host: string) => {
@@ -933,7 +1105,7 @@ export const clusterAPI = {
     return fetchAPI<ClusterAuthCheckResponse>("/clusters/check-auth", {
       method: "POST",
       body: JSON.stringify({ cluster_id: clusterId }),
-    });
+    }, 20000); // 20s timeout - node should respond quickly if trust is configured
   },
 
   list: async (fresh: boolean = false): Promise<ClusterListResponse> => {
@@ -958,6 +1130,20 @@ export const clusterAPI = {
         method: "POST",
       }
     );
+  },
+
+  updateLocation: async (clusterId: string, location: GeoLocation): Promise<ClusterLocationUpdateResponse> => {
+    return fetchAPI<ClusterLocationUpdateResponse>(
+      `/clusters/${clusterId}/location`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({ location }),
+      }
+    );
+  },
+
+  getFacilities: async (): Promise<Array<{ facility_name: string; facility_provider?: string }>> => {
+    return fetchAPI<Array<{ facility_name: string; facility_provider?: string }>>("/clusters/facilities");
   },
 };
 
@@ -989,7 +1175,11 @@ export const myKeysAPI = {
 
   download: async (keyId: string) => {
     const url = `${API_BASE_URL}${API_PREFIX}/my-keys/${keyId}/download`;
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+      },
+    });
     if (!response.ok) {
       throw new Error("Failed to download key");
     }
@@ -1087,6 +1277,7 @@ import type {
   ExternalUserMapping,
   UserMappingRequest,
   AvailableClustersResponse,
+  IntegrationOrganization,
 } from "@/types";
 
 export const integrationsAPI = {
@@ -1147,6 +1338,30 @@ export const integrationsAPI = {
   getAvailableClusters: async (): Promise<AvailableClustersResponse> => {
     return fetchAPI<AvailableClustersResponse>("/integrations/available-clusters");
   },
+
+  // Synced Organizations from external apps
+  listOrganizations: async (source?: string): Promise<IntegrationOrganization[]> => {
+    const params = source ? `?source=${encodeURIComponent(source)}` : "";
+    return fetchAPI<IntegrationOrganization[]>(`/integrations/organizations${params}`);
+  },
+
+  refreshOrganizations: async (apiKeyId: string): Promise<{ message: string; organizations_synced: number }> => {
+    return fetchAPI(`/integrations/refresh-organizations?api_key_id=${encodeURIComponent(apiKeyId)}`, {
+      method: "POST",
+    });
+  },
+};
+
+// Regions API
+import { RegionsOverviewResponse, RegionSummary } from "@/types/api";
+
+const regionsAPI = {
+  getOverview: async () => {
+    return fetchAPI<RegionsOverviewResponse>("/regions");
+  },
+  getRegion: async (regionId: string) => {
+    return fetchAPI<RegionSummary>(`/regions/${encodeURIComponent(regionId)}`);
+  },
 };
 
 // Consolidated API export
@@ -1176,6 +1391,7 @@ export const api = {
   monitoring: monitoringAPI,
   certificates: certificateAPI,
   integrations: integrationsAPI,
+  regions: regionsAPI,
   clusterMembers: {
     list: async (node: string) => {
       return fetchAPI<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`);
@@ -1190,5 +1406,134 @@ export const api = {
         `/cluster-members/${encodeURIComponent(memberName)}/resources?node=${encodeURIComponent(node)}`
       );
     },
+  },
+
+  // ── Organizations ──
+  organizations: {
+    list: () => fetchAPI<Organization[]>("/organizations"),
+    get: (id: string) => fetchAPI<Organization>(`/organizations/${id}`),
+    create: (data: OrganizationCreateRequest) =>
+      fetchAPI<Organization>("/organizations", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: OrganizationUpdateRequest) =>
+      fetchAPI<Organization>(`/organizations/${id}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    delete: (id: string) =>
+      fetchAPI<{ message: string }>(`/organizations/${id}`, { method: "DELETE" }),
+    // members
+    listMembers: (orgId: string) =>
+      fetchAPI<OrganizationMember[]>(`/organizations/${orgId}/members`),
+    addMember: (orgId: string, data: { user_email: string }) =>
+      fetchAPI<OrganizationMember>(`/organizations/${orgId}/members`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    updateMember: (orgId: string, email: string, data: Record<string, unknown>) =>
+      fetchAPI<OrganizationMember>(
+        `/organizations/${orgId}/members/${encodeURIComponent(email)}`,
+        { method: "PUT", body: JSON.stringify(data) }
+      ),
+    removeMember: (orgId: string, email: string) =>
+      fetchAPI<{ message: string }>(
+        `/organizations/${orgId}/members/${encodeURIComponent(email)}`,
+        { method: "DELETE" }
+      ),
+    // clusters
+    listClusters: (orgId: string) =>
+      fetchAPI<OrganizationCluster[]>(`/organizations/${orgId}/clusters`),
+    bindCluster: (orgId: string, data: { cluster_id: string }) =>
+      fetchAPI<OrganizationCluster>(`/organizations/${orgId}/clusters`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    unbindCluster: (orgId: string, clusterId: string) =>
+      fetchAPI<{ message: string }>(
+        `/organizations/${orgId}/clusters/${encodeURIComponent(clusterId)}`,
+        { method: "DELETE" }
+      ),
+    // org-level personalization
+    getPreferences: (orgId: string) =>
+      fetchAPI<{ organization_id: number; settings: Record<string, any>; updated_by?: string }>(
+        `/organizations/${orgId}/preferences`
+      ),
+    updatePreferences: (orgId: string, settings: Record<string, any>) =>
+      fetchAPI<{ organization_id: number; settings: Record<string, any>; updated_by?: string }>(
+        `/organizations/${orgId}/preferences`,
+        { method: "PUT", body: JSON.stringify({ settings }) }
+      ),
+    deletePreferences: (orgId: string) =>
+      fetchAPI<{ message: string }>(`/organizations/${orgId}/preferences`, {
+        method: "DELETE",
+      }),
+    getMyOrgPreferences: () =>
+      fetchAPI<{ organization_id: number; settings: Record<string, any>; updated_by?: string; updated_at?: string }>(
+        `/organizations/my-preferences`
+      ),
+    getMyOrgPreferencesVersion: () =>
+      fetchAPI<{ organization_id: number; updated_at: string | null }>(
+        `/organizations/my-preferences/version`
+      ),
+  },
+
+  // ── User Groups (Admin) ──
+  userGroups: {
+    list: () => fetchAPI<UserGroupEntry[]>("/user-groups"),
+    assign: (data: UserGroupAssignRequest) =>
+      fetchAPI<UserGroupAssignResponse>("/user-groups/assign", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    remove: (email: string) =>
+      fetchAPI<{ message: string }>(
+        `/user-groups/${encodeURIComponent(email)}`,
+        { method: "DELETE" }
+      ),
+    syncStatus: () => fetchAPI<AuthentikSyncStatus>("/user-groups/sync-status"),
+  },
+
+  // ── Tenant Access Policies (ACL) ──
+  tenantAccess: {
+    // policy CRUD
+    listPolicies: (organizationId?: number) => {
+      const params = organizationId ? `?organization_id=${organizationId}` : "";
+      return fetchAPI<PolicyListResponse>(`/tenant-access/policies${params}`);
+    },
+    getPolicy: (policyId: number) =>
+      fetchAPI<AccessPolicy>(`/tenant-access/policies/${policyId}`),
+    createPolicy: (data: PolicyCreateRequest) =>
+      fetchAPI<AccessPolicy>("/tenant-access/policies", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    updatePolicy: (policyId: number, data: PolicyUpdateRequest) =>
+      fetchAPI<AccessPolicy>(`/tenant-access/policies/${policyId}`, {
+        method: "PUT",
+        body: JSON.stringify(data),
+      }),
+    deletePolicy: (policyId: number) =>
+      fetchAPI<void>(`/tenant-access/policies/${policyId}`, { method: "DELETE" }),
+
+    // assignments
+    listAssignments: (organizationId?: number, userEmail?: string) => {
+      const params = new URLSearchParams();
+      if (organizationId) params.set("organization_id", String(organizationId));
+      if (userEmail) params.set("user_email", userEmail);
+      const qs = params.toString();
+      return fetchAPI<AssignmentListResponse>(`/tenant-access/assignments${qs ? `?${qs}` : ""}`);
+    },
+    createAssignment: (data: AssignmentCreateRequest) =>
+      fetchAPI<PolicyAssignment>("/tenant-access/assignments", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    deleteAssignment: (assignmentId: number) =>
+      fetchAPI<void>(`/tenant-access/assignments/${assignmentId}`, { method: "DELETE" }),
+
+    // tenant self-view
+    myAccess: () => fetchAPI<MyAccessResponse>("/tenant-access/my-access"),
   },
 };

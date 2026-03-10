@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { HardDrive, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useStoragePools } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -169,8 +169,7 @@ export default function StoragePoolsPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <HardDrive className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Storage Pools
           </h1>
           <p className="text-muted-foreground mt-2">

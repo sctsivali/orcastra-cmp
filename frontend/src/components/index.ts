@@ -19,3 +19,4 @@ export * from "./read-only-banner";
 export * from "./node-register-form";
 export * from "./loading-lottie";
 export * from "./system-resource-usage";
+export * from "./permission-guard";

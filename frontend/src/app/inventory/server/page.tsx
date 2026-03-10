@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,12 +20,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Server, RotateCw, Cpu, HardDrive, Settings } from "lucide-react";
+import { RotateCw, Settings } from "lucide-react";
 import { ServerInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useServerInfo } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { usePermissions } from "@/hooks/use-permissions";
 
 function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
   const [open, setOpen] = useState(false);
@@ -45,8 +46,8 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
       </Badge>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-4xl max-h-[85vh]">
-          <DialogHeader className="pr-8">
+        <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col overflow-hidden">
+          <DialogHeader className="pr-8 flex-shrink-0">
             <DialogTitle className="text-xl flex items-center gap-2">
               <Settings className="h-5 w-5" />
               Configuration Items
@@ -56,7 +57,7 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
             </DialogDescription>
           </DialogHeader>
 
-          <ScrollArea className="max-h-[calc(85vh-8rem)] pr-4">
+          <div className="flex-1 min-h-0 overflow-y-auto pr-2">
             <div className="space-y-3">
               {Object.entries(config).map(([key, value], index) => (
                 <div key={index} className="border rounded-lg p-4 space-y-2 hover:bg-muted/30 transition-colors">
@@ -88,7 +89,7 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
                 </div>
               ))}
             </div>
-          </ScrollArea>
+          </div>
         </DialogContent>
       </Dialog>
     </>
@@ -96,9 +97,20 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
 }
 
 export default function ServerPage() {
+  const router = useRouter();
+  const { isPartner } = usePermissions();
   const { data, isLoading, refetch, isRefetching } = useServerInfo();
   const servers = (data as any)?.servers || [];
   const { toast } = useToast();
+
+  // redirect if not Partner+
+  useEffect(() => {
+    if (!isPartner) {
+      router.replace("/");
+    }
+  }, [isPartner, router]);
+
+  if (!isPartner) return null;
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -108,8 +120,7 @@ export default function ServerPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Server className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Server Information
           </h1>
           <p className="text-muted-foreground mt-2">
@@ -126,8 +137,7 @@ export default function ServerPage() {
         {servers.map((server: any) => (
           <Card key={server.node}>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Server className="h-5 w-5" />
+              <CardTitle>
                 {server.node}
               </CardTitle>
             </CardHeader>

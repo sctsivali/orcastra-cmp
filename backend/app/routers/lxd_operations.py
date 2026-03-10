@@ -14,11 +14,17 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/operations", tags=["Operations"])
+router = APIRouter(
+    prefix="/operations",
+    tags=["Operations"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -188,12 +194,15 @@ async def cancel_operation(
     operation_id: str,
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Cancel an operation."""
     try:
         client = lxd_service.connection_manager.get_client(host)
-        operation = client.operations.get(operation_id)
-        operation.cancel()
+        # pylxd Operation objects don't have a cancel() method;
+        # use the raw API to send DELETE to /1.0/operations/<uuid>
+        client.api.operations[operation_id].delete()
         
         return {
             "success": True,

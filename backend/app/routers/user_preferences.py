@@ -10,6 +10,7 @@ Architecture:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Header, Response
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
@@ -17,13 +18,20 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
 import json
+import base64
+import httpx
 
 from app.core.database import get_db
+from app.core.dependencies import check_read_only_mode, require_authenticated, AuthenticatedUser
 from app.models.db_models import UserPreferences
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/user-preferences", tags=["User Preferences"])
+router = APIRouter(
+    prefix="/user-preferences",
+    tags=["User Preferences"],
+    dependencies=[Depends(require_authenticated())],
+)
 
 
 # ============================================
@@ -124,6 +132,7 @@ def get_default_settings() -> Dict[str, Any]:
             "useCustomSidebarText": False,
             "autoTextColor": True,
         },
+        "theme": "system",
         "lastModified": None,
     }
 
@@ -198,6 +207,11 @@ async def get_user_preferences(
                 if key in saved_settings:
                     settings[key].update(saved_settings[key])
             
+            # Preserve scalar top-level keys (theme, etc.)
+            for key in saved_settings:
+                if key not in ["logo", "background", "branding", "colors", "lastModified"]:
+                    settings[key] = saved_settings[key]
+            
             if "lastModified" in saved_settings:
                 settings["lastModified"] = saved_settings["lastModified"]
             else:
@@ -228,6 +242,7 @@ async def update_user_preferences(
     db: AsyncSession = Depends(get_db),
     x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
     x_user_email: Optional[str] = Header(None, alias="X-User-Email"),
+    _: None = Depends(check_read_only_mode),
 ) -> Dict[str, Any]:
     """
     Update personalization settings for the current user.
@@ -284,6 +299,10 @@ async def update_user_preferences(
         for key in ["logo", "background", "branding", "colors"]:
             if key in saved_settings:
                 merged_settings[key].update(saved_settings[key])
+        # Preserve scalar top-level keys (theme, etc.)
+        for key in saved_settings:
+            if key not in ["logo", "background", "branding", "colors", "lastModified"]:
+                merged_settings[key] = saved_settings[key]
         merged_settings["lastModified"] = saved_settings.get("lastModified")
         
         return merged_settings
@@ -306,6 +325,7 @@ async def reset_user_preferences(
     response: Response,
     db: AsyncSession = Depends(get_db),
     x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    _: None = Depends(check_read_only_mode),
 ) -> Dict[str, str]:
     """
     Reset personalization settings to defaults.
@@ -343,3 +363,65 @@ async def reset_user_preferences(
     except Exception as e:
         await db.rollback()
         logger.error(f"Error resetting user preferences for {x_user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to reset preferences")
+
+
+# ============================================
+# Image Proxy - fetch cross-origin images server-side
+# ============================================
+
+class ProxyImageRequest(BaseModel):
+    """Request to proxy-fetch an image from a URL."""
+    url: str = Field(..., description="URL of the image to fetch")
+
+class ProxyImageResponse(BaseModel):
+    """Base64-encoded image data."""
+    data: str = Field(..., description="Base64 data URI (data:image/...;base64,...)")
+
+
+@router.post(
+    "/proxy-image",
+    response_model=ProxyImageResponse,
+    summary="Fetch image from URL (server-side CORS proxy)",
+    description="Fetches an image from a cross-origin URL server-side and returns it as a base64 data URI.",
+)
+async def proxy_image(
+    request: ProxyImageRequest,
+    _user: AuthenticatedUser = Depends(require_authenticated()),
+):
+    """Proxy-fetch an image URL to avoid browser CORS restrictions."""
+    url = request.url.strip()
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+
+    # limit max image size to 2MB
+    max_size = 2 * 1024 * 1024
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+
+            content_type = resp.headers.get("content-type", "")
+            if not content_type.startswith("image/"):
+                raise HTTPException(status_code=400, detail=f"URL does not point to an image (content-type: {content_type})")
+
+            if len(resp.content) > max_size:
+                raise HTTPException(status_code=400, detail="Image exceeds 2MB size limit")
+
+            # build data URI
+            b64 = base64.b64encode(resp.content).decode("utf-8")
+            data_uri = f"data:{content_type};base64,{b64}"
+            return ProxyImageResponse(data=data_uri)
+
+    except httpx.HTTPStatusError as e:
+        logger.warning(f"Image proxy HTTP error for {url}: {e.response.status_code}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image: HTTP {e.response.status_code}")
+    except httpx.RequestError as e:
+        logger.warning(f"Image proxy request error for {url}: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Image proxy unexpected error for {url}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch image")

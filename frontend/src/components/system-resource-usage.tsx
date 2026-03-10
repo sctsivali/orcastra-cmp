@@ -26,14 +26,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Cpu,
-  HardDrive,
   MemoryStick,
-  Network,
-  Server,
   Activity,
   Clock,
   RefreshCw,
-  Terminal,
   Gauge,
   ArrowUpFromLine,
   ArrowDownToLine,
@@ -134,8 +130,7 @@ function CPUSection({ cpu }: { cpu: CPUInfo }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Cpu className="h-5 w-5" />
+        <CardTitle>
           CPU Usage
         </CardTitle>
         <CardDescription>
@@ -190,8 +185,7 @@ function MemorySection({ memory }: { memory: MemoryInfo }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <MemoryStick className="h-5 w-5" />
+        <CardTitle>
           Memory Usage
         </CardTitle>
         <CardDescription>
@@ -244,8 +238,7 @@ function DiskSection({ disks }: { disks: DiskInfo[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <HardDrive className="h-5 w-5" />
+        <CardTitle>
           Storage
         </CardTitle>
         <CardDescription>
@@ -298,8 +291,7 @@ function NetworkSection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Network className="h-5 w-5" />
+        <CardTitle>
           Network Interfaces
         </CardTitle>
         <CardDescription>
@@ -377,8 +369,7 @@ function ProcessSection({ process }: { process: ProcessInfo }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Terminal className="h-5 w-5" />
+        <CardTitle>
           Application Process
         </CardTitle>
         <CardDescription>
@@ -428,8 +419,7 @@ function SystemInfoSection({ os, python }: { os: OSInfo; python: PythonInfo }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Server className="h-5 w-5" />
+        <CardTitle>
           System Information
         </CardTitle>
         <CardDescription>
@@ -439,8 +429,7 @@ function SystemInfoSection({ os, python }: { os: OSInfo; python: PythonInfo }) {
       <CardContent>
         <div className="grid gap-4">
           <div className="space-y-2">
-            <h4 className="text-sm font-medium flex items-center gap-2">
-              <Server className="h-4 w-4" />
+            <h4 className="text-sm font-medium">
               Operating System
             </h4>
             <div className="grid grid-cols-2 gap-2 text-sm">
@@ -464,8 +453,7 @@ function SystemInfoSection({ os, python }: { os: OSInfo; python: PythonInfo }) {
           </div>
           
           <div className="space-y-2">
-            <h4 className="text-sm font-medium flex items-center gap-2">
-              <Terminal className="h-4 w-4" />
+            <h4 className="text-sm font-medium">
               Python Runtime
             </h4>
             <div className="grid grid-cols-2 gap-2 text-sm">
@@ -572,8 +560,7 @@ export function SystemResourceUsagePanel() {
       {/* Header with controls */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold flex items-center gap-2">
-            <Activity className="h-6 w-6" />
+          <h2 className="text-2xl font-bold">
             System Resource Usage
           </h2>
           <p className="text-muted-foreground text-sm mt-1">
@@ -582,9 +569,9 @@ export function SystemResourceUsagePanel() {
         </div>
         <div className="flex items-center gap-3">
           {lastUpdated && (
-            <Badge variant="secondary" className="text-xs">
+            <span className="text-xs text-muted-foreground">
               Updated: {lastUpdated}
-            </Badge>
+            </span>
           )}
           <Button
             variant="outline"

@@ -30,12 +30,8 @@ export interface TerminalInstanceHandle {
   focus: () => void;
 }
 
-// Get WebSocket URL based on environment
-function getWebSocketUrl(instanceName: string, host: string, project: string): string {
-  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-  const apiHost = process.env.NEXT_PUBLIC_API_URL?.replace(/^https?:\/\//, "") || "localhost:4050";
-  return `${protocol}//${apiHost}/api/v1/terminal/ws/${instanceName}?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
-}
+// WebSocket URL builder - shared utility for proxy-safe URLs
+import { getTerminalWsUrl } from "@/lib/ws-url";
 
 export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInstanceProps>(function TerminalInstance({
   terminalId,
@@ -153,7 +149,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const wsUrl = getWebSocketUrl(instanceName, host, project);
+    const wsUrl = getTerminalWsUrl(instanceName, host, project);
 
     updateTerminalStatus(terminalId, "connecting");
     const ws = new WebSocket(wsUrl);

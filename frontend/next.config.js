@@ -8,6 +8,15 @@ const appVersion = process.env.APP_VERSION || packageJson.version;
 
 const nextConfig = {
   output: 'standalone',
+  // Tree-shake large packages for smaller bundles
+  experimental: {
+    optimizePackageImports: [
+      'lucide-react',
+      'recharts',
+      '@radix-ui/react-icons',
+      'date-fns',
+    ],
+  },
   images: {
     remotePatterns: [{
       protocol: 'https',

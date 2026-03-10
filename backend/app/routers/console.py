@@ -21,17 +21,27 @@ import asyncio
 import json
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends
 from pydantic import BaseModel, Field
 import websockets
 from websockets import State as WebSocketState
 from websockets.exceptions import ConnectionClosed
 
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
+from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
 from app.services.console_service import get_console_service
+from app.services.activity_logger import get_activity_logger
+from app.services.session_tracker import get_session_tracker, SessionProtocol
+from app.core.database import async_session_maker
+from app.models.db_models import SessionAuditLog
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/console", tags=["Console"])
+router = APIRouter(
+    prefix="/console",
+    tags=["Console"],
+)
 
 
 # ============ Request/Response Models ============
@@ -149,18 +159,159 @@ class ActionResponse(BaseModel):
     error: Optional[str] = None
 
 
+class SessionBandwidth(BaseModel):
+    """Bandwidth stats for a session."""
+    download_bytes: int = Field(0, description="Total bytes received by user")
+    upload_bytes: int = Field(0, description="Total bytes sent by user")
+    download_rate_bps: float = Field(0.0, description="Current download rate in bytes/second")
+    upload_rate_bps: float = Field(0.0, description="Current upload rate in bytes/second")
+
+
+class SessionUser(BaseModel):
+    """User info for a session."""
+    id: str = Field("anonymous", description="User ID")
+    email: str = Field("", description="User email")
+    role: str = Field("unknown", description="User access role")
+
+
+class ConsoleSessionStats(BaseModel):
+    """Real-time statistics for an active console/terminal session."""
+    session_id: str = Field(..., description="Unique session identifier")
+    instance_name: str = Field(..., description="Instance name")
+    host: str = Field(..., description="Host node")
+    project: str = Field("default", description="LXD project")
+    protocol: str = Field(..., description="Protocol type (websocket-terminal / spice-graphics)")
+    started_at: float = Field(..., description="Session start time (Unix timestamp)")
+    duration_seconds: float = Field(0.0, description="Session duration in seconds")
+    user: SessionUser = Field(default_factory=SessionUser, description="User info")
+    bandwidth: SessionBandwidth = Field(default_factory=SessionBandwidth, description="Bandwidth stats")
+    connection_status: str = Field("connected", description="Connection status")
+
+
 # ============ Endpoints ============
+
+@router.get(
+    "/session/{session_id}/stats",
+    response_model=ConsoleSessionStats,
+    summary="Get console/terminal session stats",
+    description="Get real-time bandwidth, duration, and user info for an active session.",
+    dependencies=[Depends(org_scope_dependency)],
+)
+async def get_session_stats(
+    session_id: str,
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
+):
+    """Get real-time session stats - scoped to the authenticated user's own session."""
+    tracker = get_session_tracker()
+    session = tracker.get(session_id)
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    
+    # enforce user-scoped access (users can only view their own sessions)
+    if session.user_email and _rbac.email and session.user_email != _rbac.email:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+    
+    data = session.to_dict()
+    return ConsoleSessionStats(
+        session_id=data["session_id"],
+        instance_name=data["instance_name"],
+        host=data["host"],
+        project=data["project"],
+        protocol=data["protocol"],
+        started_at=data["started_at"],
+        duration_seconds=data["duration_seconds"],
+        user=SessionUser(**data["user"]),
+        bandwidth=SessionBandwidth(**data["bandwidth"]),
+        connection_status=data["connection_status"],
+    )
+
+
+@router.get(
+    "/sessions/active",
+    summary="List all active tracked sessions",
+    description="Get all active console/terminal sessions being tracked.",
+    dependencies=[Depends(org_scope_dependency)],
+)
+async def list_active_tracked_sessions(
+    instance_name: Optional[str] = Query(None, description="Filter by instance name"),
+    host: Optional[str] = Query(None, description="Filter by host node"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
+):
+    """List active sessions scoped to the authenticated user (data minimization / GDPR)."""
+    tracker = get_session_tracker()
+    sessions = tracker.get_active_sessions(
+        instance_name=instance_name,
+        host=host,
+        user_email=_rbac.email,
+    )
+    return [s.to_dict() for s in sessions]
+
+
+@router.get(
+    "/sessions/audit",
+    summary="Query session audit logs",
+    description="Get historical session audit logs for compliance and analytics.",
+    dependencies=[Depends(org_scope_dependency)],
+)
+async def query_session_audit_logs(
+    instance_name: Optional[str] = Query(None, description="Filter by instance name"),
+    user_email: Optional[str] = Query(None, description="Filter by user email"),
+    event_type: Optional[str] = Query(None, description="Filter by event type (connect/disconnect)"),
+    limit: int = Query(100, ge=1, le=1000, description="Max results to return"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
+):
+    """Query session audit logs - scoped to the authenticated user's own sessions."""
+    from sqlalchemy import select, desc
+
+    async with async_session_maker() as db:
+        query = select(SessionAuditLog).order_by(desc(SessionAuditLog.created_at))
+
+        # always scope to own sessions (data minimization / GDPR)
+        query = query.where(SessionAuditLog.user_email == _rbac.email)
+
+        if instance_name:
+            query = query.where(SessionAuditLog.instance_name == instance_name)
+        if event_type:
+            query = query.where(SessionAuditLog.event_type == event_type)
+
+        query = query.limit(limit)
+        result = await db.execute(query)
+        logs = result.scalars().all()
+
+        return [
+            {
+                "id": log.id,
+                "session_id": log.session_id,
+                "event_type": log.event_type,
+                "instance_name": log.instance_name,
+                "host": log.host,
+                "project": log.project,
+                "protocol": log.protocol,
+                "user_id": log.user_id,
+                "user_email": log.user_email,
+                "user_role": log.user_role,
+                "duration_seconds": log.duration_seconds,
+                "download_bytes": log.download_bytes,
+                "upload_bytes": log.upload_bytes,
+                "created_at": log.created_at.isoformat() if log.created_at else None,
+            }
+            for log in logs
+        ]
+
 
 @router.get(
     "/{instance_name}/capabilities",
     response_model=ConsoleCapabilitiesResponse,
     summary="Get console capabilities",
     description="Get available console types and features for an instance.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def get_capabilities(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get console capabilities for an instance."""
     console_service = get_console_service()
@@ -182,6 +333,7 @@ async def get_capabilities(
     response_model=ConsoleSessionResponse,
     summary="Create console session",
     description="Create a new graphics console session for a VM.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def create_console_session(
     instance_name: str,
@@ -190,6 +342,7 @@ async def create_console_session(
     console_type: str = Query("vga", description="Console type: vga or console"),
     width: int = Query(1024, ge=640, le=4096, description="Console width"),
     height: int = Query(768, ge=480, le=2160, description="Console height"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Create a graphics console session."""
     console_service = get_console_service()
@@ -204,7 +357,28 @@ async def create_console_session(
     )
     
     if error:
+        # Log activity: console session creation failure (HIGH SEVERITY - security audit)
+        activity_logger.log_activity(
+            action="console.session.create",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=host,
+            target_project=project,
+            result="failure",
+            error_message=error
+        )
         return ConsoleSessionResponse(success=False, error=error)
+    
+    # Log activity: console session creation success (HIGH SEVERITY - security audit)
+    activity_logger.log_activity(
+        action="console.session.create",
+        target_type="instance",
+        target_id=instance_name,
+        target_host=host,
+        target_project=project,
+        result="success",
+        details={"console_type": console_type, "width": width, "height": height}
+    )
     
     return ConsoleSessionResponse(success=True, session=session_info)
 
@@ -214,10 +388,12 @@ async def create_console_session(
     response_model=StartupOrderResponse,
     summary="Get startup order",
     description="Get startup order for all instances on a host/project.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def get_startup_order(
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get startup order for instances."""
     console_service = get_console_service()
@@ -241,11 +417,14 @@ async def get_startup_order(
     response_model=ActionResponse,
     summary="Update startup order",
     description="Update startup order for multiple instances.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def update_startup_order(
     request: StartupOrderUpdateRequest,
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update startup order for instances."""
     console_service = get_console_service()
@@ -269,9 +448,11 @@ async def update_startup_order(
     response_model=ISOListResponse,
     summary="List available ISOs",
     description="Discover available ISO files from storage pools.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def list_isos(
     host: str = Query(..., description="Target host node"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """List available ISO files."""
     console_service = get_console_service()
@@ -292,11 +473,13 @@ async def list_isos(
     response_model=AttachedISOResponse,
     summary="Get attached ISO",
     description="Get currently attached ISO for an instance.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def get_attached_iso(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get attached ISO for an instance."""
     console_service = get_console_service()
@@ -328,12 +511,15 @@ async def get_attached_iso(
     response_model=ActionResponse,
     summary="Attach ISO",
     description="Attach an ISO to a VM instance.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def attach_iso(
     instance_name: str,
     request: AttachISORequest,
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Attach an ISO to an instance."""
     console_service = get_console_service()
@@ -359,12 +545,15 @@ async def attach_iso(
     response_model=ActionResponse,
     summary="Eject ISO",
     description="Eject (remove) an ISO from a VM instance.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def eject_iso(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
     device_name: str = Query("cdrom", description="Device name to eject"),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Eject an ISO from an instance."""
     console_service = get_console_service()
@@ -389,11 +578,13 @@ async def eject_iso(
     response_model=ActiveConsoleCheckResponse,
     summary="Check active console sessions",
     description="Check if there are active console operations for this instance.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def check_active_sessions(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """
     Check for active console operations for an instance.
@@ -460,10 +651,13 @@ async def check_active_sessions(
     response_model=ActionResponse,
     summary="Kill all active console sessions",
     description="Kill all active console operations for an instance. Used when closing console tab.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def kill_all_sessions(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill all active console sessions for an instance."""
     from app.services.lxd_service import get_lxd_service
@@ -517,11 +711,14 @@ async def kill_all_sessions(
     response_model=ActionResponse,
     summary="Kill active console session",
     description="Cancel an active console operation.",
+    dependencies=[Depends(org_scope_dependency)],
 )
 async def kill_active_session(
     instance_name: str,
     operation_id: str,
     host: str = Query(..., description="Target host node"),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill an active console session by cancelling the operation."""
     from app.services.lxd_service import get_lxd_service
@@ -587,16 +784,23 @@ class ConsoleProxy:
         host: str,
         project: str,
         console_type: str = "vga",
+        user_id: str = "anonymous",
+        user_email: str = "",
+        user_role: str = "unknown",
     ):
         self.browser_ws = browser_ws
         self.instance_name = instance_name
         self.host = host
         self.project = project
         self.console_type = console_type
+        self.user_id = user_id
+        self.user_email = user_email
+        self.user_role = user_role
         
         self.lxd_data_ws = None  # Data socket for SPICE data
         self.lxd_control_ws = None  # Control socket for lifecycle
         self._shutdown = asyncio.Event()
+        self._session = None  # SessionInfo from tracker
     
     async def _send_error(self, message: str):
         """Send error message to browser as JSON before closing.
@@ -615,6 +819,7 @@ class ConsoleProxy:
     async def run(self):
         """Main entry point - runs the console proxy."""
         console_service = get_console_service()
+        tracker = get_session_tracker()
         
         try:
             # Create console session with LXD
@@ -632,6 +837,19 @@ class ConsoleProxy:
                 logger.error(f"Console session error: {error}")
                 await self._send_error(error)
                 return
+            
+            # Register session for tracking
+            session_id = session_info.get("operation_id", f"console-{self.instance_name}-{id(self)}")
+            self._session = tracker.register(
+                session_id=session_id,
+                instance_name=self.instance_name,
+                host=self.host,
+                project=self.project,
+                protocol=SessionProtocol.GRAPHICS,
+                user_id=self.user_id,
+                user_email=self.user_email,
+                user_role=self.user_role,
+            )
             
             ssl_context = console_service.get_ssl_context(self.host)
             
@@ -667,6 +885,10 @@ class ConsoleProxy:
                     timeout=15.0
                 )
                 logger.info(f"Connected to LXD data socket: {self.instance_name}")
+                
+                # Mark session as connected after both sockets are ready
+                if self._session:
+                    self._session.mark_connected()
                 
                 # Note: SPICE doesn't send initial data - it waits for client handshake
                 # We immediately start the proxy to avoid any timeout issues
@@ -728,6 +950,9 @@ class ConsoleProxy:
                                         self.lxd_data_ws.send(message["bytes"]),
                                         timeout=5.0
                                     )
+                                    # Track upload bytes
+                                    if self._session:
+                                        self._session.add_upload_bytes(len(message["bytes"]))
                                 except asyncio.TimeoutError:
                                     logger.error(f"TIMEOUT sending to LXD data socket")
                                     self._shutdown.set()
@@ -741,7 +966,11 @@ class ConsoleProxy:
                         elif "text" in message and message["text"]:
                             # Convert text to bytes if needed
                             if self.lxd_data_ws and self.lxd_data_ws.state == WebSocketState.OPEN:
-                                await self.lxd_data_ws.send(message["text"].encode('utf-8'))
+                                encoded = message["text"].encode('utf-8')
+                                await self.lxd_data_ws.send(encoded)
+                                # Track upload bytes
+                                if self._session:
+                                    self._session.add_upload_bytes(len(encoded))
                                 logger.info(f"FORWARDED {len(message['text'])} text chars to LXD data socket")
                                 
                     except asyncio.TimeoutError:
@@ -772,11 +1001,16 @@ class ConsoleProxy:
                             if isinstance(data, bytes):
                                 logger.debug(f"LXD SPICE response ({len(data)} bytes)")
                         
-                        # Send as binary to browser
+                        # Send as binary to browser + track download bytes
                         if isinstance(data, bytes):
                             await self.browser_ws.send_bytes(data)
+                            if self._session:
+                                self._session.add_download_bytes(len(data))
                         else:
-                            await self.browser_ws.send_bytes(data.encode('utf-8'))
+                            encoded = data.encode('utf-8')
+                            await self.browser_ws.send_bytes(encoded)
+                            if self._session:
+                                self._session.add_download_bytes(len(encoded))
                             
                     except asyncio.TimeoutError:
                         continue
@@ -827,6 +1061,11 @@ class ConsoleProxy:
         """Clean up connections."""
         self._shutdown.set()
         
+        # Unregister session from tracker
+        if self._session:
+            tracker = get_session_tracker()
+            tracker.unregister(self._session.session_id)
+        
         if self.lxd_data_ws:
             try:
                 await self.lxd_data_ws.close()
@@ -847,6 +1086,7 @@ async def console_websocket(
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
     console_type: str = Query("vga", description="Console type: vga or console"),
+    user: Optional[AuthenticatedUser] = Depends(get_ws_user),
 ):
     """
     WebSocket endpoint for graphics console.
@@ -855,12 +1095,33 @@ async def console_websocket(
     The client should use spice-html5 or similar SPICE client to render.
     
     IMPORTANT: spice-html5 requires 'binary' subprotocol to be accepted.
+    Auth token is passed as ``token`` query parameter.
     """
+    # Validate auth when enabled
+    from app.core.config import get_settings as _gs
+    _settings = _gs()
+    if _settings.auth_enabled and _settings.authentik_issuer and user is None:
+        await websocket.close(code=1008, reason="Authentication required")
+        return
+
+    # set org scope for WebSocket (context variable)
+    await set_org_scope_for_ws(user)
+
     # Accept with 'binary' subprotocol - required by spice-html5
     # spice-html5 uses: new WebSocket(uri, 'binary')
     await websocket.accept(subprotocol="binary")
     
-    logger.info(f"Console WebSocket connected: {instance_name}@{host}")
+    # Extract user details for session tracking
+    user_id = user.user_id if user else "anonymous"
+    user_email = user.email if user else ""
+    # resolve via RBAC to get canonical role name (admin/partner/tenant)
+    if user:
+        from app.core.rbac import resolve_roles, get_highest_role
+        _roles = resolve_roles(user)
+        user_role = get_highest_role(_roles).value
+    else:
+        user_role = "unknown"
+    logger.info(f"Console WebSocket connected: {instance_name}@{host} user={user_id}")
     
     proxy = ConsoleProxy(
         browser_ws=websocket,
@@ -868,6 +1129,9 @@ async def console_websocket(
         host=host,
         project=project,
         console_type=console_type,
+        user_id=user_id,
+        user_email=user_email,
+        user_role=user_role,
     )
     
     await proxy.run()

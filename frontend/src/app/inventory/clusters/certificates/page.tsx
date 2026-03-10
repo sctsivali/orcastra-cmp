@@ -4,7 +4,6 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import {
-  Shield,
   CheckCircle,
   XCircle,
   Clock,
@@ -59,7 +58,9 @@ import {
   useCancelPendingCert,
 } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
+import { formatDate } from "@/lib/utils";
 
 const statusConfig = {
   [CertificateStatus.VALID]: {
@@ -99,22 +100,6 @@ const statusConfig = {
   },
 };
 
-function formatDate(dateString: string | null | undefined): string {
-  if (!dateString) return "N/A";
-  try {
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-GB", {
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return dateString;
-  }
-}
-
 function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return "N/A";
   if (days < 0) return `Expired ${Math.abs(days)} days ago`;
@@ -128,6 +113,7 @@ export default function CertificatesPage() {
   const { data, isLoading, refetch, isRefetching } = useCertificates();
   const certificates = data?.certificates || [];
   const { isReadOnly } = useReadOnlyMode();
+  const { isPartner } = usePermissions();
 
   // Renewal modal state
   const [renewalModal, setRenewalModal] = React.useState<{
@@ -155,6 +141,15 @@ export default function CertificatesPage() {
   const initiateCertRenewal = useInitiateCertRenewal();
   const verifyCertRenewal = useVerifyCertRenewal();
   const cancelPendingCert = useCancelPendingCert();
+
+  // redirect if not Partner+
+  React.useEffect(() => {
+    if (!isPartner) {
+      router.replace("/");
+    }
+  }, [isPartner, router]);
+
+  if (!isPartner) return null;
 
   const handleRenewClick = (cert: CertificateInfo) => {
     setRenewalModal({ open: true, certificate: cert });
@@ -305,8 +300,7 @@ export default function CertificatesPage() {
             <span className="sm:hidden">Back</span>
           </Button>
           <div className="min-w-0">
-            <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
-              <Shield className="h-6 w-6 md:h-8 md:w-8 text-violet-600 shrink-0" />
+            <h1 className="text-2xl md:text-3xl font-bold">
               <span className="truncate">Certificate Manager</span>
             </h1>
             <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
@@ -404,9 +398,9 @@ export default function CertificatesPage() {
                       <TableCell className="text-sm">
                         <div>
                           <div className="font-medium truncate max-w-[150px]">{cert.cluster_id}</div>
-                          {cert.common_name && (
+                          {(cert.endpoint || cert.common_name) && (
                             <div className="text-xs text-muted-foreground truncate max-w-[150px]">
-                              {cert.common_name}
+                              {cert.endpoint || cert.common_name}
                             </div>
                           )}
                         </div>
@@ -521,8 +515,7 @@ export default function CertificatesPage() {
       >
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <KeyRound className="h-5 w-5" />
+            <DialogTitle>
               {showManualTrust ? "Complete Certificate Renewal" : "Renew Certificate"}
             </DialogTitle>
             <DialogDescription>
@@ -593,10 +586,7 @@ export default function CertificatesPage() {
                       Renewing...
                     </>
                   ) : (
-                    <>
-                      <KeyRound className="h-4 w-4 mr-2" />
-                      Renew Certificate
-                    </>
+                    "Renew Certificate"
                   )}
                 </Button>
               </DialogFooter>
@@ -677,10 +667,7 @@ export default function CertificatesPage() {
                       Verifying...
                     </>
                   ) : (
-                    <>
-                      <CheckCircle className="h-4 w-4 mr-2" />
-                      Verify & Activate
-                    </>
+                    "Verify & Activate"
                   )}
                 </Button>
               </DialogFooter>

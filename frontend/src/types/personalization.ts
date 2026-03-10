@@ -93,12 +93,16 @@ export const SIDEBAR_BG_PRESETS: ColorPreset[] = [
   { name: "True Black", value: "#000000" },
 ];
 
+// Theme preference type
+export type ThemePreference = "dark" | "light" | "system";
+
 // Complete personalization settings
 export interface PersonalizationSettings {
   logo: LogoSettings;
   background: BackgroundSettings;
   branding: BrandingSettings;
   colors: ColorSettings;
+  theme: ThemePreference;          // User's theme preference (dark/light/system)
   lastModified: string | null;   // ISO date string
 }
 
@@ -129,6 +133,7 @@ export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
     useCustomSidebarText: false,
     autoTextColor: true,          // Auto-calculate text color by default
   },
+  theme: "system",               // Default: follow system preference
   lastModified: null,
 };
 
@@ -139,7 +144,14 @@ export interface PersonalizationContextType {
   updateBackground: (background: Partial<BackgroundSettings>) => void;
   updateBranding: (branding: Partial<BrandingSettings>) => void;
   updateColors: (colors: Partial<ColorSettings>) => void;
+  updateTheme: (theme: ThemePreference) => void;
   resetToDefaults: () => void;
+  undoSettings: () => void;
+  redoSettings: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
+  /** Force-apply settings without API save (for org-level instant preview) */
+  applySettingsOptimistically: (settings: PersonalizationSettings) => void;
   refreshSettings: () => Promise<void>;  // Force refresh from API
   isLoading: boolean;
   isSaving: boolean;

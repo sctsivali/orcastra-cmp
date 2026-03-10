@@ -6,6 +6,8 @@ Provides endpoints for managing LXD network IP address allocations.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List, Dict, Any
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
@@ -13,10 +15,20 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from pydantic import BaseModel, Field
+from app.core.dependencies import require_tenant
+from app.core.org_scope import org_scope_dependency, get_scope_cache_key
+from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/ipam", tags=["IPAM"])
+# thread pool for parallel node queries
+_ipam_executor = ThreadPoolExecutor(max_workers=10)
+
+router = APIRouter(
+    prefix="/ipam",
+    tags=["IPAM"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 
 class IPAMAllocation(BaseModel):
@@ -37,6 +49,80 @@ class IPAMListResponse(BaseModel):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _fetch_ipam_for_node(
+    lxd_service: LXDService,
+    node_name: str,
+    network_filter: Optional[str],
+) -> List[IPAMAllocation]:
+    """Fetch IPAM allocations for a single node (runs in thread pool)."""
+    allocations: List[IPAMAllocation] = []
+    try:
+        client = lxd_service.connection_manager.get_client(node_name)
+        if client is None:
+            return allocations
+
+        # get project names
+        try:
+            projects = client.projects.all()
+            project_names = [p.name for p in projects]
+        except Exception as e:
+            logger.error(f"Could not get projects for {node_name}: {e}")
+            project_names = ['default']
+
+        for project_name in project_names:
+            try:
+                base_url = client.api._api_endpoint
+                allocations_url = f"network-allocations?project={project_name}&recursion=1"
+                full_url = f"{base_url}/{allocations_url}"
+                allocations_response = client.api.session.get(full_url)
+
+                if allocations_response.status_code == 200:
+                    allocations_data = allocations_response.json().get('metadata', [])
+                    for alloc in allocations_data:
+                        alloc_network = alloc.get('network', '')
+                        if network_filter and alloc_network != network_filter:
+                            continue
+
+                        addresses_str = alloc.get('addresses', '')
+                        address = addresses_str.split('/')[0] if addresses_str else ''
+                        alloc_type = alloc.get('type', 'network')
+                        used_by = alloc.get('used_by', '')
+                        hwaddr = alloc.get('hwaddr', '')
+
+                        if used_by:
+                            if '/instances/' in used_by:
+                                instance_name = used_by.split('/instances/')[-1].split('?')[0]
+                                resource_type = "instance"
+                                resource_name = instance_name
+                            else:
+                                resource_type = alloc_type
+                                resource_name = alloc_network
+                        else:
+                            resource_type = "network"
+                            resource_name = alloc_network
+
+                        if address:
+                            allocations.append(IPAMAllocation(
+                                address=address,
+                                type=resource_type,
+                                used_by=resource_name,
+                                hardware_address=hwaddr or "",
+                                network=alloc_network,
+                                node=node_name,
+                                project=project_name,
+                            ))
+                else:
+                    logger.debug(
+                        f"Could not get network allocations for project {project_name} on {node_name}: "
+                        f"status {allocations_response.status_code}"
+                    )
+            except Exception as e:
+                logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
+    except Exception as e:
+        logger.error(f"Error listing IPAM on {node_name}: {e}")
+    return allocations
+
+
 @router.get(
     "",
     response_model=IPAMListResponse,
@@ -48,96 +134,42 @@ async def list_ipam_allocations(
     network: Optional[str] = Query(None, description="Filter by specific network"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """List all IPAM allocations."""
+    """List all IPAM allocations. Nodes are queried in parallel with caching."""
+    # check cache first (120s TTL)
+    cache = get_cache_manager()
+    cache_key = get_scope_cache_key(f"ipam:list:host={host}:network={network}")
+    cached = cache.get("api_responses", cache_key)
+    if cached is not None:
+        logger.debug(f"Returning cached IPAM data for {cache_key}")
+        return IPAMListResponse(**cached)
+
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
-        all_allocations = []
-        
-        for node_name in nodes_to_query:
-            try:
-                client = lxd_service.connection_manager.get_client(node_name)
-                
-                # Get all projects using the high-level pylxd interface
-                try:
-                    projects = client.projects.all()
-                    project_names = [p.name for p in projects]
-                except Exception as e:
-                    logger.error(f"Could not get projects for {node_name}: {e}")
-                    project_names = ['default']  # Fallback to default project
-                
-                # Get network allocations from each project
-                for project_name in project_names:
-                    try:
-                        # Use the network-allocations API endpoint which provides comprehensive IPAM data
-                        # This is the same endpoint used by the LXD UI
-                        # We need to use the session directly as pylxd doesn't have a high-level wrapper for this
-                        base_url = client.api._api_endpoint
-                        # Note: base_url already includes `/1.0`, so we just add the endpoint path
-                        allocations_url = f"network-allocations?project={project_name}&recursion=1"
-                        full_url = f"{base_url}/{allocations_url}"
-                        
-                        # Use the underlying session from the client
-                        allocations_response = client.api.session.get(full_url)
-                        
-                        if allocations_response.status_code == 200:
-                            allocations_data = allocations_response.json().get('metadata', [])
-                            
-                            for alloc in allocations_data:
-                                # Filter by network if specified
-                                alloc_network = alloc.get('network', '')
-                                if network and alloc_network != network:
-                                    continue
-                                
-                                # Note: the API returns 'addresses' (plural) with CIDR notation
-                                addresses_str = alloc.get('addresses', '')
-                                # Extract just the IP address without CIDR
-                                address = addresses_str.split('/')[0] if addresses_str else ''
-                                alloc_type = alloc.get('type', 'network')
-                                used_by = alloc.get('used_by', '')
-                                hwaddr = alloc.get('hwaddr', '')
-                                nat = alloc.get('nat', False)
-                                
-                                # Determine the type and used_by field
-                                if used_by:
-                                    # Extract instance name from used_by path
-                                    # Format is usually: `/1.0/instances/<name>?project=<project>`
-                                    if '/instances/' in used_by:
-                                        instance_name = used_by.split('/instances/')[-1].split('?')[0]
-                                        resource_type = "instance"
-                                        resource_name = instance_name
-                                    else:
-                                        resource_type = alloc_type
-                                        resource_name = alloc_network
-                                else:
-                                    resource_type = "network"
-                                    resource_name = alloc_network
-                                
-                                if address:
-                                    all_allocations.append(IPAMAllocation(
-                                        address=address,
-                                        type=resource_type,
-                                        used_by=resource_name,
-                                        hardware_address=hwaddr or "",
-                                        network=alloc_network,
-                                        node=node_name,
-                                        project=project_name
-                                    ))
-                        else:
-                            logger.debug(
-                                f"Could not get network allocations for project {project_name} on {node_name}: "
-                                f"status {allocations_response.status_code}"
-                            )
-                    except Exception as e:
-                        logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
-                        
-            except Exception as e:
-                logger.error(f"Error listing IPAM on {node_name}: {e}")
-        
-        return IPAMListResponse(
+
+        # query all nodes in parallel
+        loop = asyncio.get_event_loop()
+        tasks = [
+            loop.run_in_executor(_ipam_executor, _fetch_ipam_for_node, lxd_service, node_name, network)
+            for node_name in nodes_to_query
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        all_allocations: List[IPAMAllocation] = []
+        for result in results:
+            if isinstance(result, list):
+                all_allocations.extend(result)
+            elif isinstance(result, Exception):
+                logger.error(f"IPAM node query failed: {result}")
+
+        response = IPAMListResponse(
             total=len(all_allocations),
             allocations=all_allocations,
-            nodes=lxd_service.connection_manager.get_node_names()
+            nodes=lxd_service.connection_manager.get_node_names(),
         )
+
+        # cache for 120 seconds
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+        return response
     except Exception as e:
         logger.error(f"Error listing IPAM: {e}")
         raise HTTPException(status_code=500, detail=str(e))

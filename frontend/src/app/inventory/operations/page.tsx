@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -28,29 +29,17 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Cog, RotateCw, X, Clock, Loader2, AlertTriangle, XCircle, Unplug } from "lucide-react";
+import { RotateCw, X, Clock, Loader2, XCircle, Unplug } from "lucide-react";
 import { useOperations } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
-
-// Format datetime to DD/MM/YYYY, HH:MM:SS
-const formatDateTime = (dateStr: string) => {
-  if (!dateStr) return "N/A";
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return "N/A";
-  
-  const day = d.getDate().toString().padStart(2, '0');
-  const month = (d.getMonth() + 1).toString().padStart(2, '0');
-  const year = d.getFullYear();
-  const hours = d.getHours().toString().padStart(2, '0');
-  const minutes = d.getMinutes().toString().padStart(2, '0');
-  const seconds = d.getSeconds().toString().padStart(2, '0');
-  
-  return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}`;
-};
+import { API_URL, getAccessToken } from "@/lib/api";
+import { usePermissions } from "@/hooks/use-permissions";
+import { formatDateTime } from "@/lib/utils";
 
 export default function OperationsPage() {
+  const router = useRouter();
+  const { isPartner } = usePermissions();
   const { data, isLoading, refetch, isRefetching } = useOperations();
   const operations = (data as any)?.operations || [];
   const nodes = (data as any)?.nodes || [];
@@ -65,6 +54,15 @@ export default function OperationsPage() {
     isKillSession?: boolean;
     instanceName?: string;
   }>({ open: false, operationId: "", host: "", description: "" });
+
+  // redirect if not Partner+
+  useEffect(() => {
+    if (!isPartner) {
+      router.replace("/");
+    }
+  }, [isPartner, router]);
+
+  if (!isPartner) return null;
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -120,7 +118,12 @@ export default function OperationsPage() {
     try {
       const response = await fetch(
         `${API_URL}/operations/${operationId}?host=${encodeURIComponent(host)}`,
-        { method: "DELETE" }
+        {
+          method: "DELETE",
+          headers: {
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+          },
+        }
       );
       
       if (!response.ok) {
@@ -152,7 +155,12 @@ export default function OperationsPage() {
     try {
       const response = await fetch(
         `${API_URL}/console/${instanceName}/active-sessions/${operationId}?host=${encodeURIComponent(host)}`,
-        { method: "DELETE" }
+        {
+          method: "DELETE",
+          headers: {
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+          },
+        }
       );
       
       if (!response.ok) {
@@ -199,8 +207,7 @@ export default function OperationsPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Cog className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Operations
           </h1>
           <p className="text-muted-foreground mt-2">
@@ -217,8 +224,7 @@ export default function OperationsPage() {
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-500" />
+            <AlertDialogTitle>
               {confirmDialog.isKillSession ? "Kill Console Session?" : "Cancel Operation?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
@@ -258,10 +264,7 @@ export default function OperationsPage() {
                   {confirmDialog.isKillSession ? "Killing..." : "Cancelling..."}
                 </>
               ) : (
-                <>
-                  {confirmDialog.isKillSession ? <Unplug className="h-4 w-4 mr-2" /> : <XCircle className="h-4 w-4 mr-2" />}
-                  {confirmDialog.isKillSession ? "Kill Session" : "Cancel Operation"}
-                </>
+                confirmDialog.isKillSession ? "Kill Session" : "Cancel Operation"
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -313,7 +316,7 @@ export default function OperationsPage() {
                       </TableCell>
                       <TableCell>{operation.description || "N/A"}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{operation.node_name || "Unknown"}</Badge>
+                        <Badge variant="outline">{operation.node_name || "N/A"}</Badge>
                       </TableCell>
                       <TableCell>
                         <span className="text-sm">{operation.project || "default"}</span>
@@ -356,7 +359,7 @@ export default function OperationsPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8 text-orange-500 hover:text-orange-600 hover:bg-orange-100"
-                                onClick={() => openCancelConfirm(operation, true, instanceName || "unknown")}
+                                onClick={() => openCancelConfirm(operation, true, instanceName || "N/A")}
                                 disabled={cancellingId !== null || killingId !== null}
                               >
                                 {killingId === operation.id ? (

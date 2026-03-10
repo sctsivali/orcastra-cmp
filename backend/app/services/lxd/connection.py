@@ -9,7 +9,7 @@ import tempfile
 import os
 import atexit
 import gc
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import requests
 import pylxd
 from requests.adapters import HTTPAdapter
@@ -41,6 +41,10 @@ class LXDConnectionManager:
         self._connection_info: Dict[str, Dict[str, str]] = {}
         # Track temp file paths for cleanup
         self._temp_cert_paths: Dict[str, Tuple[str, str]] = {}
+        # Vault-registered cluster whitelist - only these clusters
+        # should be visible via get_node_names(). Prevents stale or
+        # unregistered nodes from leaking into API responses.
+        self._registered_clusters: Optional[set] = None
         
         # Register cleanup on exit
         atexit.register(self._cleanup_all_temp_files)
@@ -249,7 +253,21 @@ class LXDConnectionManager:
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
             logger.info(f"Connected to cluster {cluster_id} using Vault certificate")
-            
+
+            # audit: connection established
+            try:
+                from app.services.activity_logger import get_activity_logger
+                get_activity_logger().log_activity(
+                    action="lxd.connection.establish",
+                    target_type="cluster",
+                    target_id=cluster_id,
+                    target_host=endpoint,
+                    result="success",
+                    details={"endpoint": endpoint},
+                )
+            except Exception:
+                pass  # never block connection on audit failure
+
             return client
                     
         except LXDConnectionError:
@@ -269,7 +287,15 @@ class LXDConnectionManager:
         - If client exists and is valid, return it
         - If validation fails, attempt auto-reconnect using stored credentials
         - NO TTL-based refresh (connections persist indefinitely while valid)
+
+        Returns None if the cluster is not in the current user's org scope.
         """
+        # org-scope filter: deny access to clusters outside user's org
+        from app.core.org_scope import get_current_allowed_clusters
+        allowed = get_current_allowed_clusters()
+        if allowed is not None and cluster_id not in allowed:
+            return None
+
         if cluster_id in self._clients:
             # Validate connection is still working
             if self._validate_connection(self._clients[cluster_id], cluster_id):
@@ -326,16 +352,77 @@ class LXDConnectionManager:
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
             logger.info(f"Auto-reconnected to {cluster_id}")
+
+            # audit auto-reconnect events
+            try:
+                from app.services.activity_logger import get_activity_logger
+                activity_logger = get_activity_logger()
+                activity_logger.log_activity(
+                    action="lxd.connection.reconnect",
+                    target_type="cluster",
+                    target_id=cluster_id,
+                    result="success",
+                    details={"endpoint": info["endpoint"], "method": "auto_reconnect"},
+                )
+            except Exception:
+                pass
+
             return client
             
         except Exception as e:
             logger.warning(f"Auto-reconnect to {cluster_id} failed: {e}")
             self._cleanup_temp_cert_files(cluster_id)
+
+            # audit failed reconnect
+            try:
+                from app.services.activity_logger import get_activity_logger
+                activity_logger = get_activity_logger()
+                activity_logger.log_activity(
+                    action="lxd.connection.reconnect",
+                    target_type="cluster",
+                    target_id=cluster_id,
+                    result="failure",
+                    error_code=type(e).__name__,
+                    error_message=str(e),
+                )
+            except Exception:
+                pass
+
             return None
     
+    def sync_registered_clusters(self, cluster_ids: List[str]) -> None:
+        """Update the Vault-registered cluster whitelist.
+
+        Called at startup and after cluster registration/deregistration
+        to keep the in-memory whitelist in sync with Vault.
+        """
+        self._registered_clusters = set(cluster_ids)
+        logger.debug(f"Synced registered clusters whitelist: {self._registered_clusters}")
+
+    def register_cluster(self, cluster_id: str) -> None:
+        """Add a single cluster to the registered whitelist."""
+        if self._registered_clusters is None:
+            self._registered_clusters = set()
+        self._registered_clusters.add(cluster_id)
+
+    def unregister_cluster(self, cluster_id: str) -> None:
+        """Remove a single cluster from the registered whitelist."""
+        if self._registered_clusters is not None:
+            self._registered_clusters.discard(cluster_id)
+
     def get_node_names(self) -> list:
-        """Get list of active cluster IDs (cached clients)."""
-        return list(self._clients.keys())
+        """Get list of active cluster IDs that are both connected AND registered.
+
+        Only returns nodes that exist in Vault's registered cluster list
+        to prevent stale/unregistered nodes from appearing in API responses.
+        Filtered by org-scope context variable when set.
+        """
+        from app.core.org_scope import apply_cluster_filter
+        connected = list(self._clients.keys())
+        # intersect with Vault-registered whitelist when available
+        if self._registered_clusters is not None:
+            connected = [cid for cid in connected if cid in self._registered_clusters]
+        return apply_cluster_filter(connected)
     
     def has_connection_info(self, cluster_id: str) -> bool:
         """Check if we have stored connection info for a cluster."""
@@ -363,6 +450,9 @@ class LXDConnectionManager:
         """
         self.cleanup_connection(cluster_id)
         
+        # Remove from registered whitelist
+        self.unregister_cluster(cluster_id)
+        
         # Clear credentials from memory
         if cluster_id in self._connection_info:
             info = self._connection_info[cluster_id]
@@ -374,5 +464,17 @@ class LXDConnectionManager:
         
         # Clean up temp files
         self._cleanup_temp_cert_files(cluster_id)
-        
+
+        # audit: connection removed
+        try:
+            from app.services.activity_logger import get_activity_logger
+            get_activity_logger().log_activity(
+                action="lxd.connection.remove",
+                target_type="cluster",
+                target_id=cluster_id,
+                result="success",
+            )
+        except Exception:
+            pass  # never block removal on audit failure
+
         logger.info(f"Completely removed connection for {cluster_id}")

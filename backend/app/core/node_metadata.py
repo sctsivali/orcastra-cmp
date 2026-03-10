@@ -32,40 +32,60 @@ class NodeMetadataStore:
     def __init__(self):
         if not hasattr(self, '_initialized'):
             self.metadata_file = Path("/app/config/node_metadata.json")
+            self._memory_cache: Optional[Dict[str, Dict[str, str]]] = None
             self._ensure_metadata_file()
             self._initialized = True
     
     def _ensure_metadata_file(self) -> None:
-        """Ensure metadata file and directory exist."""
+        """Ensure metadata file and directory exist. Non-fatal if it fails."""
         try:
             self.metadata_file.parent.mkdir(parents=True, exist_ok=True)
             if not self.metadata_file.exists():
                 self._write_metadata({})
                 logger.info(f"Created metadata file: {self.metadata_file}")
+            else:
+                # pre-load into memory cache
+                self._read_metadata()
         except Exception as e:
-            logger.error(f"Error creating metadata file: {e}")
+            logger.warning(
+                f"Could not initialize metadata file '{self.metadata_file}': {e}. "
+                "Will use in-memory storage as fallback."
+            )
+            self._memory_cache = {}
     
     def _read_metadata(self) -> Dict[str, Dict[str, str]]:
-        """Read metadata from file."""
+        """Read metadata from file, falling back to in-memory cache."""
         try:
             with self._lock:
                 if self.metadata_file.exists():
                     with open(self.metadata_file, 'r') as f:
-                        return json.load(f)
-                return {}
+                        data = json.load(f)
+                        # sync memory cache with file
+                        self._memory_cache = data
+                        return data
+                # file doesn't exist, return memory cache if available
+                return self._memory_cache.copy() if self._memory_cache else {}
         except Exception as e:
-            logger.error(f"Error reading metadata file: {e}")
-            return {}
+            logger.warning(f"Error reading metadata file: {e}. Using in-memory cache.")
+            return self._memory_cache.copy() if self._memory_cache else {}
     
     def _write_metadata(self, metadata: Dict[str, Dict[str, str]]) -> None:
-        """Write metadata to file."""
+        """Write metadata to file. Gracefully handles write failures without crashing."""
         try:
             with self._lock:
                 with open(self.metadata_file, 'w') as f:
                     json.dump(metadata, f, indent=2)
+        except PermissionError as e:
+            logger.warning(
+                f"Permission denied writing metadata file '{self.metadata_file}': {e}. "
+                "Node metadata will be kept in memory only. "
+                "Fix: ensure the config directory is writable by the app user."
+            )
+            # keep metadata in memory cache so reads still work this session
+            self._memory_cache = metadata
         except Exception as e:
-            logger.error(f"Error writing metadata file: {e}")
-            raise
+            logger.warning(f"Could not write metadata file: {e}. Using in-memory fallback.")
+            self._memory_cache = metadata
     
     def get_node_display_name(self, node_name: str) -> Optional[str]:
         """Get display name for a node."""

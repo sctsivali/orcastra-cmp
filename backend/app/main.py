@@ -5,8 +5,8 @@ Main FastAPI application entry point.
 
 import logging
 import time
+import asyncio
 from contextlib import asynccontextmanager
-from collections import defaultdict
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -19,6 +19,8 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from app.core.config import get_settings
+from app.core.logging_config import setup_logging
+from app.middleware import RequestIdMiddleware, AccessLogMiddleware
 from app.routers import (
     vms_router, 
     images_router, 
@@ -44,15 +46,20 @@ from app.routers.system import router as system_router
 from app.routers.cluster_registration import router as cluster_registration_router
 from app.services.lxd_service import get_lxd_service, LXDConnectionError
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+# Configure structured JSON logging
+settings_for_logging = get_settings()
+setup_logging(
+    service_name="orcastra-backend",
+    version=settings_for_logging.app_version or "0.0.0",
+    log_level="DEBUG" if settings_for_logging.debug else "INFO",
+    json_logs=not settings_for_logging.debug  # JSON in production, human-readable in dev
 )
 logger = logging.getLogger(__name__)
 
-# Rate limiting storage (in-memory, consider Redis for production)
-rate_limit_storage = defaultdict(list)
+# Rate limiting storage - bounded dict to prevent memory leaks
+# key: bucket_key (user_id or IP), value: list of timestamps
+_MAX_RATE_BUCKETS = 10_000
+rate_limit_storage: dict[str, list[float]] = {}
 
 
 @asynccontextmanager
@@ -61,6 +68,14 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Orcastra Dashboard API...")
     settings = get_settings()
+    
+    # Pre-warm JWKS cache to avoid blocking first auth request (~5s savings)
+    if settings.auth_enabled and settings.authentik_issuer:
+        try:
+            from app.core.auth import _jwks_client
+            await _jwks_client.warm_up(settings)
+        except Exception as jwks_err:
+            logger.warning(f"JWKS pre-warm failed (will lazy-load on first request): {jwks_err}")
     
     # Initialize PostgreSQL database
     try:
@@ -91,21 +106,27 @@ async def lifespan(app: FastAPI):
                 cluster_ids = cert_manager.list_clusters()
                 logger.info(f"Found {len(cluster_ids)} registered clusters in Vault")
                 
-                # IMPORTANT: Connect to ALL registered clusters on startup
-                # This ensures clusters stay connected even after Docker restart
-                # Without this, clusters show as "Pending Trust" after container restarts
-                connected_count = 0
-                failed_clusters = []
+                # Sync registered cluster whitelist into connection_manager
+                # to ensure get_node_names() only returns registered nodes
+                lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
                 
-                for cluster_id in cluster_ids:
+                # Connect to ALL registered clusters in parallel for faster startup
+                # This ensures clusters stay connected even after Docker restart
+                import asyncio
+                
+                async def _connect_cluster(cluster_id: str) -> tuple[str, bool, str | None]:
+                    """Connect to a single cluster; returns (id, success, error)."""
                     try:
-                        # Verify connection is possible (certificate is trusted)
-                        connected, error_msg = cert_manager.verify_connection(cluster_id)
+                        connected, error_msg = await asyncio.to_thread(
+                            cert_manager.verify_connection, cluster_id
+                        )
                         if connected:
-                            cluster_info = cert_manager.get_cluster_info(cluster_id)
-                            cert_data = cert_manager.get_cluster_certificate(cluster_id)
-                            
-                            # Add to connection manager for subsequent API calls
+                            cluster_info = await asyncio.to_thread(
+                                cert_manager.get_cluster_info, cluster_id
+                            )
+                            cert_data = await asyncio.to_thread(
+                                cert_manager.get_cluster_certificate, cluster_id
+                            )
                             lxd_service.connection_manager.connect_with_vault_cert(
                                 cluster_id=cluster_id,
                                 endpoint=cluster_info["metadata"]["endpoint"],
@@ -113,15 +134,25 @@ async def lifespan(app: FastAPI):
                                 key_content=cert_data["client.key"],
                                 verify=False
                             )
-                            connected_count += 1
                             logger.info(f"Connected to cluster: {cluster_id}")
+                            return (cluster_id, True, None)
                         else:
-                            # Cluster certificate not yet trusted - this is expected for new registrations
-                            failed_clusters.append((cluster_id, error_msg or "Not authenticated"))
                             logger.debug(f"Cluster {cluster_id} not authenticated: {error_msg}")
-                    except Exception as cluster_err:
-                        failed_clusters.append((cluster_id, str(cluster_err)))
-                        logger.warning(f"Could not connect cluster {cluster_id}: {cluster_err}")
+                            return (cluster_id, False, error_msg or "Not authenticated")
+                    except Exception as e:
+                        logger.warning(f"Could not connect cluster {cluster_id}: {e}")
+                        return (cluster_id, False, str(e))
+                
+                results = await asyncio.gather(
+                    *[_connect_cluster(cid) for cid in cluster_ids],
+                    return_exceptions=True,
+                )
+                
+                connected_count = sum(1 for r in results if isinstance(r, tuple) and r[1])
+                failed_clusters = [
+                    (r[0], r[2]) for r in results
+                    if isinstance(r, tuple) and not r[1]
+                ]
                 
                 logger.info(f"Startup: Connected {connected_count}/{len(cluster_ids)} clusters")
                 if failed_clusters:
@@ -154,6 +185,35 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error during LXD service initialization: {e}")
     
+    # Start metrics retention cleanup loop (purges snapshots older than 7 days)
+    try:
+        from app.services.metrics_history_service import run_retention_loop
+        asyncio.create_task(run_retention_loop(interval_hours=6, retention_days=7))
+        logger.info("Metrics retention cleanup loop started (7-day retention, every 6h)")
+    except Exception as retention_err:
+        logger.warning(f"Could not start metrics retention loop: {retention_err}")
+    
+    # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
+    try:
+        from app.services.metrics_history_service import load_metrics_history
+        from app.core.cache import get_cache_manager
+        history = await load_metrics_history(points=8640, scope="all")
+        if history:
+            cache = get_cache_manager()
+            cache.set("monitoring_history", "monitoring:history:scope=all", history, ttl=86400)
+            logger.info(f"Hydrated metrics cache from DB ({len(history)} points)")
+    except Exception as hydrate_err:
+        logger.debug(f"Metrics cache hydration skipped: {hydrate_err}")
+    
+    # Start session tracker cleanup loop
+    try:
+        from app.services.session_tracker import get_session_tracker
+        session_tracker = get_session_tracker()
+        await session_tracker.start_cleanup_loop()
+        logger.info("Session tracker cleanup loop started")
+    except Exception as tracker_err:
+        logger.warning(f"Could not start session tracker: {tracker_err}")
+    
     # Initialize default tag categories
     try:
         from app.core.database import async_session_maker
@@ -176,6 +236,15 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Orcastra Dashboard API...")
     
+    # Close archive service client
+    try:
+        from app.services.archive_service import _archive_service
+        if _archive_service is not None:
+            await _archive_service.close()
+            logger.info("Archive service client closed")
+    except Exception:
+        pass
+    
     # Close database connection
     try:
         from app.core.database import close_db
@@ -189,6 +258,14 @@ async def lifespan(app: FastAPI):
         from app.services.metrics_collector import stop_background_collector
         stop_background_collector()
         logger.info("Background metrics collector stopped")
+    except Exception:
+        pass
+    
+    # Stop session tracker cleanup
+    try:
+        from app.services.session_tracker import get_session_tracker
+        get_session_tracker().stop_cleanup()
+        logger.info("Session tracker cleanup stopped")
     except Exception:
         pass
 
@@ -257,6 +334,16 @@ Ensure your client certificates are properly configured.
     # Add GZip compression middleware
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     
+    # Add Access Log middleware (logs HTTP requests in structured JSON)
+    app.add_middleware(
+        AccessLogMiddleware,
+        service_name="orcastra-backend",
+        version=settings.app_version or "0.0.0"
+    )
+    
+    # Add Request ID middleware (must be added before access log to generate IDs)
+    app.add_middleware(RequestIdMiddleware)
+    
     # Add security headers middleware
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next):
@@ -273,25 +360,70 @@ Ensure your client certificates are properly configured.
         if not settings.rate_limit_enabled:
             return await call_next(request)
         
-        client_ip = request.client.host
+        # skip preflight requests - they must never be rate-limited
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        
+        # use authenticated user (JWT sub) as bucket key when available,
+        # fallback to client IP - avoids all Docker users sharing one bucket
+        bucket_key = request.client.host
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            import jwt as _jwt
+            try:
+                payload = _jwt.decode(
+                    auth_header[7:],
+                    options={"verify_signature": False},  # just extract sub
+                )
+                bucket_key = f"user:{payload.get('sub', bucket_key)}"
+            except Exception:
+                pass  # fallback to IP
+        
         current_time = time.time()
         
+        # Evict oldest bucket if storage is at capacity (prevents unbounded growth)
+        if bucket_key not in rate_limit_storage and len(rate_limit_storage) >= _MAX_RATE_BUCKETS:
+            oldest_key = min(rate_limit_storage, key=lambda k: rate_limit_storage[k][-1] if rate_limit_storage[k] else 0)
+            del rate_limit_storage[oldest_key]
+        
+        # Ensure bucket exists
+        if bucket_key not in rate_limit_storage:
+            rate_limit_storage[bucket_key] = []
+        
         # Clean old requests (older than 1 minute)
-        rate_limit_storage[client_ip] = [
-            req_time for req_time in rate_limit_storage[client_ip]
+        rate_limit_storage[bucket_key] = [
+            req_time for req_time in rate_limit_storage[bucket_key]
             if current_time - req_time < 60
         ]
         
-        # Check rate limit
-        if len(rate_limit_storage[client_ip]) >= settings.rate_limit_requests:
-            logger.warning(f"Rate limit exceeded for IP: {client_ip}")
-            raise HTTPException(
+        # Periodically prune stale empty buckets (every ~100 requests)
+        if len(rate_limit_storage) > 100 and hash(bucket_key) % 100 == 0:
+            stale_keys = [
+                k for k, v in rate_limit_storage.items()
+                if not v or (current_time - v[-1] > 120)
+            ]
+            for k in stale_keys:
+                if k != bucket_key:
+                    del rate_limit_storage[k]
+        
+        # Check rate limit - return JSONResponse instead of raising so CORS
+        # headers are preserved (HTTPException bypasses CORS middleware)
+        if len(rate_limit_storage[bucket_key]) >= settings.rate_limit_requests:
+            logger.warning(f"Rate limit exceeded for: {bucket_key}")
+            origin = request.headers.get("origin", "")
+            response = JSONResponse(
                 status_code=429,
-                detail="Rate limit exceeded. Please try again later."
+                content={"detail": "Rate limit exceeded. Please try again later."},
             )
+            # attach CORS headers so the browser can read the error
+            if origin:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Retry-After"] = "30"
+            return response
         
         # Add current request
-        rate_limit_storage[client_ip].append(current_time)
+        rate_limit_storage[bucket_key].append(current_time)
         
         return await call_next(request)
     
@@ -319,8 +451,9 @@ Ensure your client certificates are properly configured.
     app.include_router(my_keys_router, prefix=settings.api_prefix)
     
     # Integrations Router (External Apps - Orcahub)
-    from app.routers.integrations import router as integrations_router
+    from app.routers.integrations import router as integrations_router, external_router as integrations_external_router
     app.include_router(integrations_router, prefix=settings.api_prefix)
+    app.include_router(integrations_external_router, prefix=settings.api_prefix)
     
     # Cluster Registration Router (Vault Integration)
     app.include_router(cluster_registration_router, prefix=settings.api_prefix)
@@ -337,9 +470,17 @@ Ensure your client certificates are properly configured.
     from app.routers.cluster_members import router as cluster_members_router
     app.include_router(cluster_members_router, prefix=settings.api_prefix)
     
+    # Regions Router (Geographic overview)
+    from app.routers.regions import router as regions_router
+    app.include_router(regions_router, prefix=settings.api_prefix)
+    
     # Monitoring Router (Real-time metrics dashboard)
     from app.routers.monitoring import router as monitoring_router
     app.include_router(monitoring_router, prefix=settings.api_prefix)
+    
+    # File Transfer Router (Upload files to LXD instances)
+    from app.routers.file_transfer import router as file_transfer_router
+    app.include_router(file_transfer_router, prefix=settings.api_prefix)
     
     # Terminal Router (WebSocket terminal access)
     app.include_router(terminal_router, prefix=settings.api_prefix)
@@ -347,6 +488,24 @@ Ensure your client certificates are properly configured.
     # Console Router (VGA/Graphics console access)
     from app.routers.console import router as console_router
     app.include_router(console_router, prefix=settings.api_prefix)
+    
+    # Organization Router (Three-Tier RBAC)
+    from app.routers.organizations import router as organizations_router
+    app.include_router(organizations_router, prefix=settings.api_prefix)
+    
+    # User Groups Router (Admin user assignment + Authentik sync)
+    from app.routers.user_groups import router as user_groups_router
+    app.include_router(user_groups_router, prefix=settings.api_prefix)
+    
+    # Tenant Access Policy Router (ACL system)
+    from app.routers.tenant_access import router as tenant_access_router
+    app.include_router(tenant_access_router, prefix=settings.api_prefix)
+    
+    # Archive Router (Log compression & compliance archive)
+    if settings.opensearch_archive_enabled:
+        from app.routers.archive import router as archive_router
+        app.include_router(archive_router, prefix=settings.api_prefix)
+        logger.info("Archive management API enabled")
     
     # Health check endpoint
     @app.get("/health", tags=["Health"])

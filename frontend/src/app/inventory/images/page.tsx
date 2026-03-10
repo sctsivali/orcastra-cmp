@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ImageIcon, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useImages } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -172,8 +172,7 @@ export default function ImagesPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <ImageIcon className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Images
           </h1>
           <p className="text-muted-foreground mt-2">
@@ -304,11 +303,11 @@ export default function ImagesPage() {
                       {image.fingerprint.substring(0, 12)}...
                     </TableCell>
                     <TableCell>
-                      {image.aliases && image.aliases.length > 0 ? (
+                      {image.aliases && image.aliases.length > 0 && image.aliases[0].name ? (
                         <Badge variant="outline">{image.aliases[0].name}</Badge>
                       ) : (
                         <span className="text-muted-foreground text-xs">
-                          No alias
+                          N/A
                         </span>
                       )}
                     </TableCell>

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
+import { formatHypervisorType } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { 
   Server, 
@@ -35,6 +36,7 @@ import { toast } from "@/hooks/use-toast";
 import { ClusterMember } from "@/types/api";
 import { useClusters, useClusterMembers, useMemberResources } from "@/hooks/use-lxd";
 import { MemberResourceModal } from "@/components/member-resource-modal";
+import { usePermissions } from "@/hooks/use-permissions";
 
 function ClusterMembersContent() {
   const searchParams = useSearchParams();
@@ -120,7 +122,7 @@ function ClusterMembersContent() {
               ) : (
                 clusters.map((cluster: any) => (
                   <SelectItem key={cluster.cluster_id} value={cluster.cluster_id}>
-                    {cluster.display_name || cluster.cluster_id} ({cluster.cluster_type})
+                    {cluster.display_name || cluster.cluster_id} ({formatHypervisorType(cluster.cluster_type)})
                   </SelectItem>
                 ))
               )}
@@ -248,7 +250,7 @@ function ClusterMembersContent() {
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">
-                        {member.architecture || "—"}
+                        {member.architecture || "N/A"}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -280,6 +282,18 @@ function ClusterMembersContent() {
 }
 
 export default function ClusterMembersPage() {
+  const router = useRouter();
+  const { isPartner } = usePermissions();
+
+  // redirect if not Partner+
+  React.useEffect(() => {
+    if (!isPartner) {
+      router.replace("/");
+    }
+  }, [isPartner, router]);
+
+  if (!isPartner) return null;
+
   return (
     <Suspense fallback={
       <div className="container py-8">

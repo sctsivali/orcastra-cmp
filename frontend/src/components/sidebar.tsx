@@ -32,6 +32,12 @@ import {
   X,
   Blocks,
   Terminal,
+  MapPin,
+  Globe,
+  Lightbulb,
+  MonitorPlay,
+  Workflow,
+  UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,6 +63,11 @@ import { useLayout } from "./layout-provider";
 import { usePersonalization, useCurrentLogo } from "./personalization-provider";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
+import { usePermissions } from "@/hooks/use-permissions";
+import { Role } from "@/types/rbac";
+import { useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { queryKeys } from "@/hooks/use-lxd";
 
 interface SidebarProps {
   className?: string;
@@ -179,7 +190,7 @@ function TerminalMenuItem() {
             }}
           >
             <div className="flex items-center gap-2 flex-1 truncate">
-              <Terminal className="h-3 w-3" />
+              <Terminal className="h-4 w-4 shrink-0" />
               <span className="truncate">{terminal.instanceName}</span>
             </div>
             <div className="flex items-center gap-1">
@@ -260,9 +271,9 @@ function ConsoleMenuItem() {
           >
             <div className="flex items-center gap-2 flex-1 truncate">
               {console.instanceType === 'virtual-machine' ? (
-                <Monitor className="h-3 w-3" />
+                <Monitor className="h-4 w-4 shrink-0" />
               ) : (
-                <Box className="h-3 w-3" />
+                <Box className="h-4 w-4 shrink-0" />
               )}
               <span className="truncate">{console.instanceName}</span>
             </div>
@@ -303,6 +314,7 @@ export function Sidebar({ className }: SidebarProps) {
   const { theme, setTheme } = useTheme();
   const { settings } = usePersonalization();
   const currentLogo = useCurrentLogo(theme);
+  const { isAdmin, isPartner, isTenant } = usePermissions();
   
   const pathname = usePathname();
 
@@ -388,9 +400,61 @@ export function Sidebar({ className }: SidebarProps) {
     },
   ];
 
-  // Wrapper component for links to handle mobile close
+  // route → prefetch mapping: warm React Query cache on sidebar hover
+  const queryClient = useQueryClient();
+  const prefetchMap: Record<string, () => void> = React.useMemo(() => ({
+    "/inventory": () => {
+      queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.allProjects, queryFn: () => api.projects.listAll(), staleTime: 180_000 });
+      queryClient.prefetchQuery({ queryKey: ["clusters", { fresh: false }], queryFn: () => api.clusters.list(false), staleTime: 120_000 });
+    },
+    "/inventory/instances": () => {
+      queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
+    },
+    "/inventory/monitoring": () => {
+      queryClient.prefetchQuery({ queryKey: ["monitoring", "dashboard"], queryFn: () => api.monitoring.getDashboard(), staleTime: 0 });
+    },
+    "/inventory/networks": () => {
+      queryClient.prefetchQuery({ queryKey: ["networks", undefined], queryFn: () => api.networks.list(), staleTime: 120_000 });
+    },
+    "/inventory/storage-pools": () => {
+      queryClient.prefetchQuery({ queryKey: ["storagePools", undefined], queryFn: async () => {
+        const [pools, resources] = await Promise.all([api.storagePools.list() as Promise<any>, api.storagePools.getResourcesAll() as Promise<any>]);
+        return { ...pools, resources: resources?.resources || {} };
+      }, staleTime: 120_000 });
+    },
+    "/inventory/storage-volumes": () => {
+      queryClient.prefetchQuery({ queryKey: ["storageVolumes", undefined, undefined], queryFn: () => api.storageVolumes.list(), staleTime: 120_000 });
+    },
+    "/inventory/images": () => {
+      queryClient.prefetchQuery({ queryKey: ["images", undefined], queryFn: () => api.images.listAll(), staleTime: 120_000 });
+    },
+    "/inventory/profiles": () => {
+      queryClient.prefetchQuery({ queryKey: ["profiles", undefined], queryFn: () => api.profiles.list(), staleTime: 120_000 });
+    },
+    "/inventory/ipam": () => {
+      queryClient.prefetchQuery({ queryKey: ["ipam", undefined], queryFn: () => api.ipam.list(), staleTime: 120_000 });
+    },
+    "/inventory/network-acls": () => {
+      queryClient.prefetchQuery({ queryKey: ["networkACLs", undefined], queryFn: () => api.networkACLs.list(), staleTime: 120_000 });
+    },
+    "/regions": () => {
+      queryClient.prefetchQuery({ queryKey: ["regions", "overview"], queryFn: () => api.regions.getOverview(), staleTime: 60_000 });
+    },
+    "/": () => {
+      queryClient.prefetchQuery({ queryKey: queryKeys.nodes, queryFn: api.nodes.status, staleTime: 10_000 });
+      queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
+    },
+  }), [queryClient]);
+
+  // Wrapper component for links to handle mobile close + prefetch on hover
   const SidebarLink = ({ href, children, ...props }: any) => (
-    <Link href={href} onClick={handleLinkClick} {...props}>
+    <Link
+      href={href}
+      onClick={handleLinkClick}
+      onMouseEnter={() => prefetchMap[href]?.()}
+      {...props}
+    >
       {children}
     </Link>
   );
@@ -550,7 +614,10 @@ export function Sidebar({ className }: SidebarProps) {
                         Monitoring
                       </SidebarLink>
                     </Button>
+
                     
+                    {/* Clusters - Partner+ only */}
+                    {isPartner && (
                     <Button
                       variant={pathname === "/inventory/clusters" ? "secondary" : "ghost"}
                       className="w-full justify-start text-sm"
@@ -558,12 +625,14 @@ export function Sidebar({ className }: SidebarProps) {
                       asChild
                     >
                       <SidebarLink href="/inventory/clusters">
-                        <Network className="h-4 w-4 mr-2" />
+                        <Server className="h-4 w-4 mr-2" />
                         Clusters
                       </SidebarLink>
                     </Button>
+                    )}
                     
-                    {/* Clustering Submenu */}
+                    {/* Clustering Submenu - Partner+ only */}
+                    {isPartner && (
                     <div className="pl-2">
                       <p className="text-xs font-semibold text-muted-foreground mb-1 mt-2">Clustering</p>
                       <Button
@@ -573,11 +642,12 @@ export function Sidebar({ className }: SidebarProps) {
                         asChild
                       >
                         <SidebarLink href="/inventory/clustering/members">
-                          <Users className="h-4 w-4 mr-2" />
+                          <UserPlus className="h-4 w-4 mr-2" />
                           Members
                         </SidebarLink>
                       </Button>
                     </div>
+                    )}
                     
                     <Button
                       variant={pathname === "/inventory/instances" ? "secondary" : "ghost"}
@@ -591,9 +661,26 @@ export function Sidebar({ className }: SidebarProps) {
                       </SidebarLink>
                     </Button>
                     
-                    <TerminalMenuItem />
-                    
-                    <ConsoleMenuItem />
+                    {/* Sessions group — Sessions page + Terminals/Consoles as children */}
+                    {isTenant && (
+                    <div>
+                      <Button
+                        variant={pathname === "/inventory/sessions" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/sessions">
+                          <MonitorPlay className="h-4 w-4 mr-2" />
+                          Sessions
+                        </SidebarLink>
+                      </Button>
+                      <div className="pl-4">
+                        <TerminalMenuItem />
+                        <ConsoleMenuItem />
+                      </div>
+                    </div>
+                    )}
                     
                     <Button
                       variant={pathname === "/inventory/profiles" ? "secondary" : "ghost"}
@@ -641,7 +728,7 @@ export function Sidebar({ className }: SidebarProps) {
                         asChild
                       >
                         <SidebarLink href="/inventory/ipam">
-                          <Network className="h-4 w-4 mr-2" />
+                          <Globe className="h-4 w-4 mr-2" />
                           IPAM
                         </SidebarLink>
                       </Button>
@@ -687,6 +774,8 @@ export function Sidebar({ className }: SidebarProps) {
                       </SidebarLink>
                     </Button>
                     
+                    {/* Server - Partner+ only */}
+                    {isPartner && (
                     <Button
                       variant={pathname === "/inventory/server" ? "secondary" : "ghost"}
                       className="w-full justify-start text-sm"
@@ -694,11 +783,14 @@ export function Sidebar({ className }: SidebarProps) {
                       asChild
                     >
                       <SidebarLink href="/inventory/server">
-                        <HardDrive className="h-4 w-4 mr-2" />
+                        <Cpu className="h-4 w-4 mr-2" />
                         Server
                       </SidebarLink>
                     </Button>
+                    )}
                     
+                    {/* Operations - Partner+ only */}
+                    {isPartner && (
                     <Button
                       variant={pathname === "/inventory/operations" ? "secondary" : "ghost"}
                       className="w-full justify-start text-sm"
@@ -710,7 +802,10 @@ export function Sidebar({ className }: SidebarProps) {
                         Operations
                       </SidebarLink>
                     </Button>
-                    
+                    )}
+
+                    {/* Warnings - Partner+ only */}
+                    {isPartner && (
                     <Button
                       variant={pathname === "/inventory/warnings" ? "secondary" : "ghost"}
                       className="w-full justify-start text-sm"
@@ -722,8 +817,10 @@ export function Sidebar({ className }: SidebarProps) {
                         Warnings
                       </SidebarLink>
                     </Button>
+                    )}
                     
-                    {/* Permissions Submenu */}
+                    {/* Permissions Submenu - Admin+Partner */}
+                    {isPartner && (
                     <div className="pl-2">
                       <p className="text-xs font-semibold text-muted-foreground mb-1 mt-2">Permissions</p>
                       <Button
@@ -750,8 +847,30 @@ export function Sidebar({ className }: SidebarProps) {
                         </SidebarLink>
                       </Button>
                     </div>
+                    )}
                   </div>
                 )}
+              </div>
+
+              {/* Regions Menu */}
+              <div>
+                <Button
+                  variant={pathname === "/regions" ? "default" : "ghost"}
+                  className={cn(
+                    "w-full justify-start",
+                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2",
+                    pathname === "/regions" && "sidebar-active"
+                  )}
+                  asChild
+                >
+                  <SidebarLink href="/regions">
+                    <MapPin className="h-5 w-5" />
+                    <span className={cn(
+                      "ml-3 flex-1 text-left",
+                      isCollapsed && !sidebarOpen && "md:hidden"
+                    )}>Regions</span>
+                  </SidebarLink>
+                </Button>
               </div>
 
               {/* Services Menu */}
@@ -766,7 +885,7 @@ export function Sidebar({ className }: SidebarProps) {
                   asChild
                 >
                   <SidebarLink href="/service-providers">
-                    <Layers className="h-5 w-5" />
+                    <Workflow className="h-5 w-5" />
                     <span className={cn(
                       "ml-3 flex-1 text-left",
                       isCollapsed && !sidebarOpen && "md:hidden"
@@ -787,7 +906,7 @@ export function Sidebar({ className }: SidebarProps) {
                   asChild
                 >
                   <SidebarLink href="/solutions">
-                    <HardDrive className="h-5 w-5" />
+                    <Lightbulb className="h-5 w-5" />
                     <span className={cn(
                       "ml-3 flex-1 text-left",
                       isCollapsed && !sidebarOpen && "md:hidden"
@@ -821,7 +940,7 @@ export function Sidebar({ className }: SidebarProps) {
 
           {/* Footer with Settings and Theme Switcher */}
           <div className="border-t p-3 space-y-2 shrink-0">
-            {/* Settings Link */}
+            {/* Settings Link - All authenticated users */}
             <Button
               variant={pathname === "/settings" ? "default" : "ghost"}
               className={cn(

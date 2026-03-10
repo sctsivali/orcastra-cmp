@@ -63,3 +63,14 @@ docker-compose*.yml
 backup-files/
 *.bak
 *.backup
+
+# Misc
+*.zip
+*.rar
+*.7z
+*.md
+docs/
+infrastructure/
+scripts/
+.venv/
+.github/

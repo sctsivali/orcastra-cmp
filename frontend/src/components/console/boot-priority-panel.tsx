@@ -26,7 +26,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/hooks/use-toast";
-import { API_URL } from "@/lib/api";
+import { API_URL, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 interface StartupOrderEntry {
@@ -67,7 +67,8 @@ export function BootPriorityPanel({
 
     try {
       const response = await fetch(
-        `${API_URL}/console/startup-order?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`
+        `${API_URL}/console/startup-order?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
+        { headers: { ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
 
       if (!response.ok) {
@@ -123,7 +124,7 @@ export function BootPriorityPanel({
         `${API_URL}/console/startup-order?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
         {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
           body: JSON.stringify({ updates }),
         }
       );

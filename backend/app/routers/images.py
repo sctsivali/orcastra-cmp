@@ -21,10 +21,16 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.cache import get_cache_manager
+from app.core.dependencies import require_tenant
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/images", tags=["Images"])
+router = APIRouter(
+    prefix="/images",
+    tags=["Images"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -64,7 +70,7 @@ async def list_all_images(
     """List all images from all LXD nodes."""
     # Try cache first (60 second cache)
     cache = get_cache_manager()
-    cache_key = "images:list:all"
+    cache_key = get_scope_cache_key("images:list:all")
     cached_data = cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached images list")
@@ -113,6 +119,7 @@ async def list_node_images(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all images from a specific LXD node."""
+    verify_cluster_access(host)
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()

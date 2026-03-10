@@ -5,16 +5,21 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Trash2, Check, Key, ChevronRight, Activity, Settings2, Palette, Shield } from "lucide-react";
+import { ChevronRight, Activity, Settings2, Palette, Shield, Users } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
+import { OrgPersonalizationSettings } from "@/components/org-personalization-settings";
 import { PersonalizationSettings } from "@/components/personalization-settings";
 import { IntegrationsSettings } from "@/components/integrations-settings";
+import { UserGroupsSettings } from "@/components/user-groups-settings";
+import { usePermissions } from "@/hooks/use-permissions";
+import { getAccessToken } from "@/lib/api";
 
 export default function SettingsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { isAdmin, isPartner } = usePermissions();
   const [isClearing, setIsClearing] = useState(false);
   const [cleared, setCleared] = useState(false);
 
@@ -25,7 +30,12 @@ export default function SettingsPage() {
     try {
       // Clear backend cache (Redis + in-memory)
       try {
-        await fetch('/api/system/cache/clear', { method: 'POST' });
+        await fetch('/api/system/cache/clear', {
+          method: 'POST',
+          headers: {
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+          },
+        });
       } catch (backendError) {
         console.warn("Backend cache clear failed (may be unavailable):", backendError);
       }
@@ -60,7 +70,9 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-3xl font-bold">Settings</h1>
         <p className="text-muted-foreground mt-2">
-          Configure system preferences, manage cache, and monitor resource usage
+          {isPartner
+            ? "Configure system preferences, manage integrations, user access, personalization, and monitor resource usage"
+            : "Configure your preferences and manage application cache"}
         </p>
       </div>
 
@@ -70,28 +82,45 @@ export default function SettingsPage() {
             <Settings2 className="h-4 w-4 shrink-0" />
             <span>General</span>
           </TabsTrigger>
+          {/* Integrations - Admin + Partner */}
+          {isPartner && (
           <TabsTrigger value="integrations" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Shield className="h-4 w-4 shrink-0" />
             <span>Integrations</span>
           </TabsTrigger>
+          )}
+          {/* User Groups - Admin + Partner (partners can assign tenants) */}
+          {isPartner && (
+          <TabsTrigger value="user-groups" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
+            <Users className="h-4 w-4 shrink-0" />
+            <span>User Groups</span>
+          </TabsTrigger>
+          )}
+
+          {/* Personalization - Admin + Partner */}
+          {isPartner && (
           <TabsTrigger value="personalization" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Palette className="h-4 w-4 shrink-0" />
             <span>Personalization</span>
           </TabsTrigger>
+          )}
+          {/* System Info - Admin + Partner */}
+          {isPartner && (
           <TabsTrigger value="system-info" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Activity className="h-4 w-4 shrink-0" />
             <span>System Info</span>
           </TabsTrigger>
+          )}
         </TabsList>
 
-        {/* General Settings Tab */}
+        {/* General Settings Tab - all roles, My Keys hidden for Tenant */}
         <TabsContent value="general" className="space-y-6">
           <div className="grid gap-6">
-            {/* My Keys Card */}
+            {/* My Keys Card - Admin + Partner only */}
+            {isPartner && (
             <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => router.push('/my-keys')}>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Key className="h-5 w-5" />
+                <CardTitle>
                   My Keys
                 </CardTitle>
                 <CardDescription>
@@ -118,12 +147,12 @@ export default function SettingsPage() {
                 </div>
               </CardContent>
             </Card>
+            )}
 
             {/* Cache Management Card */}
             <Card>
               <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Trash2 className="h-5 w-5" />
+                <CardTitle>
                   Cache Management
                 </CardTitle>
                 <CardDescription>
@@ -146,20 +175,11 @@ export default function SettingsPage() {
                       className="gap-2"
                     >
                       {isClearing ? (
-                        <>
-                          <Trash2 className="h-4 w-4 animate-spin" />
-                          Clearing Cache...
-                        </>
+                        <>Clearing Cache...</>
                       ) : cleared ? (
-                        <>
-                          <Check className="h-4 w-4" />
-                          Cache Cleared
-                        </>
+                        <>Cache Cleared</>
                       ) : (
-                        <>
-                          <Trash2 className="h-4 w-4" />
-                          Clear All Cache
-                        </>
+                        <>Clear All Cache</>
                       )}
                     </Button>
                     {cleared && (
@@ -174,20 +194,38 @@ export default function SettingsPage() {
           </div>
         </TabsContent>
 
-        {/* System Info Tab */}
+        {/* System Info Tab - Admin + Partner */}
+        {isPartner && (
         <TabsContent value="system-info">
           <SystemResourceUsagePanel />
         </TabsContent>
+        )}
 
-        {/* Personalization Tab */}
+        {/* Personalization Tab - Admin: personal, Partner: org-level branding */}
+        {isPartner && (
         <TabsContent value="personalization">
-          <PersonalizationSettings />
+          {isAdmin ? (
+            <PersonalizationSettings />
+          ) : (
+            <OrgPersonalizationSettings />
+          )}
         </TabsContent>
+        )}
 
-        {/* Integrations Tab */}
+        {/* Integrations Tab - Admin + Partner */}
+        {isPartner && (
         <TabsContent value="integrations">
           <IntegrationsSettings />
         </TabsContent>
+        )}
+
+        {/* User Groups Tab - Admin + Partner */}
+        {isPartner && (
+        <TabsContent value="user-groups">
+          <UserGroupsSettings />
+        </TabsContent>
+        )}
+
       </Tabs>
     </div>
   );

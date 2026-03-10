@@ -24,6 +24,16 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -44,6 +54,7 @@ import {
   AlertCircle,
   CheckCircle,
   RotateCw,
+  ChevronLeft,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -52,6 +63,9 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { KeyInfo, KeyCreateRequest } from "@/types/api";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export default function MyKeysPage() {
   const { toast } = useToast();
@@ -59,7 +73,11 @@ export default function MyKeysPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("active");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [keyToDelete, setKeyToDelete] = useState<{ id: string; name: string } | null>(null);
   const { isReadOnly } = useReadOnlyMode();
+  const { isPartner } = usePermissions();
+  const router = useRouter();
 
   // Fetch keys
   const {
@@ -97,9 +115,6 @@ export default function MyKeysPage() {
   const projects = projectsData 
     ? (projectsData as any[]).flatMap((hostData: any) => hostData.projects || [])
     : [];
-  
-  // Debug log
-  console.log('Projects data:', { projectsData, projects, count: projects.length });
 
   // Generate key mutation
   const createMutation = useMutation({
@@ -142,6 +157,15 @@ export default function MyKeysPage() {
     },
   });
 
+  // redirect non-partner/non-admin users
+  useEffect(() => {
+    if (!isPartner) {
+      router.replace("/");
+    }
+  }, [isPartner, router]);
+
+  if (!isPartner) return null;
+
   // Download key handler
   const handleDownload = async (keyId: string) => {
     try {
@@ -168,15 +192,17 @@ export default function MyKeysPage() {
   };
 
   // Delete key handler
-  const handleDelete = async (keyId: string, keyName: string) => {
-    if (
-      !confirm(
-        `Are you sure you want to delete the key "${keyName}"? This action cannot be undone.`
-      )
-    ) {
-      return;
+  const handleDeleteClick = (keyId: string, keyName: string) => {
+    setKeyToDelete({ id: keyId, name: keyName });
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (keyToDelete) {
+      deleteMutation.mutate(keyToDelete.id);
     }
-    deleteMutation.mutate(keyId);
+    setDeleteDialogOpen(false);
+    setKeyToDelete(null);
   };
 
   if (isLoading) {
@@ -187,14 +213,25 @@ export default function MyKeysPage() {
     <div className="p-4 sm:p-8 space-y-6">
       <ReadOnlyBanner />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold flex items-center gap-2">
-            <Key className="h-6 w-6 sm:h-8 sm:w-8" />
-            My Keys
-          </h1>
-          <p className="text-muted-foreground mt-2 text-sm sm:text-base">
-            Manage TLS identity keys for accessing hypervisor resources
-          </p>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push("/settings")}
+            className="shrink-0"
+          >
+            <ChevronLeft className="h-4 w-4 mr-1" />
+            <span className="hidden sm:inline">Back to Settings</span>
+            <span className="sm:hidden">Back</span>
+          </Button>
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold">
+              My Keys
+            </h1>
+            <p className="text-muted-foreground mt-1 text-sm sm:text-base">
+              Manage TLS identity keys for accessing hypervisor resources
+            </p>
+          </div>
         </div>
         <div className="flex gap-2 shrink-0">
           <Button onClick={() => refetch()} disabled={isRefetching} variant="outline" size="sm" className="shrink-0">
@@ -337,11 +374,11 @@ export default function MyKeysPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {new Date(key.created_at).toLocaleDateString()}
+                        {new Date(key.created_at).toLocaleDateString('en-GB')}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {key.expires_at
-                          ? new Date(key.expires_at).toLocaleDateString()
+                          ? new Date(key.expires_at).toLocaleDateString('en-GB')
                           : "Never"}
                       </TableCell>
                       <TableCell>
@@ -370,7 +407,7 @@ export default function MyKeysPage() {
                           <Button
                             size="sm"
                             variant="destructive"
-                            onClick={() => handleDelete(key.id, key.name)}
+                            onClick={() => handleDeleteClick(key.id, key.name)}
                             title={isReadOnly ? "Disabled in read-only mode" : "Delete Key"}
                             disabled={isReadOnly}
                           >
@@ -386,6 +423,31 @@ export default function MyKeysPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={(open) => {
+        setDeleteDialogOpen(open);
+        if (!open) setKeyToDelete(null);
+      }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Key</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete the key <strong className="text-foreground">&quot;{keyToDelete?.name}&quot;</strong>?
+              This action cannot be undone and will permanently remove this TLS identity key.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setKeyToDelete(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteConfirm}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -595,7 +657,7 @@ function CreateKeyDialog({
               Key will expire on{" "}
               {new Date(
                 Date.now() + (formData.expire_days || 365) * 24 * 60 * 60 * 1000
-              ).toLocaleDateString()}
+              ).toLocaleDateString('en-GB')}
             </p>
           </div>
         </div>

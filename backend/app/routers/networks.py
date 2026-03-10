@@ -14,13 +14,20 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/networks", tags=["Networks"])
+router = APIRouter(
+    prefix="/networks",
+    tags=["Networks"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -89,9 +96,11 @@ async def list_networks(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all networks."""
+    if host:
+        verify_cluster_access(host)
     # Try cache first (60 second cache)
     cache = get_cache_manager()
-    cache_key = f"networks:list:host={host}"
+    cache_key = get_scope_cache_key(f"networks:list:host={host}")
     cached_data = cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached networks for host={host}")
@@ -146,6 +155,7 @@ async def get_network(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific network."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -178,8 +188,10 @@ async def create_network(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new network."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -189,6 +201,16 @@ async def create_network(
             type=request.type,
             config=request.config,
             description=request.description
+        )
+        
+        # Log activity: network creation success
+        activity_logger.log_activity(
+            action="network.create",
+            target_type="network",
+            target_id=request.name,
+            target_host=host,
+            result="success",
+            details={"type": request.type, "description": request.description}
         )
         
         return {
@@ -202,11 +224,20 @@ async def create_network(
                 config=network.config or {},
                 used_by=network.used_by or [],
                 status=getattr(network, 'status', ''),
-                        node=node_name
+                node=host
             )
         }
     except Exception as e:
         logger.error(f"Error creating network: {e}")
+        # Log activity: network creation failure
+        activity_logger.log_activity(
+            action="network.create",
+            target_type="network",
+            target_id=request.name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -223,8 +254,10 @@ async def update_network(
     description: Optional[str] = Body(None),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a network."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -258,8 +291,10 @@ async def delete_network(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a network."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -267,12 +302,30 @@ async def delete_network(
         network = client.networks.get(network_name)
         network.delete()
         
+        # Log activity: network deletion success
+        activity_logger.log_activity(
+            action="network.delete",
+            target_type="network",
+            target_id=network_name,
+            target_host=host,
+            result="success"
+        )
+        
         return {
             "success": True,
             "message": f"Network {network_name} deleted successfully"
         }
     except Exception as e:
         logger.error(f"Error deleting network {network_name}: {e}")
+        # Log activity: network deletion failure
+        activity_logger.log_activity(
+            action="network.delete",
+            target_type="network",
+            target_id=network_name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -288,6 +341,7 @@ async def get_network_state(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get network state."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:

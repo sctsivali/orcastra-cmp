@@ -15,6 +15,7 @@ out/
 build/
 dist/
 *.egg-info/
+*.tsbuildinfo
 
 # Environment files
 .env
@@ -58,12 +59,16 @@ certs/node2/*.key
 *.tar
 
 # Misc
+infrastructure/
 *.bak
 *.zip
 *.rar
 .cache/
 backup-files/
 docs/
+Manual Deployment/
 scripts/
 .github/
 *.md
+*.txt
+config/

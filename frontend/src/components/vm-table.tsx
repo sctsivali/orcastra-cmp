@@ -48,6 +48,7 @@ import {
   useDeleteVM,
 } from "@/hooks/use-lxd";
 import { toast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
 
 interface VMTableProps {
@@ -121,6 +122,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
   const restartMutation = useRestartVM();
   const deleteMutation = useDeleteVM();
   const { openTerminal, hasTerminal } = useTerminal();
+  const { isPartner } = usePermissions();
 
   const isRunning = vm.status === "Running";
   const isStopped = vm.status === "Stopped";
@@ -334,6 +336,8 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
           <TooltipContent>Restart</TooltipContent>
         </Tooltip>
 
+        {/* Delete - Partner+ only */}
+        {isPartner && (
         <AlertDialog>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -373,6 +377,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+        )}
       </div>
     </TooltipProvider>
   );
@@ -508,7 +513,7 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
                             <div className="font-medium">{vm.name}</div>
                             <div className="text-xs text-muted-foreground">
                               {vm.type === "virtual-machine" ? "VM" : "Container"} •{" "}
-                              {vm.architecture || "unknown"}
+                              {vm.architecture || "N/A"}
                             </div>
                           </div>
                         </div>

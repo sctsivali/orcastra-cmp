@@ -41,19 +41,15 @@ export function StorageCleanupProvider({ children }: { children: React.ReactNode
   React.useEffect(() => {
     if (typeof window === 'undefined') return;
     
-    // log current storage usage
     const size = getAppStorageSize();
     setStorageSize(size);
-    console.log(`[Storage] Current usage: ${(size / 1024).toFixed(2)} KB`);
     
     // If storage is VERY high, run nuclear cleanup
     if (size > NUCLEAR_CLEANUP_THRESHOLD) {
-      console.warn(`[Storage] Usage exceeds ${NUCLEAR_CLEANUP_THRESHOLD / 1024}KB, running NUCLEAR cleanup`);
       nuclearCleanup();
     }
     // If storage is over normal threshold, run aggressive cleanup
     else if (size > STARTUP_CLEANUP_THRESHOLD) {
-      console.warn(`[Storage] Usage exceeds ${STARTUP_CLEANUP_THRESHOLD / 1024}KB, running aggressive cleanup`);
       clearSessionStorage();
       emergencyCleanup();
     } else {
@@ -64,7 +60,6 @@ export function StorageCleanupProvider({ children }: { children: React.ReactNode
     // update size after cleanup
     const newSize = getAppStorageSize();
     setStorageSize(newSize);
-    console.log(`[Storage] After startup cleanup: ${(newSize / 1024).toFixed(2)} KB`);
   }, []);
   
   const runCleanup = React.useCallback(() => {

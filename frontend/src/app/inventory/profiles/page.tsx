@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Settings, RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
 import { ProfileInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useProfiles } from "@/hooks/use-lxd";
@@ -137,8 +137,7 @@ export default function ProfilesPage() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Settings className="h-8 w-8" />
+          <h1 className="text-3xl font-bold">
             Profiles
           </h1>
           <p className="text-muted-foreground mt-2">
@@ -250,7 +249,7 @@ export default function ProfilesPage() {
                         label="devices"
                         items={Object.entries(profile.devices || {}).map(([name, config]) => ({
                           name,
-                          type: (config as any).type || "unknown",
+                          type: (config as any).type || "N/A",
                           config
                         }))}
                         title={`Devices in ${profile.name}`}

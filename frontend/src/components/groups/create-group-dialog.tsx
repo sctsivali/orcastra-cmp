@@ -103,7 +103,7 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
           ? imagesData.flatMap((host: any) => host?.images || [])
           : (imagesData as any)?.images || [];
         return images.map((img: any) => ({ 
-          name: img.properties?.description || img.fingerprint?.substring(0, 12) || 'unnamed', 
+          name: img.properties?.description || img.fingerprint?.substring(0, 12) || 'N/A', 
           path: `/1.0/images/${img.fingerprint}` 
         }));
       case "profile":

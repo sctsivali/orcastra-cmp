@@ -2,9 +2,9 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor } from "lucide-react";
+import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LoadingLottieSmall, LoadingLottieMediumEnhanced, LoadingLottiePage } from "@/components/loading-lottie";
+import { LoadingLottieSmall, LoadingLottieMediumEnhanced } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
 import { StatsOverview } from "@/components/stats-overview";
@@ -55,12 +55,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useInstances, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateProject, useUpdateInstanceTags, useUpdateProjectTags, useClusters, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
+import { useQueryClient } from "@tanstack/react-query";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
+import { useTenantAccess } from "@/hooks/use-tenant-access";
 
 interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
@@ -98,6 +101,12 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
   const updateInstanceTags = useUpdateInstanceTags();
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [showMonitoring, setShowMonitoring] = React.useState(false);
+  const { isPartner } = usePermissions();
+  const { hasPermission } = useTenantAccess();
+
+  // tenant permission checks for this instance
+  const canOperate = hasPermission(vm.host, vm.project || "default", vm.name, "operate");
+  const canConsole = hasPermission(vm.host, vm.project || "default", vm.name, "console");
 
   const handleTagsChange = async (newTags: string[]) => {
     if (isReadOnly) {
@@ -316,7 +325,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleStart}
-                  disabled={isRunning || isPending || isReadOnly}
+                  disabled={isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {startVM.isPending ? (
                     <LoadingLottieSmall />
@@ -325,7 +334,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Start"}</TooltipContent>
+              <TooltipContent>{!canOperate ? "No operate permission" : isReadOnly ? "Disabled in read-only mode" : "Start"}</TooltipContent>
             </Tooltip>
 
             {/* Stop */}
@@ -336,7 +345,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleStop}
-                  disabled={!isRunning || isPending || isReadOnly}
+                  disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {stopVM.isPending ? (
                     <LoadingLottieSmall />
@@ -345,7 +354,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Stop"}</TooltipContent>
+              <TooltipContent>{!canOperate ? "No operate permission" : isReadOnly ? "Disabled in read-only mode" : "Stop"}</TooltipContent>
             </Tooltip>
 
             {/* Restart */}
@@ -356,7 +365,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleRestart}
-                  disabled={!isRunning || isPending || isReadOnly}
+                  disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {restartVM.isPending ? (
                     <LoadingLottieSmall />
@@ -365,7 +374,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{isReadOnly ? "Disabled in read-only mode" : "Restart"}</TooltipContent>
+              <TooltipContent>{!canOperate ? "No operate permission" : isReadOnly ? "Disabled in read-only mode" : "Restart"}</TooltipContent>
             </Tooltip>
 
             {/* Terminal */}
@@ -382,13 +391,13 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       project: vm.project || "default",
                     });
                   }}
-                  disabled={!isRunning}
-                  title={!isRunning ? "Instance must be running" : "Open Terminal"}
+                  disabled={!isRunning || !canConsole}
+                  title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Terminal"}
                 >
                   <Terminal className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{!isRunning ? "Instance must be running" : "Open Terminal"}</TooltipContent>
+              <TooltipContent>{!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Terminal"}</TooltipContent>
             </Tooltip>
 
             {/* Console */}
@@ -406,16 +415,17 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       project: vm.project || "default",
                     });
                   }}
-                  disabled={!isRunning}
-                  title={!isRunning ? "Instance must be running" : "Open Console"}
+                  disabled={!isRunning || !canConsole}
+                  title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Console"}
                 >
                   <Monitor className="h-3.5 w-3.5" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{!isRunning ? "Instance must be running" : "Open Console"}</TooltipContent>
+              <TooltipContent>{!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Console"}</TooltipContent>
             </Tooltip>
 
-            {/* Delete */}
+            {/* Delete - Partner+ only */}
+            {isPartner && (
             <AlertDialog>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -454,6 +464,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+            )}
           </div>
         </TooltipProvider>
       </div>
@@ -477,6 +488,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [editDialogOpen, setEditDialogOpen] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
+  const { isPartner } = usePermissions();
 
   const handleTagsChange = async (newTags: string[]) => {
     if (isReadOnly) {
@@ -511,10 +523,10 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
   // form state for editing
   const [editName, setEditName] = React.useState(project.name);
   const [editDescription, setEditDescription] = React.useState(project.description || "");
-  const [editMaxCpu, setEditMaxCpu] = React.useState(1);
-  const [editMaxRamValue, setEditMaxRamValue] = React.useState(1);
+  const [editMaxCpu, setEditMaxCpu] = React.useState(0);
+  const [editMaxRamValue, setEditMaxRamValue] = React.useState(0);
   const [editMaxRamUnit, setEditMaxRamUnit] = React.useState<"GiB" | "MiB">("GiB");
-  const [editMaxStorageValue, setEditMaxStorageValue] = React.useState(1);
+  const [editMaxStorageValue, setEditMaxStorageValue] = React.useState(0);
   const [editMaxStorageUnit, setEditMaxStorageUnit] = React.useState<"GiB" | "MiB">("GiB");
 
   // calculate resource usage from instances
@@ -582,30 +594,36 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       setEditName(project.name);
       setEditDescription(project.description || "");
 
-      // Parse CPU limit
+      // Parse CPU limit (0 = unlimited/no limit set)
       const cpuLimitStr = project.config["limits.cpu"];
-      if (cpuLimitStr) {
-        setEditMaxCpu(parseInt(cpuLimitStr));
-      }
+      setEditMaxCpu(cpuLimitStr ? parseInt(cpuLimitStr) || 0 : 0);
 
-      // Parse RAM limit
+      // Parse RAM limit (0 = unlimited/no limit set)
       const ramLimitStr = project.config["limits.memory"];
       if (ramLimitStr) {
         const ramMatch = ramLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB)$/i);
         if (ramMatch) {
           setEditMaxRamValue(parseFloat(ramMatch[1]));
           setEditMaxRamUnit(ramMatch[2] as "GiB" | "MiB");
+        } else {
+          setEditMaxRamValue(0);
         }
+      } else {
+        setEditMaxRamValue(0);
       }
 
-      // Parse Storage limit
+      // Parse Storage limit (0 = unlimited/no limit set)
       const storageLimitStr = project.config["limits.disk"];
       if (storageLimitStr) {
         const storageMatch = storageLimitStr.match(/^(\d+(?:\.\d+)?)(GiB|MiB)$/i);
         if (storageMatch) {
           setEditMaxStorageValue(parseFloat(storageMatch[1]));
           setEditMaxStorageUnit(storageMatch[2] as "GiB" | "MiB");
+        } else {
+          setEditMaxStorageValue(0);
         }
+      } else {
+        setEditMaxStorageValue(0);
       }
     }
   }, [editDialogOpen, project.config, project.description, project.name]);
@@ -631,20 +649,19 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       // Always include description
       updateData.description = editDescription;
 
-      // Include CPU if set
-      if (editMaxCpu > 0) {
-        updateData.max_cpu = editMaxCpu;
-      }
+      // CPU: 0 = unlimited (send 0 to clear limit), >0 = set limit
+      // null/undefined = no change (field omitted)
+      updateData.max_cpu = editMaxCpu; // always send - 0 clears the limit
 
-      // Include RAM if set
-      if (editMaxRamValue > 0) {
-        updateData.max_ram = `${editMaxRamValue}${editMaxRamUnit}`;
-      }
+      // RAM: 0 = unlimited (send "0" to clear limit), >0 = set limit
+      updateData.max_ram = editMaxRamValue > 0
+        ? `${editMaxRamValue}${editMaxRamUnit}`
+        : "0";
 
-      // Include Storage if set
-      if (editMaxStorageValue > 0) {
-        updateData.max_storage = `${editMaxStorageValue}${editMaxStorageUnit}`;
-      }
+      // Storage: 0 = unlimited (send "0" to clear limit), >0 = set limit
+      updateData.max_storage = editMaxStorageValue > 0
+        ? `${editMaxStorageValue}${editMaxStorageUnit}`
+        : "0";
 
       await updateProject.mutateAsync({ host: project.host, projectName: project.name, data: updateData });
 
@@ -714,9 +731,9 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
             <Badge variant="outline" className="text-xs">
               {project.host}
             </Badge>
-            {/* Delete Button */}
-            {!isReadOnly && (
-              <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+            {/* Delete/Edit Button - Partner+ only */}
+            {!isReadOnly && isPartner && (
+              <>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
                     <Button variant="ghost" size="icon" className="h-7 w-7">
@@ -731,17 +748,16 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
                     <Settings className="mr-2 h-4 w-4" />
                     Edit Project
                   </DropdownMenuItem>
-                  <AlertDialogTrigger asChild>
-                    <DropdownMenuItem 
-                      className="text-destructive focus:text-destructive cursor-pointer"
-                      onSelect={(e) => e.preventDefault()}
-                    >
-                      <Trash2 className="mr-2 h-4 w-4" />
-                      Delete Project
-                    </DropdownMenuItem>
-                  </AlertDialogTrigger>
+                  <DropdownMenuItem 
+                    className="text-destructive focus:text-destructive cursor-pointer"
+                    onSelect={() => setDeleteDialogOpen(true)}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Delete Project
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+              <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
               <AlertDialogContent onClick={(e) => e.stopPropagation()}>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Delete project '{project.name}'?</AlertDialogTitle>
@@ -763,7 +779,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
                   >
                     {isDeleting ? (
                       <>
-                        <LoadingLottieSmall className="mr-2" />
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                         Deleting...
                       </>
                     ) : (
@@ -773,6 +789,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
+            </>
             )}
           </div>
         </div>
@@ -958,28 +975,34 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
 
             {/* Max CPU */}
             <div className="space-y-2">
-              <Label htmlFor="edit-max-cpu">Max CPU Cores</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="edit-max-cpu">Max CPU Cores</Label>
+                {editMaxCpu === 0 && <span className="text-xs text-muted-foreground">Unlimited</span>}
+              </div>
               <Input
                 id="edit-max-cpu"
                 type="number"
-                min="1"
+                min="0"
                 value={editMaxCpu}
                 onChange={(e) => setEditMaxCpu(Number(e.target.value))}
-                placeholder="e.g., 2"
+                placeholder="0 = Unlimited"
               />
             </div>
 
             {/* Max RAM */}
             <div className="space-y-2">
-              <Label htmlFor="edit-max-ram">Max RAM</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="edit-max-ram">Max RAM</Label>
+                {editMaxRamValue === 0 && <span className="text-xs text-muted-foreground">Unlimited</span>}
+              </div>
               <div className="flex gap-2">
                 <Input
                   id="edit-max-ram"
                   type="number"
-                  min="1"
+                  min="0"
                   value={editMaxRamValue}
                   onChange={(e) => setEditMaxRamValue(Number(e.target.value))}
-                  placeholder="e.g., 2"
+                  placeholder="0 = Unlimited"
                   className="flex-1"
                 />
                 <Select value={editMaxRamUnit} onValueChange={(v) => setEditMaxRamUnit(v as "GiB" | "MiB")}>
@@ -996,15 +1019,18 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
 
             {/* Max Storage */}
             <div className="space-y-2">
-              <Label htmlFor="edit-max-storage">Max Storage</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="edit-max-storage">Max Storage</Label>
+                {editMaxStorageValue === 0 && <span className="text-xs text-muted-foreground">Unlimited</span>}
+              </div>
               <div className="flex gap-2">
                 <Input
                   id="edit-max-storage"
                   type="number"
-                  min="1"
+                  min="0"
                   value={editMaxStorageValue}
                   onChange={(e) => setEditMaxStorageValue(Number(e.target.value))}
-                  placeholder="e.g., 10"
+                  placeholder="0 = Unlimited"
                   className="flex-1"
                 />
                 <Select value={editMaxStorageUnit} onValueChange={(v) => setEditMaxStorageUnit(v as "GiB" | "MiB")}>
@@ -1044,6 +1070,13 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
   const [selectedTags, setSelectedTags] = React.useState<string[]>([]);
   const [selectedNode, setSelectedNode] = React.useState<string>("all");
   const { isReadOnly } = useReadOnlyMode();
+  const queryClient = useQueryClient();
+
+  // Refresh both instances AND projects
+  const handleRefresh = React.useCallback(() => {
+    refetch(); // refresh instances
+    queryClient.invalidateQueries({ queryKey: ["projects", "all"] }); // refresh projects
+  }, [refetch, queryClient]);
 
   // Get unique nodes from projects
   const availableNodes = React.useMemo(() => {
@@ -1171,7 +1204,7 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
         <Button
           variant="outline"
           size="sm"
-          onClick={refetch}
+          onClick={handleRefresh}
           disabled={isRefetching}
           className="gap-2"
         >
@@ -1299,9 +1332,13 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
 }
 
 // Alarm Statistics Component
-function AlarmStatistics() {
-  const { data: warningsData } = useWarnings();
-  const { data: systemWarnings } = useSystemWarnings();
+function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { prefetchedWarnings?: any; prefetchedSystemWarnings?: any } = {}) {
+  // use prefetched data if available, otherwise fall back to own hooks (standalone usage)
+  const { data: warningsDataFetched } = useWarnings();
+  const { data: systemWarningsFetched } = useSystemWarnings();
+  
+  const warningsData = prefetchedWarnings ?? warningsDataFetched;
+  const systemWarnings = prefetchedSystemWarnings ?? systemWarningsFetched;
   
   const actualWarnings = (warningsData as any)?.warnings || [];
   const certWarnings = systemWarnings?.certificate_warnings || [];
@@ -1323,15 +1360,11 @@ function AlarmStatistics() {
     certWarnings.forEach((w: any) => {
       result.total++;
       result.certIssues++;
-      if (w.severity === 'critical') result.critical++;
-      else if (w.severity === 'high') result.high++;
-      else result.warning++;
     });
     
     nodeWarnings.forEach(() => {
       result.total++;
       result.inactiveNodes++;
-      result.critical++;
     });
     
     return result;
@@ -1434,7 +1467,7 @@ function AlarmStatistics() {
           {/* Inactive Nodes */}
           {counts.inactiveNodes > 0 && (
             <Link 
-              href="/inventory/warnings"
+              href="/inventory/warnings?tab=nodes"
               className="flex items-center gap-3 p-3 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
             >
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">
@@ -1457,6 +1490,10 @@ export function Dashboard() {
   const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
   const { data: clustersData, isLoading: clustersLoading } = useClusters();
 
+  // pre-fetch alarm & node data in parallel with primary queries (eliminates waterfall)
+  const { data: warningsData } = useWarnings();
+  const { data: systemWarnings } = useSystemWarnings();
+
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString('en-GB', {
         hour: '2-digit',
@@ -1473,18 +1510,17 @@ export function Dashboard() {
     projectInstanceCounts.set(projectKey, (projectInstanceCounts.get(projectKey) || 0) + 1);
   });
 
-  // Full-page loading state when initial data is loading
-  if (vmsLoading && projectsLoading && clustersLoading) {
-    return <LoadingLottiePage />;
-  }
+  // Progressive loading: render layout immediately with skeleton placeholders
+  // instead of blocking the entire page with a full-page loading animation
+  const isPrimaryLoading = vmsLoading || projectsLoading || clustersLoading;
 
   return (
     <div className="space-y-8">
-      {/* Stats Overview */}
+      {/* Stats Overview - shows its own loading state */}
       <StatsOverview data={vmsData} clustersData={clustersData} isLoading={vmsLoading} clustersLoading={clustersLoading} />
 
-      {/* Alarm Statistics - Only shows when there are warnings */}
-      <AlarmStatistics />
+      {/* Alarm Statistics - Only shows when there are warnings (data already prefetched above) */}
+      <AlarmStatistics prefetchedWarnings={warningsData} prefetchedSystemWarnings={systemWarnings} />
 
       {/* Nodes Status */}
       <NodeStatusCards />

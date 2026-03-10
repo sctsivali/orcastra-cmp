@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Personalization Provider - Enterprise Grade
+ * Personalization Provider
  * 
  * Manages user-specific dashboard customization settings.
  * 
@@ -26,8 +26,10 @@ import {
   BackgroundSettings,
   BrandingSettings,
   ColorSettings,
+  ThemePreference,
   DEFAULT_PERSONALIZATION,
 } from "@/types/personalization";
+import { Role, resolveRoles, hasMinimumRole } from "@/types/rbac";
 import { toast } from "@/hooks/use-toast";
 
 // API configuration
@@ -35,8 +37,14 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
 const API_RETRY_COUNT = 2;
 const API_RETRY_DELAY_MS = 500;
 
-// Create context
-const PersonalizationContext = React.createContext<PersonalizationContextType | undefined>(
+// Org preference polling interval (ms) for cross-session sync
+const ORG_PREF_POLL_INTERVAL_MS = 45_000;
+
+// Cookie name for personalization hint (visual CSS values for FOUC prevention)
+const PERSONALIZATION_COOKIE = "orcastra-personalization";
+
+// Create context (exported for OrgPersonalizationSettings wrapper)
+export const PersonalizationContext = React.createContext<PersonalizationContextType | undefined>(
   undefined
 );
 
@@ -44,12 +52,75 @@ const PersonalizationContext = React.createContext<PersonalizationContextType | 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
+ * Persist visual personalization hint in cookie for instant load (365 days).
+ * Only stores CSS-relevant values - NOT images/logos (too large for cookies).
+ */
+function setPersonalizationCookie(settings: PersonalizationSettings) {
+  if (typeof document === "undefined") return;
+  try {
+    const hint = {
+      ac: settings.colors.accentColor,
+      sb: settings.colors.sidebarBgColor,
+      st: settings.colors.sidebarTextColor,
+      uca: settings.colors.useCustomAccent,
+      usb: settings.colors.useCustomSidebarBg,
+      ust: settings.colors.useCustomSidebarText,
+      atc: settings.colors.autoTextColor,
+      slc: settings.colors.sidebarLogoColor,
+      an: settings.branding.appName,
+      th: settings.theme,
+    };
+    const encoded = encodeURIComponent(JSON.stringify(hint));
+    document.cookie = `${PERSONALIZATION_COOKIE}=${encoded};path=/;max-age=${365 * 24 * 60 * 60};SameSite=Lax`;
+  } catch {
+    // cookie write failed - degrade gracefully
+  }
+}
+
+/**
+ * Read personalization hint from cookie (client-side only).
+ * Returns partial settings merged with defaults for instant initial render.
+ */
+function readPersonalizationCookie(): PersonalizationSettings | null {
+  if (typeof document === "undefined") return null;
+  try {
+    const match = document.cookie.match(new RegExp(`${PERSONALIZATION_COOKIE}=([^;]+)`));
+    if (!match) return null;
+    const hint = JSON.parse(decodeURIComponent(match[1]));
+    return {
+      ...DEFAULT_PERSONALIZATION,
+      colors: {
+        ...DEFAULT_PERSONALIZATION.colors,
+        accentColor: hint.ac ?? DEFAULT_PERSONALIZATION.colors.accentColor,
+        sidebarBgColor: hint.sb ?? DEFAULT_PERSONALIZATION.colors.sidebarBgColor,
+        sidebarTextColor: hint.st ?? DEFAULT_PERSONALIZATION.colors.sidebarTextColor,
+        useCustomAccent: hint.uca ?? DEFAULT_PERSONALIZATION.colors.useCustomAccent,
+        useCustomSidebarBg: hint.usb ?? DEFAULT_PERSONALIZATION.colors.useCustomSidebarBg,
+        useCustomSidebarText: hint.ust ?? DEFAULT_PERSONALIZATION.colors.useCustomSidebarText,
+        autoTextColor: hint.atc ?? DEFAULT_PERSONALIZATION.colors.autoTextColor,
+        sidebarLogoColor: hint.slc ?? DEFAULT_PERSONALIZATION.colors.sidebarLogoColor,
+      },
+      branding: {
+        ...DEFAULT_PERSONALIZATION.branding,
+        appName: hint.an ?? DEFAULT_PERSONALIZATION.branding.appName,
+      },
+      theme: hint.th ?? DEFAULT_PERSONALIZATION.theme,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Build headers for API requests
  */
-function buildHeaders(userId?: string, userEmail?: string): Record<string, string> {
+function buildHeaders(userId?: string, userEmail?: string, accessToken?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
   if (userId) {
     headers["X-User-ID"] = userId;
   }
@@ -70,24 +141,48 @@ function mergeWithDefaults(data: Partial<PersonalizationSettings>): Personalizat
     background: { ...DEFAULT_PERSONALIZATION.background, ...data.background },
     branding: { ...DEFAULT_PERSONALIZATION.branding, ...data.branding },
     colors: { ...DEFAULT_PERSONALIZATION.colors, ...data.colors },
+    theme: data.theme ?? DEFAULT_PERSONALIZATION.theme,
   };
 }
 
 export function PersonalizationProvider({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
-  const [settings, setSettings] = React.useState<PersonalizationSettings>(DEFAULT_PERSONALIZATION);
+  // Initialize from cookie hint for instant render (prevents FOUC for colors/branding)
+  const [settings, setSettings] = React.useState<PersonalizationSettings>(
+    () => readPersonalizationCookie() ?? DEFAULT_PERSONALIZATION
+  );
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
   
   // Track current user ID to detect user changes
   const currentUserIdRef = React.useRef<string | null>(null);
+  // Debounce ref for save operations
+  const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingSettingsRef = React.useRef<PersonalizationSettings | null>(null);
+  // Always-current settings ref (avoids stale closure in saveSettings)
+  const settingsRef = React.useRef<PersonalizationSettings>(
+    readPersonalizationCookie() ?? DEFAULT_PERSONALIZATION
+  );
+  // Undo/Redo stacks
+  const undoStackRef = React.useRef<PersonalizationSettings[]>([]);
+  const redoStackRef = React.useRef<PersonalizationSettings[]>([]);
+  const isUndoRedoRef = React.useRef(false);
+  const MAX_HISTORY = 50;
+  const [canUndo, setCanUndo] = React.useState(false);
+  const [canRedo, setCanRedo] = React.useState(false);
+
+  // Keep settingsRef always in sync with latest settings state
+  React.useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
 
   /**
    * Fetch settings from API with retry mechanism
    */
   const fetchFromAPI = React.useCallback(async (
     userId: string, 
-    userEmail?: string
+    userEmail?: string,
+    accessToken?: string
   ): Promise<PersonalizationSettings | null> => {
     for (let attempt = 0; attempt <= API_RETRY_COUNT; attempt++) {
       try {
@@ -97,7 +192,7 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
         
         const response = await fetch(`${API_BASE}/api/v1/user-preferences`, {
           method: "GET",
-          headers: buildHeaders(userId, userEmail),
+          headers: buildHeaders(userId, userEmail, accessToken),
           credentials: "include",
           cache: "no-store",
         });
@@ -125,7 +220,8 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
   const saveToAPI = React.useCallback(async (
     userId: string, 
     userEmail: string | undefined,
-    newSettings: PersonalizationSettings
+    newSettings: PersonalizationSettings,
+    accessToken?: string
   ): Promise<boolean> => {
     for (let attempt = 0; attempt <= API_RETRY_COUNT; attempt++) {
       try {
@@ -135,7 +231,7 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
         
         const response = await fetch(`${API_BASE}/api/v1/user-preferences`, {
           method: "PUT",
-          headers: buildHeaders(userId, userEmail),
+          headers: buildHeaders(userId, userEmail, accessToken),
           credentials: "include",
           body: JSON.stringify(newSettings),
         });
@@ -161,18 +257,60 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
    */
   const deleteFromAPI = React.useCallback(async (
     userId: string, 
-    userEmail?: string
+    userEmail?: string,
+    accessToken?: string
   ): Promise<boolean> => {
     try {
       const response = await fetch(`${API_BASE}/api/v1/user-preferences`, {
         method: "DELETE",
-        headers: buildHeaders(userId, userEmail),
+        headers: buildHeaders(userId, userEmail, accessToken),
         credentials: "include",
       });
       return response.ok;
     } catch {
       return false;
     }
+  }, []);
+
+  /**
+   * Fetch org-level preferences for tenant auto-inherit
+   */
+  const fetchOrgPreferences = React.useCallback(async (
+    accessToken?: string,
+  ): Promise<PersonalizationSettings | null> => {
+    for (let attempt = 0; attempt <= API_RETRY_COUNT; attempt++) {
+      try {
+        if (attempt > 0) {
+          await delay(API_RETRY_DELAY_MS * attempt);
+        }
+
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+
+        const response = await fetch(`${API_BASE}/api/v1/organizations/my-preferences`, {
+          method: "GET",
+          headers,
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          // settings field contains the PersonalizationSettings structure
+          if (data.settings && Object.keys(data.settings).length > 0) {
+            return mergeWithDefaults(data.settings);
+          }
+          return null; // org has no prefs configured yet
+        }
+
+        if (response.status >= 400 && response.status < 500) {
+          return null;
+        }
+      } catch {
+        // Network error - will retry
+      }
+    }
+    return null;
   }, []);
 
   // Load settings when session changes
@@ -187,7 +325,21 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     // Detect user change (including logout)
     const isUserChanged = currentUserIdRef.current !== userId;
     if (isUserChanged) {
-      setSettings(DEFAULT_PERSONALIZATION);
+      // On logout: clear cookie and reset to defaults
+      // On first load or login: preserve cookie hint to avoid flash (FOUC)
+      // Only reset to defaults if actually logging out (userId is null)
+      // or switching to a different user (prev was non-null and different)
+      const isPreviouslyLoggedIn = currentUserIdRef.current !== null;
+      if (!userId) {
+        // Logout: reset everything
+        setSettings(DEFAULT_PERSONALIZATION);
+        setPersonalizationCookie(DEFAULT_PERSONALIZATION);
+      } else if (isPreviouslyLoggedIn) {
+        // User switch (was user A, now user B): reset to defaults,
+        // the API call below will fetch the new user's settings
+        setSettings(DEFAULT_PERSONALIZATION);
+      }
+      // else: first load with userId - keep cookie-based hint active
       currentUserIdRef.current = userId;
     }
 
@@ -201,18 +353,30 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
         return;
       }
       
-      // Authenticated: fetch from API
-      const apiSettings = await fetchFromAPI(userId, userEmail);
-      
-      if (apiSettings) {
-        setSettings(apiSettings);
+      const token = (session as any)?.accessToken;
+
+      // Detect role from session groups
+      const groups: string[] = (session?.user as any)?.groups ?? [];
+      const roles = resolveRoles(groups);
+      const isAdmin = hasMinimumRole(roles, Role.ADMIN);
+
+      if (isAdmin) {
+        // Admin (system-level): personal user preferences
+        const apiSettings = await fetchFromAPI(userId, userEmail, token);
+        setSettings(apiSettings ?? DEFAULT_PERSONALIZATION);
       } else {
-        // API failed - use defaults and notify user
-        setSettings(DEFAULT_PERSONALIZATION);
-        toast({
-          title: "Could not load personalization",
-          description: "Using default settings. Your custom settings will load when the connection is restored.",
-          variant: "destructive",
+        // Partner / Tenant: org branding + personal theme
+        // Org prefs drive logo, colors, background, branding
+        // Personal prefs drive theme (each user picks their own)
+        const [orgSettings, personalSettings] = await Promise.all([
+          fetchOrgPreferences(token),
+          fetchFromAPI(userId, userEmail, token),
+        ]);
+        const base = orgSettings ?? DEFAULT_PERSONALIZATION;
+        const personalTheme = personalSettings?.theme;
+        setSettings({
+          ...base,
+          theme: personalTheme ?? base.theme,
         });
       }
       
@@ -220,12 +384,16 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     };
 
     loadSettings();
-  }, [status, session?.user?.id, session?.user?.email, fetchFromAPI]);
+  }, [status, session?.user?.id, session?.user?.email, fetchFromAPI, fetchOrgPreferences]);
 
   /**
-   * Save settings - requires authentication
+   * Save settings - debounced to prevent API spam on rapid edits.
+   * Pass immediate=true for discrete actions (undo/redo) to skip debounce.
    */
-  const saveSettings = React.useCallback(async (newSettings: PersonalizationSettings) => {
+  const saveSettings = React.useCallback(async (
+    newSettings: PersonalizationSettings,
+    { immediate = false }: { immediate?: boolean } = {},
+  ) => {
     const userId = session?.user?.id;
     const userEmail = session?.user?.email ?? undefined;
     
@@ -243,20 +411,59 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
       lastModified: new Date().toISOString(),
     };
     
-    // Optimistic update for responsive UI
+    // Optimistic update - instant UI feedback
+    // Only push to undo stack at the START of a new edit sequence
+    // (when no debounce timer is pending). This prevents slider drags
+    // from overwriting the original value on every intermediate tick.
+    // e.g., dragging 50% → 60% should undo to 50%, not 59%.
+    if (!saveTimerRef.current && !isUndoRedoRef.current) {
+      // Push current state onto undo stack
+      undoStackRef.current = [...undoStackRef.current, { ...settingsRef.current }];
+      if (undoStackRef.current.length > MAX_HISTORY) {
+        undoStackRef.current = undoStackRef.current.slice(-MAX_HISTORY);
+      }
+      // New edit invalidates redo history
+      redoStackRef.current = [];
+      setCanUndo(true);
+      setCanRedo(false);
+    }
+    isUndoRedoRef.current = false;
     setSettings(updatedSettings);
-    setIsSaving(true);
-    
-    const success = await saveToAPI(userId, userEmail, updatedSettings);
-    setIsSaving(false);
-    
-    if (!success) {
-      // Revert on failure
-      toast({
-        title: "Failed to save settings",
-        description: "Your changes could not be saved. Please try again.",
-        variant: "destructive",
-      });
+
+    // Clear any pending save timer
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    // flush function that persists to API
+    const flush = async (toSave: PersonalizationSettings) => {
+      setIsSaving(true);
+      const success = await saveToAPI(userId, userEmail, toSave, (session as any)?.accessToken);
+      setIsSaving(false);
+      if (!success) {
+        toast({
+          title: "Failed to save settings",
+          description: "Your changes could not be saved. Please try again.",
+          variant: "destructive",
+        });
+      }
+    };
+
+    if (immediate) {
+      // undo/redo: save right away (no debounce for discrete actions)
+      pendingSettingsRef.current = null;
+      await flush(updatedSettings);
+    } else {
+      // normal edit: debounce 800ms for continuous interactions (sliders, color pickers)
+      pendingSettingsRef.current = updatedSettings;
+      saveTimerRef.current = setTimeout(async () => {
+        saveTimerRef.current = null;
+        const toSave = pendingSettingsRef.current;
+        if (!toSave) return;
+        pendingSettingsRef.current = null;
+        await flush(toSave);
+      }, 800);
     }
   }, [session?.user?.id, session?.user?.email, saveToAPI]);
 
@@ -288,15 +495,31 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     });
   }, [settings, saveSettings]);
 
+  const updateTheme = React.useCallback((theme: ThemePreference) => {
+    saveSettings({
+      ...settings,
+      theme,
+    });
+  }, [settings, saveSettings]);
+
   const resetToDefaults = React.useCallback(async () => {
     const userId = session?.user?.id;
     const userEmail = session?.user?.email ?? undefined;
     
+    // Push current settings onto undo stack so user can undo the reset
+    undoStackRef.current = [...undoStackRef.current, { ...settingsRef.current }];
+    if (undoStackRef.current.length > MAX_HISTORY) {
+      undoStackRef.current = undoStackRef.current.slice(-MAX_HISTORY);
+    }
+    redoStackRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
+
     // Reset UI immediately
     setSettings(DEFAULT_PERSONALIZATION);
     
     if (userId) {
-      const success = await deleteFromAPI(userId, userEmail);
+      const success = await deleteFromAPI(userId, userEmail, (session as any)?.accessToken);
       if (success) {
         toast({
           title: "Settings reset",
@@ -312,6 +535,49 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     }
   }, [session?.user?.id, session?.user?.email, deleteFromAPI]);
 
+  // Undo: pop from undo stack, push current onto redo stack
+  const undoSettings = React.useCallback(() => {
+    const stack = undoStackRef.current;
+    if (stack.length === 0) return;
+
+    // Push current state onto redo stack
+    redoStackRef.current = [...redoStackRef.current, { ...settingsRef.current }];
+
+    // Pop last state from undo stack
+    const prev = stack[stack.length - 1];
+    undoStackRef.current = stack.slice(0, -1);
+
+    // Apply the undo without adding to undo stack - immediate save
+    isUndoRedoRef.current = true;
+    saveSettings(prev, { immediate: true });
+    setCanUndo(undoStackRef.current.length > 0);
+    setCanRedo(true);
+  }, [saveSettings]);
+
+  // Redo: pop from redo stack, push current onto undo stack
+  const redoSettings = React.useCallback(() => {
+    const stack = redoStackRef.current;
+    if (stack.length === 0) return;
+
+    // Push current state onto undo stack
+    undoStackRef.current = [...undoStackRef.current, { ...settingsRef.current }];
+
+    // Pop last state from redo stack
+    const next = stack[stack.length - 1];
+    redoStackRef.current = stack.slice(0, -1);
+
+    // Apply the redo without adding to undo stack - immediate save
+    isUndoRedoRef.current = true;
+    saveSettings(next, { immediate: true });
+    setCanUndo(true);
+    setCanRedo(redoStackRef.current.length > 0);
+  }, [saveSettings]);
+
+  // Force-apply settings without API save (for org-level instant preview in sidebar/header)
+  const applySettingsOptimistically = React.useCallback((newSettings: PersonalizationSettings) => {
+    setSettings(newSettings);
+  }, []);
+
   const refreshSettings = React.useCallback(async () => {
     const userId = session?.user?.id;
     const userEmail = session?.user?.email ?? undefined;
@@ -321,25 +587,135 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
       return;
     }
     
-    setIsLoading(true);
-    const apiSettings = await fetchFromAPI(userId, userEmail);
-    
-    if (apiSettings) {
-      setSettings(apiSettings);
-      toast({
-        title: "Settings refreshed",
-        description: "Your personalization settings have been reloaded.",
-      });
+    // Silent refresh - no isLoading flash to prevent visible re-render
+    const token = (session as any)?.accessToken;
+
+    // detect role to decide which source to load
+    const groups: string[] = (session?.user as any)?.groups ?? [];
+    const roles = resolveRoles(groups);
+    const isAdmin = hasMinimumRole(roles, Role.ADMIN);
+
+    if (isAdmin) {
+      const apiSettings = await fetchFromAPI(userId, userEmail, token);
+      setSettings(apiSettings ?? DEFAULT_PERSONALIZATION);
     } else {
-      toast({
-        title: "Could not refresh settings",
-        description: "Failed to load settings from server.",
-        variant: "destructive",
+      // Partner / Tenant: org branding + personal theme
+      const [orgSettings, personalSettings] = await Promise.all([
+        fetchOrgPreferences(token),
+        fetchFromAPI(userId, userEmail, token),
+      ]);
+      const base = orgSettings ?? DEFAULT_PERSONALIZATION;
+      const personalTheme = personalSettings?.theme;
+      setSettings({
+        ...base,
+        theme: personalTheme ?? base.theme,
       });
     }
     
-    setIsLoading(false);
-  }, [session?.user?.id, session?.user?.email, fetchFromAPI]);
+    // No isLoading = false needed (silent refresh has no loading state)
+  }, [session, fetchFromAPI, fetchOrgPreferences]);
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Cross-session org-preference sync (polling + visibility)
+  //
+  // When a Partner saves org branding, other sessions (Tenant / Partner in
+  // another browser) must pick up the change without a hard refresh.
+  // Strategy:
+  //   1. Poll a lightweight /version endpoint every ORG_PREF_POLL_INTERVAL_MS
+  //      (returns only updated_at - avoids transferring base64 images).
+  //   2. On document visibilitychange (tab becomes visible), do a single
+  //      version check and full refresh if changed.
+  //   3. Skip entirely for Admin (personal prefs only) and unauthenticated.
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Track the last-known org preferences version to avoid unnecessary full fetches
+  const orgPrefsVersionRef = React.useRef<string | null>(null);
+
+  /**
+   * Lightweight version check: fetch only updated_at from backend.
+   * Returns true if org preferences have changed since last check.
+   */
+  const checkOrgPrefsVersion = React.useCallback(async (
+    accessToken?: string,
+  ): Promise<boolean> => {
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+
+      const response = await fetch(`${API_BASE}/api/v1/organizations/my-preferences/version`, {
+        method: "GET",
+        headers,
+        credentials: "include",
+        cache: "no-store",
+      });
+
+      if (!response.ok) return false;
+
+      const data = await response.json();
+      const serverVersion = data.updated_at ?? null;
+      const localVersion = orgPrefsVersionRef.current;
+
+      if (serverVersion !== localVersion) {
+        orgPrefsVersionRef.current = serverVersion;
+        // On first fetch (localVersion === null), record version but don't flag as changed
+        // because the initial load already fetched settings.
+        return localVersion !== null;
+      }
+
+      return false; // no change
+    } catch {
+      return false; // network error - skip this cycle
+    }
+  }, []);
+
+  // Determine if current user should use org-pref sync
+  const shouldPollOrgPrefs = React.useMemo(() => {
+    if (!session?.user?.id) return false;
+    const groups: string[] = (session?.user as any)?.groups ?? [];
+    const roles = resolveRoles(groups);
+    return !hasMinimumRole(roles, Role.ADMIN); // Partner + Tenant inherit org prefs
+  }, [session?.user?.id, (session?.user as any)?.groups]);
+
+  // Seed the version ref on initial load so subsequent polls have a baseline
+  React.useEffect(() => {
+    if (!shouldPollOrgPrefs) return;
+    const token = (session as any)?.accessToken;
+    // Fire-and-forget: just records the current version
+    checkOrgPrefsVersion(token);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldPollOrgPrefs]);
+
+  // Periodic polling: check version every N seconds, full refresh only on change
+  React.useEffect(() => {
+    if (!shouldPollOrgPrefs) return;
+
+    const intervalId = setInterval(async () => {
+      const token = (session as any)?.accessToken;
+      const changed = await checkOrgPrefsVersion(token);
+      if (changed) {
+        await refreshSettings();
+      }
+    }, ORG_PREF_POLL_INTERVAL_MS);
+
+    return () => clearInterval(intervalId);
+  }, [shouldPollOrgPrefs, checkOrgPrefsVersion, refreshSettings, session]);
+
+  // Visibility-based refresh: when user switches back to the tab, check immediately
+  React.useEffect(() => {
+    if (!shouldPollOrgPrefs) return;
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== "visible") return;
+      const token = (session as any)?.accessToken;
+      const changed = await checkOrgPrefsVersion(token);
+      if (changed) {
+        await refreshSettings();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [shouldPollOrgPrefs, checkOrgPrefsVersion, refreshSettings, session]);
 
   const value: PersonalizationContextType = {
     settings,
@@ -347,7 +723,13 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     updateBackground,
     updateBranding,
     updateColors,
+    updateTheme,
     resetToDefaults,
+    undoSettings,
+    redoSettings,
+    canUndo,
+    canRedo,
+    applySettingsOptimistically,
     refreshSettings,
     isLoading,
     isSaving,
@@ -403,6 +785,11 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
       root.style.setProperty("--personalization-sidebar-bg-l", `${sidebarBgHSL.l}%`);
     }
   }, [settings.colors]);
+
+  // Persist visual hint cookie whenever visual settings change (for FOUC prevention on next load)
+  React.useEffect(() => {
+    setPersonalizationCookie(settings);
+  }, [settings.colors, settings.branding.appName, settings.theme]);
 
   return (
     <PersonalizationContext.Provider value={value}>

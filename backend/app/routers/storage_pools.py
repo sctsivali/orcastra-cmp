@@ -13,13 +13,33 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
-router = APIRouter(prefix="/storage/pools", tags=["Storage Pools"])
+
+def _serialize_pool_resources(resources) -> dict:
+    """Convert pylxd StorageResources to a plain dict.
+    
+    pylxd's StorageResources uses __slots__ and marshall() returns {},
+    so FastAPI's jsonable_encoder produces {} instead of {space, inodes}.
+    """
+    return {
+        "space": resources.space if isinstance(resources.space, dict) else {},
+        "inodes": resources.inodes if isinstance(resources.inodes, dict) else {},
+    }
+
+
+router = APIRouter(
+    prefix="/storage/pools",
+    tags=["Storage Pools"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
@@ -86,9 +106,11 @@ async def list_storage_pools(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all storage pools."""
+    if host:
+        verify_cluster_access(host)
     # Try cache first (60 second cache)
     cache = get_cache_manager()
-    cache_key = f"storage_pools:list:host={host}"
+    cache_key = get_scope_cache_key(f"storage_pools:list:host={host}")
     cached_data = cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached storage pools for host={host}")
@@ -141,28 +163,49 @@ async def get_all_storage_pool_resources(
 ):
     """Get resources for all storage pools on all nodes."""
     try:
-        all_resources = {}
+        # check cache first
+        cache = get_cache_manager()
+        cache_key = "storage_pool_resources:all"
+        cached = cache.get("api_responses", cache_key)
+        if cached is not None:
+            return cached
+
         nodes = lxd_service.connection_manager.get_node_names()
-        
-        for node_name in nodes:
+
+        def _fetch_node_resources(node_name: str) -> dict:
+            """Fetch all pool resources for a single node (runs in thread)."""
+            result = {}
             try:
                 client = lxd_service.get_client_with_reconnect(node_name)
                 if client is None:
                     logger.warning(f"Could not connect to {node_name}, skipping for resources")
-                    continue
+                    return result
+                pools = client.storage_pools.all()
                 for pool in pools:
                     try:
                         resources = pool.resources.get()
-                        pool_key = f"{node_name}-{pool.name}"
-                        all_resources[pool_key] = resources
+                        result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
                     except Exception as pool_err:
                         logger.warning(f"Could not get resources for pool {pool.name} on {node_name}: {pool_err}")
-                        continue
             except Exception as node_err:
                 logger.warning(f"Could not access node {node_name}: {node_err}")
-                continue
-        
-        return {"resources": all_resources}
+            return result
+
+        # query all nodes in parallel
+        loop = asyncio.get_event_loop()
+        executor = ThreadPoolExecutor(max_workers=min(len(nodes), 10))
+        tasks = [loop.run_in_executor(executor, _fetch_node_resources, n) for n in nodes]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        executor.shutdown(wait=False)
+
+        all_resources = {}
+        for r in results:
+            if isinstance(r, dict):
+                all_resources.update(r)
+
+        response = {"resources": all_resources}
+        cache.set("api_responses", cache_key, response, ttl=60)
+        return response
     except Exception as e:
         logger.error(f"Error getting all storage pool resources: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -180,6 +223,7 @@ async def get_storage_pool(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific storage pool."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -210,8 +254,10 @@ async def create_storage_pool(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new storage pool."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -223,6 +269,16 @@ async def create_storage_pool(
             "description": request.description
         })
         
+        # Log activity: storage pool creation success
+        activity_logger.log_activity(
+            action="storage.pool.create",
+            target_type="storage_pool",
+            target_id=request.name,
+            target_host=host,
+            result="success",
+            details={"driver": request.driver, "description": request.description}
+        )
+        
         return {
             "success": True,
             "message": f"Storage pool {request.name} created successfully",
@@ -232,11 +288,21 @@ async def create_storage_pool(
                 driver=pool.driver,
                 config=pool.config or {},
                 used_by=pool.used_by or [],
-                status=getattr(pool, 'status', '')
+                status=getattr(pool, 'status', ''),
+                node=host
             )
         }
     except Exception as e:
         logger.error(f"Error creating storage pool: {e}")
+        # Log activity: storage pool creation failure
+        activity_logger.log_activity(
+            action="storage.pool.create",
+            target_type="storage_pool",
+            target_id=request.name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -253,8 +319,10 @@ async def update_storage_pool(
     description: Optional[str] = Body(None),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a storage pool."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -288,8 +356,10 @@ async def delete_storage_pool(
     host: str = Query(..., description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a storage pool."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -297,12 +367,30 @@ async def delete_storage_pool(
         pool = client.storage_pools.get(pool_name)
         pool.delete()
         
+        # Log activity: storage pool deletion success
+        activity_logger.log_activity(
+            action="storage.pool.delete",
+            target_type="storage_pool",
+            target_id=pool_name,
+            target_host=host,
+            result="success"
+        )
+        
         return {
             "success": True,
             "message": f"Storage pool {pool_name} deleted successfully"
         }
     except Exception as e:
         logger.error(f"Error deleting storage pool {pool_name}: {e}")
+        # Log activity: storage pool deletion failure
+        activity_logger.log_activity(
+            action="storage.pool.delete",
+            target_type="storage_pool",
+            target_id=pool_name,
+            target_host=host,
+            result="failure",
+            error_message=str(e)
+        )
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -317,28 +405,49 @@ async def get_all_storage_pool_resources(
 ):
     """Get storage pool resources for all pools."""
     try:
-        all_resources = {}
+        # check cache first
+        cache = get_cache_manager()
+        cache_key = "storage_pool_resources:all_v2"
+        cached = cache.get("api_responses", cache_key)
+        if cached is not None:
+            return cached
+
         nodes = lxd_service.connection_manager.get_node_names()
-        
-        for node_name in nodes:
+
+        def _fetch_node_pool_resources(node_name: str) -> dict:
+            """Fetch all pool resources for a single node (runs in thread)."""
+            result = {}
             try:
                 client = lxd_service.get_client_with_reconnect(node_name)
                 if client is None:
                     logger.warning(f"Could not connect to {node_name}, skipping")
-                    continue
+                    return result
                 pools = client.storage_pools.all()
-                
                 for pool in pools:
                     try:
                         resources = pool.resources.get()
-                        pool_key = f"{node_name}-{pool.name}"
-                        all_resources[pool_key] = resources
+                        result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
                     except Exception as e:
                         logger.warning(f"Could not get resources for pool {pool.name} on {node_name}: {e}")
             except Exception as e:
                 logger.error(f"Error getting pools on {node_name}: {e}")
-        
-        return {"resources": all_resources}
+            return result
+
+        # query all nodes in parallel
+        loop = asyncio.get_event_loop()
+        executor = ThreadPoolExecutor(max_workers=min(len(nodes), 10))
+        tasks = [loop.run_in_executor(executor, _fetch_node_pool_resources, n) for n in nodes]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        executor.shutdown(wait=False)
+
+        all_resources = {}
+        for r in results:
+            if isinstance(r, dict):
+                all_resources.update(r)
+
+        response = {"resources": all_resources}
+        cache.set("api_responses", cache_key, response, ttl=60)
+        return response
     except Exception as e:
         logger.error(f"Error getting storage pool resources: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -356,6 +465,7 @@ async def get_storage_pool_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get storage pool resources."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -365,7 +475,7 @@ async def get_storage_pool_resources(
         
         return {
             "name": pool_name,
-            "resources": resources
+            "resources": _serialize_pool_resources(resources)
         }
     except Exception as e:
         logger.error(f"Error getting storage pool resources {pool_name}: {e}")

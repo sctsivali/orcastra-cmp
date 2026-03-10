@@ -217,7 +217,7 @@ function CreateAPIKeyDialog({
                       const clusterId = String(cluster.id);
                       const clusterName = String(cluster.name || '');
                       const clusterEndpoint = String(cluster.endpoint || '');
-                      const clusterType = String(cluster.server_type || 'unknown');
+                      const clusterType = String(cluster.server_type || 'N/A');
                       const isSelected = selectedClusterIds.includes(clusterId);
                       
                       return (
@@ -560,7 +560,7 @@ export default function IntegrationsPage() {
                     <div className="space-y-1">
                       <CardTitle className="text-lg flex items-center gap-2">
                         <Key className="h-5 w-5" />
-                        {String(apiKey.name || 'Unnamed')}
+                        {String(apiKey.name || 'N/A')}
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
                         <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">

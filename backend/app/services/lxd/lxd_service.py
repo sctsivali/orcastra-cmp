@@ -51,11 +51,26 @@ class LXDService:
         self.instance_manager = InstanceManager(self.connection_manager, self.resource_manager, self.cert_manager)
         self.project_manager = ProjectManager(self.connection_manager, self.cert_manager)
         self.image_manager = ImageManager(self.connection_manager, self.cert_manager)
+        
+        # Sync Vault-registered clusters into connection_manager whitelist
+        # so get_node_names() only returns registered nodes
+        try:
+            registered = self.cert_manager.list_clusters()
+            self.connection_manager.sync_registered_clusters(registered)
+        except Exception as e:
+            logger.warning(f"Could not sync registered clusters at init: {e}")
     
     def ensure_connection(self, cluster_id: str) -> bool:
         """
         Ensure cluster is connected (lazy loading helper).
+        Respects org-scope: returns False if the cluster is outside user's org.
         """
+        # Org-scope guard: prevent reconnecting to clusters outside the user's org
+        from app.core.org_scope import get_current_allowed_clusters
+        allowed = get_current_allowed_clusters()
+        if allowed is not None and cluster_id not in allowed:
+            return False
+
         # Check if already connected
         client = self.connection_manager.get_client(cluster_id)
         if client:

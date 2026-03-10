@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import Lottie from "lottie-react";
+import dynamic from "next/dynamic";
 import loadingAnimation from "../../public/loading-lotttie-orca.json";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
@@ -10,6 +10,9 @@ import {
   LOADING_MESSAGES,
   DYNAMIC_MESSAGES,
 } from "@/hooks/use-loading-progress";
+
+// Lazy-load Lottie renderer to reduce initial JS bundle (~80KB savings)
+const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 
 interface LoadingLottieProps {
   /**

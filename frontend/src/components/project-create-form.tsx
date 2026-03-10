@@ -5,9 +5,8 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { FolderKanban, ArrowLeft, Info } from "lucide-react";
+import { ArrowLeft, Info, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LoadingLottieSmall } from "@/components/loading-lottie";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -55,6 +54,13 @@ export function ProjectCreateForm() {
   const [loadingResources, setLoadingResources] = React.useState(false);
   const [maxRamInBytes, setMaxRamInBytes] = React.useState<number | null>(null);
   const [maxStorageInBytes, setMaxStorageInBytes] = React.useState<number | null>(null);
+
+  // block non-numeric characters in number inputs (e, +, -, .)
+  const blockNonNumeric = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (["e", "E", "+", "-", "."].includes(e.key)) {
+      e.preventDefault();
+    }
+  };
 
   // show error if node names failed to load
   React.useEffect(() => {
@@ -161,13 +167,10 @@ export function ProjectCreateForm() {
       try {
         const { nodeAPI } = await import("@/lib/api");
         const resources = await nodeAPI.resources(selectedHost);
-        console.log("Node resources received:", resources);
         setNodeResources(resources);
         // set max values in bytes for validation (use available, not total)
         setMaxRamInBytes(resources.memory_available);
         setMaxStorageInBytes(resources.storage_available);
-        console.log("Max RAM available (bytes):", resources.memory_available);
-        console.log("Max Storage available (bytes):", resources.storage_available);
       } catch (error) {
         console.error("Failed to load node resources:", error);
         setNodeResources(null);
@@ -183,12 +186,13 @@ export function ProjectCreateForm() {
 
   const onSubmit = async (data: ProjectCreateFormData) => {
     try {
-      // build config
-      const config: Record<string, string> = {};
-      if (data.enableImages) config["features.images"] = "true";
-      if (data.enableProfiles) config["features.profiles"] = "true";
-      if (data.enableStorageVolumes) config["features.storage.volumes"] = "true";
-      if (data.enableNetworks) config["features.networks"] = "true";
+      // build config - explicitly set all features
+      const config: Record<string, string> = {
+        "features.images": data.enableImages ? "true" : "false",
+        "features.profiles": data.enableProfiles ? "true" : "false",
+        "features.storage.volumes": data.enableStorageVolumes ? "true" : "false",
+        "features.networks": data.enableNetworks ? "true" : "false",
+      };
 
       // construct RAM and storage strings
       const maxRam = `${data.maxRamValue}${data.maxRamUnit}`;
@@ -247,8 +251,7 @@ export function ProjectCreateForm() {
           {/* Main Configuration */}
           <Card className="lg:col-span-2">
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FolderKanban className="h-5 w-5" />
+              <CardTitle>
                 Project Configuration
               </CardTitle>
             </CardHeader>
@@ -325,7 +328,7 @@ export function ProjectCreateForm() {
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Resource Limits</h3>
                   {loadingResources && (
-                    <LoadingLottieSmall />
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                   )}
                 </div>
 
@@ -354,6 +357,7 @@ export function ProjectCreateForm() {
                     min="1"
                     max={nodeResources?.cpu_available}
                     placeholder="e.g., 2"
+                    onKeyDown={blockNonNumeric}
                     {...register("maxCpu")}
                     className={errors.maxCpu ? "border-red-500" : ""}
                   />
@@ -376,6 +380,7 @@ export function ProjectCreateForm() {
                       max={maxRamInBytes ? Math.floor(maxRamInBytes / (watch("maxRamUnit") === "MiB" ? 1024 * 1024 : 1024 * 1024 * 1024)) : undefined}
                       placeholder="e.g., 1"
                       className={errors.maxRamValue ? "flex-1 border-red-500" : "flex-1"}
+                      onKeyDown={blockNonNumeric}
                       {...register("maxRamValue")}
                     />
                     <Select
@@ -410,6 +415,7 @@ export function ProjectCreateForm() {
                       max={maxStorageInBytes ? Math.floor(maxStorageInBytes / (watch("maxStorageUnit") === "MiB" ? 1024 * 1024 : 1024 * 1024 * 1024)) : undefined}
                       placeholder="e.g., 10"
                       className={errors.maxStorageValue ? "flex-1 border-red-500" : "flex-1"}
+                      onKeyDown={blockNonNumeric}
                       {...register("maxStorageValue")}
                     />
                     <Select
@@ -512,7 +518,7 @@ export function ProjectCreateForm() {
             >
               {createProject.isPending ? (
                 <>
-                  <LoadingLottieSmall className="mr-2" />
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Creating...
                 </>
               ) : (

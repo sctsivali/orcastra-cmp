@@ -265,8 +265,16 @@ class ResourceManager:
                         if limits_cpu:
                             try:
                                 cpu_used += int(limits_cpu)
-                            except:
-                                pass
+                            except (ValueError, TypeError):
+                                # non-integer value (ex; pinning "0-3") - count range
+                                try:
+                                    parts = limits_cpu.split("-")
+                                    cpu_used += int(parts[-1]) - int(parts[0]) + 1
+                                except Exception:
+                                    cpu_used += 1
+                        else:
+                            # no CPU limit set - count as 1 allocated vCPU
+                            cpu_used += 1
                 cpu_available = cpu_total - cpu_used
                 logger.debug(f"CPU on {node_name}: {cpu_total} total, {cpu_used} used, {cpu_available} available")
             except Exception as e:

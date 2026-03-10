@@ -3,6 +3,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
 import { 
   vmAPI, 
   imageAPI, 
@@ -40,17 +41,8 @@ const defaultRetryConfig = {
 export function useVMs(host?: string, status?: string) {
   return useQuery({
     queryKey: [...queryKeys.vms, { host, status }],
-    queryFn: async () => {
-      try {
-        return await vmAPI.list(host, status);
-      } catch (error) {
-        console.error("Failed to fetch VMs:", error);
-        // Return empty response instead of throwing to prevent UI breaking
-        return { total: 0, vms: [], nodes: [], lxd_count: 0, microcloud_count: 0, incus_count: 0 };
-      }
-    },
-    refetchInterval: 300000, // Auto-refresh every 5 minutes
-    ...STATIC_DATA_CONFIG, // Use static config for better initial load performance
+    queryFn: () => vmAPI.list(host, status),
+    ...STATIC_DATA_CONFIG, // Cache for 3min; manual refresh via button
   });
 }
 
@@ -154,9 +146,10 @@ export function useInstanceMetrics(
     queryKey: queryKeys.instanceMetrics(host, instanceName, project),
     queryFn: () => vmAPI.getMetrics(host, instanceName, project),
     enabled: enabled && !!host && !!instanceName,
-    refetchInterval: 5000, // Poll every 5 seconds (reduced from 3s to reduce load)
-    staleTime: 0, // Always fetch fresh data for real-time metrics
-    retry: 2, // Add retry for transient failures
+    refetchInterval: 10000, // Poll every 10 seconds (balanced freshness vs load)
+    refetchIntervalInBackground: false, // Stop polling when tab is hidden
+    staleTime: 5000, // Consider fresh for 5 seconds
+    retry: 2,
     refetchOnWindowFocus: false,
   });
 }
@@ -260,18 +253,14 @@ export function useNodeResources(nodeName: string) {
 export function useAllProjects() {
   return useQuery({
     queryKey: queryKeys.allProjects,
-    queryFn: async () => {
-      try {
-        return await projectAPI.listAll();
-      } catch (error) {
-        console.error("Failed to fetch all projects:", error);
-        // Return empty array instead of throwing to prevent UI breaking
-        return [];
-      }
-    },
+    queryFn: () => projectAPI.listAll(),
     refetchInterval: 300000, // refresh every 5 minutes (300 seconds)
     staleTime: 30000, // Consider data stale after 30 seconds
-    retry: 2, // Reduce retries to avoid long wait times
+    retry: (failureCount: number, error: unknown) => {
+      // don't retry auth/rate-limit errors
+      if (error instanceof Error && /401|403|429/.test(error.message)) return false;
+      return failureCount < 2;
+    },
     retryDelay: (attemptIndex: number) => Math.min(1000 * 2 ** attemptIndex, 10000),
     refetchOnWindowFocus: false,
   });
@@ -685,7 +674,8 @@ export function useHealth() {
   return useQuery({
     queryKey: queryKeys.health,
     queryFn: healthCheck,
-    refetchInterval: 30000,
+    refetchInterval: 60000, // Check health every minute
+    refetchIntervalInBackground: false,
     retry: 3,
   });
 }
@@ -710,7 +700,8 @@ export function useOperations(host?: string) {
     queryKey: ["operations", host],
     queryFn: () => api.operations.list(host),
     ...DYNAMIC_DATA_CONFIG,
-    refetchInterval: 5000, // Operations change frequently, poll every 5s
+    refetchInterval: 15000, // Poll every 15s (balanced freshness vs load)
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -736,7 +727,16 @@ export function useIPAM(host?: string) {
 export function useStoragePools(host?: string) {
   return useQuery({
     queryKey: ["storagePools", host],
-    queryFn: () => api.storagePools.list(host),
+    queryFn: async () => {
+      const [poolsData, resourcesData] = await Promise.all([
+        api.storagePools.list(host) as Promise<Record<string, unknown>>,
+        api.storagePools.getResourcesAll() as Promise<Record<string, unknown> | null>,
+      ]);
+      return {
+        ...poolsData,
+        resources: (resourcesData as Record<string, unknown>)?.resources || {},
+      };
+    },
     // Always enabled - fetches all pools when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1232,6 +1232,7 @@ export function useRegisterCluster() {
       queryClient.invalidateQueries({ queryKey: queryKeys.vms });
       queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
       queryClient.invalidateQueries({ queryKey: ["instances"] });
+      queryClient.invalidateQueries({ queryKey: ["facilities"] });
     },
   });
 }
@@ -1285,18 +1286,40 @@ export function useRegenerateCert() {
   });
 }
 
+export function useUpdateClusterLocation() {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: ({ clusterId, location }: { clusterId: string; location: any }) => 
+      api.clusters.updateLocation(clusterId, location),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["clusters"] });
+      queryClient.invalidateQueries({ queryKey: ["regions"] });
+      queryClient.invalidateQueries({ queryKey: ["facilities"] });
+    },
+  });
+}
+
+export function useFacilitySuggestions() {
+  return useQuery({
+    queryKey: ["facilities"],
+    queryFn: () => api.clusters.getFacilities(),
+    staleTime: 300000, // 5 min - facility data rarely changes
+  });
+}
+
 // ========== Monitoring Hooks ==========
 
-export function useMonitoringDashboard(enabled: boolean = true, refetchInterval: number = 5000) {
+export function useMonitoringDashboard(enabled: boolean = true, refetchInterval: number = 10000) {
   return useQuery({
     queryKey: ["monitoring", "dashboard"],
     queryFn: () => api.monitoring.getDashboard(),
     enabled,
-    refetchInterval, // Default: poll every 5 seconds for real-time updates
-    staleTime: 0, // Always consider data stale for real-time updates
-    gcTime: 60 * 1000, // Keep in cache for 60 seconds
-    refetchOnWindowFocus: true,
-    refetchIntervalInBackground: true, // Keep refetching even when tab is not focused
+    refetchInterval: refetchInterval > 0 ? refetchInterval : false, // 0 = disabled (WS push active)
+    staleTime: 5000, // Consider fresh for 5 seconds to avoid redundant fetches
+    gcTime: 60 * 1000,
+    refetchOnWindowFocus: refetchInterval > 0, // Only refetch on focus when polling
+    refetchIntervalInBackground: false, // Stop polling when tab is hidden
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
   });
@@ -1307,12 +1330,38 @@ export function useMonitoringNodeMetrics(nodeName: string, enabled: boolean = tr
     queryKey: ["monitoring", "node", nodeName],
     queryFn: () => api.monitoring.getNodeMetrics(nodeName),
     enabled: enabled && !!nodeName,
-    refetchInterval: 5000,
-    staleTime: 0,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: false,
+    staleTime: 5000,
   });
 }
 
 export function useMonitoringHistory(points: number = 60, enabled: boolean = true) {
+  const queryClient = useQueryClient();
+
+  // Prefetch all time ranges on mount for instant switching
+  // Backend reads from the same in-memory cache, so these are very fast
+  useEffect(() => {
+    if (!enabled) return;
+    const allRanges = [60, 180, 360, 720, 4320, 8640];
+    // Sort by proximity to current range (prefetch nearest first)
+    const sortedRanges = allRanges
+      .filter(r => r !== points)
+      .sort((a, b) => Math.abs(a - points) - Math.abs(b - points));
+
+    sortedRanges.forEach((range, idx) => {
+      // Stagger prefetches slightly to avoid burst
+      setTimeout(() => {
+        queryClient.prefetchQuery({
+          queryKey: ["monitoring", "history", range],
+          queryFn: () => api.monitoring.getHistory(range),
+          staleTime: 30000,
+        });
+      }, idx * 200);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]); // Only on mount/enable change - not on points change
+
   return useQuery({
     queryKey: ["monitoring", "history", points],
     queryFn: async () => {
@@ -1325,13 +1374,25 @@ export function useMonitoringHistory(points: number = 60, enabled: boolean = tru
       }
     },
     enabled,
-    refetchInterval: 10000, // Update history every 10 seconds
-    staleTime: 8000, // Consider data fresh for 8 seconds (prevents immediate refetch on switch)
-    gcTime: 300000, // Keep cached data for 5 minutes (fast switching between time ranges)
-    refetchIntervalInBackground: true, // Keep refetching even when tab is not focused
+    refetchInterval: 15000, // Update history every 15 seconds
+    staleTime: 30000, // 30 seconds - prevents refetch when switching back to a recently visited range
+    gcTime: 600000, // 10 minutes - keep all time range caches alive for fast switching
+    refetchIntervalInBackground: false, // Stop polling when tab is hidden
     retry: 2, // Retry up to 2 times on failure
-    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000), // Faster exponential backoff
-    placeholderData: (previousData) => previousData, // Keep previous data while fetching new range
+    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
+    placeholderData: (previousData) => {
+      // Keep previous data for seamless display while fetching
+      if (previousData) return previousData;
+      // Cross-range fallback: prefer closest cached range for best visual fit
+      const cachedRanges = [60, 180, 360, 720, 4320, 8640]
+        .filter(r => r !== points)
+        .sort((a, b) => Math.abs(a - points) - Math.abs(b - points));
+      for (const r of cachedRanges) {
+        const cached = queryClient.getQueryData<any[]>(["monitoring", "history", r]);
+        if (cached && cached.length > 0) return cached;
+      }
+      return undefined;
+    },
   });
 }
 
@@ -1340,8 +1401,9 @@ export function useMonitoringNetwork(enabled: boolean = true) {
     queryKey: ["monitoring", "network"],
     queryFn: () => api.monitoring.getNetworkMetrics(),
     enabled,
-    refetchInterval: 5000,
-    staleTime: 0,
+    refetchInterval: 10000,
+    refetchIntervalInBackground: false,
+    staleTime: 5000,
   });
 }
 
@@ -1414,5 +1476,24 @@ export function useSystemWarnings() {
     queryFn: () => api.certificates.getSystemWarnings(),
     refetchInterval: 60000, // Refresh every minute
     staleTime: 30000,
+  });
+}
+
+// Regions Hooks
+export function useRegionsOverview() {
+  return useQuery({
+    queryKey: ["regions", "overview"],
+    queryFn: () => api.regions.getOverview(),
+    refetchInterval: 120000, // Refresh every 2 minutes
+    staleTime: 60000, // Data considered fresh for 1 minute
+  });
+}
+
+export function useRegionDetails(regionId: string) {
+  return useQuery({
+    queryKey: ["regions", regionId],
+    queryFn: () => api.regions.getRegion(regionId),
+    enabled: !!regionId,
+    staleTime: 60000,
   });
 }

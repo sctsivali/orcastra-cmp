@@ -11,6 +11,7 @@ from pylxd.exceptions import LXDAPIException, NotFound
 
 from .exceptions import LXDOperationError
 from .connection import LXDConnectionManager
+from .audit import audit_operation
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,16 @@ class ProjectManager:
             logger.error(f"Error listing projects from {host}: {e}")
             raise LXDOperationError(f"Failed to list projects: {str(e)}")
     
+    @audit_operation(
+        "lxd.project.create", "project",
+        target_id_param="name",
+        extract_details=lambda args, kwargs, result: {
+            "description": kwargs.get("description"),
+            "max_cpu": kwargs.get("max_cpu"),
+            "max_ram": kwargs.get("max_ram"),
+            "max_storage": kwargs.get("max_storage"),
+        }
+    )
     async def create_project(
         self, 
         host: str, 
@@ -147,6 +158,16 @@ class ProjectManager:
             logger.error(f"Error creating project '{name}' on {host}: {e}")
             raise LXDOperationError(f"Failed to create project: {str(e)}")
     
+    @audit_operation(
+        "lxd.project.update", "project",
+        target_id_param="project_name",
+        extract_details=lambda args, kwargs, result: {
+            "description": kwargs.get("description"),
+            "max_cpu": kwargs.get("max_cpu"),
+            "max_ram": kwargs.get("max_ram"),
+            "max_storage": kwargs.get("max_storage"),
+        }
+    )
     async def update_project(
         self, 
         host: str, 
@@ -170,12 +191,22 @@ class ProjectManager:
                 project.description = description
             
             # update resource limits if provided
+            # 0 = clear limit (unlimited) - remove the config key
             if max_cpu is not None:
-                project.config["limits.cpu"] = str(max_cpu)
+                if max_cpu == 0:
+                    project.config.pop("limits.cpu", None)
+                else:
+                    project.config["limits.cpu"] = str(max_cpu)
             if max_ram is not None:
-                project.config["limits.memory"] = max_ram
+                if max_ram == "0" or max_ram == "":
+                    project.config.pop("limits.memory", None)
+                else:
+                    project.config["limits.memory"] = max_ram
             if max_storage is not None:
-                project.config["limits.disk"] = max_storage
+                if max_storage == "0" or max_storage == "":
+                    project.config.pop("limits.disk", None)
+                else:
+                    project.config["limits.disk"] = max_storage
             
             # save the updated project
             project.save()
@@ -200,6 +231,7 @@ class ProjectManager:
             logger.error(f"Error updating project '{project_name}' on {host}: {e}")
             raise LXDOperationError(f"Failed to update project: {str(e)}")
     
+    @audit_operation("lxd.project.delete", "project", target_id_param="name")
     async def delete_project(self, host: str, name: str) -> None:
         """Delete a project from a specific LXD host."""
         try:

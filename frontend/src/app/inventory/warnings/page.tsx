@@ -42,23 +42,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-
-// Helper function to format datetime with colons
-function formatDateTime(dateString: string): string {
-  if (!dateString) return "N/A";
-  try {
-    const date = new Date(dateString);
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}`;
-  } catch {
-    return dateString;
-  }
-}
+import { usePermissions } from "@/hooks/use-permissions";
+import { formatDateTime } from "@/lib/utils";
 
 // Separate component that uses useSearchParams
 function WarningsContent() {
@@ -72,33 +57,62 @@ function WarningsContent() {
   const certWarnings = systemWarnings?.certificate_warnings || [];
   const nodeWarnings = systemWarnings?.node_warnings || [];
   
-  // Active tab
-  const [activeTab, setActiveTab] = useState("all");
+  // Active tab - read from URL params
+  const initialTab = searchParams.get("tab") || "all";
+  const [activeTab, setActiveTab] = useState(initialTab);
   
-  // Get severity filter from URL
+  // Get severity and node filter from URL
   const initialSeverity = searchParams.get("severity") || "all";
+  const initialNode = searchParams.get("node") || "";
   const [severityFilter, setSeverityFilter] = useState(initialSeverity);
+  const [nodeFilter, setNodeFilter] = useState(initialNode);
   
-  // Update filter when URL changes
+  // Update filter and tab when URL changes
   useEffect(() => {
     const urlSeverity = searchParams.get("severity") || "all";
+    const urlTab = searchParams.get("tab") || "all";
+    const urlNode = searchParams.get("node") || "";
     setSeverityFilter(urlSeverity);
+    setActiveTab(urlTab);
+    setNodeFilter(urlNode);
   }, [searchParams]);
   
-  // Filter warnings by severity
+  // Filter warnings by severity and node
   const warnings = useMemo(() => {
-    if (severityFilter === "all") return allWarnings;
-    return allWarnings.filter((w: any) => {
-      const sev = (w.severity || "").toLowerCase();
-      switch (severityFilter) {
-        case "critical": return sev === "critical" || sev === "error";
-        case "high": return sev === "high";
-        case "warning": return sev === "warning" || sev === "medium";
-        case "low": return sev === "low" || sev === "info";
-        default: return true;
-      }
-    });
-  }, [allWarnings, severityFilter]);
+    let filtered = allWarnings;
+    
+    // filter by node
+    if (nodeFilter) {
+      filtered = filtered.filter((w: any) => {
+        const warningNode = w.location || w.source_node || w.host || "";
+        return warningNode === nodeFilter || warningNode.includes(nodeFilter);
+      });
+    }
+    
+    // filter by severity
+    if (severityFilter !== "all") {
+      filtered = filtered.filter((w: any) => {
+        const sev = (w.severity || "").toLowerCase();
+        switch (severityFilter) {
+          case "critical": return sev === "critical" || sev === "error";
+          case "high": return sev === "high";
+          case "warning": return sev === "warning" || sev === "medium";
+          case "low": return sev === "low" || sev === "info";
+          default: return true;
+        }
+      });
+    }
+    
+    return filtered;
+  }, [allWarnings, severityFilter, nodeFilter]);
+  
+  // Clear node filter and update URL
+  const clearNodeFilter = () => {
+    setNodeFilter("");
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("node");
+    router.replace(`/inventory/warnings?${params.toString()}`);
+  };
   
   // State for warning detail modal
   const [selectedWarning, setSelectedWarning] = useState<any>(null);
@@ -151,8 +165,7 @@ function WarningsContent() {
     <div className="p-4 md:p-8 space-y-4 md:space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl md:text-3xl font-bold flex items-center gap-2">
-            <AlertTriangle className="h-6 w-6 md:h-8 md:w-8 shrink-0" />
+          <h1 className="text-2xl md:text-3xl font-bold">
             <span className="truncate">Warnings</span>
           </h1>
           <p className="text-sm text-muted-foreground mt-1 md:mt-2 line-clamp-2">
@@ -237,8 +250,21 @@ function WarningsContent() {
           <Card>
         <CardHeader className="flex flex-col md:flex-row md:items-center justify-between space-y-2 md:space-y-0 pb-4 p-4 md:p-6">
           <div className="min-w-0">
-            <CardTitle className="text-base md:text-lg">System Warnings ({warnings.length}{severityFilter !== "all" ? ` of ${allWarnings.length}` : ""})</CardTitle>
-            <CardDescription className="mt-1 text-xs md:text-sm">Click on any row to view full details</CardDescription>
+            <CardTitle className="text-base md:text-lg">System Warnings ({warnings.length}{severityFilter !== "all" || nodeFilter ? ` of ${allWarnings.length}` : ""})</CardTitle>
+            <CardDescription className="mt-1 text-xs md:text-sm">
+              {nodeFilter ? (
+                <span className="flex items-center gap-1 flex-wrap">
+                  Filtered by node: 
+                  <Badge variant="outline" className="gap-1 text-xs">
+                    <Server className="h-3 w-3" />
+                    {nodeFilter}
+                    <button onClick={clearNodeFilter} className="ml-1 hover:text-destructive">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                </span>
+              ) : "Click on any row to view full details"}
+            </CardDescription>
           </div>
           <div className="flex items-center gap-2">
             <Select value={severityFilter} onValueChange={setSeverityFilter}>
@@ -339,7 +365,7 @@ function WarningsContent() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <span className="font-medium">{warning.location || warning.source_node || "—"}</span>
+                      <span className="font-medium">{warning.location || warning.source_node || "N/A"}</span>
                     </TableCell>
                     <TableCell>
                       <Badge variant="secondary">{warning.count.toLocaleString()}</Badge>
@@ -361,8 +387,7 @@ function WarningsContent() {
         <TabsContent value="certificates">
           <Card>
             <CardHeader className="p-4 md:p-6">
-              <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-                <Shield className="h-4 w-4 md:h-5 md:w-5" />
+              <CardTitle className="text-base md:text-lg">
                 Certificate Issues ({certWarnings.length})
               </CardTitle>
               <CardDescription className="text-xs md:text-sm">
@@ -445,8 +470,7 @@ function WarningsContent() {
         <TabsContent value="nodes">
           <Card>
             <CardHeader className="p-4 md:p-6">
-              <CardTitle className="flex items-center gap-2 text-base md:text-lg">
-                <WifiOff className="h-4 w-4 md:h-5 md:w-5" />
+              <CardTitle className="text-base md:text-lg">
                 Offline Nodes ({nodeWarnings.length})
               </CardTitle>
               <CardDescription className="text-xs md:text-sm">
@@ -520,8 +544,7 @@ function WarningsContent() {
       <Dialog open={detailModalOpen} onOpenChange={setDetailModalOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5" />
+            <DialogTitle>
               Warning Details
             </DialogTitle>
             <DialogDescription>
@@ -557,7 +580,7 @@ function WarningsContent() {
                       Node:
                     </span>
                     <p className="text-sm font-mono bg-secondary/50 p-2 rounded">
-                      {selectedWarning.location || selectedWarning.source_node || "Unknown"}
+                      {selectedWarning.location || selectedWarning.source_node || "N/A"}
                     </p>
                   </div>
                   <div className="space-y-1">
@@ -631,6 +654,18 @@ function WarningsContent() {
 
 // Main page component with Suspense wrapper
 export default function WarningsPage() {
+  const router = useRouter();
+  const { isPartner } = usePermissions();
+
+  // redirect if not Partner+
+  useEffect(() => {
+    if (!isPartner) {
+      router.replace("/");
+    }
+  }, [isPartner, router]);
+
+  if (!isPartner) return null;
+
   return (
     <Suspense fallback={<LoadingLottiePage />}>
       <WarningsContent />

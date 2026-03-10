@@ -20,6 +20,8 @@ import {
   AlertCircle,
   CheckCircle2,
   GripVertical,
+  XCircle,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -175,7 +177,7 @@ function TrayItem({
 }
 
 export function TerminalTray() {
-  const { terminals, trayExpanded, toggleTray, restoreTerminal, closeTerminal, reorderMinimizedTerminals } =
+  const { terminals, trayExpanded, toggleTray, restoreTerminal, closeTerminal, closeAllTerminals, restoreAllTerminals, reorderMinimizedTerminals } =
     useTerminalStore();
 
   // Drag and drop state
@@ -249,6 +251,42 @@ export function TerminalTray() {
               isDropTarget={dropTargetId === terminal.id && draggedId !== terminal.id}
             />
           ))}
+
+          {/* Bulk actions for minimized terminals */}
+          <div className="flex items-center gap-1.5 justify-end">
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[10px] gap-1 bg-[#1a1b26] border-[#292e42] text-gray-300 hover:bg-green-500/20 hover:border-green-500/50 hover:text-green-400"
+                    onClick={() => restoreAllTerminals()}
+                  >
+                    <Layers className="h-3 w-3" />
+                    Show All
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Restore all minimized terminals</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+            <TooltipProvider delayDuration={0}>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 text-[10px] gap-1 bg-[#1a1b26] border-[#292e42] text-gray-300 hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400"
+                    onClick={() => closeAllTerminals()}
+                  >
+                    <XCircle className="h-3 w-3" />
+                    Close All
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Close all terminals</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          </div>
         </div>
       )}
 

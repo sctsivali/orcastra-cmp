@@ -6,6 +6,7 @@ Supports integration with Orcahub and other external applications (soon with Orc
 
 import secrets
 import hashlib
+import hmac
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any
@@ -14,14 +15,31 @@ from pydantic import BaseModel, Field
 import json
 
 from app.services.lxd_service import LXDService, get_lxd_service
-from app.core.dependencies import check_read_only_mode
+from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_current_allowed_clusters
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
+from app.core.database import get_db
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_, delete
+from app.models.db_models import Organization, OrganizationMember
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/integrations", tags=["Integrations"])
+# Internal router: JWT-authenticated endpoints for API key management (admin UI)
+router = APIRouter(
+    prefix="/integrations",
+    tags=["Integrations"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
+
+# External router: API key-authenticated endpoints for external apps (OrcaHub, etc.)
+# No JWT dependency - these endpoints authenticate via X-API-Key-ID/Secret headers or request body
+external_router = APIRouter(
+    prefix="/integrations",
+    tags=["Integrations - External"],
+)
 
 # Vault path for integration data
 VAULT_INTEGRATIONS_PATH = "integrations"
@@ -49,7 +67,7 @@ class ClusterPermission(BaseModel):
 
 class ExternalUserMapping(BaseModel):
     """Maps external user to Orcastra identity."""
-    external_user_id: str = Field(..., description="User ID from external system (e.g., Authentik)")
+    external_user_id: str = Field(..., description="User ID from external system (ex;, Authentik)")
     external_email: str = Field(..., description="User email from external system")
     external_name: Optional[str] = Field(None, description="User display name")
     orcastra_identity_id: Optional[str] = Field(None, description="Mapped Orcastra identity ID")
@@ -137,12 +155,41 @@ class UserMappingRequest(BaseModel):
     )
 
 
+class SyncOrganization(BaseModel):
+    """Organization data pushed from external app during sync."""
+    id: str = Field(..., description="External organization UUID")
+    name: str = Field(..., description="Organization name")
+    slug: str = Field(..., description="Organization slug")
+    description: Optional[str] = Field(None, description="Organization description")
+
+
+class SyncMember(BaseModel):
+    """Member data pushed from external app during sync."""
+    email: str = Field(..., description="User email")
+    name: Optional[str] = Field(None, description="User display name")
+    organization_id: str = Field(..., description="External org UUID this member belongs to")
+    role: str = Field(..., description="Role in org: PARTNER, TENANT, or USER")
+    action: str = Field(default="upsert", description="upsert or remove")
+
+
 class SyncDataRequest(BaseModel):
     """Request for syncing data."""
     include_clusters: bool = Field(True, description="Include cluster list")
     include_instances: bool = Field(False, description="Include instances (can be large)")
     include_projects: bool = Field(True, description="Include projects")
     cluster_ids: Optional[List[str]] = Field(None, description="Specific clusters to sync")
+    # Organization data pushed from external app (ex; OrcaHub)
+    organizations: List[SyncOrganization] = Field(
+        default_factory=list,
+        description="Organizations to sync from external app"
+    )
+    # Callback URL for on-demand data pull
+    app_url: Optional[str] = Field(None, description="External app base URL for callbacks")
+    # Member data pushed from external app (ex; OrcaHub)
+    members: List[SyncMember] = Field(
+        default_factory=list,
+        description="Organization members to sync from external app"
+    )
 
 
 class SyncDataResponse(BaseModel):
@@ -151,6 +198,9 @@ class SyncDataResponse(BaseModel):
     instances: List[Dict[str, Any]] = Field(default_factory=list)
     projects: List[Dict[str, Any]] = Field(default_factory=list)
     synced_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    organizations_synced: int = Field(default=0, description="Number of organizations synced")
+    members_synced: int = Field(default=0, description="Number of members synced")
+    members_removed: int = Field(default=0, description="Number of members removed")
 
 
 class ProxyRequest(BaseModel):
@@ -167,7 +217,7 @@ class RawProxyRequest(BaseModel):
     """Request to proxy a raw HTTP request to LXD."""
     cluster_id: str = Field(..., description="Target cluster ID")
     method: str = Field(..., description="HTTP method: GET, POST, PUT, DELETE, PATCH")
-    path: str = Field(..., description="LXD API path, e.g., /1.0/instances")
+    path: str = Field(..., description="LXD API path, ex;, /1.0/instances")
     body: Optional[Dict[str, Any]] = Field(None, description="Request body for POST/PUT/PATCH")
     project: Optional[str] = Field(None, description="LXD project (added to query params)")
     external_user_id: Optional[str] = Field(None, description="External user making the request")
@@ -205,9 +255,22 @@ def get_vault_integrations_client():
     return get_vault_client(settings.vault_addr, settings.vault_token)
 
 
+def _get_hmac_key() -> bytes:
+    """Get HMAC key from SECRET_KEY for API key hashing."""
+    import os
+    key = os.environ.get('SECRET_KEY', '')
+    if not key:
+        raise HTTPException(
+            status_code=500,
+            detail="SECRET_KEY not configured - required for API key operations"
+        )
+    return key.encode()
+
+
 def generate_api_key_pair() -> tuple[str, str, str]:
     """
     Generate a new API key pair.
+    Uses HMAC-SHA256 with SECRET_KEY for secure hashing.
     """
     # Generate key ID (public identifier)
     key_id = f"oak_{secrets.token_hex(16)}"  # orcastra api key
@@ -215,30 +278,36 @@ def generate_api_key_pair() -> tuple[str, str, str]:
     # Generate key secret (private, shown only once)
     key_secret = f"oas_{secrets.token_urlsafe(32)}"  # orcastra api secret
     
-    # Hash the secret for storage
-    secret_hash = hashlib.sha256(key_secret.encode()).hexdigest()
+    # Hash the secret using HMAC-SHA256 (keyed hash prevents rainbow table attacks)
+    secret_hash = hmac.new(_get_hmac_key(), key_secret.encode(), hashlib.sha256).hexdigest()
     
     return key_id, key_secret, secret_hash
 
 
 def verify_api_key_secret(secret: str, stored_hash: str) -> bool:
-    """Verify API key secret against stored hash."""
-    computed_hash = hashlib.sha256(secret.encode()).hexdigest()
+    """Verify API key secret against stored hash using HMAC-SHA256."""
+    computed_hash = hmac.new(_get_hmac_key(), secret.encode(), hashlib.sha256).hexdigest()
     return secrets.compare_digest(computed_hash, stored_hash)
 
 
-def save_api_key_to_vault(vault_client, key_id: str, metadata: Dict[str, Any], secret_hash: str):
-    """Save API key metadata and hash to Vault."""
+def save_api_key_to_vault(
+    vault_client, key_id: str, metadata: Dict[str, Any], secret_hash: str,
+    raw_secret: Optional[str] = None,
+):
+    """Save API key metadata, hash, and optionally raw secret to Vault."""
     try:
         # Store metadata
         vault_client.vault_kv_put(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
             metadata
         )
-        # Store secret hash separately
+        # Store secret hash (+ raw secret for callback auth)
+        secret_payload: Dict[str, Any] = {"hash": secret_hash}
+        if raw_secret:
+            secret_payload["raw"] = raw_secret
         vault_client.vault_kv_put(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
-            {"hash": secret_hash}
+            secret_payload
         )
         logger.info(f"Saved API key {key_id} to Vault")
     except Exception as e:
@@ -367,6 +436,179 @@ def update_api_key_last_used(vault_client, key_id: str):
         logger.warning(f"Failed to update last_used_at: {e}")
 
 
+def _store_app_url_in_vault(api_key_id: str, app_url: str):
+    """Store external app callback URL in Vault alongside API key metadata."""
+    try:
+        vault_client = get_vault_integrations_client()
+        metadata, _ = get_api_key_from_vault(vault_client, api_key_id)
+        metadata["app_url"] = app_url
+        vault_client.vault_kv_put(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/metadata",
+            metadata
+        )
+        logger.info(f"Stored app_url for API key {api_key_id}")
+    except Exception as e:
+        logger.warning(f"Failed to store app_url in Vault: {e}")
+
+
+async def _upsert_synced_organizations(
+    db: AsyncSession,
+    organizations: List["SyncOrganization"],
+    api_key_id: str,
+) -> int:
+    """
+    Upsert organizations pushed from external app into PostgreSQL.
+    Uses (source, external_id) as dedup key.
+    Returns count of synced organizations.
+    """
+    synced = 0
+    for org_data in organizations:
+        try:
+            # check if org already exists by source + external_id
+            stmt = select(Organization).where(
+                and_(
+                    Organization.source == "orcahub",
+                    Organization.external_id == org_data.id,
+                )
+            )
+            result = await db.execute(stmt)
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # update mutable fields
+                existing.name = org_data.name
+                existing.slug = org_data.slug
+                existing.description = org_data.description
+                existing.api_key_id = api_key_id
+                existing.is_active = True
+            else:
+                # create new synced org
+                new_org = Organization(
+                    name=org_data.name,
+                    slug=org_data.slug,
+                    description=org_data.description,
+                    created_by="system",
+                    source="orcahub",
+                    external_id=org_data.id,
+                    api_key_id=api_key_id,
+                    is_active=True,
+                )
+                db.add(new_org)
+
+            synced += 1
+        except Exception as e:
+            logger.error(f"Failed to upsert organization {org_data.id}: {e}")
+
+    if synced > 0:
+        await db.commit()
+        logger.info(f"Synced {synced} organizations from OrcaHub (api_key={api_key_id})")
+
+    return synced
+
+
+# role mapping: OrcaHub OrganizationRole → Orcastra system role (Authentik group)
+_ORCAHUB_ROLE_MAP = {
+    "PARTNER": "partner",
+    "TENANT": "tenant",
+    "USER": "tenant",  # legacy alias
+}
+
+
+async def _upsert_synced_members(
+    db: AsyncSession,
+    members: List["SyncMember"],
+    api_key_id: str,
+) -> tuple[int, int]:
+    """
+    Upsert organization members pushed from external app.
+    Maps external org UUID → local org id via (source=orcahub, external_id).
+    Pushes role changes to Authentik.
+    Returns (synced_count, removed_count).
+    """
+    from app.services.authentik_sync import get_authentik_sync
+
+    synced = 0
+    removed = 0
+    sync_svc = get_authentik_sync()
+
+    for m in members:
+        try:
+            # resolve external org UUID to local org id
+            stmt = select(Organization).where(
+                and_(
+                    Organization.source == "orcahub",
+                    Organization.external_id == m.organization_id,
+                )
+            )
+            result = await db.execute(stmt)
+            org = result.scalar_one_or_none()
+            if not org:
+                logger.warning(f"Org not found for external_id={m.organization_id}, skipping member {m.email}")
+                continue
+
+            if m.action == "remove":
+                # remove membership
+                del_stmt = select(OrganizationMember).where(
+                    and_(
+                        OrganizationMember.organization_id == org.id,
+                        OrganizationMember.user_email == m.email,
+                    )
+                )
+                del_result = await db.execute(del_stmt)
+                existing = del_result.scalar_one_or_none()
+                if existing:
+                    await db.delete(existing)
+                    removed += 1
+                    # remove from Authentik roles
+                    try:
+                        await sync_svc.remove_user_from_all_roles(m.email)
+                    except Exception as e:
+                        logger.warning(f"Authentik role removal failed for {m.email}: {e}")
+                continue
+
+            # upsert membership
+            # map OrcaHub role → local member role
+            orcastra_role = _ORCAHUB_ROLE_MAP.get(m.role.upper(), "tenant")
+
+            stmt2 = select(OrganizationMember).where(
+                and_(
+                    OrganizationMember.organization_id == org.id,
+                    OrganizationMember.user_email == m.email,
+                )
+            )
+            result2 = await db.execute(stmt2)
+            existing = result2.scalar_one_or_none()
+
+            if existing:
+                existing.role = orcastra_role
+            else:
+                db.add(OrganizationMember(
+                    organization_id=org.id,
+                    user_email=m.email,
+                    role=orcastra_role,
+                    invited_by="orcahub-sync",
+                ))
+
+            synced += 1
+
+            # push system role to Authentik
+            try:
+                await sync_svc.sync_user_role(m.email, orcastra_role)
+            except Exception as e:
+                logger.warning(f"Authentik sync failed for {m.email} → {orcastra_role}: {e}")
+
+        except Exception as e:
+            logger.error(f"Failed to sync member {m.email}: {e}")
+
+    if synced > 0 or removed > 0:
+        await db.commit()
+        logger.info(
+            f"Member sync: {synced} upserted, {removed} removed (api_key={api_key_id})"
+        )
+
+    return synced, removed
+
+
 # ============================================
 # API Key Validation Dependency
 # ============================================
@@ -389,6 +631,21 @@ async def validate_api_key(
     # Verify secret
     if not verify_api_key_secret(x_api_key_secret, secret_hash):
         raise HTTPException(status_code=401, detail="Invalid API key secret")
+    
+    # Backfill raw secret if not already stored (for callback auth)
+    try:
+        secret_data = vault_client.vault_read(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{x_api_key_id}/secret"
+        )
+        if not secret_data.get("raw"):
+            secret_data["raw"] = x_api_key_secret
+            vault_client.vault_kv_put(
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{x_api_key_id}/secret",
+                secret_data,
+            )
+            logger.info(f"Backfilled raw secret for API key {x_api_key_id}")
+    except Exception:
+        pass  # non-critical
     
     # Check if revoked
     if metadata.get("is_revoked", False):
@@ -427,6 +684,7 @@ async def validate_api_key(
 async def create_api_key(
     request: APIKeyCreateRequest,
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new API key for external integration."""
     vault_client = get_vault_integrations_client()
@@ -441,12 +699,13 @@ async def create_api_key(
         if request.expire_days:
             expires_at = created_at + timedelta(days=request.expire_days)
         
-        # Prepare metadata
+        # Prepare metadata (include creator for org-level ownership)
         metadata = {
             "id": key_id,
             "name": request.name,
             "app_name": request.app_name,
             "app_type": request.app_type,
+            "created_by": _rbac.email,
             "created_at": created_at.isoformat(),
             "expires_at": expires_at.isoformat() if expires_at else None,
             "is_active": True,
@@ -455,12 +714,12 @@ async def create_api_key(
             "cluster_permissions": [p.model_dump() for p in request.cluster_permissions],
         }
         
-        # Save to Vault
-        save_api_key_to_vault(vault_client, key_id, metadata, secret_hash)
+        # Save to Vault (include raw secret for callback authentication)
+        save_api_key_to_vault(vault_client, key_id, metadata, secret_hash, raw_secret=key_secret)
         
-        # Clear cache
+        # Clear all scoped cache variants
         cache = get_cache_manager()
-        cache.delete("api_responses", "integrations:api_keys:list")
+        cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         
         return APIKeyCreateResponse(
             api_key=APIKeyInfo(**metadata, user_mappings_count=0),
@@ -482,17 +741,31 @@ async def create_api_key(
     description="Get a list of all API keys for external integrations.",
 )
 async def list_api_keys():
-    """List all API keys."""
+    """List API keys visible to the current user (admin sees all, others see org-scoped)."""
     vault_client = get_vault_integrations_client()
     
     try:
-        # Try cache first
+        # Scoped cache key so each org gets its own cached list
         cache = get_cache_manager()
-        cache_key = "integrations:api_keys:list"
+        cache_key = get_scope_cache_key("integrations:api_keys:list")
         cached_data = cache.get("api_responses", cache_key)
         
         if cached_data is None:
             all_metadata = list_api_keys_from_vault(vault_client)
+            
+            # Filter by org scope: non-admin users only see keys
+            # whose cluster_permissions overlap with their allowed clusters
+            allowed = get_current_allowed_clusters()
+            if allowed is not None:
+                filtered = []
+                for meta in all_metadata:
+                    perms = meta.get("cluster_permissions", [])
+                    # show key if ANY of its permitted clusters is in the user's set
+                    key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
+                    if key_clusters & allowed:
+                        filtered.append(meta)
+                all_metadata = filtered
+            
             cache.set("api_responses", cache_key, all_metadata, ttl=60)
         else:
             all_metadata = cached_data
@@ -563,6 +836,7 @@ async def update_api_key_permissions(
     key_id: str,
     permissions: List[ClusterPermission],
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update API key cluster permissions."""
     vault_client = get_vault_integrations_client()
@@ -579,9 +853,9 @@ async def update_api_key_permissions(
             metadata
         )
         
-        # Clear cache
+        # Clear all scoped cache variants
         cache = get_cache_manager()
-        cache.delete("api_responses", "integrations:api_keys:list")
+        cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
         return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
@@ -601,6 +875,7 @@ async def update_api_key_permissions(
 async def revoke_api_key(
     key_id: str,
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Revoke an API key (immediate revocation)."""
     vault_client = get_vault_integrations_client()
@@ -619,9 +894,9 @@ async def revoke_api_key(
             metadata
         )
         
-        # Clear cache immediately for real-time revocation
+        # Clear all scoped cache variants for real-time revocation
         cache = get_cache_manager()
-        cache.delete("api_responses", "integrations:api_keys:list")
+        cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         cache.delete("api_responses", f"integrations:api_key:{key_id}")
         
         logger.info(f"API key {key_id} revoked")
@@ -644,6 +919,7 @@ async def revoke_api_key(
 async def delete_api_key(
     key_id: str,
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete an API key permanently."""
     vault_client = get_vault_integrations_client()
@@ -655,9 +931,9 @@ async def delete_api_key(
         # Delete from Vault
         delete_api_key_from_vault(vault_client, key_id)
         
-        # Clear cache
+        # Clear all scoped cache variants
         cache = get_cache_manager()
-        cache.delete("api_responses", "integrations:api_keys:list")
+        cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         
         return {"success": True, "message": f"API key {key_id} deleted"}
         
@@ -682,6 +958,7 @@ async def add_user_mapping(
     key_id: str,
     request: UserMappingRequest,
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Add or update a user mapping for an API key."""
     vault_client = get_vault_integrations_client()
@@ -746,6 +1023,7 @@ async def delete_user_mapping(
     key_id: str,
     user_id: str,
     _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """Delete a user mapping."""
     vault_client = get_vault_integrations_client()
@@ -763,9 +1041,10 @@ async def delete_user_mapping(
 
 # ============================================
 # External API Endpoints (for Orcahub/External Apps)
+# These use API key auth (headers or body), NOT JWT auth
 # ============================================
 
-@router.post(
+@external_router.post(
     "/validate",
     response_model=APIKeyValidateResponse,
     summary="Validate API key",
@@ -848,7 +1127,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         return APIKeyValidateResponse(valid=False, error="Validation failed")
 
 
-@router.post(
+@external_router.post(
     "/sync",
     response_model=SyncDataResponse,
     summary="Sync data",
@@ -858,10 +1137,31 @@ async def sync_data(
     request: SyncDataRequest,
     api_key: Dict[str, Any] = Depends(validate_api_key),
     lxd_service: LXDService = Depends(get_lxd_service),
+    db: AsyncSession = Depends(get_db),
 ):
     """Sync data to external application."""
     try:
         result = SyncDataResponse()
+        api_key_id = api_key.get("id", "")
+
+        # ── Sync organizations from external app ──
+        if request.organizations:
+            orgs_synced = await _upsert_synced_organizations(
+                db, request.organizations, api_key_id
+            )
+            result.organizations_synced = orgs_synced
+
+        # ── Sync members from external app ──
+        if request.members:
+            members_synced, members_removed = await _upsert_synced_members(
+                db, request.members, api_key_id
+            )
+            result.members_synced = members_synced
+            result.members_removed = members_removed
+
+        # ── Store callback URL in Vault API key metadata ──
+        if request.app_url:
+            _store_app_url_in_vault(api_key_id, request.app_url)
         
         # Get allowed cluster IDs from API key permissions
         allowed_clusters = {
@@ -937,7 +1237,7 @@ async def sync_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post(
+@external_router.post(
     "/raw-proxy",
     response_model=RawProxyResponse,
     summary="Raw HTTP proxy to LXD",
@@ -1094,7 +1394,7 @@ async def raw_proxy(
         )
 
 
-@router.post(
+@external_router.post(
     "/proxy",
     response_model=ProxyResponse,
     summary="Proxy LXD operation",
@@ -1282,11 +1582,13 @@ async def proxy_operation(
 
 @router.get(
     "/available-clusters",
-    summary="List available clusters",
-    description="Get list of clusters that can be assigned to API keys.",
+    summary="List available clusters for current user",
+    description="Get list of clusters the current user can assign to API keys. "
+                "Filtered by the user's organization scope and excludes pending/unauthorized clusters.",
+    dependencies=[Depends(require_partner())],
 )
 async def list_available_clusters():
-    """List all available clusters for integration."""
+    """List clusters available to the current user for API key assignment."""
     try:
         settings = get_settings()
         clusters = []
@@ -1301,14 +1603,26 @@ async def list_available_clusters():
             
             cluster_ids = cert_manager.list_clusters()
             
+            # filter by org scope (partner sees only their clusters)
+            allowed = get_current_allowed_clusters()
+            if allowed is not None:
+                cluster_ids = [cid for cid in cluster_ids if cid in allowed]
+            
             for cluster_id in cluster_ids:
                 try:
                     cluster_info = cert_manager.get_cluster_info(cluster_id)
+                    metadata = cluster_info.get("metadata", {})
+                    
+                    # skip pending/unauthorized clusters (no trust established)
+                    status = metadata.get("status", "").lower()
+                    if status in ("pending", "not_authorized", "error"):
+                        continue
+                    
                     clusters.append({
                         "id": cluster_id,
-                        "name": cluster_info.get("metadata", {}).get("name", cluster_id),
-                        "endpoint": cluster_info.get("metadata", {}).get("endpoint"),
-                        "server_type": cluster_info.get("metadata", {}).get("server_type", "lxd"),
+                        "name": metadata.get("name", cluster_id),
+                        "endpoint": metadata.get("endpoint"),
+                        "server_type": metadata.get("server_type", "lxd"),
                     })
                 except Exception as e:
                     logger.warning(f"Could not get cluster info for {cluster_id}: {e}")
@@ -1318,3 +1632,445 @@ async def list_available_clusters():
     except Exception as e:
         logger.error(f"Error listing available clusters: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================
+# Organization Sync Endpoints
+# ============================================
+
+class IntegrationOrgResponse(BaseModel):
+    """Organization synced from an external app."""
+    id: int
+    name: str
+    slug: str
+    description: Optional[str] = None
+    source: str
+    external_id: Optional[str] = None
+    api_key_id: Optional[str] = None
+    app_name: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+@router.get(
+    "/organizations",
+    response_model=List[IntegrationOrgResponse],
+    summary="List synced organizations",
+    description="Get organizations synced from external apps (OrcaHub). Requires admin or partner role.",
+)
+async def list_synced_organizations(
+    source: Optional[str] = Query(None, description="Filter by source: orcahub, local, or all"),
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+):
+    """List organizations synced from external applications, scoped by user membership."""
+    from app.core.rbac import resolve_roles, get_highest_role, Role
+
+    try:
+        if source and source != "all":
+            stmt = select(Organization).where(
+                and_(Organization.source == source, Organization.is_active == True)
+            )
+        else:
+            # default: return only externally synced orgs (non-local)
+            stmt = select(Organization).where(
+                and_(Organization.source != "local", Organization.is_active == True)
+            )
+
+        # scope by user membership for non-admins
+        roles = resolve_roles(user)
+        highest = get_highest_role(roles)
+        if highest != Role.ADMIN:
+            from sqlalchemy import or_ as sa_or
+            stmt = stmt.where(
+                sa_or(
+                    Organization.created_by == user.email,
+                    Organization.id.in_(
+                        select(OrganizationMember.organization_id).where(
+                            OrganizationMember.user_email == user.email,
+                        )
+                    ),
+                )
+            )
+
+        result = await db.execute(stmt)
+        orgs = result.scalars().all()
+
+        # enrich with app_name from Vault
+        vault_client = get_vault_integrations_client()
+        app_name_cache: Dict[str, str] = {}
+
+        response = []
+        for org in orgs:
+            app_name = None
+            if org.api_key_id:
+                if org.api_key_id not in app_name_cache:
+                    try:
+                        meta, _ = get_api_key_from_vault(vault_client, org.api_key_id)
+                        app_name_cache[org.api_key_id] = meta.get("app_name", "")
+                    except Exception:
+                        app_name_cache[org.api_key_id] = ""
+                app_name = app_name_cache[org.api_key_id] or None
+
+            response.append(IntegrationOrgResponse(
+                id=org.id,
+                name=org.name,
+                slug=org.slug,
+                description=org.description,
+                source=org.source,
+                external_id=org.external_id,
+                api_key_id=org.api_key_id,
+                app_name=app_name,
+                created_at=org.created_at.isoformat() if org.created_at else None,
+                updated_at=org.updated_at.isoformat() if org.updated_at else None,
+            ))
+
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error listing synced organizations: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to list synced organizations")
+
+
+@router.post(
+    "/refresh-organizations",
+    summary="Refresh organizations from external app",
+    description="Pull fresh organization data from connected external app (on-demand). Requires partner role.",
+    dependencies=[Depends(require_partner())],
+)
+async def refresh_organizations(
+    api_key_id: str = Query(..., description="API key ID of the external app to refresh from"),
+    db: AsyncSession = Depends(get_db),
+):
+    """On-demand pull of organizations from external app via stored callback URL."""
+    import httpx
+
+    vault_client = get_vault_integrations_client()
+
+    # Retrieve API key metadata including app_url and credentials
+    try:
+        metadata, _ = get_api_key_from_vault(vault_client, api_key_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="API key not found")
+
+    app_url = metadata.get("app_url")
+    if not app_url:
+        raise HTTPException(
+            status_code=400,
+            detail="No callback URL configured for this API key. Trigger a sync from the external app first."
+        )
+
+    # Retrieve API key secret for authenticating the callback
+    try:
+        secret_data = vault_client.vault_read(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{api_key_id}/secret"
+        )
+        secret_hash = secret_data.get("hash", "")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to read API key credentials")
+
+    # Call external app's organizations endpoint
+    callback_url = f"{app_url.rstrip('/')}/api/external/organizations"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                callback_url,
+                headers={
+                    "X-API-Key-ID": api_key_id,
+                    "X-API-Key-Secret-Hash": secret_hash,
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(f"External app returned {e.response.status_code}: {e.response.text}")
+        raise HTTPException(status_code=502, detail=f"External app returned {e.response.status_code}")
+    except Exception as e:
+        logger.error(f"Failed to reach external app at {callback_url}: {e}")
+        raise HTTPException(status_code=502, detail="Failed to reach external app")
+
+    # Parse and upsert organizations
+    orgs_data = data.get("organizations", [])
+    if not orgs_data:
+        return {"message": "No organizations returned from external app", "organizations_synced": 0}
+
+    sync_orgs = [SyncOrganization(**o) for o in orgs_data]
+    synced = await _upsert_synced_organizations(db, sync_orgs, api_key_id)
+
+    return {
+        "message": f"Refreshed {synced} organizations from external app",
+        "organizations_synced": synced,
+    }
+
+
+# ============================================
+# OrcaHub Tenant Access Policy Sync Endpoints
+# ============================================
+
+class SyncPolicyRule(BaseModel):
+    """Rule within a synced policy."""
+    cluster_id: str
+    project_name: str = "*"
+    instance_name: str = "*"
+    permissions: List[str] = ["view"]
+
+
+class SyncPolicyAssignment(BaseModel):
+    """Assignment within a synced policy."""
+    user_email: str
+    expires_at: Optional[str] = None
+
+
+class SyncPolicy(BaseModel):
+    """Policy to sync from OrcaHub."""
+    external_id: str = Field(..., description="UUID from OrcaHub")
+    name: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+    org_external_id: str = Field(..., description="Organization's external_id")
+    rules: List[SyncPolicyRule] = []
+    assignments: List[SyncPolicyAssignment] = []
+
+
+class SyncPoliciesRequest(BaseModel):
+    """Request body for syncing policies from OrcaHub."""
+    policies: List[SyncPolicy]
+
+
+@external_router.post(
+    "/external/sync-policies",
+    summary="Sync tenant access policies from external app",
+    description="Push tenant access policies from OrcaHub to Orcastra. Requires valid API key.",
+    tags=["Integrations - External"],
+)
+async def sync_policies_from_external(
+    body: SyncPoliciesRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Sync tenant access policies from OrcaHub.
+
+    Creates or updates policies based on external_id matching.
+    Handles rules and assignments as part of the sync.
+    """
+    from app.models.db_models import (
+        TenantAccessPolicy,
+        TenantPolicyRule,
+        TenantPolicyAssignment,
+        OrganizationMember,
+    )
+
+    # authenticate via API key
+    api_key_id = request.headers.get("X-API-Key-ID", "") or ""
+    api_key_secret = request.headers.get("X-API-Key-Secret", "") or ""
+
+    if not api_key_id or not api_key_secret:
+        raise HTTPException(status_code=401, detail="API key credentials required")
+
+    try:
+        vault_client = get_vault_integrations_client()
+        metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    # verify secret
+    computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
+    if not hmac.compare_digest(computed_hash, stored_hash):
+        raise HTTPException(status_code=401, detail="Invalid API key secret")
+
+    if metadata.get("is_revoked"):
+        raise HTTPException(status_code=403, detail="API key has been revoked")
+
+    synced_count = 0
+    errors = []
+
+    for sync_policy in body.policies:
+        try:
+            # find org by external_id
+            org_stmt = select(Organization).where(
+                and_(
+                    Organization.external_id == sync_policy.org_external_id,
+                    Organization.is_active == True,
+                )
+            )
+            result = await db.execute(org_stmt)
+            org = result.scalar_one_or_none()
+
+            if not org:
+                errors.append(f"Organization with external_id '{sync_policy.org_external_id}' not found")
+                continue
+
+            # upsert policy by external_id
+            existing_stmt = select(TenantAccessPolicy).where(
+                and_(
+                    TenantAccessPolicy.external_id == sync_policy.external_id,
+                    TenantAccessPolicy.organization_id == org.id,
+                )
+            )
+            result = await db.execute(existing_stmt)
+            policy = result.scalar_one_or_none()
+
+            if policy:
+                # update existing
+                policy.name = sync_policy.name
+                policy.description = sync_policy.description
+                policy.updated_at = datetime.utcnow()
+            else:
+                # create new
+                policy = TenantAccessPolicy(
+                    organization_id=org.id,
+                    name=sync_policy.name,
+                    description=sync_policy.description,
+                    source="orcahub",
+                    external_id=sync_policy.external_id,
+                    created_by=f"orcahub:{api_key_id}",
+                )
+                db.add(policy)
+                await db.flush()
+
+            # replace rules
+            await db.execute(
+                delete(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy.id)
+            )
+            for rule_data in sync_policy.rules:
+                db.add(TenantPolicyRule(
+                    policy_id=policy.id,
+                    cluster_id=rule_data.cluster_id,
+                    project_name=rule_data.project_name,
+                    instance_name=rule_data.instance_name,
+                    permissions=rule_data.permissions,
+                ))
+
+            # sync assignments (merge - don't remove local ones)
+            for assign_data in sync_policy.assignments:
+                # find org member
+                member_stmt = select(OrganizationMember).where(
+                    and_(
+                        OrganizationMember.organization_id == org.id,
+                        OrganizationMember.user_email == assign_data.user_email,
+                    )
+                )
+                result = await db.execute(member_stmt)
+                member = result.scalar_one_or_none()
+
+                if not member:
+                    continue  # skip unknown users
+
+                # check existing assignment
+                existing_assign = await db.execute(
+                    select(TenantPolicyAssignment).where(
+                        and_(
+                            TenantPolicyAssignment.policy_id == policy.id,
+                            TenantPolicyAssignment.org_member_id == member.id,
+                        )
+                    )
+                )
+                if not existing_assign.scalar_one_or_none():
+                    db.add(TenantPolicyAssignment(
+                        policy_id=policy.id,
+                        org_member_id=member.id,
+                        assigned_by=f"orcahub:{api_key_id}",
+                        source="orcahub",
+                        external_id=sync_policy.external_id,
+                        expires_at=(
+                            datetime.fromisoformat(assign_data.expires_at)
+                            if assign_data.expires_at else None
+                        ),
+                    ))
+
+            synced_count += 1
+
+        except Exception as e:
+            logger.error(f"Error syncing policy '{sync_policy.name}': {e}")
+            errors.append(f"Failed to sync '{sync_policy.name}': {str(e)}")
+
+    await db.commit()
+
+    return {
+        "message": f"Synced {synced_count} policies",
+        "synced": synced_count,
+        "errors": errors,
+    }
+
+
+@external_router.get(
+    "/external/policies",
+    summary="Read tenant access policies for sync",
+    description="Read tenant access policies from Orcastra for OrcaHub pull sync. Requires valid API key.",
+    tags=["Integrations - External"],
+)
+async def get_policies_for_external(
+    org_external_id: Optional[str] = Query(None, description="Filter by organization external ID"),
+    request: Request = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Read policies for external app pull sync."""
+    from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
+
+    # authenticate via API key
+    api_key_id = request.headers.get("X-API-Key-ID", "") if request else ""
+    api_key_secret = request.headers.get("X-API-Key-Secret", "") if request else ""
+
+    if not api_key_id or not api_key_secret:
+        raise HTTPException(status_code=401, detail="API key credentials required")
+
+    try:
+        vault_client = get_vault_integrations_client()
+        metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
+    except HTTPException:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
+    if not hmac.compare_digest(computed_hash, stored_hash):
+        raise HTTPException(status_code=401, detail="Invalid API key secret")
+
+    # build query
+    stmt = (
+        select(TenantAccessPolicy)
+        .join(Organization, TenantAccessPolicy.organization_id == Organization.id)
+        .where(Organization.is_active == True)
+    )
+
+    if org_external_id:
+        stmt = stmt.where(Organization.external_id == org_external_id)
+
+    # limit to orgs associated with this API key
+    stmt = stmt.where(Organization.api_key_id == api_key_id)
+
+    result = await db.execute(stmt)
+    policies = result.scalars().unique().all()
+
+    # build response
+    response_policies = []
+    for policy in policies:
+        # load rules
+        rules_stmt = select(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy.id)
+        rules_result = await db.execute(rules_stmt)
+        rules = rules_result.scalars().all()
+
+        org = await db.get(Organization, policy.organization_id)
+
+        response_policies.append({
+            "id": policy.id,
+            "external_id": policy.external_id,
+            "name": policy.name,
+            "description": policy.description,
+            "organization_id": policy.organization_id,
+            "org_external_id": org.external_id if org else None,
+            "source": policy.source,
+            "is_default": policy.is_default,
+            "rules": [
+                {
+                    "cluster_id": r.cluster_id,
+                    "project_name": r.project_name,
+                    "instance_name": r.instance_name,
+                    "permissions": r.permissions,
+                }
+                for r in rules
+            ],
+            "created_at": policy.created_at.isoformat() if policy.created_at else None,
+            "updated_at": policy.updated_at.isoformat() if policy.updated_at else None,
+        })
+
+    return {"policies": response_policies, "total": len(response_policies)}

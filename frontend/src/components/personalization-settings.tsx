@@ -15,6 +15,8 @@ import {
   ImageIcon,
   Upload,
   RotateCcw,
+  Undo2,
+  Redo2,
   Sun,
   Moon,
   Palette,
@@ -51,25 +53,27 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-// Fetch image from URL and convert to base64
+// Fetch image from URL via backend proxy (avoids CORS)
+import { getAccessToken } from "@/lib/api";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+
 async function fetchImageAsBase64(url: string): Promise<string> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch image: ${response.status}`);
-  }
-  const blob = await response.blob();
-  
-  // Validate that it's an image
-  if (!blob.type.startsWith("image/")) {
-    throw new Error("URL does not point to a valid image");
-  }
-  
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(blob);
+  const token = getAccessToken();
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
+  const response = await fetch(`${API_BASE}/api/v1/user-preferences/proxy-image`, {
+    method: "POST",
+    headers,
+    credentials: "include",
+    body: JSON.stringify({ url }),
   });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+    throw new Error(err.detail || `Failed to fetch image: ${response.status}`);
+  }
+  const data = await response.json();
+  return data.data; // base64 data URI
 }
 
 // Image upload component with URL support
@@ -457,7 +461,7 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
 
 // Main PersonalizationSettings component
 export function PersonalizationSettings() {
-  const { settings, updateLogo, updateBackground, updateBranding, updateColors, resetToDefaults, isLoading } = usePersonalization();
+  const { settings, updateLogo, updateBackground, updateBranding, updateColors, resetToDefaults, undoSettings, redoSettings, canUndo, canRedo, isLoading } = usePersonalization();
   const { theme } = useTheme();
   const [resetConfirm, setResetConfirm] = React.useState(false);
 
@@ -499,15 +503,37 @@ export function PersonalizationSettings() {
               </Button>
             </div>
           ) : (
-            <Button 
-              variant="ghost" 
-              size="sm" 
-              className="gap-2 text-muted-foreground"
-              onClick={() => setResetConfirm(true)}
-            >
-              <RotateCcw className="h-4 w-4" />
-              Reset to Defaults
-            </Button>
+            <>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="gap-2"
+                onClick={undoSettings}
+                disabled={!canUndo}
+              >
+                <Undo2 className="h-4 w-4" />
+                Undo
+              </Button>
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="gap-2"
+                onClick={redoSettings}
+                disabled={!canRedo}
+              >
+                <Redo2 className="h-4 w-4" />
+                Redo
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                className="gap-2 text-muted-foreground"
+                onClick={() => setResetConfirm(true)}
+              >
+                <RotateCcw className="h-4 w-4" />
+                Reset to Defaults
+              </Button>
+            </>
           )}
           
           <PreviewDialog>
@@ -763,8 +789,7 @@ export function PersonalizationSettings() {
                 </DialogTrigger>
                 <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
                   <DialogHeader>
-                    <DialogTitle className="flex items-center gap-2">
-                      <Palette className="h-5 w-5" />
+                    <DialogTitle>
                       Custom Color Settings
                     </DialogTitle>
                     <DialogDescription>
@@ -1106,7 +1131,14 @@ export function PersonalizationSettings() {
       {/* Last Modified Info */}
       {settings.lastModified && (
         <div className="text-xs text-muted-foreground text-right">
-          Last modified: {new Date(settings.lastModified).toLocaleString()}
+          Last modified: {new Date(settings.lastModified).toLocaleString('en-GB', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })}
         </div>
       )}
     </div>

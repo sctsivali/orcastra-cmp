@@ -21,12 +21,18 @@ from app.services.lxd_service import (
     LXDOperationError,
 )
 from app.core.config import get_settings
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.vault_client import get_vault_client
 from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/nodes", tags=["Nodes"])
+router = APIRouter(
+    prefix="/nodes",
+    tags=["Nodes"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 # Thread pool for parallel node status fetching
 _node_executor = ThreadPoolExecutor(max_workers=10)
@@ -48,7 +54,7 @@ async def get_nodes_status(
     
     # Try to get from cache first (180 second cache for enterprise)
     cache = get_cache_manager()
-    cache_key = "nodes:status:all"
+    cache_key = get_scope_cache_key("nodes:status:all")
     cached_response = cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached nodes status")
@@ -227,6 +233,8 @@ async def update_node(
     node_name: str,
     request: NodeUpdateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update node metadata (display name)."""
     from fastapi import HTTPException
@@ -236,11 +244,12 @@ async def update_node(
     node_exists = False
     in_vault = False
     
-    # Check in config
+    # Check in config - get_node_names() queries Vault-registered clusters
     if node_name in lxd_service.get_node_names():
         node_exists = True
+        in_vault = True  # get_node_names() sources from Vault via cert_manager.list_clusters()
     
-    # Check in Vault clusters if not found in config
+    # Fallback: check Vault directly if not found
     if not node_exists:
         settings = get_settings()
         if settings.vault_enabled and settings.vault_token:
@@ -283,18 +292,33 @@ async def update_node(
                     # Read existing metadata
                     cluster_info = cert_manager.get_cluster_info(node_name)
                     metadata = cluster_info.get("metadata", {})
-                    # Save back to Vault with updated display name
-                    cert_manager.save_cluster_metadata(
-                        cluster_id=node_name,
-                        display_name=request.display_name,
-                        endpoint=metadata.get("endpoint", ""),
-                        zone=metadata.get("zone", ""),
-                        cluster_type=metadata.get("type", "LXD"),
-                        merchant_id=metadata.get("merchant_id", "")
-                    )
-                    logger.info(f"Updated display name for Vault cluster {node_name}")
+                    # Only update Vault if we got valid existing metadata
+                    if metadata.get("endpoint"):
+                        # Save back to Vault with updated display name (preserve all fields)
+                        cert_manager.save_cluster_metadata(
+                            cluster_id=node_name,
+                            display_name=request.display_name,
+                            endpoint=metadata.get("endpoint", ""),
+                            zone=metadata.get("zone", ""),
+                            cluster_type=metadata.get("type", "LXD"),
+                            merchant_id=metadata.get("merchant_id", ""),
+                            location=metadata.get("location", {}),
+                        )
+                        logger.info(f"Updated display name for Vault cluster {node_name}")
+                    else:
+                        logger.warning(f"Skipped Vault metadata update for {node_name}: existing metadata is empty/incomplete")
                 except Exception as e:
                     logger.warning(f"Failed to update Vault metadata: {e}")
+        
+        # Invalidate caches so updated name appears immediately
+        cache = get_cache_manager()
+        if cache:
+            cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
+            cache.delete("api_responses", "clusters:list:all:scope=all")
+            cache.delete("api_responses", get_scope_cache_key("nodes:status:all"))
+            cache.delete("api_responses", "nodes:status:all:scope=all")
+            cache.invalidate_cluster_cache(node_name)
+            logger.info(f"Invalidated caches after updating node {node_name}")
         
         return NodeUpdateResponse(
             success=True,
@@ -318,6 +342,7 @@ async def update_node(
 async def invalidate_node_cache(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Invalidate all cache entries for a specific node."""
     from fastapi import HTTPException
@@ -325,10 +350,10 @@ async def invalidate_node_cache(
     try:
         cache = get_cache_manager()
         
-        # Invalidate various cache keys for this node
-        cache.delete("api_responses", "nodes:status:all")
+        # Invalidate various cache keys for this node (pattern match for all scope variants)
+        cache.delete_pattern("api_responses", "nodes:status:all*")
         cache.delete("lxd_resources", f"microcloud_resources:{node_name}")
-        cache.delete("api_responses", f"cluster_members:list:host={node_name}")
+        cache.delete_pattern("api_responses", f"cluster_members:list:host={node_name}*")
         
         logger.info(f"Invalidated all cache entries for node: {node_name}")
         
@@ -352,6 +377,7 @@ async def invalidate_node_cache(
 )
 async def invalidate_all_nodes_cache(
     lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """Invalidate all node-related cache entries."""
     from fastapi import HTTPException
@@ -359,8 +385,8 @@ async def invalidate_all_nodes_cache(
     try:
         cache = get_cache_manager()
         
-        # Clear all nodes status cache
-        cache.delete("api_responses", "nodes:status:all")
+        # Clear all nodes status cache (all scope variants)
+        cache.delete_pattern("api_responses", "nodes:status:all*")
         
         # Clear all LXD resources cache (pattern delete)
         cache.delete_pattern("lxd_resources", "*")

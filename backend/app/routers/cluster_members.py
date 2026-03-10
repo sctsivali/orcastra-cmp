@@ -24,8 +24,14 @@ from app.models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+from app.core.dependencies import require_tenant, AuthenticatedUser
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 
-router = APIRouter(prefix="/cluster-members", tags=["Cluster Members"])
+router = APIRouter(
+    prefix="/cluster-members",
+    tags=["Cluster Members"],
+    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
 
 
 class ClusterMember(BaseModel):
@@ -174,9 +180,10 @@ async def list_cluster_members(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all cluster members for a given node."""
+    verify_cluster_access(node)
     # Try cache first (30 second cache)
     cache = get_cache_manager()
-    cache_key = f"cluster_members:list:host={node}"
+    cache_key = get_scope_cache_key(f"cluster_members:list:host={node}")
     cached_data = cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached cluster members for host={node}")
@@ -330,6 +337,7 @@ async def get_cluster_member(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific cluster member."""
+    verify_cluster_access(node)
     try:
         client = lxd_service.connection_manager.get_client(node)
         
@@ -374,12 +382,13 @@ async def get_member_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get resource information for a specific cluster member."""
+    verify_cluster_access(node)
     cache = get_cache_manager()
     settings = get_settings()
     cache_ttl = settings.cache_ttl_lxd_data
     
     # Check cache first
-    cache_key = f"member_resources:{node}:{member_name}"
+    cache_key = get_scope_cache_key(f"member_resources:{node}:{member_name}")
     cached_resources = cache.get("lxd_resources", cache_key)
     if cached_resources is not None:
         logger.info(f"Cache HIT for member resources: {node}/{member_name}")

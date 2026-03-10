@@ -24,20 +24,28 @@
     "display_name": "Intel NUC 1",
     "type": "lxd"
   },
-  "jetson-sctlab": {
-    "display_name": "Jetson Pandora SCT Lab",
+  "blitzkrieg": {
+    "display_name": "Hetzner",
     "type": "lxd"
   },
-  "jetson-nx-ecobyteslab": {
-    "display_name": "Jetson NX EcoBytes Lab",
-    "type": "microcloud"
-  },
-  "jetson-orin-ecobyteslab": {
-    "display_name": "Jetson Orin EcoBytes Lab",
+  "vdc-hetzner": {
+    "display_name": "VDC Hetzner",
     "type": "lxd"
   },
-  "nuc-industrial": {
-    "display_name": "NUC Industrial",
+  "central1-argon": {
+    "display_name": "C1-JKT",
+    "type": "lxd"
+  },
+  "blitz001": {
+    "display_name": "BSD Lab",
+    "type": "lxd"
+  },
+  "test232": {
+    "display_name": "test232",
+    "type": "lxd"
+  },
+  "bbb": {
+    "display_name": "bbb",
     "type": "lxd"
   }
 }
