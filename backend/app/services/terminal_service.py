@@ -79,17 +79,19 @@ class TerminalService:
         """
         Get appropriate shell command for instance type.
         For VMs with lxd-agent, use login shell.
-        For containers, use bash or sh directly.
+        For containers, use smart shell detection that works on any distro.
         """
         if instance_type == "virtual-machine":
             # VMs typically have a proper login environment
             return ["/bin/bash", "--login"]
         else:
-            # Containers - use bash directly, will fallback to sh if bash not found
-            return ["/bin/bash"]
+            # important: /bin/sh is guaranteed on all Linux distros (Alpine, BusyBox, Ubuntu, etc.)
+            # This tries bash first for better UX (tab completion, history), falls back to sh.
+            # Fixes immediate disconnect on minimal containers that only have /bin/sh.
+            return ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"]
     
     def get_fallback_shell(self) -> list:
-        """Fallback shell if bash is not available."""
+        """Fallback shell when smart detection fails."""
         return ["/bin/sh"]
     
     async def create_exec_session(

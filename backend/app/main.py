@@ -274,6 +274,9 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
     
+    # disable API docs in production (when DEBUG=false)
+    is_debug = settings.debug if hasattr(settings, 'debug') else False
+    
     app = FastAPI(
         title=settings.api_title,
         version=settings.app_version,
@@ -285,9 +288,9 @@ A unified REST API for managing virtual machines across multiple nodes.
 This API uses certificate-based authentication to connect to nodes.
 Ensure your client certificates are properly configured.
         """,
-        docs_url="/docs",
-        redoc_url="/redoc",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if is_debug else None,
+        redoc_url="/redoc" if is_debug else None,
+        openapi_url="/openapi.json" if is_debug else None,
         lifespan=lifespan,
     )
     
@@ -475,8 +478,9 @@ Ensure your client certificates are properly configured.
     app.include_router(regions_router, prefix=settings.api_prefix)
     
     # Monitoring Router (Real-time metrics dashboard)
-    from app.routers.monitoring import router as monitoring_router
+    from app.routers.monitoring import router as monitoring_router, ws_router as monitoring_ws_router
     app.include_router(monitoring_router, prefix=settings.api_prefix)
+    app.include_router(monitoring_ws_router, prefix=settings.api_prefix)
     
     # File Transfer Router (Upload files to LXD instances)
     from app.routers.file_transfer import router as file_transfer_router
@@ -517,14 +521,16 @@ Ensure your client certificates are properly configured.
     @app.get("/", tags=["Root"])
     async def root():
         """Root endpoint with API information."""
-        return {
+        response = {
             "name": settings.api_title,
             "version": settings.app_version,
             "build_date": getattr(settings, 'build_date', None),
             "build_commit": getattr(settings, 'build_commit', None),
-            "docs": "/docs",
             "health": "/health",
         }
+        if is_debug:
+            response["docs"] = "/docs"
+        return response
     
     # Global exception handler
     @app.exception_handler(LXDConnectionError)

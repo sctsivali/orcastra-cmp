@@ -1187,12 +1187,15 @@ async def sync_data(
                     try:
                         cluster_info = cert_manager.get_cluster_info(cluster_id)
                         # Return only non-sensitive info
+                        location_data = cluster_info.get("metadata", {}).get("location", {})
+                        zone_name = location_data.get("region_name") or location_data.get("city") or None
                         result.clusters.append({
                             "id": cluster_id,
                             "name": cluster_info.get("metadata", {}).get("name", cluster_id),
                             "endpoint": cluster_info.get("metadata", {}).get("endpoint"),
                             "server_type": cluster_info.get("metadata", {}).get("server_type", "lxd"),
                             "registered_at": cluster_info.get("metadata", {}).get("registered_at"),
+                            "zone": zone_name,
                         })
                     except Exception as e:
                         logger.warning(f"Could not get cluster info for {cluster_id}: {e}")
@@ -2074,3 +2077,324 @@ async def get_policies_for_external(
         })
 
     return {"policies": response_policies, "total": len(response_policies)}
+
+
+# ============================================
+
+# ============================================
+# Auto-Provision Tenant Access (called by OrcaHub during provisioning)
+# ============================================
+
+class ProvisionTenantAccessRequest(BaseModel):
+    """Request from OrcaHub to auto-create tenant access for a provisioned project."""
+    organization_external_id: str = Field(..., description="OrcaHub organization UUID")
+    cluster_id: str = Field(..., description="Cluster ID where the project was created")
+    project_name: str = Field(..., description="LXD project name")
+    instance_name: str = Field(default="*", description="Instance name or * for all in project")
+    user_emails: List[str] = Field(default_factory=list, description="Tenant user emails to grant access")
+    permissions: List[str] = Field(
+        default=["view", "operate", "console", "snapshot", "file_transfer"],
+        description="Permissions to grant",
+    )
+    # Auto-creation fields - sent when buyer org might not exist in Orcastra yet
+    organization_name: Optional[str] = Field(default=None, description="Org name for auto-creation")
+    organization_slug: Optional[str] = Field(default=None, description="Org slug for auto-creation")
+
+
+class ProvisionTenantAccessResponse(BaseModel):
+    """Response for provisioned tenant access."""
+    policy_id: int
+    policy_name: str
+    organization_id: int
+    rules_created: int
+    assignments_created: int
+    assignments_skipped: int
+    org_created: bool = False
+    members_created: int = 0
+    cluster_mapped: bool = False
+
+
+@external_router.post(
+    "/provision-tenant-access",
+    response_model=ProvisionTenantAccessResponse,
+    summary="Auto-provision tenant access for a new project",
+    description="Called by OrcaHub after provisioning to automatically create tenant access policies and assignments. Auto-creates org, members, and cluster mapping if they do not exist.",
+)
+async def provision_tenant_access(
+    body: ProvisionTenantAccessRequest,
+    api_key: Dict[str, Any] = Depends(validate_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Auto-create a tenant access policy + assignments when OrcaHub provisions a new project.
+    Idempotent: if policy already exists for this project, updates rules and adds new assignments.
+    Auto-creates org, members, and cluster mapping if they do not exist yet.
+    """
+    api_key_id = api_key.get("id", "")
+    org_created = False
+    members_created = 0
+    cluster_mapped = False
+
+    # Step 1: resolve or auto-create org by external UUID
+    stmt = select(Organization).where(
+        and_(
+            Organization.source == "orcahub",
+            Organization.external_id == body.organization_external_id,
+            Organization.api_key_id == api_key_id,
+        )
+    )
+    result = await db.execute(stmt)
+    org = result.scalar_one_or_none()
+
+    if not org:
+        if not body.organization_name or not body.organization_slug:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Organization with external_id={body.organization_external_id} not found. "
+                    "Provide organization_name and organization_slug for auto-creation."
+                ),
+            )
+        org = Organization(
+            name=body.organization_name,
+            slug=body.organization_slug,
+            source="orcahub",
+            external_id=body.organization_external_id,
+            api_key_id=api_key_id,
+            is_active=True,
+        )
+        db.add(org)
+        await db.flush()
+        org_created = True
+        logger.info(f"Auto-created org {body.organization_slug} (external_id={body.organization_external_id})")
+
+
+
+    # Step 1b: ensure buyer org inherits partner personalization (runs for new AND existing orgs)
+    # note: partner org is found via api_key created_by email -> org membership,
+    # because partner orgs created locally have api_key_id=NULL (not synced from OrcaHub)
+    try:
+        from app.models.db_models import OrganizationPreferences
+        existing_prefs_stmt = select(OrganizationPreferences).where(
+            OrganizationPreferences.organization_id == org.id
+        )
+        existing_prefs_result = await db.execute(existing_prefs_stmt)
+        existing_prefs = existing_prefs_result.scalar_one_or_none()
+        if not existing_prefs:
+            partner_org = None
+
+            # primary: find partner org via API key creator email -> org membership
+            partner_email = api_key.get("created_by")
+            if partner_email:
+                partner_member_stmt = (
+                    select(OrganizationMember)
+                    .where(OrganizationMember.user_email == partner_email)
+                    .order_by(OrganizationMember.joined_at.asc())
+                    .limit(1)
+                )
+                partner_member_result = await db.execute(partner_member_stmt)
+                partner_member = partner_member_result.scalar_one_or_none()
+                if partner_member and partner_member.organization_id != org.id:
+                    partner_org_stmt = select(Organization).where(
+                        Organization.id == partner_member.organization_id
+                    )
+                    partner_org_result = await db.execute(partner_org_stmt)
+                    partner_org = partner_org_result.scalar_one_or_none()
+                    if partner_org:
+                        logger.info(f"Found partner org {partner_org.slug} via creator email {partner_email}")
+
+            # fallback: find partner org by shared api_key_id (for orgs synced from OrcaHub)
+            if not partner_org:
+                partner_stmt = select(Organization).where(
+                    and_(
+                        Organization.api_key_id == api_key_id,
+                        Organization.id != org.id,
+                    )
+                ).order_by(Organization.created_at.asc()).limit(1)
+                partner_result = await db.execute(partner_stmt)
+                partner_org = partner_result.scalar_one_or_none()
+
+            if partner_org:
+                partner_prefs_stmt = select(OrganizationPreferences).where(
+                    OrganizationPreferences.organization_id == partner_org.id
+                )
+                partner_prefs_result = await db.execute(partner_prefs_stmt)
+                partner_prefs = partner_prefs_result.scalar_one_or_none()
+                if partner_prefs and partner_prefs.settings:
+                    buyer_prefs = OrganizationPreferences(
+                        organization_id=org.id,
+                        settings=partner_prefs.settings,
+                        updated_by="orcahub-provisioning",
+                    )
+                    db.add(buyer_prefs)
+                    await db.flush()
+                    logger.info(f"Copied partner personalization to buyer org {org.slug}")
+                else:
+                    logger.info(f"Partner org {partner_org.slug} has no personalization to copy")
+            else:
+                logger.info(f"No partner org found for personalization inheritance (api_key_id={api_key_id})")
+    except Exception as e:
+        logger.warning(f"Failed to copy personalization (non-fatal): {e}")
+
+    # Step 2: ensure cluster is mapped to this org
+    from app.models.db_models import OrganizationCluster
+    cluster_stmt = select(OrganizationCluster).where(
+        and_(
+            OrganizationCluster.organization_id == org.id,
+            OrganizationCluster.cluster_id == body.cluster_id,
+        )
+    )
+    cluster_result = await db.execute(cluster_stmt)
+    if not cluster_result.scalar_one_or_none():
+        db.add(OrganizationCluster(
+            organization_id=org.id,
+            cluster_id=body.cluster_id,
+        ))
+        await db.flush()
+        cluster_mapped = True
+        logger.info(f"Auto-mapped cluster {body.cluster_id} to org {org.slug}")
+
+    # Step 3: ensure org members exist for all user_emails
+    for email in body.user_emails:
+        member_check = await db.execute(
+            select(OrganizationMember).where(
+                and_(
+                    OrganizationMember.organization_id == org.id,
+                    OrganizationMember.user_email == email,
+                )
+            )
+        )
+        if not member_check.scalar_one_or_none():
+            db.add(OrganizationMember(
+                organization_id=org.id,
+                user_email=email,
+                role="tenant",
+            ))
+            members_created += 1
+            logger.info(f"Auto-created tenant member {email} in org {org.slug}")
+
+    await db.flush()
+
+    # validate permissions
+    valid_perms = {"view", "operate", "console", "snapshot", "file_transfer"}
+    invalid = set(body.permissions) - valid_perms
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid permissions: {invalid}")
+
+    # find or create policy for this project (idempotent)
+    from app.models.db_models import TenantAccessPolicy, TenantPolicyRule, TenantPolicyAssignment
+
+    policy_name = f"auto:{body.project_name}"
+    policy_stmt = select(TenantAccessPolicy).where(
+        and_(
+            TenantAccessPolicy.organization_id == org.id,
+            TenantAccessPolicy.name == policy_name,
+        )
+    )
+    policy_result = await db.execute(policy_stmt)
+    policy = policy_result.scalar_one_or_none()
+
+    if not policy:
+        policy = TenantAccessPolicy(
+            organization_id=org.id,
+            name=policy_name,
+            description=f"Auto-provisioned access for project {body.project_name}",
+            is_default=False,
+            source="orcahub",
+            external_id=body.organization_external_id,
+            created_by="orcahub-provisioning",
+        )
+        db.add(policy)
+        await db.flush()
+
+    # upsert rule for this cluster/project/instance
+    rule_stmt = select(TenantPolicyRule).where(
+        and_(
+            TenantPolicyRule.policy_id == policy.id,
+            TenantPolicyRule.cluster_id == body.cluster_id,
+            TenantPolicyRule.project_name == body.project_name,
+            TenantPolicyRule.instance_name == body.instance_name,
+        )
+    )
+    rule_result = await db.execute(rule_stmt)
+    existing_rule = rule_result.scalar_one_or_none()
+    rules_created = 0
+
+    if existing_rule:
+        existing_rule.permissions = sorted(set(body.permissions))
+    else:
+        db.add(TenantPolicyRule(
+            policy_id=policy.id,
+            cluster_id=body.cluster_id,
+            project_name=body.project_name,
+            instance_name=body.instance_name,
+            permissions=sorted(set(body.permissions)),
+        ))
+        rules_created = 1
+
+    # assign policy to each user email (members now guaranteed to exist)
+    assignments_created = 0
+    assignments_skipped = 0
+
+    for email in body.user_emails:
+        member_stmt = select(OrganizationMember).where(
+            and_(
+                OrganizationMember.organization_id == org.id,
+                OrganizationMember.user_email == email,
+            )
+        )
+        member_result = await db.execute(member_stmt)
+        member = member_result.scalar_one_or_none()
+
+        if not member:
+            assignments_skipped += 1
+            continue
+
+        existing_assign = await db.execute(
+            select(TenantPolicyAssignment).where(
+                and_(
+                    TenantPolicyAssignment.policy_id == policy.id,
+                    TenantPolicyAssignment.org_member_id == member.id,
+                )
+            )
+        )
+        if existing_assign.scalar_one_or_none():
+            assignments_skipped += 1
+            continue
+
+        db.add(TenantPolicyAssignment(
+            policy_id=policy.id,
+            org_member_id=member.id,
+            assigned_by="orcahub-provisioning",
+            source="orcahub",
+        ))
+        assignments_created += 1
+
+    await db.commit()
+
+    # invalidate caches so tenants see access immediately
+    try:
+        cache = get_cache_manager()
+        cache.delete_pattern("api_responses", "instances:*")
+        cache.delete_pattern("api_responses", "projects:*")
+        cache.delete_pattern("api_responses", "monitoring:*")
+    except Exception:
+        pass
+
+    logger.info(
+        f"Tenant access provisioned: policy={policy_name}, org={org.slug}, "
+        f"org_created={org_created}, members_created={members_created}, cluster_mapped={cluster_mapped}, "
+        f"rules={rules_created}, assignments={assignments_created}, skipped={assignments_skipped}"
+    )
+
+    return ProvisionTenantAccessResponse(
+        policy_id=policy.id,
+        policy_name=policy_name,
+        organization_id=org.id,
+        rules_created=rules_created,
+        assignments_created=assignments_created,
+        assignments_skipped=assignments_skipped,
+        org_created=org_created,
+        members_created=members_created,
+        cluster_mapped=cluster_mapped,
+    )

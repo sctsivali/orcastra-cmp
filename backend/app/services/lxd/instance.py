@@ -420,6 +420,11 @@ class InstanceManager:
             
             if instance.status == "Running":
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
+            elif instance.status == "Frozen":
+                raise LXDOperationError(
+                    f"Instance {name} is frozen by billing policy and cannot be started. "
+                    f"Please reactivate the subscription through the billing portal."
+                )
             else:
                 instance.start(wait=True)
                 instance.sync()
@@ -491,6 +496,12 @@ class InstanceManager:
             
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
+            
+            if instance.status == "Frozen":
+                raise LXDOperationError(
+                    f"Instance {name} is frozen by billing policy and cannot be restarted. "
+                    f"Please reactivate the subscription through the billing portal."
+                )
             
             instance.restart(force=force, wait=True, timeout=timeout)
             instance.sync()

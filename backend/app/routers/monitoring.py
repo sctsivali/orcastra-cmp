@@ -29,7 +29,7 @@ from app.services.lxd_service import (
 )
 from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
-from app.core.dependencies import require_tenant
+from app.core.dependencies import require_tenant, get_ws_user
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,15 @@ router = APIRouter(
     prefix="/monitoring",
     tags=["Monitoring"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+)
+
+# Separate router for WebSocket endpoints — router-level HTTP auth
+# dependencies (HTTPBearer) break WebSocket upgrade requests because
+# browsers cannot send Authorization headers during the WS handshake.
+# Auth is handled inside the handler via get_ws_user() (query param token).
+ws_router = APIRouter(
+    prefix="/monitoring",
+    tags=["Monitoring"],
 )
 
 # Thread pool for parallel instance state fetching
@@ -1038,14 +1047,33 @@ async def get_network_metrics(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.websocket("/ws")
+@ws_router.websocket("/ws")
 async def monitoring_websocket(ws: WebSocket):
     """
     WebSocket endpoint for real-time monitoring push.
     Clients connect here to receive dashboard updates pushed by the
     background metrics collector, eliminating the need for polling.
     The server sends JSON-serialized MonitoringDashboardResponse on each cycle.
+
+    Auth: token passed via ``?token=`` query param (browsers cannot set
+    Authorization headers on WebSocket upgrade requests).
     """
+    from app.core.config import get_settings
+    from app.core.auth import validate_jwt
+
+    # Validate auth token from query param
+    settings = get_settings()
+    if settings.auth_enabled and settings.authentik_issuer:
+        token = ws.query_params.get("token")
+        if not token:
+            await ws.close(code=1008, reason="Authentication required")
+            return
+        try:
+            validate_jwt(token, settings)
+        except Exception:
+            await ws.close(code=1008, reason="Invalid or expired token")
+            return
+
     from app.services.ws_broadcast import get_monitoring_broadcaster
 
     broadcaster = get_monitoring_broadcaster()

@@ -143,7 +143,7 @@ async def list_storage_pools(
             nodes=lxd_service.connection_manager.get_node_names()
         )
         
-        # Cache as dict for 120 seconds (enterprise TTL)
+        # Cache as dict for 120 seconds
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
         logger.debug(f"Cached storage pools list for 120 seconds")
         
@@ -171,6 +171,11 @@ async def get_all_storage_pool_resources(
             return cached
 
         nodes = lxd_service.connection_manager.get_node_names()
+
+        if not nodes:
+            response = {"resources": {}}
+            cache.set("api_responses", cache_key, response, ttl=60)
+            return response
 
         def _fetch_node_resources(node_name: str) -> dict:
             """Fetch all pool resources for a single node (runs in thread)."""
@@ -432,6 +437,11 @@ async def get_all_storage_pool_resources(
             except Exception as e:
                 logger.error(f"Error getting pools on {node_name}: {e}")
             return result
+
+        if not nodes:
+            response = {"resources": {}}
+            cache.set("api_responses", cache_key, response, ttl=60)
+            return response
 
         # query all nodes in parallel
         loop = asyncio.get_event_loop()

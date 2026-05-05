@@ -121,8 +121,167 @@ async def clear_cache(
 
 
 # ========================
+# Container / CGroup Detection Helpers
+# ========================
+
+import logging
+from pathlib import Path
+
+_log = logging.getLogger(__name__)
+
+
+def _read_cgroup_file(path: str) -> Optional[str]:
+    """Safely read a cgroup file, return None on error."""
+    try:
+        return Path(path).read_text().strip()
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+
+
+def _detect_container() -> Dict[str, Any]:
+    """Detect if running inside a container and return runtime info."""
+    runtime = "bare-metal"
+    is_containerized = False
+    cgroup_version = None
+
+    # detect cgroup version
+    if Path("/sys/fs/cgroup/cgroup.controllers").exists():
+        cgroup_version = "v2"
+    elif Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").exists():
+        cgroup_version = "v1"
+
+    # detect Docker
+    if Path("/.dockerenv").exists():
+        runtime = "docker"
+        is_containerized = True
+    elif _read_cgroup_file("/proc/1/cgroup"):
+        cgroup_content = _read_cgroup_file("/proc/1/cgroup") or ""
+        if "docker" in cgroup_content or "containerd" in cgroup_content:
+            runtime = "docker"
+            is_containerized = True
+        elif "lxc" in cgroup_content:
+            runtime = "lxc"
+            is_containerized = True
+
+    # detect LXD/LXC via environment
+    import os
+    if os.environ.get("container") == "lxc":
+        runtime = "lxc"
+        is_containerized = True
+
+    return {
+        "is_containerized": is_containerized,
+        "runtime": runtime,
+        "cgroup_version": cgroup_version,
+    }
+
+
+def _get_cgroup_memory_limit() -> Optional[int]:
+    """Read container memory limit from cgroup. Returns bytes or None."""
+    # cgroup v2
+    val = _read_cgroup_file("/sys/fs/cgroup/memory.max")
+    if val and val != "max":
+        try:
+            return int(val)
+        except ValueError:
+            pass
+
+    # cgroup v1
+    val = _read_cgroup_file("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+    if val:
+        try:
+            limit = int(val)
+            # values near PAGE_COUNTER_MAX (2^63-4096 or similar) mean no limit
+            if limit < (1 << 62):
+                return limit
+        except ValueError:
+            pass
+
+    return None
+
+
+def _get_cgroup_memory_usage() -> Optional[int]:
+    """Read current container memory usage from cgroup. Returns bytes or None."""
+    # cgroup v2
+    val = _read_cgroup_file("/sys/fs/cgroup/memory.current")
+    if val:
+        try:
+            return int(val)
+        except ValueError:
+            pass
+
+    # cgroup v1
+    val = _read_cgroup_file("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    if val:
+        try:
+            return int(val)
+        except ValueError:
+            pass
+
+    return None
+
+
+def _get_cgroup_cpu_limit() -> Optional[float]:
+    """Read container CPU limit from cgroup. Returns number of CPUs (float) or None."""
+    # cgroup v2: /sys/fs/cgroup/cpu.max contains "QUOTA PERIOD" or "max PERIOD"
+    val = _read_cgroup_file("/sys/fs/cgroup/cpu.max")
+    if val:
+        parts = val.split()
+        if len(parts) == 2 and parts[0] != "max":
+            try:
+                quota = int(parts[0])
+                period = int(parts[1])
+                if period > 0:
+                    return quota / period
+            except ValueError:
+                pass
+
+    # cgroup v1
+    quota_str = _read_cgroup_file("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+    period_str = _read_cgroup_file("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+    if quota_str and period_str:
+        try:
+            quota = int(quota_str)
+            period = int(period_str)
+            if quota > 0 and period > 0:
+                return quota / period
+        except ValueError:
+            pass
+
+    return None
+
+
+def _deduplicate_disks(disks: list) -> list:
+    """Deduplicate disk partitions that share the same backing device/pool.
+    
+    In containerized environments (Docker + ZFS/overlay), multiple mounts
+    often point to the same underlying filesystem, showing identical total/used.
+    Keep only one entry per unique (device, total) pair, preferring root (/).
+    """
+    seen: Dict[tuple, Any] = {}
+    for disk in disks:
+        key = (disk.device, disk.total)
+        if key not in seen:
+            seen[key] = disk
+        else:
+            # prefer root mountpoint
+            if disk.mountpoint == "/":
+                seen[key] = disk
+    return list(seen.values())
+
+
+# ========================
 # System Resource Usage Models
 # ========================
+
+class ContainerInfo(BaseModel):
+    """Container runtime information."""
+    is_containerized: bool
+    runtime: str  # docker, lxc, bare-metal
+    cgroup_version: Optional[str] = None
+    memory_limit: Optional[int] = None  # bytes, None if unlimited
+    cpu_limit: Optional[float] = None   # number of CPUs, None if unlimited
+
 
 class CPUInfo(BaseModel):
     """CPU usage information."""
@@ -207,6 +366,7 @@ class OSInfo(BaseModel):
 class SystemResourceUsage(BaseModel):
     """Comprehensive system resource usage response."""
     timestamp: str
+    container: Optional[ContainerInfo] = None
     cpu: CPUInfo
     memory: MemoryInfo
     disks: List[DiskInfo]
@@ -221,20 +381,41 @@ async def get_system_resource_usage():
     """
     Get real-time system resource usage statistics.
     
-    Returns comprehensive information about CPU, memory, disk, and network usage.
+    Container-aware: when running inside Docker/LXC, reports allocated
+    resources (cgroup limits) rather than the host's total resources.
     """
     try:
         import psutil
         import os
-        
-        # CPU Information
+
+        # Detect container environment and cgroup limits
+        container_meta = _detect_container()
+        cgroup_mem_limit = _get_cgroup_memory_limit()
+        cgroup_mem_usage = _get_cgroup_memory_usage()
+        cgroup_cpu_limit = _get_cgroup_cpu_limit()
+
+        container_info = ContainerInfo(
+            is_containerized=container_meta["is_containerized"],
+            runtime=container_meta["runtime"],
+            cgroup_version=container_meta["cgroup_version"],
+            memory_limit=cgroup_mem_limit,
+            cpu_limit=cgroup_cpu_limit,
+        )
+
+        # CPU Information — use cgroup CPU limit if available
         cpu_freq = psutil.cpu_freq()
         load_avg = psutil.getloadavg() if hasattr(psutil, 'getloadavg') else (None, None, None)
+
+        effective_logical = int(cgroup_cpu_limit) if cgroup_cpu_limit else psutil.cpu_count(logical=True)
+        effective_physical = min(
+            psutil.cpu_count(logical=False) or effective_logical,
+            effective_logical,
+        )
         
         cpu_info = CPUInfo(
             percent=psutil.cpu_percent(interval=0.1),
-            count_logical=psutil.cpu_count(logical=True),
-            count_physical=psutil.cpu_count(logical=False) or psutil.cpu_count(logical=True),
+            count_logical=effective_logical,
+            count_physical=effective_physical,
             frequency_current=cpu_freq.current if cpu_freq else None,
             frequency_max=cpu_freq.max if cpu_freq else None,
             load_avg_1m=load_avg[0],
@@ -242,21 +423,33 @@ async def get_system_resource_usage():
             load_avg_15m=load_avg[2],
         )
         
-        # Memory Information
+        # Memory Information — use cgroup memory limit if available
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
-        
+
+        if cgroup_mem_limit:
+            # containerized: use cgroup values for accurate reporting
+            effective_total = cgroup_mem_limit
+            effective_used = cgroup_mem_usage if cgroup_mem_usage else mem.used
+            effective_available = max(effective_total - effective_used, 0)
+            effective_percent = (effective_used / effective_total * 100) if effective_total > 0 else 0.0
+        else:
+            effective_total = mem.total
+            effective_used = mem.used
+            effective_available = mem.available
+            effective_percent = mem.percent
+
         memory_info = MemoryInfo(
-            total=mem.total,
-            available=mem.available,
-            used=mem.used,
-            percent=mem.percent,
+            total=effective_total,
+            available=effective_available,
+            used=effective_used,
+            percent=round(effective_percent, 1),
             swap_total=swap.total,
             swap_used=swap.used,
             swap_percent=swap.percent,
         )
         
-        # Disk Information
+        # Disk Information — deduplicate overlapping container mounts
         disks = []
         for partition in psutil.disk_partitions(all=False):
             try:
@@ -272,6 +465,9 @@ async def get_system_resource_usage():
                 ))
             except (PermissionError, OSError):
                 continue
+
+        if container_info.is_containerized:
+            disks = _deduplicate_disks(disks)
         
         # Network Information
         net_io = psutil.net_io_counters(pernic=True)
@@ -320,7 +516,7 @@ async def get_system_resource_usage():
                 process_info = ProcessInfo(
                     pid=proc.pid,
                     cpu_percent=proc.cpu_percent(),
-                    memory_percent=proc.memory_percent(),
+                    memory_percent=round(mem_info.rss / effective_total * 100, 2) if effective_total > 0 else proc.memory_percent(),
                     memory_rss=mem_info.rss,
                     memory_vms=mem_info.vms,
                     threads=proc.num_threads(),
@@ -357,6 +553,7 @@ async def get_system_resource_usage():
         
         return SystemResourceUsage(
             timestamp=datetime.now().isoformat(),
+            container=container_info,
             cpu=cpu_info,
             memory=memory_info,
             disks=disks,

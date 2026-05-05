@@ -196,7 +196,15 @@ async def get_regions_overview(
         
         # Get org-scoped cluster list
         cluster_ids = cert_manager.list_clusters()
-        
+
+        if not cluster_ids:
+            response = RegionsOverviewResponse(
+                regions=[], total_nodes=0, total_instances=0,
+                total_cpu=0, total_memory=0, total_storage=0, total_gpu=0,
+            )
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+            return response
+
         # process single cluster (runs in thread pool for parallelism)
         def _process_cluster(cluster_id: str) -> Optional[Tuple[str, Dict, RegionNodeInfo, int, int]]:
             """Fetch metadata + resources for one cluster. Returns (region_id, region_data, node_info, inst_count, inst_running) or None."""
