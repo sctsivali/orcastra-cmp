@@ -1,5 +1,11 @@
 # Orcastra Dashboard
 
+[![Release](https://img.shields.io/badge/Release-v1.0.0--RC2-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases/tag/v1.0.0-RC2)
+[![Stability](https://img.shields.io/badge/Stability-Release_Candidate-1F6FEB?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases)
+[![License](https://img.shields.io/badge/License-GPLv3-2EA043?style=flat-square)](LICENSE)
+[![Community](https://img.shields.io/badge/Community-Forum-5865F2?style=flat-square)](https://discourse.orca.id)
+[![Docs](https://img.shields.io/badge/Docs-docs.orcastra.io-555555?style=flat-square)](https://docs.orcastra.io)
+
 Control plane for managing LXD/Incus hypervisors across multiple nodes and organizations. Supports multi-cluster orchestration, real-time monitoring, RBAC, and centralized logging.
 
 ## Stack
