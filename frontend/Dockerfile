@@ -24,18 +24,17 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build arguments for version management
-ARG NEXT_PUBLIC_API_URL
-ARG NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL
-ARG APP_VERSION=1.0.0-RC1
+ARG APP_VERSION=1.0.0-RC2
 
 # Auth build arguments - ONLY public/non-secret values needed at build time
 # Secrets (CLIENT_SECRET, NEXTAUTH_SECRET) are injected at RUNTIME via env vars
 ARG AUTHENTIK_ISSUER
 ARG AUTHENTIK_CLIENT_ID
 
-# Set environment variables for build
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=$NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL
+# NEXT_PUBLIC_* vars use placeholder URLs at build time.
+# Actual values are injected at container startup via entrypoint.sh
+ENV NEXT_PUBLIC_API_URL=http://NEXT_PUBLIC_API_URL_PLACEHOLDER
+ENV NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=http://NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL_PLACEHOLDER
 ENV APP_VERSION=$APP_VERSION
 ENV NEXT_TELEMETRY_DISABLED=1
 
@@ -74,6 +73,10 @@ RUN chown nextjs:nodejs .next
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Runtime env replacement script (replaces NEXT_PUBLIC_* placeholders on startup)
+COPY --chown=nextjs:nodejs entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
 USER nextjs
 
 EXPOSE 2025
@@ -85,4 +88,4 @@ ENV HOSTNAME="0.0.0.0"
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:2025 || exit 1
 
-CMD ["node", "server.js"]
+ENTRYPOINT ["./entrypoint.sh"]

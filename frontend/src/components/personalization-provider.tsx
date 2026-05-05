@@ -32,8 +32,8 @@ import {
 import { Role, resolveRoles, hasMinimumRole } from "@/types/rbac";
 import { toast } from "@/hooks/use-toast";
 
-// API configuration
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+// API configuration - use relative URLs (Next.js rewrites proxy to backend)
+const API_BASE = "";
 const API_RETRY_COUNT = 2;
 const API_RETRY_DELAY_MS = 500;
 

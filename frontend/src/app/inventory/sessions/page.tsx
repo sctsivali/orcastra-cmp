@@ -135,7 +135,8 @@ function formatTime(date: Date): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4050";
+// Use relative URLs - Next.js rewrites proxy to backend
+const API_URL = "";
 
 // ============ Sort Helper ============
 

@@ -223,7 +223,6 @@ export function ConsoleResourceBar({
     const fetchStats = async () => {
       try {
         const { getAccessToken } = await import("@/lib/api");
-        const API_URL_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4050";
         const token = getAccessToken();
         const headers: Record<string, string> = {};
         if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -231,7 +230,7 @@ export function ConsoleResourceBar({
         if (sessionId) {
           // Direct lookup by session ID (terminal / text mode)
           const response = await fetch(
-            `${API_URL_BASE}/api/v1/console/session/${encodeURIComponent(sessionId)}/stats`,
+            `/api/v1/console/session/${encodeURIComponent(sessionId)}/stats`,
             { headers }
           );
           if (response.ok) {
@@ -244,7 +243,7 @@ export function ConsoleResourceBar({
             host: host,
           });
           const response = await fetch(
-            `${API_URL_BASE}/api/v1/console/sessions/active?${params}`,
+            `/api/v1/console/sessions/active?${params}`,
             { headers }
           );
           if (response.ok) {

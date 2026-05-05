@@ -14,12 +14,13 @@ export const config = {
   matcher: [
     /*
      * Match all request paths except for the ones starting with:
-     * - api/auth (NextAuth API routes)
+     * - api (API routes: NextAuth + backend proxy)
+     * - health (health check proxy)
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon (favicon files)
      * - public assets (images, fonts, etc.)
      */
-    "/((?!api/auth|_next/static|_next/image|favicon|.*\\.ico|.*\\.png|.*\\.jpg|.*\\.svg|.*\\.webp|.*\\.json|spice-html5).*)",
+    "/((?!api/|health|_next/static|_next/image|favicon|.*\\.ico|.*\\.png|.*\\.jpg|.*\\.svg|.*\\.webp|.*\\.json|spice-html5).*)",
   ],
 };

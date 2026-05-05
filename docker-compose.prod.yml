@@ -58,7 +58,7 @@ services:
 
   # Backend API (port: 8765)
   backend:
-    image: svlct/orcastra-dashboard:backend-${APP_VERSION:-1.0.0-RC1}
+    image: svlct/orcastra-dashboard:backend-${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-backend
     restart: always
     ports:
@@ -66,8 +66,8 @@ services:
     env_file:
       - .env
     environment:
-      - APP_VERSION=${APP_VERSION:-1.0.0-RC1}
-      - API_VERSION=${API_VERSION:-1.0.0-RC1}
+      - APP_VERSION=${APP_VERSION:-latest}
+      - API_VERSION=${API_VERSION:-latest}
       - DEBUG=${DEBUG:-false}
       - DATABASE_URL=${DATABASE_URL}
       - AUTH_ENABLED=${AUTH_ENABLED:-true}
@@ -87,6 +87,9 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    # Resource limits — ensures Dashboard Host shows container resources, not the host
+    mem_limit: ${BACKEND_MEM_LIMIT:-2g}
+    cpus: ${BACKEND_CPUS:-2}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')"]
       interval: 30s
@@ -101,7 +104,7 @@ services:
 
   # Frontend (port: 4321)
   frontend:
-    image: svlct/orcastra-dashboard:frontend-${APP_VERSION:-1.0.0-RC1}
+    image: svlct/orcastra-dashboard:frontend-${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-frontend
     restart: always
     ports:
@@ -109,6 +112,8 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
+      # Internal Docker URL for server-side API proxying (avoids external DNS/firewall issues)
+      - INTERNAL_BACKEND_URL=http://backend:4050
       - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}
@@ -150,12 +155,13 @@ services:
       - backend
       - frontend
     healthcheck:
-      # -debug image includes curl for proper HTTP health check
+      # /api/v1/health turns red when HC_Errors_Count or HC_Retry_Failure_Count is exceeded.
+      # Combined with restart:always this surfaces shipping failures to Docker, not just HTTP 200.
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:2020/api/v1/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
 
 networks:
   orcastra-dashboard:

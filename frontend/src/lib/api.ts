@@ -52,9 +52,13 @@ import {
 
 const API_PREFIX = "/api/v1";
 
-// Export for direct use in components
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4050";
-export const API_URL = `${API_BASE_URL}${API_PREFIX}`;
+// All HTTP API calls use relative URLs — Next.js rewrites proxy them to the backend.
+// This avoids cross-origin (CORS) and mixed-content issues entirely.
+const API_BASE_URL = "";
+
+// Relative API URL — safe for browser HTTP fetch calls.
+// WebSocket connections use ws-url.ts which derives URLs from NEXT_PUBLIC_API_URL.
+export const API_URL = API_PREFIX;
 
 /**
  * Token store for Bearer auth.
@@ -266,7 +270,10 @@ async function _fetchAPIInternal<T>(
     if (error instanceof APIError) {
       throw error;
     }
-    if (error instanceof TypeError && error.message.includes('fetch')) {
+    // TypeError from fetch indicates network-level failure (DNS, connection refused,
+    // CORS, SSL, etc.). Message varies by browser: "Failed to fetch" (Chrome),
+    // "NetworkError..." (Firefox), "Load failed" (Safari).
+    if (error instanceof TypeError) {
       throw new APIError('Network error - unable to connect to server', 0, 'Connection failed');
     }
     throw error;
@@ -712,7 +719,7 @@ export const tagAPI = {
 
 // Health Check
 export const healthCheck = async (): Promise<{ status: string }> => {
-  const response = await fetch(`${API_BASE_URL}/health`);
+  const response = await fetch("/health");
   if (!response.ok) {
     throw new APIError("Health check failed", response.status);
   }

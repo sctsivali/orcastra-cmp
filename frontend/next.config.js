@@ -86,20 +86,8 @@ const nextConfig = {
   },
   async rewrites() {
     return {
-      // beforeFiles rewrites are checked before pages/public files
-      // allowing API routes to be handled by Next.js first
       beforeFiles: [],
-      // afterFiles rewrites are checked after pages/public files
-      // but before fallback routes  
-      afterFiles: [
-        {
-          // Rewrite /api/v1/* to backend (main API routes)
-          // NEXT_PUBLIC_API_URL is REQUIRED - set via .env or build args
-          source: '/api/v1/:path*',
-          destination: `${process.env.NEXT_PUBLIC_API_URL}/api/v1/:path*`,
-        },
-      ],
-      // Fallback rewrites - /api/auth/* is handled by NextAuth locally
+      afterFiles: [],
       fallback: [],
     };
   },

@@ -55,7 +55,8 @@ async function fileToBase64(file: File): Promise<string> {
 
 // Fetch image from URL via backend proxy (avoids CORS)
 import { getAccessToken } from "@/lib/api";
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "";
+// Use relative URLs - Next.js rewrites proxy to backend
+const API_BASE = "";
 
 async function fetchImageAsBase64(url: string): Promise<string> {
   const token = getAccessToken();

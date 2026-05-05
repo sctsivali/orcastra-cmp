@@ -283,8 +283,7 @@ export const useConsoleStore = create<ConsoleState>()(
         
         // Kill all sessions for this instance if requested
         if (cancelOperation && consoleToClose?.instanceName && consoleToClose?.host) {
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4050/api/v1';
-          fetch(`${apiUrl}/console/${encodeURIComponent(consoleToClose.instanceName)}/kill-all-sessions?host=${encodeURIComponent(consoleToClose.host)}`, {
+          fetch(`/api/v1/console/${encodeURIComponent(consoleToClose.instanceName)}/kill-all-sessions?host=${encodeURIComponent(consoleToClose.host)}`, {
             method: 'POST',
             headers: {
               ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
