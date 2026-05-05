@@ -126,6 +126,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
 
   const isRunning = vm.status === "Running";
   const isStopped = vm.status === "Stopped";
+  const isFrozen = vm.status === "Frozen";
   const hasActiveTerminal = hasTerminal(vm.name, vm.host);
   const isLoading =
     startMutation.isPending ||
@@ -286,7 +287,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               size="icon"
               className="h-8 w-8 text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950"
               onClick={handleStart}
-              disabled={isRunning || isLoading}
+              disabled={isRunning || isLoading || isFrozen}
             >
               {startMutation.isPending ? (
                 <LoadingLottieSmall />
@@ -295,7 +296,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               )}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Start</TooltipContent>
+          <TooltipContent>{isFrozen ? "Frozen by billing policy" : "Start"}</TooltipContent>
         </Tooltip>
 
         <Tooltip>
@@ -324,7 +325,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               size="icon"
               className="h-8 w-8 text-blue-600 hover:text-blue-700 hover:bg-blue-50 dark:hover:bg-blue-950"
               onClick={handleRestart}
-              disabled={isStopped || isLoading}
+              disabled={isStopped || isLoading || isFrozen}
             >
               {restartMutation.isPending ? (
                 <LoadingLottieSmall />
@@ -333,7 +334,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               )}
             </Button>
           </TooltipTrigger>
-          <TooltipContent>Restart</TooltipContent>
+          <TooltipContent>{isFrozen ? "Frozen by billing policy" : "Restart"}</TooltipContent>
         </Tooltip>
 
         {/* Delete - Partner+ only */}

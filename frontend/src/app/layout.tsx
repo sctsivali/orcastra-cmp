@@ -9,8 +9,8 @@ import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
   title: "Orcastra Dashboard",
-  description: "Unified dashboard for managing LXD virtual machines across multiple nodes",
-  keywords: ["LXD", "virtualization", "dashboard", "containers", "VMs"],
+  description: "Enterprise operations center for managing virtualized infrastructure, containers, and cloud resources across distributed clusters",
+  keywords: ["infrastructure", "operations", "dashboard", "virtualization", "containers", "cloud"],
   icons: {
     icon: [
       { url: "/favicon-light.ico", media: "(prefers-color-scheme: light)" },

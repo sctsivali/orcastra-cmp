@@ -117,10 +117,9 @@ export default function ClustersPage() {
       if (response.authenticated) {
         toast({
           title: "Authentication Successful",
-          description: `Cluster ${clusterId} is online and authenticated`,
+          description: `Cluster ${clusterId} is online. Refreshing instance data...`,
         });
-        // Reload list to update status
-        await refetch();
+        // refetch is handled by the mutation's onSuccess (includes delay for LXD stabilization)
       } else {
         toast({
           title: "Not Authenticated",

@@ -257,6 +257,7 @@ export function ConsoleToolbar({
 
   const isRunning = instanceStatus === 'Running';
   const isStopped = instanceStatus === 'Stopped';
+  const isFrozen = instanceStatus === 'Frozen';
   const isTransitioning = ['Starting', 'Stopping', 'Restarting'].includes(instanceStatus);
 
   return (
@@ -276,7 +277,7 @@ export function ConsoleToolbar({
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95"
-                disabled={isRunning || isTransitioning || loading !== null}
+                disabled={isRunning || isTransitioning || loading !== null || isFrozen}
                 onClick={() => handleOperation('start')}
                 onTouchEnd={(e) => { e.preventDefault(); if (!isRunning && !isTransitioning && loading === null) handleOperation('start'); }}
               >
@@ -287,7 +288,7 @@ export function ConsoleToolbar({
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Start Instance</TooltipContent>
+            <TooltipContent>{isFrozen ? "Frozen by billing policy" : "Start Instance"}</TooltipContent>
           </Tooltip>
 
           {/* Stop */}

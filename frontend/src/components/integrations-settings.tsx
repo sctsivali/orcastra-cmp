@@ -11,10 +11,12 @@ import {
   CheckCircle2,
   XCircle,
   Ban,
-  Users,
+  Shield,
   Server,
   Eye,
   EyeOff,
+  ShieldAlert,
+  CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +53,7 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import { cn, formatHypervisorType } from "@/lib/utils";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
@@ -378,6 +381,7 @@ export function IntegrationsSettings() {
   const {
     data: apiKeysData,
     isLoading: keysLoading,
+    error: keysError,
     refetch: refetchKeys,
     isRefetching,
   } = useQuery({
@@ -385,7 +389,18 @@ export function IntegrationsSettings() {
     queryFn: () => api.integrations.listAPIKeys(),
     enabled: mounted,
     staleTime: 30000,
+    retry: (failureCount, error) => {
+      // Don't retry on 503 (Vault not configured) — it won't resolve on its own
+      if (error instanceof Error && "status" in error && (error as Record<string, unknown>).status === 503) return false;
+      return failureCount < 2;
+    },
   });
+
+  // Detect Vault-not-configured state (duck-type check — instanceof breaks across chunks)
+  const vaultUnavailable =
+    keysError instanceof Error &&
+    "status" in keysError &&
+    (keysError as Record<string, unknown>).status === 503;
 
   // Fetch available clusters
   const { data: clustersData } = useQuery({
@@ -407,9 +422,12 @@ export function IntegrationsSettings() {
       });
     },
     onError: (error: Error) => {
+      const is503 = "status" in error && (error as Record<string, unknown>).status === 503;
       toast({
         title: "Failed to create API key",
-        description: error.message,
+        description: is503
+          ? "Vault is not configured. Enable Vault in backend settings for API key management."
+          : error.message,
         variant: "destructive",
       });
     },
@@ -460,6 +478,35 @@ export function IntegrationsSettings() {
   const totalKeys = typeof apiKeysData?.total === 'number' ? apiKeysData.total : 0;
   const activeKeys = typeof apiKeysData?.active === 'number' ? apiKeysData.active : 0;
   const revokedKeys = typeof apiKeysData?.revoked === 'number' ? apiKeysData.revoked : 0;
+
+  // Vault not configured — show informative banner instead of full UI
+  if (vaultUnavailable) {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            Manage API keys for external applications
+          </p>
+        </div>
+        <Alert variant="destructive" className="border-yellow-500/50 bg-yellow-500/10 text-yellow-200 [&>svg]:text-yellow-500">
+          <ShieldAlert className="h-5 w-5" />
+          <AlertTitle className="text-yellow-400 font-semibold">Vault Not Configured</AlertTitle>
+          <AlertDescription className="text-yellow-200/80 mt-1 space-y-2">
+            <p>
+              API key management requires HashiCorp Vault to be enabled and configured.
+              Keys are securely stored in Vault&apos;s encrypted secret engine.
+            </p>
+            <p className="text-xs text-yellow-200/60">
+              Set <code className="bg-yellow-500/20 px-1.5 py-0.5 rounded text-yellow-300">VAULT_ENABLED=true</code>,{" "}
+              <code className="bg-yellow-500/20 px-1.5 py-0.5 rounded text-yellow-300">VAULT_ADDR</code>, and{" "}
+              <code className="bg-yellow-500/20 px-1.5 py-0.5 rounded text-yellow-300">VAULT_TOKEN</code>{" "}
+              in the backend environment, then restart the backend service.
+            </p>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -548,7 +595,23 @@ export function IntegrationsSettings() {
           {apiKeys.map((apiKey) => {
             if (!apiKey || typeof apiKey.id !== 'string') return null;
             const clusterCount = Array.isArray(apiKey.cluster_permissions) ? apiKey.cluster_permissions.length : 0;
-            const userCount = typeof apiKey.user_mappings_count === 'number' ? apiKey.user_mappings_count : 0;
+            
+            // extract highest permission level across all clusters
+            const allPerms = Array.isArray(apiKey.cluster_permissions)
+              ? apiKey.cluster_permissions.flatMap(cp => cp.permissions || [])
+              : [];
+            const permLevel = allPerms.includes("admin")
+              ? "Admin"
+              : allPerms.includes("write")
+                ? "Read & Write"
+                : allPerms.includes("read")
+                  ? "Read Only"
+                  : "None";
+
+            // format expiry info
+            const expiryLabel = apiKey.expires_at
+              ? new Date(apiKey.expires_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
+              : "Never";
             
             return (
               <Card key={apiKey.id} className={cn(apiKey.is_revoked && "opacity-60")}>
@@ -579,16 +642,21 @@ export function IntegrationsSettings() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div className="grid grid-cols-3 gap-4 text-sm">
                     <div className="flex items-center gap-2">
                       <Server className="h-4 w-4 text-muted-foreground" />
                       <span className="text-muted-foreground">Clusters:</span>
                       <span className="font-medium">{clusterCount}</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-muted-foreground" />
-                      <span className="text-muted-foreground">Users:</span>
-                      <span className="font-medium">{userCount}</span>
+                      <Shield className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Access:</span>
+                      <span className="font-medium">{permLevel}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <CalendarClock className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-muted-foreground">Expires:</span>
+                      <span className="font-medium">{expiryLabel}</span>
                     </div>
                   </div>
                   

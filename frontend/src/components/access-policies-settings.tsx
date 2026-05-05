@@ -90,25 +90,19 @@ function PermissionCheckboxGroup({
   };
 
   return (
-    <div className="space-y-2">
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
       {ALL_TENANT_PERMISSIONS.map((perm) => (
         <label
           key={perm}
-          className="flex items-start gap-3 p-2 rounded-md hover:bg-muted/50 cursor-pointer"
+          className="flex items-center gap-2 p-1.5 rounded-md hover:bg-muted/50 cursor-pointer"
         >
           <Checkbox
             checked={selected.includes(perm)}
             onCheckedChange={() => toggle(perm)}
-            className="mt-0.5"
           />
-          <div>
-            <div className="flex items-center gap-1.5 text-sm font-medium">
-              {PERM_ICONS[perm]}
-              {TENANT_PERMISSION_LABELS[perm]}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {TENANT_PERMISSION_DESCRIPTIONS[perm]}
-            </p>
+          <div className="flex items-center gap-1.5 text-xs font-medium">
+            {PERM_ICONS[perm]}
+            {TENANT_PERMISSION_LABELS[perm]}
           </div>
         </label>
       ))}
@@ -123,9 +117,10 @@ interface RuleEditorProps {
   clusters: Array<{ cluster_id: string; display_name: string }>;
   onUpdate: (index: number, rule: Omit<PolicyRule, "id">) => void;
   onRemove: (index: number) => void;
+  readOnlyPolicy?: boolean;
 }
 
-function RuleEditor({ rule, index, clusters, onUpdate, onRemove }: RuleEditorProps) {
+function RuleEditor({ rule, index, clusters, onUpdate, onRemove, readOnlyPolicy }: RuleEditorProps) {
   const [expanded, setExpanded] = useState(true);
 
   return (
@@ -210,10 +205,19 @@ function RuleEditor({ rule, index, clusters, onUpdate, onRemove }: RuleEditorPro
           {/* Permissions */}
           <div className="space-y-1.5">
             <Label className="text-xs">Permissions</Label>
-            <PermissionCheckboxGroup
-              selected={rule.permissions as TenantPermission[]}
-              onChange={(perms) => onUpdate(index, { ...rule, permissions: perms })}
-            />
+            {readOnlyPolicy ? (
+              <div className="flex items-center gap-2 p-2 bg-muted/50 rounded-md">
+                <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                <span className="text-xs text-muted-foreground">View only (read-only policy)</span>
+              </div>
+            ) : (
+              <ScrollArea className="max-h-[140px]">
+                <PermissionCheckboxGroup
+                  selected={rule.permissions as TenantPermission[]}
+                  onChange={(perms) => onUpdate(index, { ...rule, permissions: perms })}
+                />
+              </ScrollArea>
+            )}
           </div>
         </div>
       )}
@@ -255,6 +259,20 @@ function PolicyEditorDialog({
       permissions,
     })) || [{ cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]
   );
+  const [isReadOnlyPolicy, setIsReadOnlyPolicy] = useState(() => {
+    const initRules = editPolicy?.rules || [];
+    return initRules.length > 0 && initRules.every(r => 
+      r.permissions.length === 1 && r.permissions[0] === "view"
+    );
+  });
+
+  // When read-only toggle changes, update all rules
+  const handleReadOnlyToggle = (enabled: boolean) => {
+    setIsReadOnlyPolicy(enabled);
+    if (enabled) {
+      setRules(rules.map(r => ({ ...r, permissions: ["view"] })));
+    }
+  };
 
   // reset when dialog opens with new data
   const handleOpenChange = (v: boolean) => {
@@ -263,27 +281,35 @@ function PolicyEditorDialog({
       setDescription(editPolicy.description || "");
       setOrgId(String(editPolicy.organization_id));
       setIsDefault(editPolicy.is_default);
-      setRules(
-        editPolicy.rules?.map(({ cluster_id, project_name, instance_name, permissions }) => ({
+      const editRules = editPolicy.rules?.map(({ cluster_id, project_name, instance_name, permissions }) => ({
           cluster_id, project_name, instance_name, permissions,
-        })) || []
-      );
+        })) || [];
+      setRules(editRules);
+      setIsReadOnlyPolicy(editRules.length > 0 && editRules.every(r =>
+        r.permissions.length === 1 && r.permissions[0] === "view"
+      ));
     } else if (v && !editPolicy) {
       setName("");
       setDescription("");
       setOrgId("");
       setIsDefault(false);
+      setIsReadOnlyPolicy(false);
       setRules([{ cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]);
     }
     onOpenChange(v);
   };
 
   const addRule = () => {
-    setRules([...rules, { cluster_id: "*", project_name: "*", instance_name: "*", permissions: ["view"] }]);
+    const perms: TenantPermission[] = isReadOnlyPolicy ? ["view"] : ["view"];
+    setRules([...rules, { cluster_id: "*", project_name: "*", instance_name: "*", permissions: perms }]);
   };
 
   const updateRule = (index: number, rule: Omit<PolicyRule, "id">) => {
     const updated = [...rules];
+    // enforce view-only when read-only mode is on
+    if (isReadOnlyPolicy) {
+      rule = { ...rule, permissions: ["view"] };
+    }
     updated[index] = rule;
     setRules(updated);
   };
@@ -319,7 +345,7 @@ function PolicyEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit Policy" : "Create Access Policy"}</DialogTitle>
           <DialogDescription>
@@ -391,6 +417,20 @@ function PolicyEditorDialog({
               </div>
             </div>
 
+            {/* Read-Only Mode */}
+            <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg border">
+              <Switch checked={isReadOnlyPolicy} onCheckedChange={handleReadOnlyToggle} />
+              <div>
+                <Label className="text-sm flex items-center gap-1.5">
+                  <Eye className="h-3.5 w-3.5" />
+                  Read-Only Policy
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Restrict to view-only access — no operate, console, or file transfer
+                </p>
+              </div>
+            </div>
+
             {/* Rules */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
@@ -412,6 +452,7 @@ function PolicyEditorDialog({
                     clusters={clusters}
                     onUpdate={updateRule}
                     onRemove={removeRule}
+                    readOnlyPolicy={isReadOnlyPolicy}
                   />
                 ))}
               </div>

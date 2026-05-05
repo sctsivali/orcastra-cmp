@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -1012,39 +1013,48 @@ export default function MonitoringContent() {
     return counts;
   }, [actualWarnings, certWarnings, nodeWarnings, selectedNode]);
 
-  // Fetch instances for dialog
+  // React Query client for leveraging cached data
+  const queryClient = useQueryClient();
+
+  // Fetch instances for dialog - uses React Query cache for instant results
   const fetchInstances = async (filterType: "running" | "stopped" | "other" | "container" | "vm") => {
-    setInstancesLoading(true);
     setInstanceFilterType(filterType);
     setInstanceDialogOpen(true);
+
+    // Try cached data first for instant display
+    const cached = queryClient.getQueryData<{ vms: VMInfo[] }>(["vms", { host: undefined, status: undefined }]);
+    if (cached?.vms) {
+      setAllInstances(filterInstanceList(cached.vms, filterType));
+      setInstancesLoading(false);
+      return;
+    }
+
+    // Fallback: fetch via React Query (reuses cache if available)
+    setInstancesLoading(true);
     try {
-      const response = await vmAPI.list();
-      let filtered = response.vms;
-      
-      switch (filterType) {
-        case "running":
-          filtered = filtered.filter(vm => vm.status === "Running");
-          break;
-        case "stopped":
-          filtered = filtered.filter(vm => vm.status === "Stopped");
-          break;
-        case "other":
-          filtered = filtered.filter(vm => vm.status !== "Running" && vm.status !== "Stopped");
-          break;
-        case "container":
-          filtered = filtered.filter(vm => vm.type === "container");
-          break;
-        case "vm":
-          filtered = filtered.filter(vm => vm.type === "virtual-machine");
-          break;
-      }
-      
-      setAllInstances(filtered);
+      const response = await queryClient.fetchQuery({
+        queryKey: ["vms", { host: undefined, status: undefined }],
+        queryFn: () => vmAPI.list(),
+        staleTime: 30_000,
+      });
+      setAllInstances(filterInstanceList(response.vms, filterType));
     } catch (error) {
       console.error("Failed to fetch instances:", error);
       setAllInstances([]);
     } finally {
       setInstancesLoading(false);
+    }
+  };
+
+  // Helper to filter instance list by type
+  const filterInstanceList = (vms: VMInfo[], filterType: string) => {
+    switch (filterType) {
+      case "running": return vms.filter(vm => vm.status === "Running");
+      case "stopped": return vms.filter(vm => vm.status === "Stopped");
+      case "other": return vms.filter(vm => vm.status !== "Running" && vm.status !== "Stopped");
+      case "container": return vms.filter(vm => vm.type === "container");
+      case "vm": return vms.filter(vm => vm.type === "virtual-machine");
+      default: return vms;
     }
   };
 
@@ -1950,18 +1960,16 @@ export default function MonitoringContent() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="relative">
-          {/* Subtle loading overlay during time range transition */}
-          {(isTimeRangePending || historyFetching) && (
-            <div className="absolute inset-0 z-10 flex items-start justify-center pt-2 pointer-events-none">
-              <div className="flex items-center gap-2 bg-background/80 backdrop-blur-sm rounded-full px-3 py-1 shadow-sm border">
+        <CardContent>
+          {/* Chart Type Tabs */}
+          <Tabs value={chartTab} onValueChange={(v) => setChartTab(v as "cpu" | "memory" | "storage" | "network")} className="mb-4">
+            {/* Updating indicator inline with tabs */}
+            {(isTimeRangePending || historyFetching) && (
+              <div className="inline-flex items-center gap-1.5 ml-3 align-middle">
                 <RefreshCw className="h-3 w-3 animate-spin text-primary" />
                 <span className="text-xs text-muted-foreground">Updating...</span>
               </div>
-            </div>
-          )}
-          {/* Chart Type Tabs */}
-          <Tabs value={chartTab} onValueChange={(v) => setChartTab(v as "cpu" | "memory" | "storage" | "network")} className="mb-4">
+            )}
             <TabsList className="grid w-full max-w-2xl grid-cols-4 h-auto p-1">
               <TabsTrigger value="cpu" className="flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs sm:text-sm sm:gap-2 sm:px-3">
                 <Cpu className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />

@@ -108,7 +108,7 @@ export default function SettingsPage() {
           {isPartner && (
           <TabsTrigger value="system-info" className="gap-2 text-xs sm:text-sm px-3 sm:px-4 py-1.5">
             <Activity className="h-4 w-4 shrink-0" />
-            <span>System Info</span>
+            <span>Dashboard Host</span>
           </TabsTrigger>
           )}
         </TabsList>

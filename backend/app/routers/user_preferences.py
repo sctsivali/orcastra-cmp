@@ -55,7 +55,7 @@ class BackgroundSettings(BaseModel):
 class BrandingSettings(BaseModel):
     """Branding text settings."""
     appName: str = "Orcastra"
-    tagline: str = "A unified dashboard for managing hypervisor virtual machines and containers across multiple nodes."
+    tagline: str = "Enterprise operations center for managing virtualized infrastructure and containers across distributed clusters."
     footerText: str = "© {YEAR} ORCASTRA"
 
 
@@ -119,7 +119,7 @@ def get_default_settings() -> Dict[str, Any]:
         },
         "branding": {
             "appName": "Orcastra",
-            "tagline": "A unified dashboard for managing hypervisor virtual machines and containers across multiple nodes. Streamline your infrastructure management with powerful tools and real-time insights.",
+            "tagline": "Enterprise operations center for managing virtualized infrastructure and containers across distributed clusters. Streamline resource management with real-time monitoring and automation.",
             "footerText": "© {YEAR} ORCASTRA",
         },
         "colors": {

@@ -120,7 +120,7 @@ export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
   },
   branding: {
     appName: "Orcastra",
-    tagline: "A unified dashboard for managing hypervisor virtual machines and containers across multiple nodes. Streamline your infrastructure management with powerful tools and real-time insights.",
+    tagline: "Operations center for managing virtualized infrastructure and containers across distributed clusters. Streamline resource management with real-time monitoring and automation.",
     footerText: "© {YEAR} ORCASTRA",
   },
   colors: {

@@ -6,7 +6,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { API_URL } from "@/lib/api";
+import { getAccessToken } from "@/lib/api";
 import type { MonitoringDashboardResponse } from "@/types";
 
 const WS_RECONNECT_BASE_MS = 2000;
@@ -29,10 +29,23 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
   const connect = useCallback(() => {
     if (!enabled) return;
 
-    // Build WS URL from the API base (http→ws, https→wss)
-    const base = API_URL.replace(/\/api\/v1$/, "");
-    const wsBase = base.replace(/^http/, "ws");
-    const wsUrl = `${wsBase}/api/v1/monitoring/ws`;
+    // Build WS URL from NEXT_PUBLIC_API_URL (direct backend connection for WebSocket)
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
+    // Append auth token as query param (browsers can't set Authorization headers on WS)
+    const token = getAccessToken();
+    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+    let wsUrl: string;
+    if (apiUrl) {
+      const isSecure = apiUrl.startsWith("https://");
+      const protocol = isSecure ? "wss:" : "ws:";
+      const host = apiUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      wsUrl = `${protocol}//${host}/api/v1/monitoring/ws${tokenParam}`;
+    } else {
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+      const protocol = isHttps ? "wss:" : "ws:";
+      const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost";
+      wsUrl = `${protocol}//${hostname}:4050/api/v1/monitoring/ws${tokenParam}`;
+    }
 
     try {
       const ws = new WebSocket(wsUrl);

@@ -1003,6 +1003,14 @@ export interface MonitoringDashboardResponse {
 // System Resource Usage Types
 // ========================
 
+export interface ContainerInfo {
+  is_containerized: boolean;
+  runtime: string;
+  cgroup_version: string | null;
+  memory_limit: number | null;
+  cpu_limit: number | null;
+}
+
 export interface CPUInfo {
   percent: number;
   count_logical: number;
@@ -1078,6 +1086,7 @@ export interface OSInfo {
 
 export interface SystemResourceUsage {
   timestamp: string;
+  container: ContainerInfo | null;
   cpu: CPUInfo;
   memory: MemoryInfo;
   disks: DiskInfo[];

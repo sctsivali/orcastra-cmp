@@ -1243,10 +1243,20 @@ export function useCheckClusterAuth() {
   return useMutation({
     mutationFn: (clusterId: string) => api.clusters.checkAuth(clusterId),
     onSuccess: async () => {
-      // Use refetchQueries to ensure data is actually refreshed before redirect
-      // This is more reliable than invalidateQueries which only marks as stale
+      // First pass: immediate refetch so clusters list updates
+      await queryClient.refetchQueries({ queryKey: ["clusters"], type: 'active' });
+      
+      // Remove stale cached data for instances/VMs/projects
+      // so the next fetch pulls fresh data including the new cluster
+      queryClient.removeQueries({ queryKey: queryKeys.vms });
+      queryClient.removeQueries({ queryKey: ["instances"] });
+      queryClient.removeQueries({ queryKey: queryKeys.allProjects });
+      
+      // Small delay to let the backend's LXD connection stabilize
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      
+      // Second pass: refetch instance data from scratch
       await Promise.all([
-        queryClient.refetchQueries({ queryKey: ["clusters"], type: 'active' }),
         queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: 'active' }),
         queryClient.refetchQueries({ queryKey: queryKeys.vms, type: 'active' }),
         queryClient.refetchQueries({ queryKey: queryKeys.allProjects, type: 'active' }),
