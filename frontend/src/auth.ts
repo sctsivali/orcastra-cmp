@@ -1,7 +1,7 @@
 /**
  * NextAuth.js v5 Configuration for Authentik OAuth2/OIDC
  *
- * This configuration provides enterprise-grade SSO authentication
+ * This configuration provides SSO authentication
  * using Authentik as the Identity Provider.
  */
 

@@ -24,7 +24,7 @@ class MetricsCollector:
     - Total cycle: ~85-105 seconds (well within 180s TTL)
     """
     
-    # Cache TTL for API responses (enterprise: 180s = 3 minutes)
+    # Cache TTL for API responses (180s = 3 minutes)
     CACHE_TTL = 180
     
     def __init__(self, collection_interval: int = 60):

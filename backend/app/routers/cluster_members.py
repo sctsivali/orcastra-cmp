@@ -303,7 +303,7 @@ async def list_cluster_members(
                 total=len(members)
             )
             
-            # Cache as dict for 120 seconds (enterprise TTL)
+            # Cache as dict for 120 seconds
             cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
             logger.debug(f"Cached cluster members for 120 seconds")
             

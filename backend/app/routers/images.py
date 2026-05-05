@@ -95,7 +95,7 @@ async def list_all_images(
         else:
             response.append(result)
     
-    # Cache as dict for 120 seconds (enterprise TTL)
+    # Cache as dict for 120 seconds
     cache_data = [item.model_dump() for item in response]
     cache.set("api_responses", cache_key, cache_data, ttl=180)
     logger.debug(f"Cached images list for 120 seconds")

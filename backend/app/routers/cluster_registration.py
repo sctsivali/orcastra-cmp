@@ -603,7 +603,7 @@ async def list_clusters(
             total=len(clusters)
         )
         
-        # Cache the response for 120 seconds (enterprise TTL)
+        # Cache the response for 120 seconds
         if cache:
             cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
         

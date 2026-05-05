@@ -2,7 +2,7 @@
 FROM python:3.12-slim as base
 
 # Build arguments for version management
-ARG APP_VERSION=1.0.0-RC1
+ARG APP_VERSION=1.0.0-RC2
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -52,7 +52,7 @@ async def get_nodes_status(
 ):
     """Get status of all LXD nodes including Vault-registered clusters."""
     
-    # Try to get from cache first (180 second cache for enterprise)
+    # Try to get from cache first (180 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key("nodes:status:all")
     cached_response = cache.get("api_responses", cache_key)

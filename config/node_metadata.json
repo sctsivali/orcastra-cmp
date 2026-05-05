@@ -43,9 +43,5 @@
   "test232": {
     "display_name": "test232",
     "type": "lxd"
-  },
-  "bbb": {
-    "display_name": "bbb",
-    "type": "lxd"
   }
 }

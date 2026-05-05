@@ -5,7 +5,7 @@
  * 
  * Runs storage cleanup operations on app initialization to prevent
  * localStorage quota issues. This is especially important for
- * enterprise applications with many users.
+ * applications with many users.
  */
 
 import * as React from "react";

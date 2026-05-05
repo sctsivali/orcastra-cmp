@@ -133,7 +133,7 @@ async def list_networks(
             nodes=lxd_service.connection_manager.get_node_names()
         )
         
-        # Cache as dict for 120 seconds (enterprise TTL)
+        # Cache as dict for 120 seconds
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
         logger.debug(f"Cached networks list for 120 seconds")
         
