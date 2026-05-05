@@ -65,10 +65,11 @@ infrastructure/
 *.rar
 .cache/
 backup-files/
-docs/
+personal-docs/
 Manual Deployment/
 scripts/
-.github/
-*.md
-*.txt
 config/
+backup/
+.github/instructions/
+CHANGELOG.md
+COMMIT-MESSAGE.md

@@ -122,6 +122,9 @@ Control plane for managing LXD/Incus hypervisors across multiple nodes and organ
 
 ## API Endpoints
 
+<details>
+<summary>Show API endpoints</summary>
+
 All endpoints prefixed with `/api/v1`:
 
 ### Core Operations
@@ -171,7 +174,12 @@ All endpoints prefixed with `/api/v1`:
 
 See `/docs` for interactive Swagger API documentation.
 
+</details>
+
 ## Quick Start
+
+<details>
+<summary>Show quick start steps</summary>
 
 ```bash
 # clone and configure
@@ -189,7 +197,12 @@ make status
 make health
 ```
 
+</details>
+
 ## Make Commands
+
+<details>
+<summary>Show make commands</summary>
 
 ```bash
 # build
@@ -236,7 +249,12 @@ make config             # validate docker-compose configuration
 make env-check          # verify .env file exists
 ```
 
+</details>
+
 ## Configuration
+
+<details>
+<summary>Show configuration example</summary>
 
 Copy `.env.example` to `.env` and configure:
 
@@ -287,6 +305,8 @@ SECRET_KEY=your-secret-key                 # openssl rand -hex 32
 READ_ONLY_MODE=false
 ```
 
+</details>
+
 ## Versioning
 
 Project follows [Semantic Versioning](https://semver.org/):
@@ -297,3 +317,13 @@ Project follows [Semantic Versioning](https://semver.org/):
 - **RC** (x.x.x-RCn) – Release candidate for testing before stable release
 
 Version is centralized in `.env` (`APP_VERSION`) and propagated to all components via `make version-sync`.
+
+## Key Resources
+
+- License: GNU GPL v3 ([LICENSE](LICENSE))
+- Contribution workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Community standards: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- Security disclosure: [SECURITY.md](SECURITY.md)
+- Support channels: [SUPPORT.md](SUPPORT.md)
+- Product and deployment docs: https://docs.orcastra.io
+- Community forum: https://discourse.orca.id

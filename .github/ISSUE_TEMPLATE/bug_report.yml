@@ -1,0 +1,76 @@
+name: Bug Report
+description: Report a reproducible bug in Orcastra Dashboard
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this issue.
+        Please provide enough detail so maintainers can reproduce quickly.
+
+  - type: input
+    id: version
+    attributes:
+      label: Orcastra Version
+      description: ex; 1.0.0
+      placeholder: 1.0.0
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Docker version, browser, deployment mode
+      placeholder: Ubuntu 22.04, Docker 27.x, Chrome 136, docker-compose.prod
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: Exact ordered steps
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Screenshots
+      description: Redact all secrets and tokens before posting
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues first
+          required: true
+        - label: I removed/redacted sensitive data from logs and screenshots
+          required: true
+        - label: I understand security vulnerabilities should be reported via SECURITY.md process
+          required: true
