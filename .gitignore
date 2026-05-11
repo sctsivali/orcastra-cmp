@@ -72,4 +72,5 @@ scripts/
 config/
 backup/
 CHANGELOG.md
+COMMIT-MESSAGE.md
 .github/instructions/

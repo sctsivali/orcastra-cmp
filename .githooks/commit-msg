@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+REPO_ROOT=$(git rev-parse --show-toplevel)
+"$REPO_ROOT/frontend/node_modules/.bin/commitlint" \
+	--config "$REPO_ROOT/frontend/commitlint.config.cjs" \
+	--edit "$1"
