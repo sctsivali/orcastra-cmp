@@ -9,9 +9,9 @@ import {
   Server,
   Container,
   Terminal,
+  Loader2,
 } from "lucide-react";
 import { useTerminal } from "@/hooks/use-terminal";
-import { LoadingLottieSmall } from "@/components/loading-lottie";
 import {
   Table,
   TableBody,
@@ -154,7 +154,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
     try {
       await startMutation.mutateAsync({
         name: vm.name,
-        request: { host: vm.host },
+        request: { host: vm.host, project: vm.project || "default" },
       });
       toast({
         title: "VM Started",
@@ -179,7 +179,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
     try {
       await stopMutation.mutateAsync({
         name: vm.name,
-        request: { host: vm.host },
+        request: { host: vm.host, project: vm.project || "default" },
       });
       toast({
         title: "VM Stopped",
@@ -204,7 +204,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
     try {
       await restartMutation.mutateAsync({
         name: vm.name,
-        request: { host: vm.host },
+        request: { host: vm.host, project: vm.project || "default" },
       });
       toast({
         title: "VM Restarted",
@@ -231,6 +231,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
         name: vm.name,
         host: vm.host,
         force: true,
+        project: vm.project || "default",
       });
       toast({
         title: "VM Deleted",
@@ -290,7 +291,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isRunning || isLoading || isFrozen}
             >
               {startMutation.isPending ? (
-                <LoadingLottieSmall />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Play className="h-4 w-4" />
               )}
@@ -309,7 +310,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isStopped || isLoading}
             >
               {stopMutation.isPending ? (
-                <LoadingLottieSmall />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <Square className="h-4 w-4" />
               )}
@@ -328,7 +329,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isStopped || isLoading || isFrozen}
             >
               {restartMutation.isPending ? (
-                <LoadingLottieSmall />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <RotateCw className="h-4 w-4" />
               )}
@@ -350,7 +351,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
                   disabled={isLoading}
                 >
                   {deleteMutation.isPending ? (
-                    <LoadingLottieSmall />
+                    <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Trash2 className="h-4 w-4" />
                   )}
@@ -389,7 +390,7 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
   const groupedVMs = React.useMemo(() => {
     const groups: Record<string, VMInfo[]> = {};
     vms.forEach((vm) => {
-      const project = vm.config?.project || "default";
+      const project = vm.project || vm.config?.project || "default";
       if (!groups[project]) {
         groups[project] = [];
       }
@@ -490,7 +491,7 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
                 <TableBody>
                   {projectVMs.map((vm, index) => (
                     <TableRow
-                      key={`${vm.host}-${vm.name}`}
+                      key={`${vm.host}-${vm.project || "default"}-${vm.name}`}
                       className="animate-fade-in"
                       style={{ animationDelay: `${index * 50}ms` }}
                     >
