@@ -751,6 +751,16 @@ const systemAPI = {
   getResourceUsage: async (): Promise<SystemResourceUsage> => {
     return fetchAPI<SystemResourceUsage>("/system/resource-usage");
   },
+  clearCache: async (namespace?: string): Promise<{ message?: string; error?: string }> => {
+    const params = new URLSearchParams();
+    if (namespace) params.append("namespace", namespace);
+
+    const queryString = params.toString();
+    return fetchAPI<{ message?: string; error?: string }>(
+      queryString ? `/system/cache/clear?${queryString}` : "/system/cache/clear",
+      { method: "POST" }
+    );
+  },
 };
 
 // Instance Operations (similar to VMs but more comprehensive)

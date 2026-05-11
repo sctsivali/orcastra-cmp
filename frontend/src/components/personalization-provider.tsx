@@ -29,7 +29,7 @@ import {
   ThemePreference,
   DEFAULT_PERSONALIZATION,
 } from "@/types/personalization";
-import { Role, resolveRoles, hasMinimumRole } from "@/types/rbac";
+import { Role, resolveRoles } from "@/types/rbac";
 import { toast } from "@/hooks/use-toast";
 
 // API configuration - use relative URLs (Next.js rewrites proxy to backend)
@@ -358,22 +358,22 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
       // Detect role from session groups
       const groups: string[] = (session?.user as any)?.groups ?? [];
       const roles = resolveRoles(groups);
-      const isAdmin = hasMinimumRole(roles, Role.ADMIN);
+      const isAdminOnly = roles.includes(Role.ADMIN) && !roles.includes(Role.PARTNER);
 
-      if (isAdmin) {
+      if (isAdminOnly) {
         // Admin (system-level): personal user preferences
         const apiSettings = await fetchFromAPI(userId, userEmail, token);
         setSettings(apiSettings ?? DEFAULT_PERSONALIZATION);
       } else {
         // Partner / Tenant: org branding + personal theme
         // Org prefs drive logo, colors, background, branding
-        // Personal prefs drive theme (each user picks their own)
+        // Personal prefs drive theme only after the user saves one.
         const [orgSettings, personalSettings] = await Promise.all([
           fetchOrgPreferences(token),
           fetchFromAPI(userId, userEmail, token),
         ]);
         const base = orgSettings ?? DEFAULT_PERSONALIZATION;
-        const personalTheme = personalSettings?.theme;
+        const personalTheme = personalSettings?.lastModified ? personalSettings.theme : undefined;
         setSettings({
           ...base,
           theme: personalTheme ?? base.theme,
@@ -593,19 +593,19 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     // detect role to decide which source to load
     const groups: string[] = (session?.user as any)?.groups ?? [];
     const roles = resolveRoles(groups);
-    const isAdmin = hasMinimumRole(roles, Role.ADMIN);
+    const isAdminOnly = roles.includes(Role.ADMIN) && !roles.includes(Role.PARTNER);
 
-    if (isAdmin) {
+    if (isAdminOnly) {
       const apiSettings = await fetchFromAPI(userId, userEmail, token);
       setSettings(apiSettings ?? DEFAULT_PERSONALIZATION);
     } else {
-      // Partner / Tenant: org branding + personal theme
+      // Partner / Tenant: org branding + saved personal theme
       const [orgSettings, personalSettings] = await Promise.all([
         fetchOrgPreferences(token),
         fetchFromAPI(userId, userEmail, token),
       ]);
       const base = orgSettings ?? DEFAULT_PERSONALIZATION;
-      const personalTheme = personalSettings?.theme;
+      const personalTheme = personalSettings?.lastModified ? personalSettings.theme : undefined;
       setSettings({
         ...base,
         theme: personalTheme ?? base.theme,
@@ -673,7 +673,7 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     if (!session?.user?.id) return false;
     const groups: string[] = (session?.user as any)?.groups ?? [];
     const roles = resolveRoles(groups);
-    return !hasMinimumRole(roles, Role.ADMIN); // Partner + Tenant inherit org prefs
+    return !(roles.includes(Role.ADMIN) && !roles.includes(Role.PARTNER)); // Partner + Tenant inherit org prefs
   }, [session?.user?.id, (session?.user as any)?.groups]);
 
   // Seed the version ref on initial load so subsequent polls have a baseline

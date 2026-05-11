@@ -25,7 +25,13 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    get_scope_cache_key,
+    check_tenant_permission,
+    verify_tenant_permission,
+)
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 
@@ -85,6 +91,11 @@ async def list_vms(
         
         if status:
             filtered_vms = [vm for vm in filtered_vms if vm.status == status]
+
+        filtered_vms = [
+            vm for vm in filtered_vms
+            if check_tenant_permission(vm.host, vm.project or "default", vm.name, "view")
+        ]
         
         # Count LXD vs MicroCloud vs Incus nodes
         lxd_count = 0
@@ -178,6 +189,7 @@ async def get_vm(
                 status_code=404, 
                 detail=f"VM '{vm_name}' not found on host '{host}'"
             )
+        verify_tenant_permission(host, vm.project or "default", vm.name, "view")
         
         return vm
         

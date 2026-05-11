@@ -22,7 +22,7 @@ from app.services.lxd_service import (
 )
 from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.vault_client import get_vault_client
 from app.core.cache import get_cache_manager
 
@@ -75,7 +75,7 @@ async def get_nodes_status(
             )
             
             # Get all cluster IDs from Vault
-            cluster_ids = cert_manager.list_clusters()
+            cluster_ids = apply_cluster_filter(cert_manager.list_clusters())
             
             # Filter out clusters already in statuses
             existing_names = {s.name for s in statuses}
@@ -210,6 +210,7 @@ async def get_node_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get available resources for a specific node."""
+    verify_cluster_access(node_name)
     try:
         resources = lxd_service.get_node_resources(node_name)
         return NodeResources(**resources)

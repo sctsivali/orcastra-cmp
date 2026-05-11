@@ -36,7 +36,6 @@ import {
   ArrowDownToLine,
   Wifi,
   WifiOff,
-  Container,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -563,23 +562,11 @@ export function SystemResourceUsagePanel() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold flex items-center gap-2">
-            {data.container?.is_containerized && (
-              <Container className="h-5 w-5 text-muted-foreground" />
-            )}
-            {data.container?.is_containerized
-              ? `Container Resources`
-              : "Dashboard Host Resources"}
+            Dashboard Host Resources
           </h2>
           <p className="text-muted-foreground text-sm mt-1">
-            {data.container?.is_containerized
-              ? `Resource usage of the ${data.container.runtime} container running this dashboard — not the host server`
-              : "Resource usage of the server hosting this dashboard application — not the managed VMs or clusters"}
+            Resource usage of the deployment instance running this dashboard application, not the managed VMs or clusters
           </p>
-          {data.container?.is_containerized && !data.container.memory_limit && !data.container.cpu_limit && (
-            <p className="text-xs text-yellow-500 mt-1">
-              No resource limits detected — showing host resources. Set memory/CPU limits in docker-compose for accurate reporting.
-            </p>
-          )}
         </div>
         <div className="flex items-center gap-3">
           {lastUpdated && (

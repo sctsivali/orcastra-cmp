@@ -114,7 +114,8 @@ class LXDService:
     # Node operations
     def get_node_names(self) -> List[str]:
         """Get list of all registered cluster names from Vault."""
-        return self.cert_manager.list_clusters()
+        from app.core.org_scope import apply_cluster_filter
+        return apply_cluster_filter(self.cert_manager.list_clusters())
     
     def check_nodes_status(self) -> List[NodeStatus]:
         """Check connection status for all nodes (sync version - deprecated, use async version)."""

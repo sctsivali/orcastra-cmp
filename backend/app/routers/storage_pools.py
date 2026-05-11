@@ -14,7 +14,8 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
+from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
@@ -114,13 +115,11 @@ async def list_storage_pools(
     cached_data = cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached storage pools for host={host}")
-        # Reconstruct Pydantic model from cached dict
         return StoragePoolListResponse(**cached_data)
     
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
-        # Fetch pools from all nodes in parallel
         loop = asyncio.get_event_loop()
         tasks = [
             loop.run_in_executor(_executor, _fetch_pools_for_node, lxd_service, node_name)
@@ -128,22 +127,27 @@ async def list_storage_pools(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
         all_pools = []
         for result in results:
             if isinstance(result, list):
                 all_pools.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching pools: {result}")
+
+        if tenant_acl_active():
+            visible_pools = []
+            for pool in all_pools:
+                pool.used_by = filter_visible_lxd_references(pool.node, pool.used_by)
+                if pool.used_by:
+                    visible_pools.append(pool)
+            all_pools = visible_pools
         
-        # Store in variable first
         response = StoragePoolListResponse(
             total=len(all_pools),
             pools=all_pools,
             nodes=lxd_service.connection_manager.get_node_names()
         )
         
-        # Cache as dict for 120 seconds
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
         logger.debug(f"Cached storage pools list for 120 seconds")
         
@@ -163,14 +167,14 @@ async def get_all_storage_pool_resources(
 ):
     """Get resources for all storage pools on all nodes."""
     try:
-        # check cache first
         cache = get_cache_manager()
-        cache_key = "storage_pool_resources:all"
+        cache_key = get_scope_cache_key("storage_pool_resources:all")
         cached = cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
 
         nodes = lxd_service.connection_manager.get_node_names()
+        tenant_acl = get_tenant_acl()
 
         if not nodes:
             response = {"resources": {}}
@@ -187,6 +191,8 @@ async def get_all_storage_pool_resources(
                     return result
                 pools = client.storage_pools.all()
                 for pool in pools:
+                    if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
+                        continue
                     try:
                         resources = pool.resources.get()
                         result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
@@ -196,7 +202,6 @@ async def get_all_storage_pool_resources(
                 logger.warning(f"Could not access node {node_name}: {node_err}")
             return result
 
-        # query all nodes in parallel
         loop = asyncio.get_event_loop()
         executor = ThreadPoolExecutor(max_workers=min(len(nodes), 10))
         tasks = [loop.run_in_executor(executor, _fetch_node_resources, n) for n in nodes]
@@ -410,14 +415,14 @@ async def get_all_storage_pool_resources(
 ):
     """Get storage pool resources for all pools."""
     try:
-        # check cache first
         cache = get_cache_manager()
-        cache_key = "storage_pool_resources:all_v2"
+        cache_key = get_scope_cache_key("storage_pool_resources:all_v2")
         cached = cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
 
         nodes = lxd_service.connection_manager.get_node_names()
+        tenant_acl = get_tenant_acl()
 
         def _fetch_node_pool_resources(node_name: str) -> dict:
             """Fetch all pool resources for a single node (runs in thread)."""
@@ -429,6 +434,8 @@ async def get_all_storage_pool_resources(
                     return result
                 pools = client.storage_pools.all()
                 for pool in pools:
+                    if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
+                        continue
                     try:
                         resources = pool.resources.get()
                         result[f"{node_name}-{pool.name}"] = _serialize_pool_resources(resources)
@@ -443,7 +450,6 @@ async def get_all_storage_pool_resources(
             cache.set("api_responses", cache_key, response, ttl=60)
             return response
 
-        # query all nodes in parallel
         loop = asyncio.get_event_loop()
         executor = ThreadPoolExecutor(max_workers=min(len(nodes), 10))
         tasks = [loop.run_in_executor(executor, _fetch_node_pool_resources, n) for n in nodes]
@@ -481,6 +487,8 @@ async def get_storage_pool_resources(
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(pool_name)
+        if not tenant_acl_can_view_lxd_used_by(get_tenant_acl(), host, pool.used_by or []):
+            raise HTTPException(status_code=403, detail="Access denied to this storage pool")
         resources = pool.resources.get()
         
         return {

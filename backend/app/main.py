@@ -297,7 +297,20 @@ Ensure your client certificates are properly configured.
     # Configure CORS with environment-based origins
     # When CORS_ORIGINS is "*", we use a custom approach to support credentials
     cors_origins = settings.get_cors_origins()
-    
+
+    # important: wildcard CORS with credentials is dangerous in production.
+    # Block it when DEBUG=false to prevent credential leakage to arbitrary origins.
+    if cors_origins == ["*"] and not is_debug:
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "SECURITY: CORS_ORIGINS='*' is not allowed in production (DEBUG=false). "
+            "Set CORS_ORIGINS to explicit allowed origins. Refusing to start."
+        )
+        raise RuntimeError(
+            "CORS_ORIGINS='*' is forbidden in production. "
+            "Set DEBUG=true for development or specify explicit CORS_ORIGINS."
+        )
+
     if cors_origins == ["*"]:
         # For wildcard CORS with credentials support, we need custom middleware
         # that echoes back the request origin (more permissive, use only in dev/trusted environments)

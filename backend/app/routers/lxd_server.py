@@ -103,6 +103,8 @@ async def list_servers(
 ):
     """List all server information."""
     try:
+        if host:
+            verify_cluster_access(host)
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch server info from all nodes in parallel
@@ -141,6 +143,7 @@ async def get_server_info(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get server information for a specific node."""
+    verify_cluster_access(node_name)
     try:
         client = lxd_service.connection_manager.get_client(node_name)
         server_data = client.host_info
@@ -190,6 +193,7 @@ async def get_server_config(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get server configuration."""
+    verify_cluster_access(node_name)
     try:
         client = lxd_service.connection_manager.get_client(node_name)
         server_data = client.host_info
@@ -210,6 +214,7 @@ async def get_server_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get server resources."""
+    verify_cluster_access(node_name)
     try:
         return lxd_service.get_node_resources(node_name)
     except Exception as e:

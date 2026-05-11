@@ -2,14 +2,17 @@
 System settings and configuration endpoints.
 """
 
-import time
+import logging
+import math
 import platform
-from datetime import datetime, timedelta
-from fastapi import APIRouter, HTTPException
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Optional, Dict, List, Any
+
 from app.core.config import get_settings
-from fastapi import Depends
 from app.core.dependencies import require_tenant, require_admin, AuthenticatedUser
 
 router = APIRouter(
@@ -124,18 +127,142 @@ async def clear_cache(
 # Container / CGroup Detection Helpers
 # ========================
 
-import logging
-from pathlib import Path
-
 _log = logging.getLogger(__name__)
 
+CGROUP_ROOT = Path("/sys/fs/cgroup")
+CGROUP_UNLIMITED_MEMORY = 1 << 62
 
-def _read_cgroup_file(path: str) -> Optional[str]:
+
+def _read_cgroup_file(path: str | Path) -> Optional[str]:
     """Safely read a cgroup file, return None on error."""
     try:
         return Path(path).read_text().strip()
     except (FileNotFoundError, PermissionError, OSError):
         return None
+
+
+def _parse_proc_cgroup() -> List[Tuple[List[str], str]]:
+    """Parse /proc/self/cgroup into controller/path pairs."""
+    content = _read_cgroup_file("/proc/self/cgroup") or ""
+    entries: List[Tuple[List[str], str]] = []
+
+    for line in content.splitlines():
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+
+        controllers = [item for item in parts[1].split(",") if item]
+        entries.append((controllers, parts[2]))
+
+    return entries
+
+
+def _safe_cgroup_path(root: Path, raw_path: str) -> Path:
+    """Build a cgroup path without allowing proc values to escape root."""
+    parts = [part for part in raw_path.strip("/").split("/") if part not in ("", ".", "..")]
+    return root.joinpath(*parts) if parts else root
+
+
+def _ancestor_files(current: Path, root: Path, filename: str) -> List[Path]:
+    """Return candidate files from current cgroup up to the cgroup root."""
+    candidates: List[Path] = []
+    cursor = current
+
+    while True:
+        candidates.append(cursor / filename)
+        if cursor == root or cursor == cursor.parent:
+            break
+        cursor = cursor.parent
+
+    return candidates
+
+
+def _deduplicate_paths(paths: List[Path]) -> List[Path]:
+    """Preserve path order while removing duplicates."""
+    unique_paths: List[Path] = []
+    seen: set[str] = set()
+
+    for path in paths:
+        path_key = str(path)
+        if path_key in seen:
+            continue
+        seen.add(path_key)
+        unique_paths.append(path)
+
+    return unique_paths
+
+
+def _candidate_cgroup_v2_files(filename: str) -> List[Path]:
+    """Find cgroup v2 files for current and parent scopes."""
+    candidates = [CGROUP_ROOT / filename]
+
+    for controllers, raw_path in _parse_proc_cgroup():
+        if controllers:
+            continue
+        current = _safe_cgroup_path(CGROUP_ROOT, raw_path)
+        candidates.extend(_ancestor_files(current, CGROUP_ROOT, filename))
+
+    return _deduplicate_paths(candidates)
+
+
+def _candidate_cgroup_v1_files(controller: str, filename: str) -> List[Path]:
+    """Find cgroup v1 files for current and parent scopes."""
+    root = CGROUP_ROOT / controller
+    candidates = [root / filename]
+
+    for controllers, raw_path in _parse_proc_cgroup():
+        if controller not in controllers:
+            continue
+        current = _safe_cgroup_path(root, raw_path)
+        candidates.extend(_ancestor_files(current, root, filename))
+
+    return _deduplicate_paths(candidates)
+
+
+def _parse_int(value: Optional[str]) -> Optional[int]:
+    """Parse a positive integer cgroup value."""
+    if not value or value == "max":
+        return None
+
+    try:
+        parsed = int(value)
+    except ValueError:
+        return None
+
+    return parsed if parsed > 0 else None
+
+
+def _parse_memory_limit(value: Optional[str]) -> Optional[int]:
+    """Parse memory limit values and ignore unlimited cgroup sentinels."""
+    limit = _parse_int(value)
+    if limit is None or limit >= CGROUP_UNLIMITED_MEMORY:
+        return None
+    return limit
+
+
+def _select_deployment_memory_scope() -> Tuple[Optional[int], Optional[int]]:
+    """Return the outermost constrained memory scope for nested deployments."""
+    scopes: List[Tuple[int, Optional[int]]] = []
+
+    for limit_path in _candidate_cgroup_v2_files("memory.max"):
+        limit = _parse_memory_limit(_read_cgroup_file(limit_path))
+        if limit is None:
+            continue
+        usage = _parse_int(_read_cgroup_file(limit_path.with_name("memory.current")))
+        scopes.append((limit, usage))
+
+    for limit_path in _candidate_cgroup_v1_files("memory", "memory.limit_in_bytes"):
+        limit = _parse_memory_limit(_read_cgroup_file(limit_path))
+        if limit is None:
+            continue
+        usage = _parse_int(_read_cgroup_file(limit_path.with_name("memory.usage_in_bytes")))
+        scopes.append((limit, usage))
+
+    if not scopes:
+        return None, None
+
+    # note: largest constrained scope matches the deployment instance when Docker runs inside LXD/VMs.
+    return max(scopes, key=lambda item: item[0])
 
 
 def _detect_container() -> Dict[str, Any]:
@@ -177,78 +304,75 @@ def _detect_container() -> Dict[str, Any]:
 
 
 def _get_cgroup_memory_limit() -> Optional[int]:
-    """Read container memory limit from cgroup. Returns bytes or None."""
-    # cgroup v2
-    val = _read_cgroup_file("/sys/fs/cgroup/memory.max")
-    if val and val != "max":
-        try:
-            return int(val)
-        except ValueError:
-            pass
-
-    # cgroup v1
-    val = _read_cgroup_file("/sys/fs/cgroup/memory/memory.limit_in_bytes")
-    if val:
-        try:
-            limit = int(val)
-            # values near PAGE_COUNTER_MAX (2^63-4096 or similar) mean no limit
-            if limit < (1 << 62):
-                return limit
-        except ValueError:
-            pass
-
-    return None
+    """Read deployment memory limit from cgroup. Returns bytes or None."""
+    limit, _usage = _select_deployment_memory_scope()
+    return limit
 
 
 def _get_cgroup_memory_usage() -> Optional[int]:
-    """Read current container memory usage from cgroup. Returns bytes or None."""
-    # cgroup v2
-    val = _read_cgroup_file("/sys/fs/cgroup/memory.current")
-    if val:
-        try:
-            return int(val)
-        except ValueError:
-            pass
+    """Read deployment memory usage from cgroup. Returns bytes or None."""
+    _limit, usage = _select_deployment_memory_scope()
+    if usage is not None:
+        return usage
 
-    # cgroup v1
-    val = _read_cgroup_file("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+    val = _read_cgroup_file(CGROUP_ROOT / "memory.current")
     if val:
-        try:
-            return int(val)
-        except ValueError:
-            pass
+        return _parse_int(val)
 
-    return None
+    val = _read_cgroup_file(CGROUP_ROOT / "memory" / "memory.usage_in_bytes")
+    return _parse_int(val)
+
+
+def _parse_cpu_limit(value: Optional[str]) -> Optional[float]:
+    """Parse cgroup v2 CPU quota as number of CPUs."""
+    if not value:
+        return None
+
+    parts = value.split()
+    if len(parts) != 2 or parts[0] == "max":
+        return None
+
+    try:
+        quota = int(parts[0])
+        period = int(parts[1])
+    except ValueError:
+        return None
+
+    if quota <= 0 or period <= 0:
+        return None
+
+    return quota / period
+
+
+def _parse_cpu_quota(quota_value: Optional[str], period_value: Optional[str]) -> Optional[float]:
+    """Parse cgroup v1 CPU quota as number of CPUs."""
+    quota = _parse_int(quota_value)
+    period = _parse_int(period_value)
+
+    if quota is None or period is None:
+        return None
+
+    return quota / period
 
 
 def _get_cgroup_cpu_limit() -> Optional[float]:
-    """Read container CPU limit from cgroup. Returns number of CPUs (float) or None."""
-    # cgroup v2: /sys/fs/cgroup/cpu.max contains "QUOTA PERIOD" or "max PERIOD"
-    val = _read_cgroup_file("/sys/fs/cgroup/cpu.max")
-    if val:
-        parts = val.split()
-        if len(parts) == 2 and parts[0] != "max":
-            try:
-                quota = int(parts[0])
-                period = int(parts[1])
-                if period > 0:
-                    return quota / period
-            except ValueError:
-                pass
+    """Read deployment CPU limit from cgroup. Returns number of CPUs (float) or None."""
+    limits: List[float] = []
 
-    # cgroup v1
-    quota_str = _read_cgroup_file("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
-    period_str = _read_cgroup_file("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
-    if quota_str and period_str:
-        try:
-            quota = int(quota_str)
-            period = int(period_str)
-            if quota > 0 and period > 0:
-                return quota / period
-        except ValueError:
-            pass
+    for cpu_path in _candidate_cgroup_v2_files("cpu.max"):
+        limit = _parse_cpu_limit(_read_cgroup_file(cpu_path))
+        if limit is not None:
+            limits.append(limit)
 
-    return None
+    for quota_path in _candidate_cgroup_v1_files("cpu", "cpu.cfs_quota_us"):
+        limit = _parse_cpu_quota(
+            _read_cgroup_file(quota_path),
+            _read_cgroup_file(quota_path.with_name("cpu.cfs_period_us")),
+        )
+        if limit is not None:
+            limits.append(limit)
+
+    return max(limits) if limits else None
 
 
 def _deduplicate_disks(disks: list) -> list:
@@ -381,8 +505,8 @@ async def get_system_resource_usage():
     """
     Get real-time system resource usage statistics.
     
-    Container-aware: when running inside Docker/LXC, reports allocated
-    resources (cgroup limits) rather than the host's total resources.
+    Deployment-aware: when running inside nested Docker/LXC, reports the
+    constrained deployment scope instead of leaking bare-metal totals.
     """
     try:
         import psutil
@@ -402,11 +526,12 @@ async def get_system_resource_usage():
             cpu_limit=cgroup_cpu_limit,
         )
 
-        # CPU Information — use cgroup CPU limit if available
+        # CPU Information - use cgroup CPU limit if available
         cpu_freq = psutil.cpu_freq()
         load_avg = psutil.getloadavg() if hasattr(psutil, 'getloadavg') else (None, None, None)
 
-        effective_logical = int(cgroup_cpu_limit) if cgroup_cpu_limit else psutil.cpu_count(logical=True)
+        host_logical = psutil.cpu_count(logical=True) or 1
+        effective_logical = max(1, math.ceil(cgroup_cpu_limit)) if cgroup_cpu_limit else host_logical
         effective_physical = min(
             psutil.cpu_count(logical=False) or effective_logical,
             effective_logical,
@@ -423,14 +548,14 @@ async def get_system_resource_usage():
             load_avg_15m=load_avg[2],
         )
         
-        # Memory Information — use cgroup memory limit if available
+        # Memory Information - use cgroup memory limit if available
         mem = psutil.virtual_memory()
         swap = psutil.swap_memory()
 
-        if cgroup_mem_limit:
-            # containerized: use cgroup values for accurate reporting
+        if cgroup_mem_limit is not None:
+            # Use cgroup values for nested deployment scopes when available.
             effective_total = cgroup_mem_limit
-            effective_used = cgroup_mem_usage if cgroup_mem_usage else mem.used
+            effective_used = cgroup_mem_usage if cgroup_mem_usage is not None else mem.used
             effective_available = max(effective_total - effective_used, 0)
             effective_percent = (effective_used / effective_total * 100) if effective_total > 0 else 0.0
         else:
@@ -449,7 +574,7 @@ async def get_system_resource_usage():
             swap_percent=swap.percent,
         )
         
-        # Disk Information — deduplicate overlapping container mounts
+        # Disk Information - deduplicate overlapping container mounts
         disks = []
         for partition in psutil.disk_partitions(all=False):
             try:

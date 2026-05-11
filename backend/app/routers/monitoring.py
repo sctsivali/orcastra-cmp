@@ -31,6 +31,7 @@ from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
 from app.core.dependencies import require_tenant, get_ws_user
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
+from app.core.tenant_visibility import tenant_acl_active
 
 logger = logging.getLogger(__name__)
 
@@ -542,6 +543,9 @@ async def get_monitoring_dashboard(
                 ))
         
         # Calculate overall percentages
+        if tenant_acl_active():
+            storage_pools_list = []
+
         cpu_usage_percent = round((used_cpu / total_cpu * 100) if total_cpu > 0 else 0, 2)
         memory_usage_percent = round((used_memory / total_memory * 100) if total_memory > 0 else 0, 2)
         storage_usage_percent = round((used_storage / total_storage * 100) if total_storage > 0 else 0, 2)
@@ -853,7 +857,11 @@ async def get_node_metrics(
             raise HTTPException(status_code=500, detail="Node resources not available")
         
         # instance count already fetched in parallel above
-        node_instances = [vm for vm in all_vms if vm.host == node_name]
+        node_instances = [
+            vm for vm in all_vms
+            if vm.host == node_name
+            and check_tenant_permission(vm.host, vm.project or "default", vm.name, "view")
+        ]
         
         result = ClusterMonitoringMetrics(
             node_name=node_name,
@@ -932,6 +940,9 @@ async def get_metrics_history(
     All users read from the global 'scope=all' stream so charts are
     gap-free regardless of individual session activity.
     """
+    if tenant_acl_active():
+        return []
+
     cache = get_cache_manager()
     history_key = "monitoring:history:scope=all"
     history = cache.get("monitoring_history", history_key) or []
@@ -1005,6 +1016,8 @@ async def get_network_metrics(
         interface_stats: Dict[str, Dict[str, int]] = {}
         
         for vm in all_vms:
+            if not check_tenant_permission(vm.host, vm.project or "default", vm.name, "view"):
+                continue
             if vm.status.value == "Running" and vm.resources and vm.resources.network_counters:
                 for iface, counters in vm.resources.network_counters.items():
                     rx = counters.get("bytes_received", 0)

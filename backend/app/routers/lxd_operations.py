@@ -15,7 +15,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -123,6 +123,8 @@ async def list_operations(
 ):
     """List all operations."""
     try:
+        if host:
+            verify_cluster_access(host)
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch operations from all nodes in parallel
@@ -140,6 +142,16 @@ async def list_operations(
                 all_operations.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching operations: {result}")
+
+        all_operations = [
+            operation for operation in all_operations
+            if check_tenant_permission(
+                operation.node_name,
+                operation.project or "default",
+                operation.instance_name or None,
+                "view",
+            )
+        ]
         
         return OperationListResponse(
             total=len(all_operations),

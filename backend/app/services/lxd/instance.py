@@ -218,6 +218,9 @@ class InstanceManager:
                 node_names = self.connection_manager.get_node_names()
         else:
             node_names = self.connection_manager.get_node_names()
+
+        from app.core.org_scope import apply_cluster_filter
+        node_names = apply_cluster_filter(node_names)
         
         if not node_names:
             logger.warning("No nodes found in Vault or connection manager")

@@ -28,6 +28,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const { sidebarCollapsed } = useLayout();
   const { settings } = usePersonalization();
   const pathname = usePathname();
+  const isAuthPage = pathname.startsWith("/auth");
   const isLandingPage = pathname === "/";
   const [mounted, setMounted] = React.useState(false);
   
@@ -51,6 +52,10 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   }, [settings?.branding?.footerText, mounted]);
   
   const appName = settings?.branding?.appName || "Orcastra";
+
+  if (isAuthPage) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="relative flex min-h-[100dvh]">

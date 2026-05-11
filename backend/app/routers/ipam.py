@@ -16,7 +16,7 @@ from app.services.lxd_service import (
 )
 from pydantic import BaseModel, Field
 from app.core.dependencies import require_tenant
-from app.core.org_scope import org_scope_dependency, get_scope_cache_key
+from app.core.org_scope import org_scope_dependency, get_scope_cache_key, verify_cluster_access, check_tenant_permission
 from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,8 @@ async def list_ipam_allocations(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all IPAM allocations. Nodes are queried in parallel with caching."""
+    if host:
+        verify_cluster_access(host)
     # check cache first (120s TTL)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"ipam:list:host={host}:network={network}")
@@ -160,6 +162,16 @@ async def list_ipam_allocations(
                 all_allocations.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"IPAM node query failed: {result}")
+
+        all_allocations = [
+            allocation for allocation in all_allocations
+            if check_tenant_permission(
+                allocation.node,
+                allocation.project or "default",
+                allocation.used_by if allocation.type == "instance" else None,
+                "view",
+            )
+        ]
 
         response = IPAMListResponse(
             total=len(all_allocations),

@@ -17,6 +17,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
@@ -122,6 +123,14 @@ async def list_profiles(
                 all_profiles.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching profiles: {result}")
+
+        if tenant_acl_active():
+            visible_profiles = []
+            for profile in all_profiles:
+                profile.used_by = filter_visible_lxd_references(profile.node, profile.used_by)
+                if profile.used_by:
+                    visible_profiles.append(profile)
+            all_profiles = visible_profiles
         
         # Store in variable first
         response = ProfileListResponse(
@@ -158,13 +167,17 @@ async def get_profile(
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         profile = client.profiles.get(profile_name)
+        used_by = filter_visible_lxd_references(host, profile.used_by or [])
+        if tenant_acl_active() and not used_by:
+            raise HTTPException(status_code=403, detail="Access denied to this profile")
         
         return ProfileInfo(
             name=profile.name,
             description=profile.description or "",
             config=profile.config or {},
             devices=profile.devices or {},
-            used_by=profile.used_by or []
+            used_by=used_by,
+            node=host,
         )
     except Exception as e:
         logger.error(f"Error getting profile {profile_name}: {e}")

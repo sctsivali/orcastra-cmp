@@ -19,6 +19,12 @@ from app.core.dependencies import (
 )
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.services.organization_service import OrganizationService
+from app.services.organization_preferences import (
+    get_org_preferences_payload,
+    get_user_org_preferences_payload,
+    get_user_org_preferences_version,
+    reset_org_preferences_to_defaults,
+)
 
 router = APIRouter(
     prefix="/organizations",
@@ -160,35 +166,12 @@ async def get_my_org_preferences(
     Tenants call this to auto-inherit org branding without knowing the org_id.
     Returns empty settings if user has no org or org has no preferences.
     """
-    from app.models.db_models import OrganizationMember, OrganizationPreferences
-    from sqlalchemy import select
-
-    # find user's first org membership
-    result = await db.execute(
-        select(OrganizationMember)
-        .where(OrganizationMember.user_email == user.email)
-        .order_by(OrganizationMember.joined_at.asc())
-        .limit(1)
-    )
-    membership = result.scalar_one_or_none()
-
-    if not membership:
-        return OrgPreferencesResponse(organization_id=0, settings={})
-
-    prefs_result = await db.execute(
-        select(OrganizationPreferences)
-        .where(OrganizationPreferences.organization_id == membership.organization_id)
-    )
-    prefs = prefs_result.scalar_one_or_none()
-
-    if not prefs:
-        return OrgPreferencesResponse(organization_id=membership.organization_id, settings={})
-
+    payload = await get_user_org_preferences_payload(db, user.email)
     return OrgPreferencesResponse(
-        organization_id=prefs.organization_id,
-        settings=prefs.settings or {},
-        updated_by=prefs.updated_by,
-        updated_at=prefs.updated_at.isoformat() if prefs.updated_at else None,
+        organization_id=payload.organization_id,
+        settings=payload.settings,
+        updated_by=payload.updated_by,
+        updated_at=payload.updated_at,
     )
 
 
@@ -205,29 +188,10 @@ async def get_my_org_preferences_version(
     large base64 images). Clients compare this timestamp to their cached
     version and issue a full fetch only when it differs.
     """
-    from app.models.db_models import OrganizationMember, OrganizationPreferences
-    from sqlalchemy import select
-
-    result = await db.execute(
-        select(OrganizationMember)
-        .where(OrganizationMember.user_email == user.email)
-        .order_by(OrganizationMember.joined_at.asc())
-        .limit(1)
-    )
-    membership = result.scalar_one_or_none()
-
-    if not membership:
-        return OrgPreferencesVersionResponse(organization_id=0, updated_at=None)
-
-    prefs_result = await db.execute(
-        select(OrganizationPreferences.updated_at)
-        .where(OrganizationPreferences.organization_id == membership.organization_id)
-    )
-    row = prefs_result.one_or_none()
-
+    version = await get_user_org_preferences_version(db, user.email)
     return OrgPreferencesVersionResponse(
-        organization_id=membership.organization_id,
-        updated_at=row[0].isoformat() if row and row[0] else None,
+        organization_id=version.organization_id,
+        updated_at=version.updated_at,
     )
 
 
@@ -457,28 +421,18 @@ async def get_org_preferences(
     db: AsyncSession = Depends(get_db),
 ):
     """Get personalization for an organization. Any member can read."""
-    from app.models.db_models import OrganizationPreferences
-    from sqlalchemy import select
-
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
     if not await svc.user_has_access(org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
-    result = await db.execute(
-        select(OrganizationPreferences).where(OrganizationPreferences.organization_id == org_id)
-    )
-    prefs = result.scalar_one_or_none()
-
-    if not prefs:
-        return OrgPreferencesResponse(organization_id=org_id, settings={})
-
+    payload = await get_org_preferences_payload(db, org_id)
     return OrgPreferencesResponse(
-        organization_id=prefs.organization_id,
-        settings=prefs.settings or {},
-        updated_by=prefs.updated_by,
-        updated_at=prefs.updated_at.isoformat() if prefs.updated_at else None,
+        organization_id=payload.organization_id,
+        settings=payload.settings,
+        updated_by=payload.updated_by,
+        updated_at=payload.updated_at,
     )
 
 
@@ -533,20 +487,10 @@ async def reset_org_preferences(
     db: AsyncSession = Depends(get_db),
 ):
     """Reset organization personalization to defaults. Partner (own org) or Admin."""
-    from app.models.db_models import OrganizationPreferences
-    from sqlalchemy import select
-
     svc = OrganizationService(db)
     role = _get_user_role(user)
 
     if not await svc.user_has_access(org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
 
-    result = await db.execute(
-        select(OrganizationPreferences).where(OrganizationPreferences.organization_id == org_id)
-    )
-    prefs = result.scalar_one_or_none()
-
-    if prefs:
-        await db.delete(prefs)
-        await db.commit()
+    await reset_org_preferences_to_defaults(db, org_id, user.email)

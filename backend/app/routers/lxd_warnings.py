@@ -14,7 +14,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission, apply_cluster_filter
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,8 @@ async def list_warnings(
 ):
     """List all warnings."""
     try:
+        if host:
+            verify_cluster_access(host)
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch warnings from all nodes in parallel
@@ -122,6 +124,11 @@ async def list_warnings(
                 all_warnings.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching warnings: {result}")
+
+        all_warnings = [
+            warning for warning in all_warnings
+            if check_tenant_permission(warning.source_node, warning.project or "default", None, "view")
+        ]
         
         return WarningListResponse(
             total=len(all_warnings),
@@ -146,6 +153,7 @@ async def get_warning(
 ):
     """Get details for a specific warning."""
     try:
+        verify_cluster_access(host)
         client = lxd_service.connection_manager.get_client(host)
         warning_response = client.api.warnings[warning_uuid].get(timeout=(5, 30))
         
@@ -155,6 +163,8 @@ async def get_warning(
             raw_location = warning_data.get('location', '')
             location = raw_location if raw_location and raw_location.lower() != "none" else host
             project = warning_data.get('project', '') or 'default'
+            if not check_tenant_permission(host, project, None, "view"):
+                raise HTTPException(status_code=403, detail="Access denied to this warning")
             
             return WarningInfo(
                 uuid=warning_data.get('uuid', ''),
@@ -235,6 +245,11 @@ async def get_all_system_warnings(
         for result in results:
             if isinstance(result, list):
                 lxd_warnings.extend(result)
+
+        lxd_warnings = [
+            warning for warning in lxd_warnings
+            if check_tenant_permission(warning.source_node, warning.project or "default", None, "view")
+        ]
         
         # Get certificate and node warnings from cert_manager
         cert_warnings = []
@@ -259,7 +274,7 @@ async def get_all_system_warnings(
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                cluster_ids = cert_manager.list_clusters(use_cache=False)
+                cluster_ids = apply_cluster_filter(cert_manager.list_clusters(use_cache=False))
                 
                 for cluster_id in cluster_ids:
                     try:

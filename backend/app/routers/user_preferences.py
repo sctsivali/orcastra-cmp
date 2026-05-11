@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 import logging
 import json
 import base64
+import ipaddress
+import socket
 import httpx
 
 from app.core.database import get_db
@@ -370,6 +372,41 @@ async def reset_user_preferences(
 # Image Proxy - fetch cross-origin images server-side
 # ============================================
 
+# important: SSRF protection - block requests to private/internal network ranges
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),   # Carrier-grade NAT (Tailscale range)
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / cloud metadata
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+_BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
+
+
+def _is_ssrf_safe(url: str) -> bool:
+    """Return False if the URL resolves to a private/internal IP address."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        if not host:
+            return False
+        if host.lower() in _BLOCKED_HOSTNAMES:
+            return False
+        resolved = socket.getaddrinfo(host, None)
+        for _, _, _, _, sockaddr in resolved:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if any(ip in net for net in _PRIVATE_NETWORKS):
+                return False
+        return True
+    except Exception:
+        return False
+
+
 class ProxyImageRequest(BaseModel):
     """Request to proxy-fetch an image from a URL."""
     url: str = Field(..., description="URL of the image to fetch")
@@ -393,6 +430,9 @@ async def proxy_image(
     url = request.url.strip()
     if not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
+
+    if not _is_ssrf_safe(url):
+        raise HTTPException(status_code=400, detail="URL points to a private or disallowed address")
 
     # limit max image size to 2MB
     max_size = 2 * 1024 * 1024

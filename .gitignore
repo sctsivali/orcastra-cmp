@@ -67,7 +67,9 @@ infrastructure/
 backup-files/
 personal-docs/
 Manual Deployment/
+tasks/
 scripts/
 config/
 backup/
+CHANGELOG.md
 .github/instructions/

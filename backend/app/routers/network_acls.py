@@ -15,6 +15,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.services.activity_logger import get_activity_logger
 from pydantic import BaseModel, Field
 
@@ -97,6 +98,8 @@ async def list_network_acls(
 ):
     """List all network ACLs."""
     try:
+        if host:
+            verify_cluster_access(host)
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
         # Fetch ACLs from all nodes in parallel
@@ -114,6 +117,14 @@ async def list_network_acls(
                 all_acls.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching network ACLs: {result}")
+
+        if tenant_acl_active():
+            visible_acls = []
+            for acl in all_acls:
+                acl.used_by = filter_visible_lxd_references(acl.node, acl.used_by)
+                if acl.used_by:
+                    visible_acls.append(acl)
+            all_acls = visible_acls
         
         return NetworkACLListResponse(
             total=len(all_acls),
@@ -138,18 +149,23 @@ async def get_network_acl(
 ):
     """Get details for a specific network ACL."""
     try:
+        verify_cluster_access(host)
         client = lxd_service.connection_manager.get_client(host)
         response = client.api.get(f'/1.0/network-acls/{acl_name}')
         
         if response.status_code == 200:
             acl_data = response.json().get('metadata', {})
+            used_by = filter_visible_lxd_references(host, acl_data.get('used_by', []))
+            if tenant_acl_active() and not used_by:
+                raise HTTPException(status_code=403, detail="Access denied to this network ACL")
             return NetworkACLInfo(
                 name=acl_data.get('name', ''),
                 description=acl_data.get('description', ''),
                 ingress=acl_data.get('ingress', []),
                 egress=acl_data.get('egress', []),
                 config=acl_data.get('config', {}),
-                used_by=acl_data.get('used_by', [])
+                used_by=used_by,
+                node=host,
             )
         else:
             raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")

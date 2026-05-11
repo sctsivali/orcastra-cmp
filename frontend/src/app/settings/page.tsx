@@ -14,12 +14,14 @@ import { PersonalizationSettings } from "@/components/personalization-settings";
 import { IntegrationsSettings } from "@/components/integrations-settings";
 import { UserGroupsSettings } from "@/components/user-groups-settings";
 import { usePermissions } from "@/hooks/use-permissions";
-import { getAccessToken } from "@/lib/api";
+import { api } from "@/lib/api";
+import { Role } from "@/types/rbac";
 
 export default function SettingsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { isAdmin, isPartner } = usePermissions();
+  const { isPartner, roles } = usePermissions();
+  const managesOrganizationBranding = roles.includes(Role.PARTNER);
   const [isClearing, setIsClearing] = useState(false);
   const [cleared, setCleared] = useState(false);
 
@@ -30,12 +32,7 @@ export default function SettingsPage() {
     try {
       // Clear backend cache (Redis + in-memory)
       try {
-        await fetch('/api/system/cache/clear', {
-          method: 'POST',
-          headers: {
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-          },
-        });
+        await api.system.clearCache();
       } catch (backendError) {
         console.warn("Backend cache clear failed (may be unavailable):", backendError);
       }
@@ -201,13 +198,13 @@ export default function SettingsPage() {
         </TabsContent>
         )}
 
-        {/* Personalization Tab - Admin: personal, Partner: org-level branding */}
+        {/* Personalization Tab - Partner role edits org branding, admin-only edits personal prefs */}
         {isPartner && (
         <TabsContent value="personalization">
-          {isAdmin ? (
-            <PersonalizationSettings />
-          ) : (
+          {managesOrganizationBranding ? (
             <OrgPersonalizationSettings />
+          ) : (
+            <PersonalizationSettings />
           )}
         </TabsContent>
         )}

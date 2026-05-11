@@ -4,7 +4,7 @@ Provides endpoints for listing available images on each node.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import List
+from typing import Dict, List, Optional, Set
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -22,7 +22,8 @@ from app.services.lxd_service import (
 )
 from app.core.cache import get_cache_manager
 from app.core.dependencies import require_tenant
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
+from app.core.tenant_visibility import tenant_acl_active
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,43 @@ async def _fetch_images_for_node(lxd_service: LXDService, node_name: str) -> Ima
         )
 
 
+
+async def _allowed_image_fingerprints_by_host(
+    lxd_service: LXDService,
+) -> Optional[Dict[str, Set[str]]]:
+    """Return image fingerprints used by tenant-visible instances."""
+    if not tenant_acl_active():
+        return None
+
+    all_vms, _ = await lxd_service.list_all_vms()
+    allowed: Dict[str, Set[str]] = {}
+    for vm in all_vms:
+        if not check_tenant_permission(vm.host, vm.project or "default", vm.name, "view"):
+            continue
+        config = vm.config or {}
+        fingerprint = config.get("volatile.base_image") or config.get("image.fingerprint")
+        if fingerprint:
+            allowed.setdefault(vm.host, set()).add(fingerprint)
+    return allowed
+
+
+def _filter_images_for_tenant(
+    response: ImageListResponse,
+    allowed: Optional[Dict[str, Set[str]]],
+) -> ImageListResponse:
+    if allowed is None:
+        return response
+    host_fingerprints = allowed.get(response.host, set())
+    images = [
+        image for image in response.images
+        if any(
+            image.fingerprint.startswith(fingerprint) or fingerprint.startswith(image.fingerprint)
+            for fingerprint in host_fingerprints
+        )
+    ]
+    return ImageListResponse(host=response.host, images=images, total=len(images))
+
+
 @router.get(
     "",
     response_model=List[ImageListResponse],
@@ -79,6 +117,7 @@ async def list_all_images(
     
     # Fetch images from all nodes in parallel
     node_names = lxd_service.get_node_names()
+    allowed_images = await _allowed_image_fingerprints_by_host(lxd_service)
     tasks = [_fetch_images_for_node(lxd_service, node_name) for node_name in node_names]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
@@ -93,7 +132,7 @@ async def list_all_images(
                 total=0,
             ))
         else:
-            response.append(result)
+            response.append(_filter_images_for_tenant(result, allowed_images))
     
     # Cache as dict for 120 seconds
     cache_data = [item.model_dump() for item in response]
@@ -130,12 +169,10 @@ async def list_node_images(
             )
         
         images = await lxd_service.list_images(host)
+        result = ImageListResponse(host=host, images=images, total=len(images))
+        allowed_images = await _allowed_image_fingerprints_by_host(lxd_service)
         
-        return ImageListResponse(
-            host=host,
-            images=images,
-            total=len(images),
-        )
+        return _filter_images_for_tenant(result, allowed_images)
         
     except HTTPException:
         raise

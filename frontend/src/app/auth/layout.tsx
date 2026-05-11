@@ -1,8 +1,8 @@
 /**
  * Auth Layout
  *
- * Simple layout for authentication pages (signin, error)
- * that doesn't include the main navigation.
+ * Simple layout for authentication pages (signin, error).
+ * The global app shell suppresses sidebar/header/footer for /auth/* routes.
  */
 
 import { ReactNode } from "react";

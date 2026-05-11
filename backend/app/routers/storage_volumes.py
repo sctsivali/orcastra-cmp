@@ -15,6 +15,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
@@ -134,6 +135,14 @@ async def list_storage_volumes(
                 all_volumes.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching storage volumes: {result}")
+
+        if tenant_acl_active():
+            visible_volumes = []
+            for volume in all_volumes:
+                volume.used_by = filter_visible_lxd_references(volume.node, volume.used_by)
+                if volume.used_by:
+                    visible_volumes.append(volume)
+            all_volumes = visible_volumes
         
         # Store in variable first
         response = StorageVolumeListResponse(
@@ -171,6 +180,9 @@ async def get_storage_volume(
         client = lxd_service.connection_manager.get_client(host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
+        used_by = filter_visible_lxd_references(host, volume.used_by or [])
+        if tenant_acl_active() and not used_by:
+            raise HTTPException(status_code=403, detail="Access denied to this storage volume")
         
         return StorageVolumeInfo(
             name=volume.name,
@@ -178,8 +190,9 @@ async def get_storage_volume(
             pool=pool,
             description=getattr(volume, 'description', '') or "",
             config=volume.config or {},
-            used_by=volume.used_by or [],
-            content_type=getattr(volume, 'content_type', '')
+            used_by=used_by,
+            content_type=getattr(volume, 'content_type', ''),
+            node=host,
         )
     except Exception as e:
         logger.error(f"Error getting storage volume {volume_name}: {e}")

@@ -23,7 +23,8 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 from app.core.dependencies import require_tenant, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, get_scope_cache_key
+from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_cluster_filter, get_tenant_acl
+from app.core.tenant_visibility import tenant_acl_has_permission
 
 router = APIRouter(
     prefix="/regions",
@@ -195,7 +196,7 @@ async def get_regions_overview(
         )
         
         # Get org-scoped cluster list
-        cluster_ids = cert_manager.list_clusters()
+        cluster_ids = apply_cluster_filter(cert_manager.list_clusters())
 
         if not cluster_ids:
             response = RegionsOverviewResponse(
@@ -204,6 +205,8 @@ async def get_regions_overview(
             )
             cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
             return response
+
+        tenant_acl = get_tenant_acl()
 
         # process single cluster (runs in thread pool for parallelism)
         def _process_cluster(cluster_id: str) -> Optional[Tuple[str, Dict, RegionNodeInfo, int, int]]:
@@ -303,8 +306,21 @@ async def get_regions_overview(
                             
                             try:
                                 instances = client.instances.all()
-                                instance_count = len(instances)
-                                instance_running = sum(1 for i in instances if i.status == "Running")
+                                visible_instances = [
+                                    instance for instance in instances
+                                    if tenant_acl_has_permission(
+                                        tenant_acl,
+                                        cluster_id,
+                                        getattr(instance, "project", "default") or "default",
+                                        instance.name,
+                                        "view",
+                                    )
+                                ]
+                                instance_count = len(visible_instances)
+                                instance_running = sum(
+                                    1 for instance in visible_instances
+                                    if instance.status == "Running"
+                                )
                             except Exception:
                                 pass
                             

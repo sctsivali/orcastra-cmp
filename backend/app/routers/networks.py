@@ -16,6 +16,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
@@ -125,6 +126,14 @@ async def list_networks(
                 all_networks.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching networks: {result}")
+
+        if tenant_acl_active():
+            visible_networks = []
+            for network in all_networks:
+                network.used_by = filter_visible_lxd_references(network.node, network.used_by)
+                if network.used_by:
+                    visible_networks.append(network)
+            all_networks = visible_networks
         
         # Store in variable first
         response = NetworkListResponse(
@@ -161,6 +170,9 @@ async def get_network(
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         network = client.networks.get(network_name)
+        used_by = filter_visible_lxd_references(host, network.used_by or [])
+        if tenant_acl_active() and not used_by:
+            raise HTTPException(status_code=403, detail="Access denied to this network")
         
         return NetworkInfo(
             name=network.name,
@@ -168,9 +180,9 @@ async def get_network(
             type=network.type,
             managed=network.managed,
             config=network.config or {},
-            used_by=network.used_by or [],
+            used_by=used_by,
             status=getattr(network, 'status', ''),
-                        node=node_name
+            node=host
         )
     except Exception as e:
         logger.error(f"Error getting network {network_name}: {e}")
