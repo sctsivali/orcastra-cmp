@@ -6,6 +6,7 @@ Includes helpers for parsing status, extracting IPs, and finding instances.
 import logging
 from typing import List, Tuple, Optional
 import pylxd
+from pylxd import exceptions as pylxd_exceptions
 
 from app.models.schemas import VMStatus
 
@@ -79,18 +80,24 @@ def extract_ip_addresses_from_state(state_data: dict) -> List[str]:
     return ip_addresses
 
 
-def find_instance_in_projects(client: pylxd.Client, name: str) -> Tuple[Optional[object], Optional[str]]:
+def find_instance_in_projects(
+    client: pylxd.Client,
+    name: str,
+    project: Optional[str] = None,
+) -> Tuple[Optional[object], Optional[str]]:
     """
     Find an instance by name across all projects.
     Returns tuple of (instance, project_name) or (None, None) if not found.
     """
-    try:
-        # Get all projects
-        projects = client.projects.all()
-        project_names = [p.name for p in projects]
-    except Exception as e:
-        logger.warning(f"Could not list projects, using default: {e}")
-        project_names = ["default"]
+    if project:
+        project_names = [project]
+    else:
+        try:
+            projects = client.projects.all()
+            project_names = [p.name for p in projects]
+        except Exception as e:
+            logger.warning(f"Could not list projects, using default: {e}")
+            project_names = ["default"]
     
     # Search in each project
     for project_name in project_names:
@@ -112,6 +119,50 @@ def find_instance_in_projects(client: pylxd.Client, name: str) -> Tuple[Optional
             continue
     
     return None, None
+
+
+def wait_for_lxd_operation(
+    client: pylxd.Client,
+    response: object,
+    timeout: Optional[int] = None,
+) -> None:
+    """Wait for an async LXD operation response to complete."""
+    try:
+        response_data = response.json()
+    except Exception:
+        return
+
+    if not isinstance(response_data, dict):
+        return
+
+    operation_id = None
+    operation_path = response_data.get("operation")
+    metadata = response_data.get("metadata")
+
+    if isinstance(operation_path, str) and operation_path:
+        operation_id = operation_path.rstrip("/").split("/")[-1]
+    elif isinstance(metadata, dict):
+        operation_id = metadata.get("id")
+
+    if not operation_id:
+        return
+
+    if timeout is not None:
+        wait_response = client.api.operations[operation_id].wait.get(
+            params={"timeout": timeout}
+        )
+    else:
+        wait_response = client.api.operations[operation_id].wait.get()
+
+    try:
+        wait_metadata = wait_response.json().get("metadata", {})
+    except Exception:
+        return
+
+    status = wait_metadata.get("status") if isinstance(wait_metadata, dict) else None
+    err = wait_metadata.get("err") if isinstance(wait_metadata, dict) else None
+    if err or (status and status not in {"Success", "Done"}):
+        raise pylxd_exceptions.LXDAPIException(wait_response)
 
 
 class InstanceWrapper:
@@ -137,28 +188,36 @@ class InstanceWrapper:
     
     def start(self, wait=True):
         """Start the instance."""
-        self._client.api.instances[self.name].state.put(
+        response = self._client.api.instances[self.name].state.put(
             json={'action': 'start'},
             params={'project': self._project}
         )
+        if wait:
+            wait_for_lxd_operation(self._client, response)
     
     def stop(self, force=False, wait=True, timeout=30):
         """Stop the instance."""
-        self._client.api.instances[self.name].state.put(
+        response = self._client.api.instances[self.name].state.put(
             json={'action': 'stop', 'force': force, 'timeout': timeout},
             params={'project': self._project}
         )
+        if wait:
+            wait_for_lxd_operation(self._client, response, timeout=timeout)
     
     def restart(self, force=False, wait=True, timeout=30):
         """Restart the instance."""
-        self._client.api.instances[self.name].state.put(
+        response = self._client.api.instances[self.name].state.put(
             json={'action': 'restart', 'force': force, 'timeout': timeout},
             params={'project': self._project}
         )
+        if wait:
+            wait_for_lxd_operation(self._client, response, timeout=timeout)
     
     def delete(self, wait=True):
         """Delete the instance."""
-        self._client.api.instances[self.name].delete(params={'project': self._project})
+        response = self._client.api.instances[self.name].delete(params={'project': self._project})
+        if wait:
+            wait_for_lxd_operation(self._client, response)
     
     def sync(self):
         """Sync instance data from LXD."""

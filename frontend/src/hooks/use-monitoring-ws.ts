@@ -6,7 +6,9 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { useSession } from "next-auth/react";
 import { getAccessToken } from "@/lib/api";
+import { Role, resolveRoles } from "@/types/rbac";
 import type { MonitoringDashboardResponse } from "@/types";
 
 const WS_RECONNECT_BASE_MS = 2000;
@@ -21,13 +23,20 @@ const WS_RECONNECT_MAX_MS = 30000;
  */
 export function useMonitoringWebSocket(enabled: boolean = true) {
   const queryClient = useQueryClient();
+  const { data: session } = useSession();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
   const attemptRef = useRef(0);
   const [connected, setConnected] = useState(false);
 
+  const user = session?.user as any;
+  const groups = Array.isArray(user?.groups) ? user.groups : [];
+  const roles = resolveRoles(groups);
+  const isAdmin = roles.includes(Role.ADMIN);
+  const scopeKey = `${user?.id ?? user?.email ?? "anonymous"}:${[...groups].sort().join(",")}`;
+
   const connect = useCallback(() => {
-    if (!enabled) return;
+    if (!enabled || !isAdmin) return;
 
     // Build WS URL from NEXT_PUBLIC_API_URL (direct backend connection for WebSocket)
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
@@ -60,7 +69,7 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
         try {
           const data: MonitoringDashboardResponse = JSON.parse(event.data);
           // Inject into React Query cache - all useMonitoringDashboard consumers update instantly
-          queryClient.setQueryData(["monitoring", "dashboard"], data);
+          queryClient.setQueryData(["monitoring", "dashboard", scopeKey], data);
         } catch {
           // ignore malformed messages
         }
@@ -78,17 +87,17 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
       scheduleReconnect();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, queryClient]);
+  }, [enabled, isAdmin, queryClient, scopeKey]);
 
   const scheduleReconnect = useCallback(() => {
-    if (!enabled) return;
+    if (!enabled || !isAdmin) return;
     const delay = Math.min(
       WS_RECONNECT_BASE_MS * 2 ** attemptRef.current,
       WS_RECONNECT_MAX_MS,
     );
     attemptRef.current += 1;
     reconnectTimer.current = setTimeout(connect, delay);
-  }, [enabled, connect]);
+  }, [enabled, isAdmin, connect]);
 
   useEffect(() => {
     connect();

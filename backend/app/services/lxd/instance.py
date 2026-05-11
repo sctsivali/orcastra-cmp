@@ -408,7 +408,13 @@ class InstanceManager:
             raise LXDOperationError(f"Failed to get VM: {str(e)}")
     
     @audit_operation("lxd.instance.start", "instance")
-    async def start_vm(self, name: str, host: str, force: bool = False) -> VMInfo:
+    async def start_vm(
+        self,
+        name: str,
+        host: str,
+        force: bool = False,
+        project: Optional[str] = None,
+    ) -> VMInfo:
         """Start a VM (searches all projects)."""
         try:
             client = self._get_client_with_reconnect(host)
@@ -416,7 +422,7 @@ class InstanceManager:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
             
-            instance, project_name = find_instance_in_projects(client, name)
+            instance, project_name = find_instance_in_projects(client, name, project)
             
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
@@ -449,7 +455,8 @@ class InstanceManager:
         name: str, 
         host: str, 
         force: bool = False,
-        timeout: int = 30
+        timeout: int = 30,
+        project: Optional[str] = None,
     ) -> VMInfo:
         """Stop a VM (searches all projects)."""
         try:
@@ -458,7 +465,7 @@ class InstanceManager:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
             
-            instance, project_name = find_instance_in_projects(client, name)
+            instance, project_name = find_instance_in_projects(client, name, project)
             
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
@@ -486,7 +493,8 @@ class InstanceManager:
         name: str, 
         host: str, 
         force: bool = False,
-        timeout: int = 30
+        timeout: int = 30,
+        project: Optional[str] = None,
     ) -> VMInfo:
         """Restart a VM (searches all projects)."""
         try:
@@ -495,7 +503,7 @@ class InstanceManager:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
             
-            instance, project_name = find_instance_in_projects(client, name)
+            instance, project_name = find_instance_in_projects(client, name, project)
             
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
@@ -526,7 +534,8 @@ class InstanceManager:
         self, 
         name: str, 
         host: str, 
-        force: bool = False
+        force: bool = False,
+        project: Optional[str] = None,
     ) -> bool:
         """Delete a VM (searches all projects)."""
         try:
@@ -534,7 +543,7 @@ class InstanceManager:
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             
-            instance, project_name = find_instance_in_projects(client, name)
+            instance, project_name = find_instance_in_projects(client, name, project)
             
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")

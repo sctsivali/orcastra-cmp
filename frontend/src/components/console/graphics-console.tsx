@@ -1022,10 +1022,15 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
 
       if (status === 'error') {
         return (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-zinc-950 z-10 px-6 text-center">
             <AlertCircle className="h-8 w-8 text-red-400" />
-            <p className="text-sm text-white/70">{errorMessage || 'Connection failed'}</p>
-            <Button variant="outline" size="sm" onClick={reconnect} className="text-white border-white/30 hover:bg-white/10">
+            <p className="max-w-lg text-sm font-medium leading-6 text-zinc-100">{errorMessage || 'Connection failed'}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={reconnect}
+              className="border-red-400/50 bg-red-500/15 text-red-50 hover:bg-red-500/25 hover:text-white focus-visible:ring-red-400"
+            >
               <RefreshCw className="h-4 w-4 mr-2" />
               Reconnect
             </Button>
@@ -1048,13 +1053,18 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
 
       if (status === 'disconnected') {
         return (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
+          <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-zinc-950 z-10 px-6 text-center">
             <div className="relative">
-              <Monitor className="h-12 w-12 text-white/50" />
-              <WifiOff className="h-4 w-4 text-white/50 absolute -top-1 -right-1" />
+              <Monitor className="h-12 w-12 text-zinc-400" />
+              <WifiOff className="h-4 w-4 text-red-300 absolute -top-1 -right-1" />
             </div>
-            <p className="text-sm text-white/70">Disconnected from {instanceName}</p>
-            <Button variant="outline" size="sm" onClick={reconnect} className="text-white border-white/30 hover:bg-white/10">
+            <p className="max-w-lg text-sm font-medium leading-6 text-zinc-100">Disconnected from {instanceName}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={reconnect}
+              className="border-white/25 bg-white/10 text-white hover:bg-white/20 hover:text-white focus-visible:ring-white/40"
+            >
               <RefreshCw className="h-4 w-4 mr-2" />
               Reconnect
             </Button>

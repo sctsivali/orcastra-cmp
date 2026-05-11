@@ -237,38 +237,47 @@ class LXDService:
         """Get a specific VM by name and host (searches all projects)."""
         return await self.instance_manager.get_vm(name, host)
     
-    async def start_vm(self, name: str, host: str, force: bool = False) -> VMInfo:
+    async def start_vm(
+        self,
+        name: str,
+        host: str,
+        force: bool = False,
+        project: Optional[str] = None,
+    ) -> VMInfo:
         """Start a VM (searches all projects)."""
-        return await self.instance_manager.start_vm(name, host, force)
+        return await self.instance_manager.start_vm(name, host, force, project)
     
     async def stop_vm(
         self, 
         name: str, 
         host: str, 
         force: bool = False,
-        timeout: int = 30
+        timeout: int = 30,
+        project: Optional[str] = None,
     ) -> VMInfo:
         """Stop a VM (searches all projects)."""
-        return await self.instance_manager.stop_vm(name, host, force, timeout)
+        return await self.instance_manager.stop_vm(name, host, force, timeout, project)
     
     async def restart_vm(
         self, 
         name: str, 
         host: str, 
         force: bool = False,
-        timeout: int = 30
+        timeout: int = 30,
+        project: Optional[str] = None,
     ) -> VMInfo:
         """Restart a VM (searches all projects)."""
-        return await self.instance_manager.restart_vm(name, host, force, timeout)
+        return await self.instance_manager.restart_vm(name, host, force, timeout, project)
     
     async def delete_vm(
         self, 
         name: str, 
         host: str, 
-        force: bool = False
+        force: bool = False,
+        project: Optional[str] = None,
     ) -> bool:
         """Delete a VM (searches all projects)."""
-        return await self.instance_manager.delete_vm(name, host, force)
+        return await self.instance_manager.delete_vm(name, host, force, project)
     
     async def create_vm(
         self,

@@ -56,7 +56,7 @@ _executor = ThreadPoolExecutor(max_workers=10)
 # In-memory storage for previous CPU samples (for delta calculation)
 _previous_cpu_samples: Dict[str, Dict[str, Any]] = {}
 _previous_sample_time: float = 0
-_last_history_store_time: float = 0  # Track when we last stored to history
+_last_history_store_times: Dict[str, float] = {}  # Track history writes per scope
 _history_min_interval: float = 4.0  # Minimum seconds between history stores
 
 # Lock for thread-safe CPU sample access
@@ -248,6 +248,59 @@ def _calculate_cpu_percentage(
     return min(max(cpu_percent, 0.0), 100.0)
 
 
+def _monitoring_history_key(scope_key: str) -> str:
+    """Map a dashboard scope key to its matching history cache key."""
+    if scope_key.startswith("dashboard:"):
+        return f"monitoring:history:{scope_key.split(':', 1)[1]}"
+    return f"monitoring:history:{scope_key}"
+
+
+def _build_history_point(
+    nodes_metrics: List[ClusterMonitoringMetrics],
+    instance_metrics: List[Dict[str, Any]],
+    total_memory: int,
+    storage_usage_percent: float,
+    running_instances: int,
+) -> Dict[str, Any]:
+    """Build a history point from already scoped dashboard metrics."""
+    total_instance_cpu_percent = sum(m.get('cpu_percent', 0) for m in instance_metrics)
+    avg_instance_cpu_percent = total_instance_cpu_percent / len(instance_metrics) if instance_metrics else 0
+    total_instance_memory = sum(m.get('memory_usage', 0) for m in instance_metrics)
+    instance_memory_percent = (total_instance_memory / total_memory * 100) if total_memory > 0 else 0
+
+    per_node_metrics = {}
+    for node_metric in nodes_metrics:
+        node_name = node_metric.node_name
+        node_instances = [m for m in instance_metrics if m.get('host') == node_name]
+        node_cpu_total = sum(m.get('cpu_percent', 0) for m in node_instances)
+        node_cpu_avg = node_cpu_total / len(node_instances) if node_instances else 0
+        node_memory_total = sum(m.get('memory_usage', 0) for m in node_instances)
+        node_memory_percent = (
+            (node_memory_total / node_metric.memory_total_bytes * 100)
+            if node_metric.memory_total_bytes > 0 else 0
+        )
+        per_node_metrics[node_name] = {
+            "cpu_usage_percent": round(node_cpu_avg, 2),
+            "memory_usage_percent": round(node_memory_percent, 2),
+            "storage_usage_percent": node_metric.storage_usage_percent,
+            "network_rx_bytes": sum(m.get('network_rx', 0) for m in node_instances),
+            "network_tx_bytes": sum(m.get('network_tx', 0) for m in node_instances),
+            "running_instances": len(node_instances),
+        }
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "cpu_usage_percent": round(avg_instance_cpu_percent, 2),
+        "memory_usage_percent": round(instance_memory_percent, 2),
+        "storage_usage_percent": storage_usage_percent,
+        "network_rx_bytes": sum(m.get('network_rx', 0) for m in instance_metrics),
+        "network_tx_bytes": sum(m.get('network_tx', 0) for m in instance_metrics),
+        "disk_io_bytes": 0,
+        "running_instances": running_instances,
+        "nodes": per_node_metrics,
+    }
+
+
 async def _get_running_instance_metrics(
     lxd_service: LXDService, 
     running_vms: List[Any],
@@ -292,7 +345,7 @@ async def _get_running_instance_metrics(
         host = vm.host
         if host not in instances_by_host_final:
             instances_by_host_final[host] = []
-        project = vm.config.get('project', 'default') if vm.config else 'default'
+        project = vm.project or (vm.config.get('project', 'default') if vm.config else 'default')
         # Get CPU count from config if available
         cpu_count = 1
         if vm.config:
@@ -331,7 +384,7 @@ async def _get_running_instance_metrics(
         for i, result in enumerate(results):
             if isinstance(result, dict):
                 # Calculate real-time CPU percentage
-                instance_key = f"{result['host']}:{result['name']}"
+                instance_key = f"{result['host']}:{result.get('project', 'default')}:{result['name']}"
                 cpu_count = instance_info[i][2] if i < len(instance_info) else 1
                 cpu_percent = _calculate_cpu_percentage(
                     instance_key,
@@ -571,7 +624,15 @@ async def get_monitoring_dashboard(
         instance_summaries: List[InstanceMonitoringSummary] = []
         for metrics in instance_metrics:
             # Find the VM info for type
-            vm_info = next((vm for vm in running_vms if vm.name == metrics['name'] and vm.host == metrics['host']), None)
+            vm_info = next(
+                (
+                    vm for vm in running_vms
+                    if vm.name == metrics['name']
+                    and vm.host == metrics['host']
+                    and (vm.project or "default") == metrics.get('project', 'default')
+                ),
+                None,
+            )
             vm_type = vm_info.type if vm_info else "container"
             
             instance_summaries.append(InstanceMonitoringSummary(
@@ -713,62 +774,27 @@ async def get_monitoring_dashboard(
             collection_time_ms=round(elapsed_time * 1000, 2),
         )
         
-        # Store metrics in history for charts (append to rolling buffer)
-        # Only write from admin/background scope (scope=all) to ensure continuous
-        # history without gaps. Scoped user requests read from this same key.
-        # This fixes the issue where history had gaps when users navigated away,
-        # because user-scoped history was only written during active sessions.
-        global _last_history_store_time
+        # Store metrics in history for charts (append to rolling buffer).
+        # Each org/tenant ACL gets its own history stream so charts render
+        # without exposing global/background collector data.
+        global _last_history_store_times
         current_time = time.time()
+        history_key = _monitoring_history_key(scope_key)
+        last_store_time = _last_history_store_times.get(history_key, 0)
         
-        if scope_key == "dashboard:scope=all" and current_time - _last_history_store_time >= _history_min_interval:
+        if current_time - last_store_time >= _history_min_interval:
             try:
-                _last_history_store_time = current_time
+                _last_history_store_times[history_key] = current_time
                 
                 cache = get_cache_manager()
-                history_key = "monitoring:history:scope=all"
                 history = cache.get("monitoring_history", history_key) or []
-                
-                # Calculate aggregate real-time CPU usage from all instances
-                # This gives us actual CPU activity, not just allocation
-                total_instance_cpu_percent = sum(m.get('cpu_percent', 0) for m in instance_metrics)
-                avg_instance_cpu_percent = total_instance_cpu_percent / len(instance_metrics) if instance_metrics else 0
-                
-                # Calculate aggregate memory usage from instances (as % of total cluster memory)
-                total_instance_memory = sum(m.get('memory_usage', 0) for m in instance_metrics)
-                instance_memory_percent = (total_instance_memory / total_memory * 100) if total_memory > 0 else 0
-                
-                # Build per-node metrics for the history point
-                per_node_metrics = {}
-                for node_metric in nodes_metrics:
-                    node_name = node_metric.node_name
-                    # Get instances for this node
-                    node_instances = [m for m in instance_metrics if m.get('host') == node_name]
-                    node_cpu_total = sum(m.get('cpu_percent', 0) for m in node_instances)
-                    node_cpu_avg = node_cpu_total / len(node_instances) if node_instances else 0
-                    node_memory_total = sum(m.get('memory_usage', 0) for m in node_instances)
-                    node_memory_percent = (node_memory_total / node_metric.memory_total_bytes * 100) if node_metric.memory_total_bytes > 0 else 0
-                    
-                    per_node_metrics[node_name] = {
-                        "cpu_usage_percent": round(node_cpu_avg, 2),
-                        "memory_usage_percent": round(node_memory_percent, 2),
-                        "storage_usage_percent": node_metric.storage_usage_percent,
-                        "network_rx_bytes": sum(m.get('network_rx', 0) for m in node_instances),
-                        "network_tx_bytes": sum(m.get('network_tx', 0) for m in node_instances),
-                        "running_instances": len([m for m in node_instances]),
-                    }
-            
-                new_point = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "cpu_usage_percent": round(avg_instance_cpu_percent, 2),  # Real-time avg CPU across instances
-                    "memory_usage_percent": round(instance_memory_percent, 2),  # Real-time memory usage
-                    "storage_usage_percent": storage_usage_percent,  # Storage usage
-                    "network_rx_bytes": sum(m.get('network_rx', 0) for m in instance_metrics),
-                    "network_tx_bytes": sum(m.get('network_tx', 0) for m in instance_metrics),
-                    "disk_io_bytes": 0,
-                    "running_instances": running_instances,
-                    "nodes": per_node_metrics,  # Per-node breakdown
-                }
+                new_point = _build_history_point(
+                    nodes_metrics,
+                    instance_metrics,
+                    total_memory,
+                    storage_usage_percent,
+                    running_instances,
+                )
                 history.append(new_point)
                 
                 # Keep last 8640 points (24 hours at 10s interval, or 72 hours at 30s)
@@ -777,9 +803,8 @@ async def get_monitoring_dashboard(
                 
                 cache.set("monitoring_history", history_key, history, ttl=86400)  # 24 hour TTL
                 
-                # Persist to PostgreSQL (fire-and-forget, non-blocking)
-                # DB is source of truth; cache is hot-path for performance
-                asyncio.create_task(_persist_snapshot(new_point))
+                if scope_key == "dashboard:scope=all":
+                    asyncio.create_task(_persist_snapshot(new_point))
                 
             except Exception as hist_err:
                 logger.debug(f"Could not update history: {hist_err}")
@@ -937,17 +962,15 @@ async def get_metrics_history(
       2. PostgreSQL (survives restarts, 7-day retention)
       3. Empty list (first startup, dashboard will populate on next cycle)
 
-    All users read from the global 'scope=all' stream so charts are
-    gap-free regardless of individual session activity.
+    Each org/tenant ACL reads its own scoped stream. Admin/background history
+    is still persisted to PostgreSQL as the durable global stream.
     """
-    if tenant_acl_active():
-        return []
-
     cache = get_cache_manager()
-    history_key = "monitoring:history:scope=all"
+    scope_key = get_scope_cache_key("dashboard")
+    history_key = _monitoring_history_key(scope_key)
     history = cache.get("monitoring_history", history_key) or []
     
-    if not history:
+    if not history and scope_key == "dashboard:scope=all":
         # Cache empty (backend just restarted?) - hydrate from PostgreSQL
         try:
             from app.services.metrics_history_service import load_metrics_history
@@ -958,6 +981,15 @@ async def get_metrics_history(
                 logger.info(f"Hydrated metrics cache from DB ({len(history)} points)")
         except Exception as db_err:
             logger.warning(f"DB history fallback failed: {db_err}")
+
+    if not history:
+        # First scoped request after startup: collect one scoped dashboard sample
+        # so the chart starts filling without reading the global history stream.
+        try:
+            await get_monitoring_dashboard(lxd_service=lxd_service, fresh=False)
+            history = cache.get("monitoring_history", history_key) or []
+        except Exception as collect_err:
+            logger.debug(f"Scoped history warm-up failed: {collect_err}")
     
     if not history:
         return []
@@ -1082,7 +1114,11 @@ async def monitoring_websocket(ws: WebSocket):
             await ws.close(code=1008, reason="Authentication required")
             return
         try:
-            validate_jwt(token, settings)
+            user = validate_jwt(token, settings)
+            from app.core.rbac import Role, get_highest_role, resolve_roles
+            if get_highest_role(resolve_roles(user)) != Role.ADMIN:
+                await ws.close(code=1008, reason="Monitoring WebSocket is admin-only")
+                return
         except Exception:
             await ws.close(code=1008, reason="Invalid or expired token")
             return

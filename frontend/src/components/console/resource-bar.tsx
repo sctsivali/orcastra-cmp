@@ -457,9 +457,6 @@ export function ConsoleResourceBar({
 
           {/* Section 3: Instance Resources */}
           <div className="space-y-2">
-            <h4 className="text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
-              Instance Resources
-            </h4>
             <div className="space-y-2 bg-[#1a1b26] rounded-lg p-3">
               {metricsLoading ? (
                 <div className="flex items-center justify-center py-4 text-gray-500">

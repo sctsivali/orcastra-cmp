@@ -147,6 +147,7 @@ class VMCreateResponse(BaseModel):
 class VMActionRequest(BaseModel):
     """Request for VM lifecycle actions."""
     host: str = Field(..., description="LXD host where VM resides")
+    project: Optional[str] = Field(None, description="LXD project where VM resides")
     force: bool = Field(default=False, description="Force the action")
     timeout: int = Field(default=30, description="Action timeout in seconds")
 

@@ -357,15 +357,22 @@ class CacheManager:
             # Clear cluster member cache for this specific cluster
             self.delete_pattern("api_responses", f"cluster_members:list:host={cluster_id}")
             logger.info(f"Cleared cache for specific cluster {cluster_id}")
-        
+
         # Always clear list caches to force fresh fetch
         # These are the paths that cert_manager.list_clusters() uses
         self.delete("vault_list", "secret/metadata/clusters")
         self.delete("vault_list", "secret/metadata/clusters/")
         self.delete("vault_list", "secret/data/clusters")
         self.delete("vault_list", "secret/data/clusters/")
-        
+
         logger.info(f"Invalidated cluster list cache{f' for {cluster_id}' if cluster_id else ' (all)'}")
+
+    def invalidate_instance_cache(self):
+        """Invalidate cached instance, VM, and monitoring responses."""
+        self.delete_pattern("api_responses", "instances:*")
+        self.delete_pattern("api_responses", "vms:*")
+        self.delete_pattern("api_responses", "monitoring:*")
+        logger.info("Cleared instance, VM, and monitoring caches")
     
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""

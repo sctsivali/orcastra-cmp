@@ -231,7 +231,13 @@ async def start_instance(
     """Start an instance."""
     verify_cluster_access(request.host)
     try:
-        await lxd_service.start_vm(instance_name, request.host, force=False)
+        vm = await lxd_service.start_vm(
+            instance_name,
+            request.host,
+            force=False,
+            project=request.project,
+        )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance start success
         activity_logger.log_activity(
@@ -247,7 +253,7 @@ async def start_instance(
             message=f"Instance {instance_name} started successfully",
             vm_name=instance_name,
             action="start",
-            new_status=VMStatus.RUNNING  # Start always results in Running
+            new_status=vm.status
         )
     except Exception as e:
         logger.error(f"Error starting instance {instance_name}: {e}")
@@ -284,8 +290,10 @@ async def stop_instance(
             instance_name, 
             request.host, 
             force=request.force,
-            timeout=request.timeout
+            timeout=request.timeout,
+            project=request.project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance stop success
         activity_logger.log_activity(
@@ -339,8 +347,10 @@ async def restart_instance(
             instance_name,
             request.host,
             force=request.force,
-            timeout=request.timeout
+            timeout=request.timeout,
+            project=request.project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance restart success
         activity_logger.log_activity(
@@ -384,6 +394,7 @@ async def restart_instance(
 async def delete_instance(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    project: Optional[str] = Query(None, description="LXD project name"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -391,7 +402,8 @@ async def delete_instance(
     """Delete an instance."""
     verify_cluster_access(host)
     try:
-        result = await lxd_service.delete_vm(instance_name, host)
+        await lxd_service.delete_vm(instance_name, host, project=project)
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: instance deletion success
         activity_logger.log_activity(
@@ -402,7 +414,12 @@ async def delete_instance(
             result="success"
         )
         
-        return result
+        return VMActionResponse(
+            success=True,
+            message=f"Instance {instance_name} deleted successfully",
+            vm_name=instance_name,
+            action="delete",
+        )
     except Exception as e:
         logger.error(f"Error deleting instance {instance_name}: {e}")
         

@@ -328,7 +328,9 @@ async def start_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
+            project=request.project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM start success
         activity_logger.log_activity(
@@ -399,7 +401,9 @@ async def stop_vm(
             host=request.host,
             force=request.force,
             timeout=request.timeout,
+            project=request.project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM stop success
         activity_logger.log_activity(
@@ -471,7 +475,9 @@ async def restart_vm(
             host=request.host,
             force=request.force,
             timeout=request.timeout,
+            project=request.project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM restart success
         activity_logger.log_activity(
@@ -533,6 +539,7 @@ async def delete_vm(
     vm_name: str,
     host: str = Query(..., description="LXD host node"),
     force: bool = Query(False, description="Force delete running VM"),
+    project: Optional[str] = Query(None, description="LXD project name"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -544,7 +551,9 @@ async def delete_vm(
             name=vm_name,
             host=host,
             force=force,
+            project=project,
         )
+        get_cache_manager().invalidate_instance_cache()
         
         # Log activity: VM delete success
         activity_logger.log_activity(
@@ -553,7 +562,7 @@ async def delete_vm(
             target_id=vm_name,
             target_host=host,
             result="success",
-            details={"force": force}
+            details={"force": force, "project": project}
         )
         
         return VMActionResponse(
