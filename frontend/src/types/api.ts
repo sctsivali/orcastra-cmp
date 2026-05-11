@@ -101,6 +101,7 @@ export interface VMCreateResponse {
 // VM Action Request
 export interface VMActionRequest {
   host: string;
+  project?: string;
   force?: boolean;
   timeout?: number;
 }

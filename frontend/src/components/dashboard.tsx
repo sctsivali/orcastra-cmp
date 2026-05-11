@@ -4,7 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LoadingLottieSmall, LoadingLottieMediumEnhanced } from "@/components/loading-lottie";
+import { LoadingLottieMediumEnhanced } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
 import { StatsOverview } from "@/components/stats-overview";
@@ -151,7 +151,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
     try {
       await startVM.mutateAsync({
         name: vm.name,
-        request: { host: vm.host },
+        request: { host: vm.host, project: vm.project || "default" },
       });
       toast({
         title: "VM Started",
@@ -179,7 +179,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
     try {
       await stopVM.mutateAsync({
         name: vm.name,
-        request: { host: vm.host },
+        request: { host: vm.host, project: vm.project || "default" },
       });
       toast({
         title: "VM Stopped",
@@ -207,7 +207,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
     try {
       await restartVM.mutateAsync({
         name: vm.name,
-        request: { host: vm.host },
+        request: { host: vm.host, project: vm.project || "default" },
       });
       toast({
         title: "VM Restarted",
@@ -238,6 +238,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
         name: vm.name,
         host: vm.host,
         force: true,
+        project: vm.project || "default",
       });
       toast({
         title: "VM Deleted",
@@ -328,7 +329,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {startVM.isPending ? (
-                    <LoadingLottieSmall />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Play className="h-3.5 w-3.5" />
                   )}
@@ -348,7 +349,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {stopVM.isPending ? (
-                    <LoadingLottieSmall />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Square className="h-3.5 w-3.5" />
                   )}
@@ -368,7 +369,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {restartVM.isPending ? (
-                    <LoadingLottieSmall />
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <RotateCw className="h-3.5 w-3.5" />
                   )}
@@ -437,7 +438,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       disabled={isPending || isDeleting || isReadOnly}
                     >
                       {isDeleting ? (
-                        <LoadingLottieSmall />
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       ) : (
                         <Trash2 className="h-3.5 w-3.5" />
                       )}
