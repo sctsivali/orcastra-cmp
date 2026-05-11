@@ -344,14 +344,10 @@ export const vmAPI = {
   delete: async (
     name: string,
     host: string,
-    force = false,
-    project?: string
+    force = false
   ): Promise<VMActionResponse> => {
-    const params = new URLSearchParams({ host, force: String(force) });
-    if (project) params.append("project", project);
-
     return fetchAPI<VMActionResponse>(
-      `/vms/${encodeURIComponent(name)}?${params.toString()}`,
+      `/vms/${name}?host=${encodeURIComponent(host)}&force=${force}`,
       { method: "DELETE" }
     );
   },

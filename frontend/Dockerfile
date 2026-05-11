@@ -41,6 +41,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Auth environment variables for build (non-secret only)
 ENV AUTHENTIK_ISSUER=$AUTHENTIK_ISSUER
 ENV AUTHENTIK_CLIENT_ID=$AUTHENTIK_CLIENT_ID
+ENV AUTH_TRUST_HOST=true
 
 # Build the application
 RUN \
