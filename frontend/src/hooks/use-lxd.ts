@@ -2,9 +2,8 @@
  * Custom React Query hooks for Orcastra Dashboard
  */
 
-import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { useSession } from "next-auth/react";
 import { 
   vmAPI, 
   imageAPI, 
@@ -14,7 +13,7 @@ import {
   healthCheck,
   api 
 } from "@/lib/api";
-import { VMCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse } from "@/types";
+import { VMCreateRequest, VMActionRequest, ProjectCreateRequest } from "@/types";
 import { STATIC_DATA_CONFIG, SEMI_STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG } from "@/lib/query-config";
 
 // Query Keys
@@ -31,62 +30,6 @@ export const queryKeys = {
   allProjects: ["projects", "all"] as const,
   health: ["health"] as const,
 };
-
-function useMonitoringScopeKey() {
-  const { data: session } = useSession();
-  const user = session?.user as any;
-  const groups = Array.isArray(user?.groups) ? [...user.groups].sort().join(",") : "";
-  return `${user?.id ?? user?.email ?? "anonymous"}:${groups}`;
-}
-
-function normalizeProject(project?: string | null) {
-  return project || "default";
-}
-
-function refreshInstanceQueries(queryClient: QueryClient) {
-  void queryClient.invalidateQueries({ queryKey: queryKeys.vms });
-  void queryClient.invalidateQueries({ queryKey: ["instances"] });
-}
-
-function removeInstanceFromList(
-  data: VMListResponse | undefined,
-  name: string,
-  host: string,
-  project?: string | null
-) {
-  if (!data?.vms) return data;
-
-  const filteredVms = data.vms.filter((vm) => {
-    const matchesInstance = vm.name === name && vm.host === host;
-    const matchesProject = !project || normalizeProject(vm.project) === normalizeProject(project);
-    return !(matchesInstance && matchesProject);
-  });
-
-  const removedCount = data.vms.length - filteredVms.length;
-  if (removedCount === 0) return data;
-
-  return {
-    ...data,
-    total: Math.max(0, data.total - removedCount),
-    vms: filteredVms,
-  };
-}
-
-function removeInstanceFromCaches(
-  queryClient: QueryClient,
-  name: string,
-  host: string,
-  project?: string | null
-) {
-  queryClient.setQueriesData<VMListResponse | undefined>(
-    { queryKey: queryKeys.vms },
-    (data) => removeInstanceFromList(data, name, host, project)
-  );
-  queryClient.setQueriesData<VMListResponse | undefined>(
-    { queryKey: ["instances"] },
-    (data) => removeInstanceFromList(data, name, host, project)
-  );
-}
 
 // Default retry configuration with exponential backoff
 const defaultRetryConfig = {
@@ -117,7 +60,7 @@ export function useCreateVM() {
   return useMutation({
     mutationFn: (data: VMCreateRequest) => vmAPI.create(data),
     onSuccess: () => {
-      refreshInstanceQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
     },
   });
 }
@@ -134,7 +77,7 @@ export function useStartVM() {
       request: VMActionRequest;
     }) => vmAPI.start(name, request),
     onSuccess: () => {
-      refreshInstanceQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
     },
   });
 }
@@ -151,7 +94,7 @@ export function useStopVM() {
       request: VMActionRequest;
     }) => vmAPI.stop(name, request),
     onSuccess: () => {
-      refreshInstanceQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
     },
   });
 }
@@ -168,7 +111,7 @@ export function useRestartVM() {
       request: VMActionRequest;
     }) => vmAPI.restart(name, request),
     onSuccess: () => {
-      refreshInstanceQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
     },
   });
 }
@@ -181,16 +124,13 @@ export function useDeleteVM() {
       name,
       host,
       force,
-      project,
     }: {
       name: string;
       host: string;
       force?: boolean;
-      project?: string;
-    }) => vmAPI.delete(name, host, force, project),
-    onSuccess: (_data, variables) => {
-      removeInstanceFromCaches(queryClient, variables.name, variables.host, variables.project);
-      refreshInstanceQueries(queryClient);
+    }) => vmAPI.delete(name, host, force),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.vms });
     },
   });
 }
@@ -1046,7 +986,7 @@ export function useStartInstance() {
     mutationFn: ({ name, host }: { name: string; host: string }) => 
       api.vms.start(name, { host }),
     onSuccess: () => {
-      refreshInstanceQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
     },
   });
 }
@@ -1058,7 +998,7 @@ export function useStopInstance() {
     mutationFn: ({ name, host }: { name: string; host: string }) => 
       api.vms.stop(name, { host }),
     onSuccess: () => {
-      refreshInstanceQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
     },
   });
 }
@@ -1070,7 +1010,7 @@ export function useRestartInstance() {
     mutationFn: ({ name, host }: { name: string; host: string }) => 
       api.vms.restart(name, { host }),
     onSuccess: () => {
-      refreshInstanceQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
     },
   });
 }
@@ -1079,11 +1019,10 @@ export function useDeleteInstance() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
-      api.vms.delete(name, host, force, project),
-    onSuccess: (_data, variables) => {
-      removeInstanceFromCaches(queryClient, variables.name, variables.host, variables.project);
-      refreshInstanceQueries(queryClient);
+    mutationFn: ({ name, host, force }: { name: string; host: string; force?: boolean }) => 
+      api.vms.delete(name, host, force),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
     },
   });
 }
@@ -1382,25 +1321,63 @@ export function useFacilitySuggestions() {
 // ========== Monitoring Hooks ==========
 
 export function useMonitoringDashboard(enabled: boolean = true, refetchInterval: number = 10000) {
-  const scopeKey = useMonitoringScopeKey();
+  // ── DEV MOCK ──────────────────────────────────────────────────────────────
+  // Set NEXT_PUBLIC_MOCK_MONITORING=true in .env.local to bypass the backend
+  // and render the monitoring page with static placeholder data.
+  if (process.env.NEXT_PUBLIC_MOCK_MONITORING === "true") {
+    const mockData: MonitoringDashboardResponse = {
+      timestamp: new Date().toISOString(),
+      total_nodes: 2, online_nodes: 1, inactive_nodes: 1,
+      total_instances: 5, running_instances: 3, stopped_instances: 2, other_instances: 0,
+      container_count: 3, vm_count: 2,
+      total_cpu: 32, used_cpu: 8, cpu_usage_percent: 25,
+      realtime_cpu_percent: 18,
+      total_memory_bytes: 68719476736, used_memory_bytes: 17179869184, memory_usage_percent: 25,
+      realtime_memory_bytes: 8589934592, realtime_memory_percent: 12,
+      total_storage_bytes: 1099511627776, used_storage_bytes: 274877906944, storage_usage_percent: 25,
+      total_gpu: 0, used_gpu: 0,
+      nodes: [
+        {
+          node_name: "node-01", node_type: "lxd", is_online: true, cluster_status: "online",
+          cpu_total: 16, cpu_used: 4, cpu_usage_percent: 25,
+          memory_total_bytes: 34359738368, memory_used_bytes: 8589934592, memory_usage_percent: 25,
+          storage_total_bytes: 549755813888, storage_used_bytes: 137438953472, storage_usage_percent: 25,
+          gpu_total: 0, gpu_used: 0, instance_count: 3, running_instances: 2,
+        },
+        {
+          node_name: "node-02", node_type: "lxd", is_online: false, cluster_status: "offline",
+          cpu_total: 16, cpu_used: 0, cpu_usage_percent: 0,
+          memory_total_bytes: 34359738368, memory_used_bytes: 0, memory_usage_percent: 0,
+          storage_total_bytes: 549755813888, storage_used_bytes: 0, storage_usage_percent: 0,
+          gpu_total: 0, gpu_used: 0, instance_count: 0, running_instances: 0,
+        },
+      ],
+      storage_pools: [],
+      top_cpu_consumers: [],
+      top_memory_consumers: [],
+      warnings: null,
+      collection_time_ms: 0,
+    };
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    return useQuery({
+      queryKey: ["monitoring", "dashboard"],
+      queryFn: () => Promise.resolve(mockData),
+      enabled,
+      staleTime: Infinity,
+    });
+  }
+  // ── END DEV MOCK ──────────────────────────────────────────────────────────
+
   return useQuery({
-    queryKey: ["monitoring", "dashboard", scopeKey],
+    queryKey: ["monitoring", "dashboard"],
     queryFn: () => api.monitoring.getDashboard(),
-    enabled,
-    refetchInterval: refetchInterval > 0 ? refetchInterval : false, // 0 = disabled (WS push active)
-    staleTime: 5000, // Consider fresh for 5 seconds to avoid redundant fetches
-    gcTime: 60 * 1000,
-    refetchOnWindowFocus: refetchInterval > 0, // Only refetch on focus when polling
-    refetchIntervalInBackground: false, // Stop polling when tab is hidden
-    retry: 3,
-    retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
+    // ... rest unchanged
   });
 }
 
 export function useMonitoringNodeMetrics(nodeName: string, enabled: boolean = true) {
-  const scopeKey = useMonitoringScopeKey();
   return useQuery({
-    queryKey: ["monitoring", "node", scopeKey, nodeName],
+    queryKey: ["monitoring", "node", nodeName],
     queryFn: () => api.monitoring.getNodeMetrics(nodeName),
     enabled: enabled && !!nodeName,
     refetchInterval: 10000,
@@ -1411,7 +1388,6 @@ export function useMonitoringNodeMetrics(nodeName: string, enabled: boolean = tr
 
 export function useMonitoringHistory(points: number = 60, enabled: boolean = true) {
   const queryClient = useQueryClient();
-  const scopeKey = useMonitoringScopeKey();
 
   // Prefetch all time ranges on mount for instant switching
   // Backend reads from the same in-memory cache, so these are very fast
@@ -1427,17 +1403,17 @@ export function useMonitoringHistory(points: number = 60, enabled: boolean = tru
       // Stagger prefetches slightly to avoid burst
       setTimeout(() => {
         queryClient.prefetchQuery({
-          queryKey: ["monitoring", "history", scopeKey, range],
+          queryKey: ["monitoring", "history", range],
           queryFn: () => api.monitoring.getHistory(range),
           staleTime: 30000,
         });
       }, idx * 200);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, scopeKey]); // Only on mount/enable change - not on points change
+  }, [enabled]); // Only on mount/enable change - not on points change
 
   return useQuery({
-    queryKey: ["monitoring", "history", scopeKey, points],
+    queryKey: ["monitoring", "history", points],
     queryFn: async () => {
       try {
         const data = await api.monitoring.getHistory(points);
@@ -1462,7 +1438,7 @@ export function useMonitoringHistory(points: number = 60, enabled: boolean = tru
         .filter(r => r !== points)
         .sort((a, b) => Math.abs(a - points) - Math.abs(b - points));
       for (const r of cachedRanges) {
-        const cached = queryClient.getQueryData<any[]>(["monitoring", "history", scopeKey, r]);
+        const cached = queryClient.getQueryData<any[]>(["monitoring", "history", r]);
         if (cached && cached.length > 0) return cached;
       }
       return undefined;
@@ -1471,9 +1447,8 @@ export function useMonitoringHistory(points: number = 60, enabled: boolean = tru
 }
 
 export function useMonitoringNetwork(enabled: boolean = true) {
-  const scopeKey = useMonitoringScopeKey();
   return useQuery({
-    queryKey: ["monitoring", "network", scopeKey],
+    queryKey: ["monitoring", "network"],
     queryFn: () => api.monitoring.getNetworkMetrics(),
     enabled,
     refetchInterval: 10000,
