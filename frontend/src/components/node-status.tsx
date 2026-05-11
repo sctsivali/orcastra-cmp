@@ -155,10 +155,10 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <div
               className={cn(
-                "flex h-10 w-10 items-center justify-center rounded-lg shrink-0",
+                "flex h-10 w-10 items-center justify-center shrink-0",
                 node.connected
-                  ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400"
-                  : "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400"
+                  ? " text-emerald-600 dark:text-emerald-400"
+                  : " text-red-600 dark:text-red-400"
               )}
             >
               <NodeIcon className="h-5 w-5" />

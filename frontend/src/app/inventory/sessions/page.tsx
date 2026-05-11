@@ -336,7 +336,7 @@ function ActiveSessionsTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Active</p>
               <p className="text-2xl font-bold mt-1">{sessions.length}</p>
             </div>
-            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+            <div className="h-10 w-10 rounded-full border border-primary flex items-center justify-center">
               <Wifi className="h-5 w-5 text-primary" />
             </div>
           </CardContent>
@@ -348,7 +348,7 @@ function ActiveSessionsTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Download</p>
               <p className="text-lg font-bold mt-1 font-mono">↓{formatRate(totalDlRate)}</p>
             </div>
-            <div className="h-10 w-10 rounded-lg bg-green-500/10 flex items-center justify-center">
+            <div className="h-10 w-10 rounded-full border border-green-500 flex items-center justify-center">
               <ArrowDownToLine className="h-5 w-5 text-green-500" />
             </div>
           </CardContent>
@@ -360,7 +360,7 @@ function ActiveSessionsTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Upload</p>
               <p className="text-lg font-bold mt-1 font-mono">↑{formatRate(totalUlRate)}</p>
             </div>
-            <div className="h-10 w-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+            <div className="h-10 w-10 rounded-full border border-blue-500 flex items-center justify-center">
               <ArrowUpFromLine className="h-5 w-5 text-blue-500" />
             </div>
           </CardContent>
@@ -557,7 +557,7 @@ function SessionHistoryTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Past Sessions</p>
               <p className="text-2xl font-bold mt-1">{disconnects.length}</p>
             </div>
-            <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+            <div className="h-10 w-10 rounded-full border border-primary flex items-center justify-center">
               <History className="h-5 w-5 text-primary" />
             </div>
           </CardContent>
@@ -569,7 +569,7 @@ function SessionHistoryTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Time</p>
               <p className="text-lg font-bold mt-1 font-mono">{formatDuration(totalDuration)}</p>
             </div>
-            <div className="h-10 w-10 rounded-lg bg-orange-500/10 flex items-center justify-center">
+            <div className="h-10 w-10 rounded-full border border-orange-500 flex items-center justify-center">
               <Clock className="h-5 w-5 text-orange-500" />
             </div>
           </CardContent>
@@ -585,7 +585,7 @@ function SessionHistoryTab() {
                 <span>↑{formatBytes(totalUl)}</span>
               </p>
             </div>
-            <div className="h-10 w-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
+            <div className="h-10 w-10 rounded-full border border-purple-500 flex items-center justify-center">
               <Activity className="h-5 w-5 text-purple-500" />
             </div>
           </CardContent>

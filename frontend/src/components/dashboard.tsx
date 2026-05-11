@@ -819,19 +819,19 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         {/* Resource Usage */}
         <div className="grid grid-cols-3 gap-2 pt-2">
           {/* CPU */}
-          <div className="flex items-center gap-1.5 p-2 rounded-md bg-blue-500/10 border border-blue-500/20">
-            <Cpu className="h-4 w-4 text-blue-500 flex-shrink-0" />
+          <div className="flex items-center gap-1.5 p-2 ">
+            <Cpu className="h-4 w-4 text-muted-foreground flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               {limits.cpuLimit ? (
                 <>
-                  <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                  <span className="text-xs font-semibold text-foreground">
                     {resourceUsage.cpuUsed} of {limits.cpuLimit}
                   </span>
                   <span className="text-[10px] text-muted-foreground">cores</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                  <span className="text-xs font-semibold text-foreground">
                     Unlimited
                   </span>
                   <span className="text-[10px] text-muted-foreground">CPU</span>
@@ -841,19 +841,19 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
           </div>
 
           {/* RAM */}
-          <div className="flex items-center gap-1.5 p-2 rounded-md bg-purple-500/10 border border-purple-500/20">
-            <MemoryStick className="h-4 w-4 text-purple-500 flex-shrink-0" />
+          <div className="flex items-center gap-1.5 p-2">
+            <MemoryStick className="h-4 w-4 text-muted-foreground flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               {limits.ramLimitBytes ? (
                 <>
-                  <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">
+                  <span className="text-xs font-semibold text-foreground">
                     {(resourceUsage.ramUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.ramLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
                   </span>
                   <span className="text-[10px] text-muted-foreground">GiB</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">
+                  <span className="text-xs font-semibold text-foreground">
                     Unlimited
                   </span>
                   <span className="text-[10px] text-muted-foreground">RAM</span>
@@ -863,19 +863,19 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
           </div>
 
           {/* Storage */}
-          <div className="flex items-center gap-1.5 p-2 rounded-md bg-orange-500/10 border border-orange-500/20">
-            <HardDrive className="h-4 w-4 text-orange-500 flex-shrink-0" />
+          <div className="flex items-center gap-1.5 p-2 ">
+            <HardDrive className="h-4 w-4 text-muted-foreground flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               {limits.storageLimitBytes ? (
                 <>
-                  <span className="text-xs font-semibold text-orange-600 dark:text-orange-400">
+                  <span className="text-xs font-semibold text-foreground">
                     {(resourceUsage.storageUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.storageLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
                   </span>
                   <span className="text-[10px] text-muted-foreground">GiB</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-semibold text-orange-600 dark:text-orange-400">
+                  <span className="text-xs font-semibold text-foreground">
                     Unlimited
                   </span>
                   <span className="text-[10px] text-muted-foreground">Storage</span>
