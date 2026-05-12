@@ -6,7 +6,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Key,
   Plus,
-  RefreshCw,
   Copy,
   ExternalLink,
   Clock,
@@ -21,6 +20,8 @@ import {
   EyeOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
+import { IntegrationClusterAccessList } from "@/components/integration-cluster-access-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -56,6 +57,7 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { getClusterAccessDisplay } from "@/lib/integration-display";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
@@ -472,15 +474,12 @@ export default function IntegrationsPage() {
           </p>
         </div>
         <div className="flex gap-2 shrink-0">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetchKeys()}
+          <RefreshButton
             disabled={isRefetching}
-          >
-            <RefreshCw className={cn("h-4 w-4 mr-2", isRefetching && "animate-spin")} />
-            Refresh
-          </Button>
+            isRefreshing={isRefetching}
+            label="Refresh API keys"
+            onClick={() => refetchKeys()}
+          />
           <CreateAPIKeyDialog
             clusters={clusters}
             onSubmit={(data) => createMutation.mutate(data)}
@@ -507,9 +506,9 @@ export default function IntegrationsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Active Keys</p>
-                <p className="text-2xl font-bold text-green-600">{activeKeys}</p>
+                <p className="text-2xl font-bold text-muted-foreground">{activeKeys}</p>
               </div>
-              <CheckCircle2 className="h-8 w-8 text-green-600" />
+              <CheckCircle2 className="h-8 w-8 text-muted-foreground" />
             </div>
           </CardContent>
         </Card>
@@ -518,9 +517,9 @@ export default function IntegrationsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">Revoked Keys</p>
-                <p className="text-2xl font-bold text-red-600">{revokedKeys}</p>
+                <p className="text-2xl font-bold text-muted-foreground">{revokedKeys}</p>
               </div>
-              <XCircle className="h-8 w-8 text-red-600" />
+              <XCircle className="h-8 w-8 text-muted-foreground" />
             </div>
           </CardContent>
         </Card>
@@ -550,7 +549,8 @@ export default function IntegrationsPage() {
         <div className="grid gap-4 md:grid-cols-2">
           {apiKeys.map((apiKey) => {
             if (!apiKey || typeof apiKey.id !== 'string') return null;
-            const clusterCount = Array.isArray(apiKey.cluster_permissions) ? apiKey.cluster_permissions.length : 0;
+            const clusterAccess = getClusterAccessDisplay(apiKey.cluster_permissions, clusters);
+            const clusterCount = clusterAccess.length;
             const userCount = typeof apiKey.user_mappings_count === 'number' ? apiKey.user_mappings_count : 0;
             
             return (
@@ -558,8 +558,7 @@ export default function IntegrationsPage() {
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between">
                     <div className="space-y-1">
-                      <CardTitle className="text-lg flex items-center gap-2">
-                        <Key className="h-5 w-5" />
+                      <CardTitle className="text-lg">
                         {String(apiKey.name || 'N/A')}
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
@@ -594,6 +593,7 @@ export default function IntegrationsPage() {
                       <span className="font-medium">{userCount}</span>
                     </div>
                   </div>
+                  <IntegrationClusterAccessList clusters={clusterAccess} />
                   
                   <div className="flex items-center justify-end gap-2 border-t pt-3">
                     {!apiKey.is_revoked && (

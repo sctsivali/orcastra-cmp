@@ -1,8 +1,6 @@
 "use client";
 
 import {
-  Cloud,
-  Server,
   Cpu,
   MemoryStick,
   Sparkles,
@@ -52,8 +50,6 @@ export function NodeDetailModal({
   // helper to get display name for node type
   const getNodeTypeDisplay = formatHypervisorType;
 
-  const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
-  
   // Determine if node is truly connected (authenticated) or just pending trust
   const isAuthenticated = node.connected && node.server_version;
   const isPendingTrust = !node.connected && !node.error;
@@ -62,37 +58,23 @@ export function NodeDetailModal({
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <div className="flex items-center gap-3">
-            <div
-              className={cn(
-                "flex h-12 w-12 items-center justify-center rounded-lg",
-                isAuthenticated
-                  ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400"
-                  : isPendingTrust
-                  ? "bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400"
-                  : "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400"
+          <div className="flex-1">
+            <DialogTitle className="text-2xl flex items-center gap-2">
+              {node.display_name || node.name}
+              {node.node_type && (
+                <Badge variant="outline" className="text-xs">
+                  {getNodeTypeDisplay(node.node_type)}
+                </Badge>
               )}
-            >
-              <NodeIcon className="h-6 w-6" />
-            </div>
-            <div className="flex-1">
-              <DialogTitle className="text-2xl flex items-center gap-2">
-                {node.display_name || node.name}
-                {node.node_type && (
-                  <Badge variant="outline" className="text-xs">
-                    {getNodeTypeDisplay(node.node_type)}
-                  </Badge>
-                )}
-                {isPendingTrust && (
-                  <Badge variant="secondary" className="text-xs">
-                    Pending Trust
-                  </Badge>
-                )}
-              </DialogTitle>
-              <p className="text-sm text-muted-foreground font-mono">
-                {node.endpoint}
-              </p>
-            </div>
+              {isPendingTrust && (
+                <Badge variant="secondary" className="text-xs">
+                  Pending Trust
+                </Badge>
+              )}
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground font-mono">
+              {node.endpoint}
+            </p>
           </div>
         </DialogHeader>
 

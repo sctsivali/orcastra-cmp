@@ -15,6 +15,7 @@ import {
   Globe
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -156,16 +157,12 @@ function ClusterMembersContent() {
                 )}
               </CardDescription>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={() => refetch()}
+            <RefreshButton
               disabled={isRefetching}
-            >
-              <RefreshCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
+              isRefreshing={isRefetching}
+              label="Refresh cluster members"
+              onClick={() => refetch()}
+            />
           </div>
         </CardHeader>
         <CardContent>

@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -29,7 +30,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { RotateCw, X, Clock, Loader2, XCircle, Unplug } from "lucide-react";
+import { X, Clock, Loader2, XCircle, Unplug } from "lucide-react";
 import { useOperations } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
@@ -214,10 +215,12 @@ export default function OperationsPage() {
             Monitor hypervisor operations and background tasks
           </p>
         </div>
-        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
-          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
+        <RefreshButton
+          disabled={isRefetching}
+          isRefreshing={isRefetching}
+          label="Refresh operations"
+          onClick={() => refetch()}
+        />
       </div>
 
       {/* Cancel/Kill Confirmation Dialog */}

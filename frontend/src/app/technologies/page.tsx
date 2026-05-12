@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import type { NodeStatus, NodeEnvironment } from "@/types/api";
 
 interface HardwareCategory {
-  icon: React.ReactNode;
+  icon: React.ElementType;
   title: string;
   description: string;
   items: { label: string; value: string; detail?: string }[];
@@ -147,7 +147,7 @@ export default function TechnologiesPage() {
 
     const categories: HardwareCategory[] = [
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Cpu className="h-4 w-4 text-purple-600" /></div>,
+        icon: Cpu,
         title: "CPU Resources",
         description: "Processor information across all nodes",
         items: [
@@ -169,7 +169,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><HardDrive className="h-4 w-4 text-purple-600" /></div>,
+        icon: HardDrive,
         title: "Memory",
         description: "RAM resources available in the cluster",
         items: [
@@ -191,7 +191,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Database className="h-4 w-4 text-purple-500" /></div>,
+        icon: Database,
         title: "Storage",
         description: "Storage systems and backends",
         items: [
@@ -219,7 +219,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Network className="h-4 w-4 text-purple-600" /></div>,
+        icon: Network,
         title: "Network",
         description: "Network infrastructure and connectivity",
         items: [
@@ -245,7 +245,7 @@ export default function TechnologiesPage() {
     // Add GPU category if GPUs are available
     if (totalGPUs > 0) {
       categories.push({
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Monitor className="h-4 w-4 text-purple-600" /></div>,
+        icon: Monitor,
         title: "GPU Resources",
         description: "Graphics processing units for acceleration",
         items: [
@@ -315,11 +315,14 @@ export default function TechnologiesPage() {
           {hardwareInfo && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {hardwareInfo.map((category) => {
+                const Icon = category.icon;
                 return (
                   <Card key={category.title} className="hover:shadow-md transition-all duration-200">
                     <CardHeader>
                       <div className="flex items-center gap-3">
-                        {category.icon}
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground text-background">
+                          <Icon className="h-5 w-5" />
+                        </div>
                         <div>
                           <CardTitle>{category.title}</CardTitle>
                           <CardDescription>{category.description}</CardDescription>
@@ -417,8 +420,8 @@ export default function TechnologiesPage() {
                   <CardHeader>
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center">
-                          <Icon className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground text-background">
+                          <Icon className="h-5 w-5" />
                         </div>
                         <div>
                           <CardTitle className="text-lg">{software.name}</CardTitle>
@@ -462,9 +465,9 @@ export default function TechnologiesPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="flex gap-3 p-4 rounded-lg bg-green-500/5 border border-green-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-green-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Open Source & Community-Driven</p>
@@ -473,9 +476,9 @@ export default function TechnologiesPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-blue-500/5 border border-blue-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-blue-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Enterprise-Grade Reliability</p>
@@ -484,9 +487,9 @@ export default function TechnologiesPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-violet-500/5 border border-violet-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-violet-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Modern Architecture</p>
@@ -495,9 +498,9 @@ export default function TechnologiesPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-orange-500/5 border border-orange-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-orange-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Security First</p>

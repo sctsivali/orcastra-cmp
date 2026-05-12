@@ -38,6 +38,7 @@ import {
   WifiOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { cn } from "@/lib/utils";
 
 // Helper function to format bytes
@@ -574,14 +575,12 @@ export function SystemResourceUsagePanel() {
               Updated: {lastUpdated}
             </span>
           )}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
+          <RefreshButton
             disabled={isFetching}
-          >
-            <RefreshCw className={cn("h-4 w-4", isFetching && "animate-spin")} />
-          </Button>
+            isRefreshing={isFetching}
+            label="Refresh host resources"
+            onClick={handleRefresh}
+          />
         </div>
       </div>
 

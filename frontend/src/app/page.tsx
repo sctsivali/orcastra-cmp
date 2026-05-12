@@ -58,43 +58,31 @@ export default function HomePage() {
       icon: Server,
       title: "Multi-Node Management",
       description: "Manage multiple LXD nodes from a single, unified dashboard interface.",
-      color: "text-violet-500",
-      bgColor: "bg-transparent",
     },
     {
       icon: Cloud,
       title: "Virtual Machines & Containers",
       description: "Deploy and manage both VMs and containers with ease using LXD technology.",
-      color: "text-violet-500",
-      bgColor: "bg-transparent",
     },
     {
       icon: Database,
       title: "Resource Monitoring",
       description: "Real-time monitoring of CPU, memory, storage, and network resources.",
-      color: "text-violet-500",
-      bgColor: "bg-transparent",
     },
     {
       icon: Zap,
       title: "High Performance",
       description: "Built on enterprise-grade infrastructure for maximum reliability and speed.",
-      color: "text-violet-500",
-      bgColor: "bg-transparent",
     },
     {
       icon: Shield,
       title: "Secure by Design",
       description: "Enterprise security with TLS encryption and role-based access control.",
-      color: "text-violet-500",
-      bgColor: "bg-transparent",
     },
     {
       icon: TrendingUp,
       title: "Scalable Architecture",
       description: "Scale from a single node to hundreds with our flexible architecture.",
-      color: "text-violet-500",
-      bgColor: "bg-transparent",
     },
   ];
 
@@ -130,9 +118,6 @@ export default function HomePage() {
         {/* Hero Section */}
         <section className="text-center space-y-6 py-12">
         <div className="space-y-4">
-          <Badge variant="secondary" className="text-sm">
-            Cloud Federation Platform
-          </Badge>
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight">
             Welcome to{" "}
             <span style={{ color: settings.colors.accentColor || "#8b5cf6" }}>
@@ -142,7 +127,10 @@ export default function HomePage() {
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">
             {settings.branding.tagline}
           </p>
-          <div className="flex items-center justify-center gap-2 pt-2">
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+            <Badge variant="outline" className="text-xs">
+              Cloud Federation Platform
+            </Badge>
             <Badge variant="outline" className="text-xs">
               Built on Open Source
             </Badge>
@@ -158,8 +146,8 @@ export default function HomePage() {
           </Button>
           {isPartner && (
           <Button asChild variant="outline" size="lg" className="gap-2">
-            <Link href="/create">
-              Create Project
+            <Link href="/register-node">
+              Register Node
             </Link>
           </Button>
           )}
@@ -240,9 +228,7 @@ export default function HomePage() {
             return (
               <Card key={feature.title} className="hover:shadow-lg transition-shadow">
                 <CardHeader>
-                  <div className={`w-12 h-12 rounded-lg ${feature.bgColor} flex items-center justify-center mb-3`}>
-                    <Icon className={`h-6 w-6 ${feature.color}`} />
-                  </div>
+                  <Icon className="mb-3 h-9 w-9 text-foreground" />
                   <CardTitle className="text-xl">{feature.title}</CardTitle>
                   <CardDescription className="text-base">
                     {feature.description}

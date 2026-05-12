@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -47,7 +48,6 @@ import {
   AlertCircle,
   Loader2,
   Plus,
-  RefreshCw,
   Trash2,
   Users,
   Building2,
@@ -105,6 +105,7 @@ export function UserGroupsSettings() {
   const {
     data: users,
     isLoading: usersLoading,
+    isFetching: usersFetching,
     error: usersError,
     refetch: refetchUsers,
   } = useQuery({
@@ -119,7 +120,7 @@ export function UserGroupsSettings() {
   });
 
   // fetch identity provider sync status
-  const { data: syncStatus, refetch: refetchSync } = useQuery({
+  const { data: syncStatus, refetch: refetchSync, isFetching: syncStatusFetching } = useQuery({
     queryKey: ["user-groups-sync-status"],
     queryFn: () => api.userGroups.syncStatus(),
     refetchInterval: 30000, // check every 30s
@@ -181,12 +182,9 @@ export function UserGroupsSettings() {
           <div>
             <CardTitle className="text-base flex items-center gap-2">
               Identity Provider Sync Status
-              <Badge variant="outline" className="text-xs text-muted-foreground">
-                Authentik
-              </Badge>
             </CardTitle>
             <CardDescription className="mt-1 text-xs">
-              User roles and group memberships are synchronized from your identity provider.
+              User roles and group memberships are synchronized from your identity provider (Authentik).
             </CardDescription>
           </div>
         </CardHeader>
@@ -197,16 +195,10 @@ export function UserGroupsSettings() {
                 <>
                   <Wifi className="h-4 w-4 text-green-500" />
                   <span className="text-sm text-green-600 dark:text-green-400">
-                    Connected — role changes sync automatically
+                    {syncStatus.groups_exist
+                      ? "Connected — role changes and groups sync automatically"
+                      : "Connected — role changes sync automatically"}
                   </span>
-                  {syncStatus.groups_exist && (
-                    <Badge
-                      variant="outline"
-                      className="text-xs bg-green-500/10 text-green-600 border-green-500/20"
-                    >
-                      Groups OK
-                    </Badge>
-                  )}
                 </>
               ) : (
                 <>
@@ -224,14 +216,14 @@ export function UserGroupsSettings() {
                 </span>
               </>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
+            <RefreshButton
               className="ml-auto h-8 w-8"
+              iconClassName="h-3.5 w-3.5"
+              isRefreshing={syncStatusFetching}
+              label="Refresh sync status"
               onClick={() => refetchSync()}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-            </Button>
+              variant="ghost"
+            />
           </div>
         </CardContent>
       </Card>
@@ -253,17 +245,12 @@ export function UserGroupsSettings() {
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
+              <RefreshButton
+                disabled={usersFetching}
+                isRefreshing={usersFetching}
+                label="Refresh user groups"
                 onClick={() => refetchUsers()}
-                disabled={usersLoading}
-              >
-                <RefreshCw
-                  className={`h-4 w-4 mr-1.5 ${usersLoading ? "animate-spin" : ""}`}
-                />
-                Refresh
-              </Button>
+              />
               <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm" onClick={resetForm}>

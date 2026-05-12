@@ -70,6 +70,7 @@ import { format } from "date-fns";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -158,10 +159,8 @@ interface MetricCardProps {
   title: string;
   value: string | number;
   subtitle?: string;
-  icon: React.ReactNode;
   trend?: "up" | "down" | "neutral";
   trendValue?: string;
-  color?: string;
   progress?: number;
   className?: string;
 }
@@ -170,43 +169,36 @@ const MetricCard = memo(function MetricCard({
   title, 
   value, 
   subtitle, 
-  icon, 
   trend, 
   trendValue, 
-  color = "text-blue-500",
   progress,
   className 
 }: MetricCardProps) {
   return (
     <Card className={cn("transition-all hover:shadow-md", className)}>
       <CardContent className="p-6">
-        <div className="flex items-start justify-between">
-          <div className="space-y-2 flex-1">
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            <div className="flex items-baseline gap-2">
-              <p className="text-2xl sm:text-3xl font-bold tracking-tight">{value}</p>
-              {trend && trendValue && (
-                <span className={cn(
-                  "flex items-center text-xs font-medium",
-                  trend === "up" && "text-green-500",
-                  trend === "down" && "text-red-500",
-                  trend === "neutral" && "text-muted-foreground"
-                )}>
-                  {trend === "up" && <TrendingUp className="h-3 w-3 mr-0.5" />}
-                  {trend === "down" && <TrendingDown className="h-3 w-3 mr-0.5" />}
-                  {trend === "neutral" && <Minus className="h-3 w-3 mr-0.5" />}
-                  {trendValue}
-                </span>
-              )}
-            </div>
-            {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
-            {progress !== undefined && (
-              <Progress value={progress} className="h-2 mt-2" />
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-muted-foreground">{title}</p>
+          <div className="flex items-baseline gap-2">
+            <p className="text-2xl sm:text-3xl font-bold tracking-tight">{value}</p>
+            {trend && trendValue && (
+              <span className={cn(
+                "flex items-center text-xs font-medium",
+                trend === "up" && "text-green-500",
+                trend === "down" && "text-red-500",
+                trend === "neutral" && "text-muted-foreground"
+              )}>
+                {trend === "up" && <TrendingUp className="h-3 w-3 mr-0.5" />}
+                {trend === "down" && <TrendingDown className="h-3 w-3 mr-0.5" />}
+                {trend === "neutral" && <Minus className="h-3 w-3 mr-0.5" />}
+                {trendValue}
+              </span>
             )}
           </div>
-          <div className={cn("flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-muted", color)}>
-            {icon}
-          </div>
+          {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
+          {progress !== undefined && (
+            <Progress value={progress} className="h-2 mt-2" />
+          )}
         </div>
       </CardContent>
     </Card>
@@ -846,7 +838,7 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
             {instances.length} instance{instances.length !== 1 ? "s" : ""} found
           </DialogDescription>
         </DialogHeader>
-        <div className="flex-1 overflow-y-auto space-y-2 pr-2">
+        <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-2">
           {isLoading ? (
             <div className="space-y-2">
               {[...Array(5)].map((_, i) => (
@@ -1710,14 +1702,12 @@ export default function MonitoringContent() {
             </TooltipTrigger>
             <TooltipContent>{isPaused ? "Resume" : "Pause"} updates</TooltipContent>
           </UITooltip>
-          <Button 
-            variant="outline" 
-            size="sm" 
-            onClick={() => refetchDashboard()}
+          <RefreshButton
             disabled={dashboardFetching}
-          >
-            <RefreshCw className={cn("h-4 w-4", dashboardFetching && "animate-spin")} />
-          </Button>
+            isRefreshing={dashboardFetching}
+            label="Refresh monitoring"
+            onClick={() => refetchDashboard()}
+          />
           {/* Node Selection - at the end (rightmost) */}
           <Select value={selectedNode} onValueChange={setSelectedNode}>
             <SelectTrigger className="w-auto min-w-[160px] max-w-[300px] h-9">
@@ -1741,31 +1731,23 @@ export default function MonitoringContent() {
           title="Total Instances"
           value={filteredStats.total_instances}
           subtitle={selectedNode === "all" ? `${filteredStats.container_count} containers • ${filteredStats.vm_count} VMs` : `on ${selectedNode}`}
-          icon={<div className="h-8 w-8 border rounded-full flex border-white dark:border-black items-center justify-center"><Box className="h-4 w-4 text-blue-600" /></div>}
-          color="bg-transparent"
         />
         <MetricCard
           title="Running"
           value={filteredStats.running_instances}
           subtitle={`${filteredStats.stopped_instances} stopped`}
-          icon={<div className="h-8 w-8 border border-white dark:border-black rounded-full  flex items-center justify-center"><Play className="h-4 w-4 text-green-600" /></div>}
-          color="bg-transparent"
           progress={(filteredStats.running_instances / Math.max(filteredStats.total_instances, 1)) * 100}
         />
         <MetricCard
           title="Nodes Online"
           value={`${filteredStats.online_nodes} / ${filteredStats.total_nodes}`}
           subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} inactive` : "All nodes healthy"}
-          icon={<div className="h-8 w-8 border rounded-full border-white dark:border-black flex items-center justify-center"><Server className="h-4 w-4 text-purple-600" /></div>}
-          color="bg-transparent"
           trend={filteredStats.inactive_nodes > 0 ? "down" : "neutral"}
         />
         <MetricCard
           title="Warnings"
           value={filteredStats.warnings?.total || 0}
           subtitle={filteredStats.warnings?.critical ? `${filteredStats.warnings.critical} critical` : "No critical issues"}
-          icon={<div className={cn("h-8 w-8 border rounded-full flex items-center justify-center", (filteredStats.warnings?.critical || 0) > 0 ? "border-white dark:border-black" : "border-white dark:border-black")}><AlertTriangle className={cn("h-4 w-4", (filteredStats.warnings?.critical || 0) > 0 ? "text-red-500" : "text-amber-600")} /></div>}
-          color={(filteredStats.warnings?.critical || 0) > 0 ? "bg-transparent" : "bg-transparent"}
           trend={(filteredStats.warnings?.critical || 0) > 0 ? "up" : "neutral"}
         />
       </div>
@@ -2668,49 +2650,49 @@ export default function MonitoringContent() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <Link 
               href={`/inventory/warnings?severity=critical${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg hover:border-2 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
+              className="flex items-center gap-3 p-4 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
             >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg transition-colors">
-                <Flame className="h-5 w-5 text-red-600 group-hover:text-red-500 transition-colors" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
+                <Flame className="h-5 w-5 text-red-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-red-600 group-hover:text-red-600 transition-colors">{warningsCounts.critical}</p>
-                <p className="text-xs text-red-600">Critical</p>
+                <p className="text-2xl font-bold text-red-600">{warningsCounts.critical}</p>
+                <p className="text-xs text-muted-foreground">Critical</p>
               </div>
             </Link>
             <Link 
               href={`/inventory/warnings?severity=high${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg hover:border-2  hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
+              className="flex items-center gap-3 p-4 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
             >
-              <div className="flex h-10 w-10 items-center justify-center transition-colors">
-                <ShieldAlert className="h-5 w-5 group-hover:text-orange-500 transition-colors" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
+                <ShieldAlert className="h-5 w-5 text-orange-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold group-hover:text-orange-600 transition-colors">{warningsCounts.high}</p>
+                <p className="text-2xl font-bold text-orange-600">{warningsCounts.high}</p>
                 <p className="text-xs text-muted-foreground">Major</p>
               </div>
             </Link>
             <Link 
               href={`/inventory/warnings?severity=warning${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg hover:border-2  hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
+              className="flex items-center gap-3 p-4 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
             >
-              <div className="flex h-10 w-10 items-center justify-center transition-colors">
-                <AlertTriangle className="h-5 w-5 group-hover:text-yellow-500 transition-colors" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
+                <AlertTriangle className="h-5 w-5 text-yellow-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold group-hover:text-yellow-600 transition-colors">{warningsCounts.warning}</p>
+                <p className="text-2xl font-bold text-yellow-600">{warningsCounts.warning}</p>
                 <p className="text-xs text-muted-foreground">Warning</p>
               </div>
             </Link>
             <Link 
               href={`/inventory/warnings?severity=low${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
-              className="flex items-center gap-3 p-4 rounded-lg hover:border-2  hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
+              className="flex items-center gap-3 p-4 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
             >
-              <div className="flex h-10 w-10 items-center justify-center transition-colors">
-                <Info className="h-5 w-5 group-hover:text-blue-500 transition-colors" />
+              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
+                <Info className="h-5 w-5 text-blue-500" />
               </div>
               <div>
-                <p className="text-2xl font-bold group-hover:text-blue-600 transition-colors">{warningsCounts.low + warningsCounts.info}</p>
+                <p className="text-2xl font-bold text-blue-600">{warningsCounts.low + warningsCounts.info}</p>
                 <p className="text-xs text-muted-foreground">Info</p>
               </div>
             </Link>
@@ -2751,7 +2733,7 @@ export default function MonitoringContent() {
           )}
           
           {warningsCounts.total === 0 && (
-            <div className="mt-4 text-center py-4 rounded-full border-2 border-green-500/20">
+            <div className="mt-4 text-center py-4 bg-green-500/5 rounded-lg border border-green-500/20">
               <p className="text-green-600 font-medium">✓ All systems operational - No active alarms</p>
             </div>
           )}

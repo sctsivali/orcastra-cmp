@@ -15,6 +15,7 @@ import {
   ChevronLeft,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -308,15 +309,12 @@ export default function CertificatesPage() {
             </p>
           </div>
         </div>
-        <Button
-          onClick={() => refetch()}
+        <RefreshButton
           disabled={isRefetching}
-          size="sm"
-          className="gap-2 shrink-0"
-        >
-          <RefreshCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
+          isRefreshing={isRefetching}
+          label="Refresh certificates"
+          onClick={() => refetch()}
+        />
       </div>
 
       {/* Summary Cards */}

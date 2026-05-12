@@ -23,6 +23,7 @@ import {
   Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -449,15 +450,12 @@ EOF`}
                 {clusters.length} {clusters.length === 1 ? "cluster" : "clusters"} registered
               </CardDescription>
             </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetch()}
+            <RefreshButton
               disabled={isRefetching}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${isRefetching ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
+              isRefreshing={isRefetching}
+              label="Refresh clusters"
+              onClick={() => refetch()}
+            />
           </div>
         </CardHeader>
         <CardContent>

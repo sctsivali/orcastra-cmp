@@ -4,6 +4,7 @@ import * as React from "react";
 import Link from "next/link";
 import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { LoadingLottieMediumEnhanced } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
@@ -819,19 +820,19 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         {/* Resource Usage */}
         <div className="grid grid-cols-3 gap-2 pt-2">
           {/* CPU */}
-          <div className="flex items-center gap-1.5 p-2 ">
-            <Cpu className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <div className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border">
+            <Cpu className="h-4 w-4 text-foreground/80 flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               {limits.cpuLimit ? (
                 <>
-                  <span className="text-xs font-semibold text-foreground">
+                  <span className="text-xs font-semibold text-foreground/80">
                     {resourceUsage.cpuUsed} of {limits.cpuLimit}
                   </span>
                   <span className="text-[10px] text-muted-foreground">cores</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-semibold text-foreground">
+                  <span className="text-xs font-semibold text-foreground/80">
                     Unlimited
                   </span>
                   <span className="text-[10px] text-muted-foreground">CPU</span>
@@ -841,19 +842,19 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
           </div>
 
           {/* RAM */}
-          <div className="flex items-center gap-1.5 p-2">
-            <MemoryStick className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <div className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border">
+            <MemoryStick className="h-4 w-4 text-foreground/80 flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               {limits.ramLimitBytes ? (
                 <>
-                  <span className="text-xs font-semibold text-foreground">
+                  <span className="text-xs font-semibold text-foreground/80">
                     {(resourceUsage.ramUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.ramLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
                   </span>
                   <span className="text-[10px] text-muted-foreground">GiB</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-semibold text-foreground">
+                  <span className="text-xs font-semibold text-foreground/80">
                     Unlimited
                   </span>
                   <span className="text-[10px] text-muted-foreground">RAM</span>
@@ -863,19 +864,19 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
           </div>
 
           {/* Storage */}
-          <div className="flex items-center gap-1.5 p-2 ">
-            <HardDrive className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <div className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border">
+            <HardDrive className="h-4 w-4 text-foreground/80 flex-shrink-0" />
             <div className="flex flex-col min-w-0">
               {limits.storageLimitBytes ? (
                 <>
-                  <span className="text-xs font-semibold text-foreground">
+                  <span className="text-xs font-semibold text-foreground/80">
                     {(resourceUsage.storageUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.storageLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
                   </span>
                   <span className="text-[10px] text-muted-foreground">GiB</span>
                 </>
               ) : (
                 <>
-                  <span className="text-xs font-semibold text-foreground">
+                  <span className="text-xs font-semibold text-foreground/80">
                     Unlimited
                   </span>
                   <span className="text-[10px] text-muted-foreground">Storage</span>
@@ -1202,18 +1203,12 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
             </p>
           )}
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
+        <RefreshButton
           disabled={isRefetching}
-          className="gap-2"
-        >
-          <RefreshCw
-            className={cn("h-4 w-4", isRefetching && "animate-spin")}
-          />
-          Refresh
-        </Button>
+          isRefreshing={isRefetching}
+          label="Refresh projects"
+          onClick={handleRefresh}
+        />
       </div>
 
       {/* Search Bar and Node Filter */}
