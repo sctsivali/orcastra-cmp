@@ -102,31 +102,31 @@ export function StatsOverview({ data, clustersData, isLoading, clustersLoading }
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       <StatCard
-        icon={<Server className="h-6 w-6 text-violet-600" />}
+        icon={<div className="h-8 w-8 border border-white dark:border-black rounded-full  flex items-center justify-center"><Server className="h-4 w-4 text-violet-600" /></div>}
         label="Total Instances"
         value={totalVMs}
         subtext={`${virtualMachines} VMs, ${containers} containers`}
-        color="bg-violet-100 dark:bg-violet-950"
+        color="bg-transparent"
         delay={0}
       />
       <StatCard
-        icon={<Activity className="h-6 w-6 text-emerald-600" />}
+        icon={<div className="h-8 w-8 border border-white dark:border-black rounded-full  flex items-center justify-center"><Activity className="h-4 w-4 text-emerald-600" /></div>}
         label="Running"
         value={runningVMs}
         subtext={`${Math.round((runningVMs / Math.max(totalVMs, 1)) * 100)}% of total`}
-        color="bg-emerald-100 dark:bg-emerald-950"
+        color="bg-transparent"
         delay={50}
       />
       <StatCard
-        icon={<HardDrive className="h-6 w-6 text-amber-600" />}
+        icon={<div className="h-8 w-8 border border-white dark:border-black rounded-full  flex items-center justify-center"><HardDrive className="h-4 w-4 text-amber-600" /></div>}
         label="Stopped"
         value={stoppedVMs}
         subtext="Available to start"
-        color="bg-amber-100 dark:bg-amber-950"
+        color="bg-transparent"
         delay={100}
       />
       <StatCard
-        icon={<Cpu className="h-6 w-6 text-blue-600" />}
+        icon={<div className="h-8 w-8 border border-white dark:border-black rounded-full  flex items-center justify-center"><Cpu className="h-4 w-4 text-blue-600" /></div>}
         label="Registered Clusters"
         value={totalClusters}
         subtext={[
@@ -134,7 +134,7 @@ export function StatsOverview({ data, clustersData, isLoading, clustersLoading }
           microcloudClusters > 0 ? `${microcloudClusters} MicroCloud` : null,
           incusClusters > 0 ? `${incusClusters} Incus` : null,
         ].filter(Boolean).join(", ") || "No clusters"}
-        color="bg-blue-100 dark:bg-blue-950"
+        color="bg-transparent"
         delay={150}
       />
     </div>

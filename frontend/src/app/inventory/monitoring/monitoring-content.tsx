@@ -1741,14 +1741,14 @@ export default function MonitoringContent() {
           title="Total Instances"
           value={filteredStats.total_instances}
           subtitle={selectedNode === "all" ? `${filteredStats.container_count} containers • ${filteredStats.vm_count} VMs` : `on ${selectedNode}`}
-          icon={<div className="h-8 w-8 border rounded-full flex border-white items-center justify-center"><Box className="h-4 w-4 text-blue-600" /></div>}
+          icon={<div className="h-8 w-8 border rounded-full flex border-white dark:border-black items-center justify-center"><Box className="h-4 w-4 text-blue-600" /></div>}
           color="bg-transparent"
         />
         <MetricCard
           title="Running"
           value={filteredStats.running_instances}
           subtitle={`${filteredStats.stopped_instances} stopped`}
-          icon={<div className="h-8 w-8 border border-white rounded-full  flex items-center justify-center"><Play className="h-4 w-4 text-green-600" /></div>}
+          icon={<div className="h-8 w-8 border border-white dark:border-black rounded-full  flex items-center justify-center"><Play className="h-4 w-4 text-green-600" /></div>}
           color="bg-transparent"
           progress={(filteredStats.running_instances / Math.max(filteredStats.total_instances, 1)) * 100}
         />
@@ -1756,7 +1756,7 @@ export default function MonitoringContent() {
           title="Nodes Online"
           value={`${filteredStats.online_nodes} / ${filteredStats.total_nodes}`}
           subtitle={filteredStats.inactive_nodes > 0 ? `${filteredStats.inactive_nodes} inactive` : "All nodes healthy"}
-          icon={<div className="h-8 w-8 border rounded-full border-white flex items-center justify-center"><Server className="h-4 w-4 text-purple-600" /></div>}
+          icon={<div className="h-8 w-8 border rounded-full border-white dark:border-black flex items-center justify-center"><Server className="h-4 w-4 text-purple-600" /></div>}
           color="bg-transparent"
           trend={filteredStats.inactive_nodes > 0 ? "down" : "neutral"}
         />
@@ -1764,7 +1764,7 @@ export default function MonitoringContent() {
           title="Warnings"
           value={filteredStats.warnings?.total || 0}
           subtitle={filteredStats.warnings?.critical ? `${filteredStats.warnings.critical} critical` : "No critical issues"}
-          icon={<div className={cn("h-8 w-8 border rounded-full flex items-center justify-center", (filteredStats.warnings?.critical || 0) > 0 ? "border-white" : "border-white")}><AlertTriangle className={cn("h-4 w-4", (filteredStats.warnings?.critical || 0) > 0 ? "text-red-500" : "text-amber-600")} /></div>}
+          icon={<div className={cn("h-8 w-8 border rounded-full flex items-center justify-center", (filteredStats.warnings?.critical || 0) > 0 ? "border-white dark:border-black" : "border-white dark:border-black")}><AlertTriangle className={cn("h-4 w-4", (filteredStats.warnings?.critical || 0) > 0 ? "text-red-500" : "text-amber-600")} /></div>}
           color={(filteredStats.warnings?.critical || 0) > 0 ? "bg-transparent" : "bg-transparent"}
           trend={(filteredStats.warnings?.critical || 0) > 0 ? "up" : "neutral"}
         />

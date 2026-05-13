@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import type { NodeStatus, NodeEnvironment } from "@/types/api";
 
 interface HardwareCategory {
-  icon: React.ElementType;
+  icon: React.ReactNode;
   title: string;
   description: string;
   items: { label: string; value: string; detail?: string }[];
@@ -147,7 +147,7 @@ export default function TechnologiesPage() {
 
     const categories: HardwareCategory[] = [
       {
-        icon: Cpu,
+        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Cpu className="h-4 w-4 text-purple-600" /></div>,
         title: "CPU Resources",
         description: "Processor information across all nodes",
         items: [
@@ -169,7 +169,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: HardDrive,
+        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><HardDrive className="h-4 w-4 text-purple-600" /></div>,
         title: "Memory",
         description: "RAM resources available in the cluster",
         items: [
@@ -191,7 +191,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: Database,
+        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Database className="h-4 w-4 text-purple-500" /></div>,
         title: "Storage",
         description: "Storage systems and backends",
         items: [
@@ -219,7 +219,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: Network,
+        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Network className="h-4 w-4 text-purple-600" /></div>,
         title: "Network",
         description: "Network infrastructure and connectivity",
         items: [
@@ -245,7 +245,7 @@ export default function TechnologiesPage() {
     // Add GPU category if GPUs are available
     if (totalGPUs > 0) {
       categories.push({
-        icon: Monitor,
+        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Monitor className="h-4 w-4 text-purple-600" /></div>,
         title: "GPU Resources",
         description: "Graphics processing units for acceleration",
         items: [
@@ -315,14 +315,11 @@ export default function TechnologiesPage() {
           {hardwareInfo && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {hardwareInfo.map((category) => {
-                const Icon = category.icon;
                 return (
                   <Card key={category.title} className="hover:shadow-md transition-all duration-200">
                     <CardHeader>
                       <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-lg bg-primary/10">
-                          <Icon className="h-6 w-6 text-primary" />
-                        </div>
+                        {category.icon}
                         <div>
                           <CardTitle>{category.title}</CardTitle>
                           <CardDescription>{category.description}</CardDescription>
@@ -420,8 +417,8 @@ export default function TechnologiesPage() {
                   <CardHeader>
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="p-2 rounded-lg bg-violet-500/10">
-                          <Icon className="h-5 w-5 text-violet-600 dark:text-violet-400" />
+                        <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center">
+                          <Icon className="h-4 w-4 text-violet-600 dark:text-violet-400" />
                         </div>
                         <div>
                           <CardTitle className="text-lg">{software.name}</CardTitle>
