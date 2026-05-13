@@ -57,32 +57,32 @@ export default function HomePage() {
     {
       icon: Server,
       title: "Multi-Node Management",
-      description: "Manage multiple LXD nodes from a single, unified dashboard interface.",
+      description: "Operate nodes accros regions from a single unified dashboard interface",
     },
     {
       icon: Cloud,
       title: "Virtual Machines & Containers",
-      description: "Deploy and manage both VMs and containers with ease using LXD technology.",
+      description: "Provision, inspect, and operate system containers and virtual machines with project-scoped access.",
     },
     {
       icon: Database,
       title: "Resource Monitoring",
-      description: "Real-time monitoring of CPU, memory, storage, and network resources.",
+      description: "Track CPU, memory, storage, GPU, and network health from live cluster telemetry.",
     },
     {
       icon: Zap,
       title: "High Performance",
-      description: "Built on enterprise-grade infrastructure for maximum reliability and speed.",
+      description: "Use host-native virtualization, snapshots, and storage backends designed for production workloads.",
     },
     {
       icon: Shield,
       title: "Secure by Design",
-      description: "Enterprise security with TLS encryption and role-based access control.",
+      description: "Protect operations with TLS-backed node access, scoped API keys, and tenant access policies.",
     },
     {
       icon: TrendingUp,
       title: "Scalable Architecture",
-      description: "Scale from a single node to hundreds with our flexible architecture.",
+      description: "Organize capacity by clusters, regions, organizations, and projects as your environment grows.",
     },
   ];
 
@@ -218,7 +218,7 @@ export default function HomePage() {
         <div className="text-center space-y-2">
           <h2 className="text-3xl font-bold">Platform Features</h2>
           <p className="text-muted-foreground">
-            Everything you need to manage your infrastructure efficiently
+            Production controls for operating LXD infrastructure with visibility and scoped access
           </p>
         </div>
 

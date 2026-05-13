@@ -541,10 +541,7 @@ export function RegionsPage() {
 
         {/* Regions list - full width since filters are hidden */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Regions</h2>
-            <Badge variant="secondary">{filteredRegions.length} regions</Badge>
-          </div>
+          <h2 className="text-lg font-semibold">Regions</h2>
 
           {isLoading ? (
             <div className="space-y-4">

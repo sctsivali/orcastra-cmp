@@ -31,8 +31,7 @@ export function IntegrationClusterAccessList({ clusters }: IntegrationClusterAcc
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground sm:justify-end">
-              <span className="font-medium text-foreground">{cluster.permissionLabel}</span>
-              <span>{cluster.projectsLabel}</span>
+              <span className="font-medium text-foreground">{cluster.projectsLabel}</span>
             </div>
           </div>
         ))}

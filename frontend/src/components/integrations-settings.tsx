@@ -485,7 +485,8 @@ export function IntegrationsSettings() {
   if (vaultUnavailable) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Integrations</h2>
           <p className="text-sm text-muted-foreground">
             Manage API keys for external applications
           </p>
@@ -513,10 +514,13 @@ export function IntegrationsSettings() {
   return (
     <div className="space-y-6">
       {/* Header with actions */}
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          Manage API keys for external applications
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">Integrations</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Manage API keys for external applications
+          </p>
+        </div>
         <div className="flex gap-2">
           <RefreshButton
             disabled={isRefetching}

@@ -25,6 +25,32 @@ interface SoftwareItem {
   icon: React.ElementType;
 }
 
+function cleanVersion(value?: string | null): string {
+  return String(value || "").replace(/^v/i, "").trim();
+}
+
+function cleanDriverVersion(value?: string | null): string {
+  const normalized = cleanVersion(value);
+  if (!normalized) return "";
+  const parts = normalized.split("|").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : normalized;
+}
+
+function formatStorageVersion(env: NodeEnvironment | null, nodes: NodeStatus[]): string {
+  const storageName = cleanVersion(env?.storage as string | undefined);
+  const storageVersion = cleanVersion(env?.storage_version as string | undefined);
+
+  if (storageName && storageVersion) return `${storageName} ${storageVersion}`;
+  if (storageVersion) return storageVersion;
+  if (storageName) return storageName;
+
+  const storageBackends = new Set(
+    nodes.flatMap((node) => node.resources?.storage_pools?.map((pool) => pool.driver) || [])
+  );
+
+  return Array.from(storageBackends).filter(Boolean).join(", ");
+}
+
 // Helper function to generate software stack with real versions
 function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   // Aggregate environment data from connected nodes
@@ -32,11 +58,13 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   const firstEnv: NodeEnvironment | null = connectedNodes[0]?.environment || null;
   
   // Get versions from first connected node's environment
-  const lxdVersion = connectedNodes[0]?.server_version || "";
-  const kernelVersion = firstEnv?.kernel_version || "";
-  const osVersion = firstEnv?.os_version || "";
-  const driverVersion = firstEnv?.driver_version || "";
-  const storageVersion = firstEnv?.storage_version || "";
+  const lxdVersion = cleanVersion(connectedNodes[0]?.server_version || firstEnv?.server_version as string | undefined);
+  const kernelVersion = cleanVersion(firstEnv?.kernel_version);
+  const osName = String(firstEnv?.os_name || "Linux");
+  const osVersion = cleanVersion(firstEnv?.os_version);
+  const driverVersion = cleanDriverVersion(firstEnv?.driver_version as string | undefined);
+  const storageVersion = formatStorageVersion(firstEnv, connectedNodes);
+  const firewallStack = cleanVersion(firstEnv?.firewall as string | undefined);
   
   return [
     {
@@ -47,9 +75,9 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
       icon: Server,
     },
     {
-      name: "Ubuntu",
+      name: osName,
       version: osVersion,
-      purpose: "Enterprise-grade Linux operating system with long-term support",
+      purpose: "Host operating system reported by the connected LXD node inventory",
       category: "Operating System",
       icon: Server,
     },
@@ -61,30 +89,30 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
       icon: Cpu,
     },
     {
-      name: "ZFS",
-      version: storageVersion && storageVersion.includes("zfs") ? storageVersion : "",
-      purpose: "Advanced filesystem with data integrity and snapshot capabilities",
+      name: "Storage Backend",
+      version: storageVersion,
+      purpose: "Storage pool backend used for volumes, images, snapshots, and instance disks",
       category: "Storage",
       icon: Database,
     },
     {
       name: "QEMU/KVM",
       version: driverVersion,
-      purpose: "Kernel-based virtual machine for full virtualization",
+      purpose: "Virtual machine acceleration provided through Linux KVM and the LXD VM driver",
       category: "Virtualization",
       icon: Server,
     },
     {
-      name: "Open vSwitch",
-      version: "",
-      purpose: "Production-quality multilayer virtual switch",
+      name: "Network Stack",
+      version: firewallStack,
+      purpose: "Linux bridge, firewall, and optional OVN/Open vSwitch networking used by LXD networks",
       category: "Networking",
       icon: Network,
     },
     {
-      name: "containerd",
+      name: "LXC",
       version: "",
-      purpose: "Container runtime for managing container lifecycle",
+      purpose: "Linux system container runtime used by LXD for container workloads",
       category: "Container Runtime",
       icon: Package,
     },
@@ -402,10 +430,10 @@ export default function TechnologiesPage() {
                 <Info className="h-5 w-5 text-blue-500 mt-0.5" />
                 <div>
                   <p className="text-sm font-medium mb-1">
-                    Production Software Stack
+                    Live Production Software Inventory
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Orcastra leverages enterprise-grade open-source software to deliver reliable, scalable infrastructure management. All software versions are actively maintained and regularly updated.
+                    Versions below are detected from connected LXD nodes. Missing version badges mean the node API does not report that component directly; updates are managed through the host operating system and LXD channel.
                   </p>
                 </div>
               </div>
@@ -427,7 +455,7 @@ export default function TechnologiesPage() {
                           <CardTitle className="text-lg">{software.name}</CardTitle>
                           {software.version && (
                             <Badge variant="secondary" className="mt-1 text-xs font-mono">
-                              v{software.version}
+                              {software.version}
                             </Badge>
                           )}
                         </div>

@@ -473,7 +473,11 @@ function PolicyEditorDialog({
 // Main Exported Component
 // ============================================
 
-export function PolicyManagementSection() {
+interface PolicyManagementSectionProps {
+  showRefresh?: boolean;
+}
+
+export function PolicyManagementSection({ showRefresh = true }: PolicyManagementSectionProps) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -597,14 +601,16 @@ export function PolicyManagementSection() {
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              <RefreshButton
-                className="h-7 w-7"
-                disabled={policiesFetching}
-                iconClassName="h-3.5 w-3.5"
-                isRefreshing={policiesFetching}
-                label="Refresh access policies"
-                onClick={() => refetchPolicies()}
-              />
+              {showRefresh && (
+                <RefreshButton
+                  className="h-7 w-7"
+                  disabled={policiesFetching}
+                  iconClassName="h-3.5 w-3.5"
+                  isRefreshing={policiesFetching}
+                  label="Refresh access policies"
+                  onClick={() => refetchPolicies()}
+                />
+              )}
               <Button size="sm" onClick={() => setCreateOpen(true)} className="h-7 text-xs">
                 <Plus className="h-3.5 w-3.5 mr-1" />
                 Create Policy
