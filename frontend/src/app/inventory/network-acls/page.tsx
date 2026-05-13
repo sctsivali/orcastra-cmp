@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { RotateCw, Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Search, ArrowUp, ArrowDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworkACLs } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -142,10 +142,12 @@ export default function NetworkACLsPage() {
             Manage hypervisor network access control lists
           </p>
         </div>
-        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
-          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
+        <RefreshButton
+          disabled={isRefetching}
+          isRefreshing={isRefetching}
+          label="Refresh network ACLs"
+          onClick={() => refetch()}
+        />
       </div>
 
       <Card>

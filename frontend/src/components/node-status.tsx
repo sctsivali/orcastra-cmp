@@ -2,10 +2,11 @@
 
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, XCircle, Server, RefreshCw, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
+import { CheckCircle2, XCircle, Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LXDVersionChecker } from "./lxd-version-checker";
 import {
@@ -155,10 +156,10 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <div
               className={cn(
-                "flex h-10 w-10 items-center justify-center shrink-0",
+                "flex h-10 w-10 items-center justify-center rounded-lg shrink-0",
                 node.connected
-                  ? " text-emerald-600 dark:text-emerald-400"
-                  : " text-red-600 dark:text-red-400"
+                  ? "bg-emerald-500 text-white"
+                  : "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400"
               )}
             >
               <NodeIcon className="h-5 w-5" />
@@ -458,22 +459,16 @@ export function NodeStatusCards() {
     <>
       <div className="space-y-4">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div>
             <h2 className="text-lg font-semibold">Clusters</h2>
             {data?.nodes && data.nodes.length > 0 ? (
               data.all_connected ? (
-                <Badge variant="success" className="text-xs">
-                  All Connected
-                </Badge>
+                <p className="text-xs text-muted-foreground mt-1">All Connected</p>
               ) : (
-                <Badge variant="warning" className="text-xs">
-                  Some nodes not connected
-                </Badge>
+                <p className="text-xs text-muted-foreground mt-1">Some nodes not connected</p>
               )
             ) : (
-              <Badge variant="secondary" className="text-xs">
-                No Clusters
-              </Badge>
+              <p className="text-xs text-muted-foreground mt-1">No Clusters</p>
             )}
             {selectedTags.length > 0 && (
               <Badge variant="outline" className="text-xs">
@@ -481,20 +476,12 @@ export function NodeStatusCards() {
               </Badge>
             )}
           </div>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => refetch()}
-              disabled={isRefetching}
-              className="gap-2"
-            >
-              <RefreshCw
-                className={cn("h-4 w-4", isRefetching && "animate-spin")}
-              />
-              Refresh
-            </Button>
-          </div>
+          <RefreshButton
+            disabled={isRefetching}
+            isRefreshing={isRefetching}
+            label="Refresh clusters"
+            onClick={() => refetch()}
+          />
         </div>
 
         {/* Tag Filter */}

@@ -19,6 +19,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
@@ -87,6 +88,7 @@ export function ISOManagerPanel({
   const [error, setError] = useState<string | null>(null);
   const [confirmEject, setConfirmEject] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [refreshingISOs, setRefreshingISOs] = useState(false);
 
   const { setAttachedISO } = useConsoleStore();
 
@@ -247,6 +249,15 @@ export function ISOManagerPanel({
     iso.pool.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const handleRefreshISOs = useCallback(async () => {
+    setRefreshingISOs(true);
+    try {
+      await fetchAvailableISOs();
+    } finally {
+      setRefreshingISOs(false);
+    }
+  }, [fetchAvailableISOs]);
+
   if (loading) {
     return (
       <div className={cn("flex items-center justify-center h-full", className)}>
@@ -313,13 +324,14 @@ export function ISOManagerPanel({
         <div className="p-4 pb-2">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-medium">Available ISOs</h3>
-            <Button
+            <RefreshButton
+              className="h-8 w-8"
+              disabled={refreshingISOs}
+              isRefreshing={refreshingISOs}
+              label="Refresh ISOs"
+              onClick={handleRefreshISOs}
               variant="ghost"
-              size="sm"
-              onClick={fetchAvailableISOs}
-            >
-              <RefreshCw className="h-4 w-4" />
-            </Button>
+            />
           </div>
           
           <Input

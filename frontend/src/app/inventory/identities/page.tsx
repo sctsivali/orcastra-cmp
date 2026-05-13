@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,7 +37,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { RotateCw, Search, Trash2, MoreVertical } from "lucide-react";
+import { Search, Trash2, MoreVertical } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useIdentities, useDeleteIdentity } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -149,10 +150,12 @@ export default function IdentitiesPage() {
             Manage hypervisor user identities
           </p>
         </div>
-        <Button onClick={() => refetch()} disabled={isRefetching} variant="outline" size="sm" className="gap-2">
-          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
+        <RefreshButton
+          disabled={isRefetching}
+          isRefreshing={isRefetching}
+          label="Refresh identities"
+          onClick={() => refetch()}
+        />
       </div>
 
       <Card>

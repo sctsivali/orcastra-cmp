@@ -1,13 +1,25 @@
-/**
- * Next.js Middleware for Authentication
- *
- * This middleware runs on every request and ensures:
- * - All protected routes require authentication
- * - Unauthenticated users are redirected to sign-in page
- * - Auth pages are accessible without authentication
- */
+import { auth } from "@/auth";
+import { inspectRequestTarget } from "@/lib/request-security";
+import { NextResponse } from "next/server";
 
-export { auth as middleware } from "@/auth";
+export default auth((request) => {
+  const decision = inspectRequestTarget(
+    request.method,
+    request.nextUrl.pathname,
+    request.nextUrl.search
+  );
+
+  if (decision) {
+    return new NextResponse(decision.statusCode === 404 ? "Not found" : "Method not allowed", {
+      status: decision.statusCode,
+      headers: {
+        "X-Orcastra-Security-Action": decision.reason,
+      },
+    });
+  }
+
+  return undefined;
+});
 
 export const config = {
   // Match all routes except static assets and API routes handled by NextAuth

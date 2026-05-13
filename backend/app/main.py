@@ -4,7 +4,6 @@ Main FastAPI application entry point.
 """
 
 import logging
-import time
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
@@ -20,7 +19,12 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
-from app.middleware import RequestIdMiddleware, AccessLogMiddleware
+from app.middleware import (
+    AccessLogMiddleware,
+    RequestIdMiddleware,
+    RequestSecurityMiddleware,
+    SecurityHeadersMiddleware,
+)
 from app.routers import (
     vms_router, 
     images_router, 
@@ -55,12 +59,6 @@ setup_logging(
     json_logs=not settings_for_logging.debug  # JSON in production, human-readable in dev
 )
 logger = logging.getLogger(__name__)
-
-# Rate limiting storage - bounded dict to prevent memory leaks
-# key: bucket_key (user_id or IP), value: list of timestamps
-_MAX_RATE_BUCKETS = 10_000
-rate_limit_storage: dict[str, list[float]] = {}
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -350,6 +348,9 @@ Ensure your client certificates are properly configured.
     # Add GZip compression middleware
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     
+    # Block scanner probes and enforce IP plus subnet-aware throttling before routing
+    app.add_middleware(RequestSecurityMiddleware, settings=settings)
+    
     # Add Access Log middleware (logs HTTP requests in structured JSON)
     app.add_middleware(
         AccessLogMiddleware,
@@ -360,88 +361,8 @@ Ensure your client certificates are properly configured.
     # Add Request ID middleware (must be added before access log to generate IDs)
     app.add_middleware(RequestIdMiddleware)
     
-    # Add security headers middleware
-    @app.middleware("http")
-    async def add_security_headers(request: Request, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        return response
-    
-    # Add rate limiting middleware
-    @app.middleware("http")
-    async def rate_limit_middleware(request: Request, call_next):
-        if not settings.rate_limit_enabled:
-            return await call_next(request)
-        
-        # skip preflight requests - they must never be rate-limited
-        if request.method == "OPTIONS":
-            return await call_next(request)
-        
-        # use authenticated user (JWT sub) as bucket key when available,
-        # fallback to client IP - avoids all Docker users sharing one bucket
-        bucket_key = request.client.host
-        auth_header = request.headers.get("authorization", "")
-        if auth_header.startswith("Bearer "):
-            import jwt as _jwt
-            try:
-                payload = _jwt.decode(
-                    auth_header[7:],
-                    options={"verify_signature": False},  # just extract sub
-                )
-                bucket_key = f"user:{payload.get('sub', bucket_key)}"
-            except Exception:
-                pass  # fallback to IP
-        
-        current_time = time.time()
-        
-        # Evict oldest bucket if storage is at capacity (prevents unbounded growth)
-        if bucket_key not in rate_limit_storage and len(rate_limit_storage) >= _MAX_RATE_BUCKETS:
-            oldest_key = min(rate_limit_storage, key=lambda k: rate_limit_storage[k][-1] if rate_limit_storage[k] else 0)
-            del rate_limit_storage[oldest_key]
-        
-        # Ensure bucket exists
-        if bucket_key not in rate_limit_storage:
-            rate_limit_storage[bucket_key] = []
-        
-        # Clean old requests (older than 1 minute)
-        rate_limit_storage[bucket_key] = [
-            req_time for req_time in rate_limit_storage[bucket_key]
-            if current_time - req_time < 60
-        ]
-        
-        # Periodically prune stale empty buckets (every ~100 requests)
-        if len(rate_limit_storage) > 100 and hash(bucket_key) % 100 == 0:
-            stale_keys = [
-                k for k, v in rate_limit_storage.items()
-                if not v or (current_time - v[-1] > 120)
-            ]
-            for k in stale_keys:
-                if k != bucket_key:
-                    del rate_limit_storage[k]
-        
-        # Check rate limit - return JSONResponse instead of raising so CORS
-        # headers are preserved (HTTPException bypasses CORS middleware)
-        if len(rate_limit_storage[bucket_key]) >= settings.rate_limit_requests:
-            logger.warning(f"Rate limit exceeded for: {bucket_key}")
-            origin = request.headers.get("origin", "")
-            response = JSONResponse(
-                status_code=429,
-                content={"detail": "Rate limit exceeded. Please try again later."},
-            )
-            # attach CORS headers so the browser can read the error
-            if origin:
-                response.headers["Access-Control-Allow-Origin"] = origin
-                response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Retry-After"] = "30"
-            return response
-        
-        # Add current request
-        rate_limit_storage[bucket_key].append(current_time)
-        
-        return await call_next(request)
+    # Add security headers outermost so blocked responses are hardened too
+    app.add_middleware(SecurityHeadersMiddleware)
     
     # Register routers
     app.include_router(vms_router, prefix=settings.api_prefix)

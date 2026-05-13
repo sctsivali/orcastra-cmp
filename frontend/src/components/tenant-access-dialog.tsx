@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter,
+  Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,6 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -375,8 +374,8 @@ function InlinePolicyEditor({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             {isEdit ? "Edit Policy" : "Create Access Policy"}
           </DialogTitle>
@@ -387,7 +386,7 @@ function InlinePolicyEditor({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 pr-4 -mr-4">
+        <DialogBody className="-mr-2 pr-2">
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="inline-policy-name" className="text-xs">Policy Name</Label>
@@ -462,9 +461,9 @@ function InlinePolicyEditor({
               </div>
             </div>
           </div>
-        </ScrollArea>
+        </DialogBody>
 
-        <DialogFooter className="pt-3 border-t">
+        <DialogFooter className="shrink-0 pt-3 border-t">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit || isPending}>
             {isPending && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
@@ -689,9 +688,9 @@ export function TenantAccessDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-3xl max-h-[90vh] flex flex-col p-0">
+        <DialogContent className="max-w-3xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden p-0">
           {/* Header */}
-          <div className="px-6 pt-6 pb-4 border-b">
+          <div className="px-6 pt-6 pb-4 border-b shrink-0">
             <DialogHeader>
               <DialogTitle className="text-lg">
                 Manage Access
@@ -718,8 +717,7 @@ export function TenantAccessDialog({
           </div>
 
           {/* Body */}
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="px-6 py-4 space-y-6">
+          <DialogBody className="px-6 py-4 space-y-6">
               {isLoading ? (
                 <div className="flex items-center justify-center py-16">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -861,11 +859,10 @@ export function TenantAccessDialog({
                   </div>
                 </>
               )}
-            </div>
-          </ScrollArea>
+          </DialogBody>
 
           {/* Footer */}
-          <div className="px-6 py-3 border-t flex justify-end">
+          <div className="px-6 py-3 border-t flex justify-end shrink-0">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Close
             </Button>

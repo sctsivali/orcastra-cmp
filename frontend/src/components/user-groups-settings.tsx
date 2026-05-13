@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useIsFetching, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
   CardContent,
@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -47,7 +48,6 @@ import {
   AlertCircle,
   Loader2,
   Plus,
-  RefreshCw,
   Trash2,
   Users,
   Building2,
@@ -56,6 +56,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { api, integrationsAPI } from "@/lib/api";
+import { toast } from "@/hooks/use-toast";
 import { PolicyManagementSection } from "@/components/policy-management-section";
 import { TenantAccessDialog } from "@/components/tenant-access-dialog";
 import type {
@@ -91,6 +92,10 @@ function roleBadge(role: string) {
 
 export function UserGroupsSettings() {
   const queryClient = useQueryClient();
+  const policiesFetching = useIsFetching({ queryKey: ["tenant-access-policies"] });
+  const integrationOrgsFetching = useIsFetching({ queryKey: ["integration-organizations"] });
+  const organizationsFetching = useIsFetching({ queryKey: ["organizations"] });
+  const clustersFetching = useIsFetching({ queryKey: ["clusters"] });
   const [assignOpen, setAssignOpen] = useState(false);
   const [deleteEmail, setDeleteEmail] = useState<string | null>(null);
   const [accessEmail, setAccessEmail] = useState<string | null>(null);
@@ -105,6 +110,7 @@ export function UserGroupsSettings() {
   const {
     data: users,
     isLoading: usersLoading,
+    isFetching: usersFetching,
     error: usersError,
     refetch: refetchUsers,
   } = useQuery({
@@ -119,7 +125,7 @@ export function UserGroupsSettings() {
   });
 
   // fetch identity provider sync status
-  const { data: syncStatus, refetch: refetchSync } = useQuery({
+  const { data: syncStatus, refetch: refetchSync, isFetching: syncStatusFetching } = useQuery({
     queryKey: ["user-groups-sync-status"],
     queryFn: () => api.userGroups.syncStatus(),
     refetchInterval: 30000, // check every 30s
@@ -152,6 +158,13 @@ export function UserGroupsSettings() {
 
   // org is required for partner/tenant roles
   const orgRequired = role === "partner" || role === "tenant";
+  const isRefreshingAll =
+    usersFetching ||
+    syncStatusFetching ||
+    policiesFetching > 0 ||
+    integrationOrgsFetching > 0 ||
+    organizationsFetching > 0 ||
+    clustersFetching > 0;
 
   // simple email regex (RFC 5322 simplified)
   const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
@@ -167,6 +180,30 @@ export function UserGroupsSettings() {
     });
   }
 
+  async function handleRefreshAll() {
+    try {
+      await Promise.all([
+        refetchSync(),
+        refetchUsers(),
+        queryClient.refetchQueries({ queryKey: ["tenant-access-policies"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["integration-organizations"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["organizations"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["clusters"], type: "active" }),
+      ]);
+
+      toast({
+        title: "User access refreshed",
+        description: "Sync status, policies, users, and organizations are up to date.",
+      });
+    } catch (error) {
+      toast({
+        title: "Refresh failed",
+        description: error instanceof Error ? error.message : "Unable to refresh user access data.",
+        variant: "destructive",
+      });
+    }
+  }
+
   // helper: open access dialog for a tenant user
   const openAccessDialog = (user: UserGroupEntry) => {
     setAccessEmail(user.user_email);
@@ -175,18 +212,30 @@ export function UserGroupsSettings() {
 
   return (
     <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 className="text-2xl font-bold">User Groups</h2>
+          <p className="text-sm text-muted-foreground mt-1">
+            Manage user roles, organizations, access policies, and identity provider sync.
+          </p>
+        </div>
+        <RefreshButton
+          disabled={isRefreshingAll}
+          isRefreshing={isRefreshingAll}
+          label="Refresh user groups, policies, and sync status"
+          onClick={handleRefreshAll}
+        />
+      </div>
+
       {/* Identity Provider Sync Status */}
       <Card>
         <CardHeader className="pb-3">
           <div>
             <CardTitle className="text-base flex items-center gap-2">
               Identity Provider Sync Status
-              <Badge variant="outline" className="text-xs text-muted-foreground">
-                Authentik
-              </Badge>
             </CardTitle>
             <CardDescription className="mt-1 text-xs">
-              User roles and group memberships are synchronized from your identity provider.
+              User roles and group memberships are synchronized from your identity provider (Authentik).
             </CardDescription>
           </div>
         </CardHeader>
@@ -197,16 +246,10 @@ export function UserGroupsSettings() {
                 <>
                   <Wifi className="h-4 w-4 text-green-500" />
                   <span className="text-sm text-green-600 dark:text-green-400">
-                    Connected — role changes sync automatically
+                    {syncStatus.groups_exist
+                      ? "Connected — role changes and groups sync automatically"
+                      : "Connected — role changes sync automatically"}
                   </span>
-                  {syncStatus.groups_exist && (
-                    <Badge
-                      variant="outline"
-                      className="text-xs bg-green-500/10 text-green-600 border-green-500/20"
-                    >
-                      Groups OK
-                    </Badge>
-                  )}
                 </>
               ) : (
                 <>
@@ -224,20 +267,12 @@ export function UserGroupsSettings() {
                 </span>
               </>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="ml-auto h-8 w-8"
-              onClick={() => refetchSync()}
-            >
-              <RefreshCw className="h-3.5 w-3.5" />
-            </Button>
           </div>
         </CardContent>
       </Card>
 
       {/* Access Policies Management */}
-      <PolicyManagementSection />
+      <PolicyManagementSection showRefresh={false} />
 
       {/* User Groups Table */}
       <Card>
@@ -245,7 +280,7 @@ export function UserGroupsSettings() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>
-                User Groups
+                Assigned Users
               </CardTitle>
               <CardDescription className="mt-1.5">
                 Assign roles and organizations to users by email. Changes sync
@@ -253,17 +288,6 @@ export function UserGroupsSettings() {
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => refetchUsers()}
-                disabled={usersLoading}
-              >
-                <RefreshCw
-                  className={`h-4 w-4 mr-1.5 ${usersLoading ? "animate-spin" : ""}`}
-                />
-                Refresh
-              </Button>
               <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm" onClick={resetForm}>

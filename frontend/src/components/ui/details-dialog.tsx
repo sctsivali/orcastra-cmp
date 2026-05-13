@@ -2,13 +2,13 @@
 
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { 
   HardDrive, 
   Network, 
@@ -29,14 +29,14 @@ interface UsedByDialogProps {
 export function UsedByDialog({ open, onOpenChange, title, items }: UsedByDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {items.length} item{items.length !== 1 ? "s" : ""} using this resource
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className="max-h-[400px] pr-4">
+        <DialogBody className="pr-4">
           <div className="space-y-2">
             {items.length === 0 ? (
               <p className="text-muted-foreground text-center py-8">No items found</p>
@@ -50,7 +50,7 @@ export function UsedByDialog({ open, onOpenChange, title, items }: UsedByDialogP
               ))
             )}
           </div>
-        </ScrollArea>
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );
@@ -103,14 +103,14 @@ export function DevicesDialog({ open, onOpenChange, devices }: DevicesDialogProp
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[85dvh] max-h-[85vh] overscroll-contain">
+      <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden overscroll-contain">
         <DialogHeader>
           <DialogTitle className="text-xl">Devices Configuration</DialogTitle>
           <DialogDescription>
             {deviceEntries.length} device{deviceEntries.length !== 1 ? "s" : ""} configured
           </DialogDescription>
         </DialogHeader>
-        <ScrollArea className="max-h-[calc(85dvh-8rem)] max-h-[calc(85vh-8rem)] pr-4">
+        <DialogBody className="pr-4">
           <div className="space-y-3">
             {deviceEntries.length === 0 ? (
               <p className="text-muted-foreground text-center py-8">No devices configured</p>
@@ -155,7 +155,7 @@ export function DevicesDialog({ open, onOpenChange, devices }: DevicesDialogProp
               ))
             )}
           </div>
-        </ScrollArea>
+        </DialogBody>
       </DialogContent>
     </Dialog>
   );

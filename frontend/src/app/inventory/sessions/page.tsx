@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -336,9 +337,7 @@ function ActiveSessionsTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Active</p>
               <p className="text-2xl font-bold mt-1">{sessions.length}</p>
             </div>
-            <div className="h-10 w-10 rounded-full border border-primary flex items-center justify-center">
-              <Wifi className="h-5 w-5 text-primary" />
-            </div>
+            <Wifi className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
         </Card>
 
@@ -348,9 +347,7 @@ function ActiveSessionsTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Download</p>
               <p className="text-lg font-bold mt-1 font-mono">↓{formatRate(totalDlRate)}</p>
             </div>
-            <div className="h-10 w-10 rounded-full border border-green-500 flex items-center justify-center">
-              <ArrowDownToLine className="h-5 w-5 text-green-500" />
-            </div>
+            <ArrowDownToLine className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
         </Card>
 
@@ -360,9 +357,7 @@ function ActiveSessionsTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Upload</p>
               <p className="text-lg font-bold mt-1 font-mono">↑{formatRate(totalUlRate)}</p>
             </div>
-            <div className="h-10 w-10 rounded-full border border-blue-500 flex items-center justify-center">
-              <ArrowUpFromLine className="h-5 w-5 text-blue-500" />
-            </div>
+            <ArrowUpFromLine className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
         </Card>
       </div>
@@ -557,9 +552,7 @@ function SessionHistoryTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Past Sessions</p>
               <p className="text-2xl font-bold mt-1">{disconnects.length}</p>
             </div>
-            <div className="h-10 w-10 rounded-full border border-primary flex items-center justify-center">
-              <History className="h-5 w-5 text-primary" />
-            </div>
+            <History className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
         </Card>
 
@@ -569,9 +562,7 @@ function SessionHistoryTab() {
               <p className="text-xs text-muted-foreground uppercase tracking-wider">Total Time</p>
               <p className="text-lg font-bold mt-1 font-mono">{formatDuration(totalDuration)}</p>
             </div>
-            <div className="h-10 w-10 rounded-full border border-orange-500 flex items-center justify-center">
-              <Clock className="h-5 w-5 text-orange-500" />
-            </div>
+            <Clock className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
         </Card>
 
@@ -585,9 +576,7 @@ function SessionHistoryTab() {
                 <span>↑{formatBytes(totalUl)}</span>
               </p>
             </div>
-            <div className="h-10 w-10 rounded-full border border-purple-500 flex items-center justify-center">
-              <Activity className="h-5 w-5 text-purple-500" />
-            </div>
+            <Activity className="h-8 w-8 shrink-0 text-muted-foreground" />
           </CardContent>
         </Card>
       </div>
@@ -604,9 +593,14 @@ function SessionHistoryTab() {
             </div>
             <div className="flex items-center gap-2">
               <SearchInput value={searchTerm} onChange={(v) => { setSearchTerm(v); setCurrentPage(1); }} placeholder="Filter..." />
-              <Button variant="outline" size="sm" onClick={() => fetchLogs(true)} disabled={loading}>
-                <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-              </Button>
+              <RefreshButton
+                className="h-9 w-9"
+                disabled={loading}
+                iconClassName="h-3.5 w-3.5"
+                isRefreshing={loading}
+                label="Refresh session history"
+                onClick={() => fetchLogs(true)}
+              />
             </div>
           </div>
         </CardHeader>

@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -20,7 +20,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { RotateCw, Settings } from "lucide-react";
 import { ServerInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useServerInfo } from "@/hooks/use-lxd";
@@ -48,8 +47,7 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader className="pr-8 flex-shrink-0">
-            <DialogTitle className="text-xl flex items-center gap-2">
-              <Settings className="h-5 w-5" />
+            <DialogTitle className="text-xl">
               Configuration Items
             </DialogTitle>
             <DialogDescription>
@@ -127,10 +125,12 @@ export default function ServerPage() {
             View hypervisor server details and configuration
           </p>
         </div>
-        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
-          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
+        <RefreshButton
+          disabled={isRefetching}
+          isRefreshing={isRefetching}
+          label="Refresh server information"
+          onClick={() => refetch()}
+        />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">

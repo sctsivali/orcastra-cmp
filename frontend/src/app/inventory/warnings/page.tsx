@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -33,7 +34,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { AlertTriangle, RotateCw, X, Info, Filter, Flame, ShieldAlert, HelpCircle, Server, FolderOpen, Shield, KeyRound, Wifi, WifiOff } from "lucide-react";
+import { AlertTriangle, X, Info, Filter, Flame, ShieldAlert, HelpCircle, Server, FolderOpen, Shield, KeyRound, Wifi, WifiOff } from "lucide-react";
 import { useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import {
@@ -50,7 +51,7 @@ function WarningsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { data, isLoading, refetch, isRefetching } = useWarnings();
-  const { data: systemWarnings, isLoading: isLoadingSystem, refetch: refetchSystem } = useSystemWarnings();
+  const { data: systemWarnings, isLoading: isLoadingSystem, refetch: refetchSystem, isRefetching: isRefetchingSystem } = useSystemWarnings();
   const allWarnings = (data as any)?.warnings || [];
   
   // Certificate and node warnings from system warnings
@@ -157,9 +158,9 @@ function WarningsContent() {
   }
   
   const handleRefreshAll = () => {
-    refetch();
-    refetchSystem();
+    void Promise.all([refetch(), refetchSystem()]);
   };
+  const isRefreshingWarnings = isRefetching || isRefetchingSystem;
 
   return (
     <div className="p-4 md:p-8 space-y-4 md:space-y-6">
@@ -172,10 +173,12 @@ function WarningsContent() {
             View hypervisor system warnings and alerts
           </p>
         </div>
-        <Button onClick={handleRefreshAll} disabled={isRefetching} size="sm" className="gap-2 shrink-0">
-          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
+        <RefreshButton
+          disabled={isRefreshingWarnings}
+          isRefreshing={isRefreshingWarnings}
+          label="Refresh warnings"
+          onClick={handleRefreshAll}
+        />
       </div>
 
       {/* Summary Cards */}

@@ -12,7 +12,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core.config import get_settings
 from app.core.request_context import get_request_context
+from app.core.request_security import get_client_ip
 from app.core.logging_config import get_access_logger
 
 
@@ -191,15 +193,6 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
     
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP, considering proxies."""
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-        
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
-            return real_ip
-        
-        if request.client:
-            return request.client.host
-        
-        return "unknown"
+        if hasattr(request.state, "client_ip") and request.state.client_ip:
+            return request.state.client_ip
+        return get_client_ip(request, get_settings().trusted_proxy_cidrs)

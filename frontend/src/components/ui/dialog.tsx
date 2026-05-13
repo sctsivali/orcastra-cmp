@@ -46,7 +46,7 @@ const DialogContent = React.forwardRef<
         // Styling - relative for close button positioning
         "relative border bg-background shadow-lg rounded-lg p-4 sm:p-6",
         // Height constraints with dvh for mobile
-        "max-h-[85dvh] max-h-[85vh] overflow-y-auto",
+        "max-h-[calc(100dvh-2rem)] overflow-y-auto",
         // Prevent scroll issues on mobile
         "overscroll-contain",
         // Animations
@@ -95,6 +95,21 @@ const DialogFooter = ({
 )
 DialogFooter.displayName = "DialogFooter"
 
+const DialogBody = React.forwardRef<
+  HTMLDivElement,
+  React.HTMLAttributes<HTMLDivElement>
+>(({ className, ...props }, ref) => (
+  <div
+    ref={ref}
+    className={cn(
+      "min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-gutter:stable]",
+      className
+    )}
+    {...props}
+  />
+))
+DialogBody.displayName = "DialogBody"
+
 const DialogTitle = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Title>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Title>
@@ -129,6 +144,7 @@ export {
   DialogClose,
   DialogTrigger,
   DialogContent,
+  DialogBody,
   DialogHeader,
   DialogFooter,
   DialogTitle,

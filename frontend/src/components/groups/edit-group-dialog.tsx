@@ -626,7 +626,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
 
   return (
     <Dialog open={open} onOpenChange={handleDialogChange}>
-      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
         <DialogHeader className="flex-shrink-0">
           <DialogTitle>
             Edit Group: {currentGroup.name}
@@ -647,7 +647,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
           </TabsList>
 
           {/* Basic Info Tab */}
-          <TabsContent value="basic" className="space-y-4 overflow-y-auto flex-1 pr-2">
+          <TabsContent value="basic" className="space-y-4 overflow-y-auto flex-1 min-h-0 pr-2">
             <form onSubmit={handleUpdateBasicInfo} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="group-name">Group Name</Label>
@@ -690,7 +690,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
           </TabsContent>
 
           {/* Permissions Tab */}
-          <TabsContent value="permissions" className="space-y-3 overflow-y-auto flex-1 pr-2">
+          <TabsContent value="permissions" className="space-y-3 overflow-y-auto flex-1 min-h-0 pr-2">
             <div>
               <Label className="text-sm font-semibold">Group Permissions</Label>
               <p className="text-xs text-muted-foreground">
@@ -943,7 +943,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
           </TabsContent>
 
           {/* Identities Tab */}
-          <TabsContent value="identities" className="space-y-3 overflow-y-auto flex-1 pr-2">
+          <TabsContent value="identities" className="space-y-3 overflow-y-auto flex-1 min-h-0 pr-2">
             <div>
               <Label className="text-base font-semibold">Group Members (Identities)</Label>
               <p className="text-sm text-muted-foreground mt-1">

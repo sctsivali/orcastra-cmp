@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,7 +54,6 @@ import {
   FolderTree,
   AlertCircle,
   CheckCircle,
-  RotateCw,
   ChevronLeft,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
@@ -234,12 +234,12 @@ export default function MyKeysPage() {
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
-          <Button onClick={() => refetch()} disabled={isRefetching} variant="outline" size="sm" className="shrink-0">
-            <RotateCw
-              className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`}
-            />
-            <span className="hidden sm:inline ml-2">Refresh</span>
-          </Button>
+          <RefreshButton
+            disabled={isRefetching}
+            isRefreshing={isRefetching}
+            label="Refresh keys"
+            onClick={() => refetch()}
+          />
           <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button 
@@ -269,7 +269,7 @@ export default function MyKeysPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Active Keys</CardTitle>
-            <CheckCircle className="h-4 w-4 text-green-500" />
+            <CheckCircle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{activeCount}</div>
@@ -279,7 +279,7 @@ export default function MyKeysPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Expired Keys</CardTitle>
-            <AlertCircle className="h-4 w-4 text-orange-500" />
+            <AlertCircle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{expiredCount}</div>

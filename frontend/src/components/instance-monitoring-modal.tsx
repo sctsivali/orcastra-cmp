@@ -60,17 +60,14 @@ export function InstanceMonitoringModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[85dvh] max-h-[90vh] overflow-y-auto overscroll-contain pt-10 sm:pt-6">
+      <DialogContent className="max-w-4xl max-h-[85dvh] overflow-y-auto overscroll-contain pt-10 sm:pt-6">
         <DialogHeader>
           <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3 min-w-0">
-              <Activity className="h-5 w-5 sm:h-6 sm:w-6 text-blue-500 shrink-0" />
-              <div className="min-w-0">
-                <DialogTitle className="text-lg sm:text-2xl truncate">{instance.name}</DialogTitle>
-                <DialogDescription className="truncate">
-                  Real-time monitoring • {instance.host}
-                </DialogDescription>
-              </div>
+            <div className="min-w-0">
+              <DialogTitle className="text-lg sm:text-2xl truncate">{instance.name}</DialogTitle>
+              <DialogDescription className="truncate">
+                Real-time monitoring • {instance.host}
+              </DialogDescription>
             </div>
             <Badge
               variant={instance.status === "Running" ? "default" : "secondary"}
@@ -136,7 +133,7 @@ export function InstanceMonitoringModal({
               {/* CPU Usage */}
               <Card className="p-4">
                 <div className="flex items-center gap-2 mb-4">
-                  <Cpu className="h-5 w-5 text-blue-500" />
+                  <Cpu className="h-5 w-5 text-foreground" />
                   <h3 className="font-semibold text-lg">CPU</h3>
                 </div>
                 <div className="space-y-2">
@@ -154,7 +151,7 @@ export function InstanceMonitoringModal({
               {/* Memory Usage */}
               <Card className="p-4">
                 <div className="flex items-center gap-2 mb-4">
-                  <Activity className="h-5 w-5 text-green-500" />
+                  <Activity className="h-5 w-5 text-foreground" />
                   <h3 className="font-semibold text-lg">Memory Usage</h3>
                 </div>
                 <div className="space-y-2">
@@ -183,7 +180,7 @@ export function InstanceMonitoringModal({
               {Object.keys(metrics.disk_usage_bytes).length > 0 && (
                 <Card className="p-4">
                   <div className="flex items-center gap-2 mb-4">
-                    <HardDrive className="h-5 w-5 text-orange-500" />
+                    <HardDrive className="h-5 w-5 text-foreground" />
                     <h3 className="font-semibold text-lg">Disk Usage</h3>
                   </div>
                   <div className="space-y-3">
@@ -210,7 +207,7 @@ export function InstanceMonitoringModal({
                 Object.keys(metrics.network_tx_bytes).length > 0) && (
                 <Card className="p-4">
                   <div className="flex items-center gap-2 mb-4">
-                    <Network className="h-5 w-5 text-purple-500" />
+                    <Network className="h-5 w-5 text-foreground" />
                     <h3 className="font-semibold text-lg">Network Usage</h3>
                   </div>
                   <div className="space-y-4">

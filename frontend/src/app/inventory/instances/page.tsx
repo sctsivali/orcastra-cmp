@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -216,10 +217,12 @@ export default function InstancesPage() {
             Manage hypervisor instances (containers and virtual machines)
           </p>
         </div>
-        <Button onClick={() => refetch()} disabled={isRefetching} size="sm" className="gap-2">
-          <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-          <span className="hidden sm:inline">Refresh</span>
-        </Button>
+        <RefreshButton
+          disabled={isRefetching}
+          isRefreshing={isRefetching}
+          label="Refresh instances"
+          onClick={() => refetch()}
+        />
       </div>
 
       {/* Filters */}

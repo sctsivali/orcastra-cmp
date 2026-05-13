@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,7 +37,6 @@ import {
 } from "@/components/ui/select";
 import { 
   Users, 
-  RotateCw, 
   UserCheck, 
   Shield, 
   Plus, 
@@ -186,10 +186,12 @@ export default function GroupsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Button onClick={() => refetch()} disabled={isRefetching} variant="outline" size="sm" className="gap-2">
-            <RotateCw className={`h-4 w-4 ${isRefetching ? "animate-spin" : ""}`} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
+          <RefreshButton
+            disabled={isRefetching}
+            isRefreshing={isRefetching}
+            label="Refresh groups"
+            onClick={() => refetch()}
+          />
           <Button 
             onClick={() => setCreateDialogOpen(true)} 
             size="sm" 
@@ -375,8 +377,7 @@ export default function GroupsPage() {
             {/* TLS Identities */}
             {selectedGroup?.identities?.tls?.length > 0 && (
               <div>
-                <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-                  <Shield className="h-4 w-4" />
+                <h4 className="text-sm font-semibold mb-2">
                   TLS Identities ({selectedGroup.identities.tls.length})
                 </h4>
                 <div className="space-y-2">

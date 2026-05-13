@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import type { NodeStatus, NodeEnvironment } from "@/types/api";
 
 interface HardwareCategory {
-  icon: React.ReactNode;
+  icon: React.ElementType;
   title: string;
   description: string;
   items: { label: string; value: string; detail?: string }[];
@@ -25,6 +25,32 @@ interface SoftwareItem {
   icon: React.ElementType;
 }
 
+function cleanVersion(value?: string | null): string {
+  return String(value || "").replace(/^v/i, "").trim();
+}
+
+function cleanDriverVersion(value?: string | null): string {
+  const normalized = cleanVersion(value);
+  if (!normalized) return "";
+  const parts = normalized.split("|").map((part) => part.trim()).filter(Boolean);
+  return parts.length > 0 ? parts[parts.length - 1] : normalized;
+}
+
+function formatStorageVersion(env: NodeEnvironment | null, nodes: NodeStatus[]): string {
+  const storageName = cleanVersion(env?.storage as string | undefined);
+  const storageVersion = cleanVersion(env?.storage_version as string | undefined);
+
+  if (storageName && storageVersion) return `${storageName} ${storageVersion}`;
+  if (storageVersion) return storageVersion;
+  if (storageName) return storageName;
+
+  const storageBackends = new Set(
+    nodes.flatMap((node) => node.resources?.storage_pools?.map((pool) => pool.driver) || [])
+  );
+
+  return Array.from(storageBackends).filter(Boolean).join(", ");
+}
+
 // Helper function to generate software stack with real versions
 function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   // Aggregate environment data from connected nodes
@@ -32,11 +58,13 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   const firstEnv: NodeEnvironment | null = connectedNodes[0]?.environment || null;
   
   // Get versions from first connected node's environment
-  const lxdVersion = connectedNodes[0]?.server_version || "";
-  const kernelVersion = firstEnv?.kernel_version || "";
-  const osVersion = firstEnv?.os_version || "";
-  const driverVersion = firstEnv?.driver_version || "";
-  const storageVersion = firstEnv?.storage_version || "";
+  const lxdVersion = cleanVersion(connectedNodes[0]?.server_version || firstEnv?.server_version as string | undefined);
+  const kernelVersion = cleanVersion(firstEnv?.kernel_version);
+  const osName = String(firstEnv?.os_name || "Linux");
+  const osVersion = cleanVersion(firstEnv?.os_version);
+  const driverVersion = cleanDriverVersion(firstEnv?.driver_version as string | undefined);
+  const storageVersion = formatStorageVersion(firstEnv, connectedNodes);
+  const firewallStack = cleanVersion(firstEnv?.firewall as string | undefined);
   
   return [
     {
@@ -47,9 +75,9 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
       icon: Server,
     },
     {
-      name: "Ubuntu",
+      name: osName,
       version: osVersion,
-      purpose: "Enterprise-grade Linux operating system with long-term support",
+      purpose: "Host operating system reported by the connected LXD node inventory",
       category: "Operating System",
       icon: Server,
     },
@@ -61,30 +89,30 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
       icon: Cpu,
     },
     {
-      name: "ZFS",
-      version: storageVersion && storageVersion.includes("zfs") ? storageVersion : "",
-      purpose: "Advanced filesystem with data integrity and snapshot capabilities",
+      name: "Storage Backend",
+      version: storageVersion,
+      purpose: "Storage pool backend used for volumes, images, snapshots, and instance disks",
       category: "Storage",
       icon: Database,
     },
     {
       name: "QEMU/KVM",
       version: driverVersion,
-      purpose: "Kernel-based virtual machine for full virtualization",
+      purpose: "Virtual machine acceleration provided through Linux KVM and the LXD VM driver",
       category: "Virtualization",
       icon: Server,
     },
     {
-      name: "Open vSwitch",
-      version: "",
-      purpose: "Production-quality multilayer virtual switch",
+      name: "Network Stack",
+      version: firewallStack,
+      purpose: "Linux bridge, firewall, and optional OVN/Open vSwitch networking used by LXD networks",
       category: "Networking",
       icon: Network,
     },
     {
-      name: "containerd",
+      name: "LXC",
       version: "",
-      purpose: "Container runtime for managing container lifecycle",
+      purpose: "Linux system container runtime used by LXD for container workloads",
       category: "Container Runtime",
       icon: Package,
     },
@@ -147,7 +175,7 @@ export default function TechnologiesPage() {
 
     const categories: HardwareCategory[] = [
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Cpu className="h-4 w-4 text-purple-600" /></div>,
+        icon: Cpu,
         title: "CPU Resources",
         description: "Processor information across all nodes",
         items: [
@@ -169,7 +197,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><HardDrive className="h-4 w-4 text-purple-600" /></div>,
+        icon: HardDrive,
         title: "Memory",
         description: "RAM resources available in the cluster",
         items: [
@@ -191,7 +219,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Database className="h-4 w-4 text-purple-500" /></div>,
+        icon: Database,
         title: "Storage",
         description: "Storage systems and backends",
         items: [
@@ -219,7 +247,7 @@ export default function TechnologiesPage() {
         ],
       },
       {
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Network className="h-4 w-4 text-purple-600" /></div>,
+        icon: Network,
         title: "Network",
         description: "Network infrastructure and connectivity",
         items: [
@@ -245,7 +273,7 @@ export default function TechnologiesPage() {
     // Add GPU category if GPUs are available
     if (totalGPUs > 0) {
       categories.push({
-        icon: <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center"><Monitor className="h-4 w-4 text-purple-600" /></div>,
+        icon: Monitor,
         title: "GPU Resources",
         description: "Graphics processing units for acceleration",
         items: [
@@ -315,11 +343,14 @@ export default function TechnologiesPage() {
           {hardwareInfo && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {hardwareInfo.map((category) => {
+                const Icon = category.icon;
                 return (
                   <Card key={category.title} className="hover:shadow-md transition-all duration-200">
                     <CardHeader>
                       <div className="flex items-center gap-3">
-                        {category.icon}
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground text-background">
+                          <Icon className="h-5 w-5" />
+                        </div>
                         <div>
                           <CardTitle>{category.title}</CardTitle>
                           <CardDescription>{category.description}</CardDescription>
@@ -399,10 +430,10 @@ export default function TechnologiesPage() {
                 <Info className="h-5 w-5 text-blue-500 mt-0.5" />
                 <div>
                   <p className="text-sm font-medium mb-1">
-                    Production Software Stack
+                    Live Production Software Inventory
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Orcastra leverages enterprise-grade open-source software to deliver reliable, scalable infrastructure management. All software versions are actively maintained and regularly updated.
+                    Versions below are detected from connected LXD nodes. Missing version badges mean the node API does not report that component directly; updates are managed through the host operating system and LXD channel.
                   </p>
                 </div>
               </div>
@@ -417,14 +448,14 @@ export default function TechnologiesPage() {
                   <CardHeader>
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 border border-white dark:border-black rounded-full flex items-center justify-center">
-                          <Icon className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground text-background">
+                          <Icon className="h-5 w-5" />
                         </div>
                         <div>
                           <CardTitle className="text-lg">{software.name}</CardTitle>
                           {software.version && (
                             <Badge variant="secondary" className="mt-1 text-xs font-mono">
-                              v{software.version}
+                              {software.version}
                             </Badge>
                           )}
                         </div>
@@ -462,9 +493,9 @@ export default function TechnologiesPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-4 sm:grid-cols-2">
-                <div className="flex gap-3 p-4 rounded-lg bg-green-500/5 border border-green-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-green-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Open Source & Community-Driven</p>
@@ -473,9 +504,9 @@ export default function TechnologiesPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-blue-500/5 border border-blue-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-blue-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Enterprise-Grade Reliability</p>
@@ -484,9 +515,9 @@ export default function TechnologiesPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-violet-500/5 border border-violet-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-violet-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Modern Architecture</p>
@@ -495,9 +526,9 @@ export default function TechnologiesPage() {
                     </p>
                   </div>
                 </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-orange-500/5 border border-orange-500/10">
+                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
                   <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-orange-500" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Security First</p>

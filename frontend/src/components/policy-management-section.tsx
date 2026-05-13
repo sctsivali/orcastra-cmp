@@ -6,6 +6,7 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -17,10 +18,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter,
+  Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Loader2, Plus, Trash2, ChevronDown,
-  ChevronRight, Edit, RefreshCw, Building2, ShieldCheck,
+  ChevronRight, Edit, Building2, ShieldCheck,
 } from "lucide-react";
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
 import { useClusters } from "@/hooks/use-lxd";
@@ -368,8 +368,8 @@ function PolicyEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             {isEdit ? "Edit Policy" : "Create Access Policy"}
           </DialogTitle>
@@ -380,7 +380,7 @@ function PolicyEditorDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 pr-4 -mr-4">
+        <DialogBody className="-mr-2 pr-2">
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="mgmt-policy-name" className="text-xs">Policy Name</Label>
@@ -455,9 +455,9 @@ function PolicyEditorDialog({
               </div>
             </div>
           </div>
-        </ScrollArea>
+        </DialogBody>
 
-        <DialogFooter className="pt-3 border-t">
+        <DialogFooter className="shrink-0 pt-3 border-t">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit || isPending}>
             {isPending && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
@@ -473,7 +473,11 @@ function PolicyEditorDialog({
 // Main Exported Component
 // ============================================
 
-export function PolicyManagementSection() {
+interface PolicyManagementSectionProps {
+  showRefresh?: boolean;
+}
+
+export function PolicyManagementSection({ showRefresh = true }: PolicyManagementSectionProps) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -486,6 +490,7 @@ export function PolicyManagementSection() {
   const {
     data: policiesData,
     isLoading: policiesLoading,
+    isFetching: policiesFetching,
     refetch: refetchPolicies,
   } = useQuery({
     queryKey: ["tenant-access-policies"],
@@ -596,16 +601,16 @@ export function PolicyManagementSection() {
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => refetchPolicies()}
-                disabled={policiesLoading}
-                className="h-7 text-xs"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 mr-1 ${policiesLoading ? "animate-spin" : ""}`} />
-                Refresh
-              </Button>
+              {showRefresh && (
+                <RefreshButton
+                  className="h-7 w-7"
+                  disabled={policiesFetching}
+                  iconClassName="h-3.5 w-3.5"
+                  isRefreshing={policiesFetching}
+                  label="Refresh access policies"
+                  onClick={() => refetchPolicies()}
+                />
+              )}
               <Button size="sm" onClick={() => setCreateOpen(true)} className="h-7 text-xs">
                 <Plus className="h-3.5 w-3.5 mr-1" />
                 Create Policy

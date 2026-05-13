@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -17,7 +18,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { 
   HardDrive, 
   Network, 
@@ -59,20 +59,8 @@ function getDeviceIcon(type: string) {
 }
 
 // Helper function to get device type color
-function getDeviceColor(type: string) {
-  const colorMap: Record<string, string> = {
-    disk: "bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400",
-    nic: "bg-green-100 text-green-600 dark:bg-green-950 dark:text-green-400",
-    gpu: "bg-purple-100 text-purple-600 dark:bg-purple-950 dark:text-purple-400",
-    usb: "bg-yellow-100 text-yellow-600 dark:bg-yellow-950 dark:text-yellow-400",
-    unix: "bg-orange-100 text-orange-600 dark:bg-orange-950 dark:text-orange-400",
-    proxy: "bg-pink-100 text-pink-600 dark:bg-pink-950 dark:text-pink-400",
-    infiniband: "bg-cyan-100 text-cyan-600 dark:bg-cyan-950 dark:text-cyan-400",
-    tpm: "bg-indigo-100 text-indigo-600 dark:bg-indigo-950 dark:text-indigo-400",
-    pci: "bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-400",
-  };
-  
-  return colorMap[type?.toLowerCase()] || "bg-gray-100 text-gray-600 dark:bg-gray-950 dark:text-gray-400";
+function getDeviceColor(_type: string) {
+  return "bg-foreground text-background";
 }
 
 export function ClickableBadge({
@@ -106,13 +94,13 @@ export function ClickableBadge({
       </Badge>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-4xl max-h-[85vh]">
+        <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
           <DialogHeader className="pr-8">
             <DialogTitle className="text-xl">{title}</DialogTitle>
             {description && <DialogDescription>{description}</DialogDescription>}
           </DialogHeader>
 
-          <ScrollArea className="max-h-[calc(85vh-8rem)] pr-4">
+          <DialogBody className="pr-4">
             <div className="space-y-3">
               {items.length === 0 ? (
                 <p className="text-muted-foreground text-center py-8">No items found</p>
@@ -195,7 +183,7 @@ export function ClickableBadge({
                 </div>
               )}
             </div>
-          </ScrollArea>
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </>

@@ -5,6 +5,7 @@ import { Search, Check, Loader2, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -12,8 +13,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "@/hooks/use-toast";
 import { useUpdateClusterLocation } from "@/hooks/use-lxd";
 import { REGIONS_DATA, type Region } from "@/lib/regions-data";
@@ -112,8 +111,8 @@ export function ClusterLocationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-w-lg max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             Set Cluster Location
           </DialogTitle>
@@ -127,7 +126,7 @@ export function ClusterLocationDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <DialogBody className="space-y-4 pr-2">
           {/* Search Input */}
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -150,7 +149,7 @@ export function ClusterLocationDialog({
           )}
 
           {/* Region List */}
-          <ScrollArea className="h-[300px] border rounded-md">
+          <div className="min-h-[180px] max-h-[300px] overflow-y-auto border rounded-md [scrollbar-gutter:stable]">
             <div className="p-2 space-y-1">
               {filteredRegions.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
@@ -186,10 +185,10 @@ export function ClusterLocationDialog({
                 ))
               )}
             </div>
-          </ScrollArea>
-        </div>
+          </div>
+        </DialogBody>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>

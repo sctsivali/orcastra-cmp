@@ -6,6 +6,7 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -17,14 +18,13 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog, DialogContent, DialogDescription, DialogFooter,
+  Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  AlertCircle, Loader2, Plus, RefreshCw, Trash2, Shield,
+  AlertCircle, Loader2, Plus, Trash2, Shield,
   ShieldCheck, Eye, Terminal, Camera, Upload, Power,
   Building2, ChevronDown, ChevronRight, Edit, Copy,
 } from "lucide-react";
@@ -211,12 +211,10 @@ function RuleEditor({ rule, index, clusters, onUpdate, onRemove, readOnlyPolicy 
                 <span className="text-xs text-muted-foreground">View only (read-only policy)</span>
               </div>
             ) : (
-              <ScrollArea className="max-h-[140px]">
-                <PermissionCheckboxGroup
-                  selected={rule.permissions as TenantPermission[]}
-                  onChange={(perms) => onUpdate(index, { ...rule, permissions: perms })}
-                />
-              </ScrollArea>
+              <PermissionCheckboxGroup
+                selected={rule.permissions as TenantPermission[]}
+                onChange={(perms) => onUpdate(index, { ...rule, permissions: perms })}
+              />
             )}
           </div>
         </div>
@@ -345,8 +343,8 @@ function PolicyEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{isEdit ? "Edit Policy" : "Create Access Policy"}</DialogTitle>
           <DialogDescription>
             {isEdit
@@ -355,7 +353,7 @@ function PolicyEditorDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 pr-4 -mr-4">
+        <DialogBody className="-mr-2 pr-2">
           <div className="space-y-4 py-2">
             {/* Name */}
             <div className="space-y-2">
@@ -458,9 +456,9 @@ function PolicyEditorDialog({
               </div>
             </div>
           </div>
-        </ScrollArea>
+        </DialogBody>
 
-        <DialogFooter className="pt-4 border-t">
+        <DialogFooter className="shrink-0 pt-4 border-t">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
@@ -620,6 +618,7 @@ export function AccessPoliciesSettings() {
   const {
     data: policiesData,
     isLoading: policiesLoading,
+    isFetching: policiesFetching,
     error: policiesError,
     refetch: refetchPolicies,
   } = useQuery({
@@ -630,6 +629,7 @@ export function AccessPoliciesSettings() {
   const {
     data: assignmentsData,
     isLoading: assignmentsLoading,
+    isFetching: assignmentsFetching,
     error: assignmentsError,
     refetch: refetchAssignments,
   } = useQuery({
@@ -816,15 +816,12 @@ export function AccessPoliciesSettings() {
                 </CardDescription>
               </div>
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
+                <RefreshButton
+                  disabled={policiesFetching}
+                  isRefreshing={policiesFetching}
+                  label="Refresh access policies"
                   onClick={() => refetchPolicies()}
-                  disabled={policiesLoading}
-                >
-                  <RefreshCw className={`h-4 w-4 mr-1.5 ${policiesLoading ? "animate-spin" : ""}`} />
-                  Refresh
-                </Button>
+                />
                 <Button size="sm" onClick={() => setCreateOpen(true)}>
                   <Plus className="h-4 w-4 mr-1.5" />
                   Create Policy
@@ -976,15 +973,12 @@ export function AccessPoliciesSettings() {
                 </CardDescription>
               </div>
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
+                <RefreshButton
+                  disabled={assignmentsFetching}
+                  isRefreshing={assignmentsFetching}
+                  label="Refresh policy assignments"
                   onClick={() => refetchAssignments()}
-                  disabled={assignmentsLoading}
-                >
-                  <RefreshCw className={`h-4 w-4 mr-1.5 ${assignmentsLoading ? "animate-spin" : ""}`} />
-                  Refresh
-                </Button>
+                />
                 <Button size="sm" onClick={() => setAssignOpen(true)}>
                   <Plus className="h-4 w-4 mr-1.5" />
                   Assign Policy

@@ -44,7 +44,7 @@
     "leaflet.markercluster": "^1.5.3",
     "lottie-react": "^2.4.1",
     "lucide-react": "^0.312.0",
-    "next": "^15.5.7",
+    "next": "^15.5.18",
     "next-auth": "^5.0.0-beta.30",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
@@ -67,9 +67,30 @@
     "@types/react-dom": "^18.2.18",
     "autoprefixer": "^10.4.17",
     "eslint": "^8.56.0",
-    "eslint-config-next": "15.0.0",
-    "postcss": "^8.4.33",
+    "eslint-config-next": "15.5.18",
+    "postcss": "8.5.14",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.3.3"
+  },
+  "overrides": {
+    "ajv@6": "6.15.0",
+    "anymatch": {
+      "picomatch": "2.3.2"
+    },
+    "brace-expansion@1": "1.1.14",
+    "brace-expansion@2": "2.1.0",
+    "flatted": "3.4.2",
+    "micromatch": {
+      "picomatch": "2.3.2"
+    },
+    "minimatch@3": "3.1.5",
+    "minimatch@9": "9.0.9",
+    "postcss": "8.5.14",
+    "readdirp": {
+      "picomatch": "2.3.2"
+    },
+    "tinyglobby": {
+      "picomatch": "4.0.4"
+    }
   }
 }

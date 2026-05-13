@@ -8,7 +8,9 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import Response
 
+from app.core.config import get_settings
 from app.core.request_context import RequestContext, set_request_context
+from app.core.request_security import get_client_ip
 
 
 # Header name for request ID propagation
@@ -66,22 +68,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
     
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP, considering proxies."""
-        # Check X-Forwarded-For header (set by reverse proxies)
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            # Take the first IP in the chain (original client)
-            return forwarded_for.split(",")[0].strip()
-        
-        # Check X-Real-IP header
-        real_ip = request.headers.get("x-real-ip")
-        if real_ip:
-            return real_ip
-        
-        # Fall back to direct client IP
-        if request.client:
-            return request.client.host
-        
-        return "unknown"
+        if hasattr(request.state, "client_ip") and request.state.client_ip:
+            return request.state.client_ip
+        return get_client_ip(request, get_settings().trusted_proxy_cidrs)
     
     def _extract_user_id(self, request: Request) -> str | None:
         """Extract user ID from request (from JWT claims or auth middleware)."""

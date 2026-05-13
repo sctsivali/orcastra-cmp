@@ -5,6 +5,7 @@ import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -92,21 +93,21 @@ function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHard
     return (
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant="outline" className="gap-1">
-          <Cpu className="h-3 w-3" />
+          <Cpu className="h-3 w-3 text-foreground" />
           {hardware.cpu_total} cores
         </Badge>
         <Badge variant="outline" className="gap-1">
-          <MemoryStick className="h-3 w-3" />
+          <MemoryStick className="h-3 w-3 text-foreground" />
           {formatBytes(hardware.memory_total)}
         </Badge>
         {hardware.gpu_total > 0 && (
           <Badge variant="outline" className="gap-1">
-            <Sparkles className="h-3 w-3" />
+            <Sparkles className="h-3 w-3 text-foreground" />
             {hardware.gpu_total} GPU
           </Badge>
         )}
         <Badge variant="outline" className="gap-1">
-          <HardDrive className="h-3 w-3" />
+          <HardDrive className="h-3 w-3 text-foreground" />
           {formatBytes(hardware.storage_total)}
         </Badge>
       </div>
@@ -118,7 +119,7 @@ function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHard
       {/* CPU */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
-          <Cpu className="h-4 w-4 text-blue-500" />
+          <Cpu className="h-4 w-4 text-foreground" />
           CPU
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
@@ -131,7 +132,7 @@ function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHard
       {/* Memory */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
-          <MemoryStick className="h-4 w-4 text-green-500" />
+          <MemoryStick className="h-4 w-4 text-foreground" />
           Memory
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
@@ -143,7 +144,7 @@ function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHard
       {/* GPU */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
-          <Sparkles className="h-4 w-4 text-purple-500" />
+          <Sparkles className="h-4 w-4 text-foreground" />
           GPU
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
@@ -163,7 +164,7 @@ function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHard
       {/* Storage */}
       <div className="space-y-1">
         <div className="flex items-center gap-2 text-sm font-medium">
-          <HardDrive className="h-4 w-4 text-orange-500" />
+          <HardDrive className="h-4 w-4 text-foreground" />
           Storage
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
@@ -201,8 +202,8 @@ function RegionCard({
           <CardHeader className="cursor-pointer hover:bg-muted/50 transition-colors pb-3">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-                  <MapPin className="h-5 w-5 text-primary" />
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-foreground text-background">
+                  <MapPin className="h-5 w-5" />
                 </div>
                 <div>
                   <CardTitle className="text-base flex items-center gap-2">
@@ -252,11 +253,11 @@ function RegionCard({
             {/* Instance stats */}
             <div className="flex items-center gap-4 text-sm">
               <div className="flex items-center gap-1.5">
-                <Box className="h-4 w-4 text-muted-foreground" />
+                <Box className="h-4 w-4 text-foreground" />
                 <span>{region.instance_count} instances</span>
               </div>
               <div className="flex items-center gap-1.5">
-                <Activity className="h-4 w-4 text-emerald-500" />
+                <Activity className="h-4 w-4 text-foreground" />
                 <span>{region.instance_running} running</span>
               </div>
             </div>
@@ -416,14 +417,12 @@ export function RegionsPage() {
             Geographic overview of your cloud federation
           </p>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => refetch()}
+        <RefreshButton
           disabled={isRefetching}
-        >
-          <RefreshCw className={cn("h-4 w-4 mr-2", isRefetching && "animate-spin")} />
-          Refresh
-        </Button>
+          isRefreshing={isRefetching}
+          label="Refresh regions"
+          onClick={() => refetch()}
+        />
       </div>
 
       {/* Global stats */}
@@ -542,10 +541,7 @@ export function RegionsPage() {
 
         {/* Regions list - full width since filters are hidden */}
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Regions</h2>
-            <Badge variant="secondary">{filteredRegions.length} regions</Badge>
-          </div>
+          <h2 className="text-lg font-semibold">Regions</h2>
 
           {isLoading ? (
             <div className="space-y-4">
