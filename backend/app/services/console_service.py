@@ -19,6 +19,7 @@ from app.services.lxd_service import get_lxd_service
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
+from app.core.safe_paths import safe_filename
 
 logger = logging.getLogger(__name__)
 
@@ -179,14 +180,16 @@ class ConsoleService:
         cert_dir = "/tmp/lxd-certs"
         os.makedirs(cert_dir, exist_ok=True)
         
-        cert_path = os.path.join(cert_dir, f"{host}.crt")
-        key_path = os.path.join(cert_dir, f"{host}.key")
+        safe_host = safe_filename(host, fallback="cluster")
+        cert_path = os.path.join(cert_dir, f"{safe_host}.crt")
+        key_path = os.path.join(cert_dir, f"{safe_host}.key")
         
         with open(cert_path, 'w') as f:
             f.write(cert_data["client.crt"])
         with open(key_path, 'w') as f:
             f.write(cert_data["client.key"])
         
+        os.chmod(cert_path, 0o600)
         os.chmod(key_path, 0o600)
         ssl_context.load_cert_chain(cert_path, key_path)
         

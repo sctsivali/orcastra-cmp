@@ -11,6 +11,7 @@
  * headers to prevent the browser from truncating the decompressed body.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { inspectRequestTarget } from "@/lib/request-security";
 
 // Docker-internal backend URL (no browser access needed)
 const BACKEND_URL =
@@ -18,15 +19,92 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:4050";
 
+const FORWARD_CLIENT_IP_HEADERS = process.env.FORWARD_CLIENT_IP_HEADERS === "true";
+
+const HOP_BY_HOP_HEADERS = [
+  "connection",
+  "content-length",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+];
+
+function isSupportedBackendUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function buildTargetUrl(pathname: string, search: string): string {
+  const targetUrl = new URL(BACKEND_URL);
+  targetUrl.pathname = pathname;
+  targetUrl.search = search;
+  return targetUrl.toString();
+}
+
+function isValidIpHeader(value: string | null): value is string {
+  if (!value) return false;
+  const candidate = value.split(",")[0]?.trim();
+  if (!candidate || candidate.length > 45) return false;
+  return /^[0-9a-f:.]+$/i.test(candidate);
+}
+
+function buildForwardHeaders(req: NextRequest): Headers {
+  const headers = new Headers(req.headers);
+
+  HOP_BY_HOP_HEADERS.forEach((headerName) => headers.delete(headerName));
+  headers.delete("host");
+  headers.delete("cf-connecting-ip");
+  headers.delete("x-real-ip");
+  headers.delete("x-forwarded-for");
+
+  if (FORWARD_CLIENT_IP_HEADERS) {
+    const forwardedFor =
+      req.headers.get("cf-connecting-ip") ||
+      req.headers.get("x-real-ip") ||
+      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+      null;
+
+    if (isValidIpHeader(forwardedFor)) {
+      headers.set("x-forwarded-for", forwardedFor.split(",")[0].trim());
+    }
+  }
+
+  headers.set("x-forwarded-host", req.headers.get("host") || req.nextUrl.host);
+  headers.set("x-forwarded-proto", req.nextUrl.protocol.replace(":", ""));
+  headers.set("accept-encoding", "identity");
+
+  return headers;
+}
+
 async function proxyRequest(req: NextRequest): Promise<Response> {
   const { pathname, search } = req.nextUrl;
-  const targetUrl = `${BACKEND_URL}${pathname}${search}`;
+  const decision = inspectRequestTarget(req.method, pathname, search);
 
-  // Forward all headers except host (let the backend see its own host)
-  const headers = new Headers(req.headers);
-  headers.delete("host");
-  // Tell backend not to compress — we handle the response directly
-  headers.set("accept-encoding", "identity");
+  if (decision) {
+    return NextResponse.json(
+      { detail: decision.statusCode === 404 ? "Not found" : "Method not allowed" },
+      {
+        status: decision.statusCode,
+        headers: { "X-Orcastra-Security-Action": decision.reason },
+      }
+    );
+  }
+
+  if (!isSupportedBackendUrl(BACKEND_URL)) {
+    return NextResponse.json({ error: "Invalid backend URL" }, { status: 502 });
+  }
+
+  const targetUrl = buildTargetUrl(pathname, search);
+
+  const headers = buildForwardHeaders(req);
 
   try {
     const upstream = await fetch(targetUrl, {

@@ -51,6 +51,26 @@ class Settings(BaseSettings):
         alias="RATE_LIMIT_REQUESTS",
         description="Number of requests allowed per minute per client"
     )
+    rate_limit_subnet_requests: int = Field(
+        default=1500,
+        alias="RATE_LIMIT_SUBNET_REQUESTS",
+        description="Number of requests allowed per minute per IPv4 /24 or IPv6 /64 subnet"
+    )
+    rate_limit_window_seconds: int = Field(
+        default=60,
+        alias="RATE_LIMIT_WINDOW_SECONDS",
+        description="Sliding rate limit window size in seconds"
+    )
+    security_probe_block_enabled: bool = Field(
+        default=True,
+        alias="SECURITY_PROBE_BLOCK_ENABLED",
+        description="Block traversal, sensitive-file, and framework scanner probes before routing"
+    )
+    trusted_proxy_cidrs: str = Field(
+        default="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,::1/128,fc00::/7,fe80::/10",
+        alias="TRUSTED_PROXY_CIDRS",
+        description="Comma-separated proxy CIDRs allowed to supply client IP headers"
+    )
     
     # Domain Configuration
     orcastra_domain: str = Field(
