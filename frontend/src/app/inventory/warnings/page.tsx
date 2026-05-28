@@ -230,8 +230,8 @@ function WarningsContent() {
         <TabsList className="h-auto flex-wrap">
           <TabsTrigger value="all" className="gap-1 md:gap-2 text-xs md:text-sm">
             <AlertTriangle className="h-3 w-3 md:h-4 md:w-4" />
-            <span className="hidden sm:inline">LXD Warnings</span>
-            <span className="sm:hidden">LXD</span>
+            <span className="hidden sm:inline">Platform Warnings</span>
+            <span className="sm:hidden">Platform</span>
             <span className="text-[10px] md:text-xs">({allWarnings.length})</span>
           </TabsTrigger>
           <TabsTrigger value="certificates" className="gap-1 md:gap-2 text-xs md:text-sm">
@@ -248,7 +248,7 @@ function WarningsContent() {
           </TabsTrigger>
         </TabsList>
 
-        {/* LXD Warnings Tab */}
+        {/* Platform Warnings Tab */}
         <TabsContent value="all">
           <Card>
         <CardHeader className="flex flex-col md:flex-row md:items-center justify-between space-y-2 md:space-y-0 pb-4 p-4 md:p-6">

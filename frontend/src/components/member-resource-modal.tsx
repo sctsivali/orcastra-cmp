@@ -541,7 +541,7 @@ export function MemberResourceModal({
               </p>
               <p className="text-xs text-muted-foreground">
                 Detailed instance information per cluster member<br />
-                requires direct LXD cluster API access
+                requires direct cluster API access
               </p>
             </div>
           )}

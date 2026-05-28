@@ -21,7 +21,7 @@ const BACKEND_URL =
 
 const FORWARD_CLIENT_IP_HEADERS = process.env.FORWARD_CLIENT_IP_HEADERS !== "false";
 const TRUSTED_CLIENT_IP_HEADERS = (
-  process.env.TRUSTED_CLIENT_IP_HEADERS || "cf-connecting-ip,true-client-ip"
+  process.env.TRUSTED_CLIENT_IP_HEADERS || "cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-forwarded-for,x-real-ip"
 )
   .split(",")
   .map((headerName) => headerName.trim().toLowerCase())

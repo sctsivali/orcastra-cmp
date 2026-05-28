@@ -117,6 +117,14 @@ class ClientIpTrustTests(unittest.TestCase):
         self.assertEqual(resolution.source, "x-orcastra-client-ip")
         self.assertTrue(resolution.trusted_proxy)
 
+    def test_keeps_internal_proxy_trusted_when_custom_cidrs_are_configured(self) -> None:
+        request = make_request({"x-orcastra-client-ip": "195.178.110.104"}, "172.18.0.5")
+
+        self.assertEqual(
+            get_client_ip(request, trusted_proxy_cidrs="173.245.48.0/20,103.21.244.0/22"),
+            "195.178.110.104",
+        )
+
     def test_rejects_private_forwarded_ip_by_default(self) -> None:
         request = make_request({"cf-connecting-ip": "172.18.0.5"}, "172.18.0.2")
 

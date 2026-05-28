@@ -218,7 +218,7 @@ export default function HomePage() {
         <div className="text-center space-y-2">
           <h2 className="text-3xl font-bold">Platform Features</h2>
           <p className="text-muted-foreground">
-            Production controls for operating LXD infrastructure with visibility and scoped access
+            Production controls for operating hypervisor infrastructure with visibility and scoped access
           </p>
         </div>
 

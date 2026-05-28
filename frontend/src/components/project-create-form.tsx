@@ -241,7 +241,7 @@ export function ProjectCreateForm() {
             Create New Project
           </h1>
           <p className="text-muted-foreground">
-            Create a new LXD project to organize your instances
+            Create a new project to organize your instances
           </p>
         </div>
       </div>

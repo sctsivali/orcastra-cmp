@@ -2,10 +2,10 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { RefreshCw, FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Tag, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2 } from "lucide-react";
+import { FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { LoadingLottieMediumEnhanced } from "@/components/loading-lottie";
+import { LoadingLottieMediumEnhanced, LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
 import { StatsOverview } from "@/components/stats-overview";
@@ -55,7 +55,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useInstances, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateProject, useUpdateInstanceTags, useUpdateProjectTags, useClusters, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
+import { useInstances, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateProject, useUpdateInstanceTags, useUpdateProjectTags, useClusters, useWarnings, useSystemWarnings, queryKeys } from "@/hooks/use-lxd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -72,7 +72,6 @@ interface ProjectsSectionProps {
   vmsData: VMInfo[];
   projectInstanceCounts: Map<string, number>;
   refetch: () => void;
-  isRefetching: boolean;
   lastUpdated: string | null;
 }
 
@@ -959,7 +958,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
                 className="bg-muted cursor-not-allowed"
               />
               <p className="text-xs text-muted-foreground">
-                Note: Renaming projects is not supported by LXD.
+                Note: Renaming projects is not supported by the current hypervisor API.
               </p>
             </div>
 
@@ -1066,19 +1065,12 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
   );
 }
 
-function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstanceCounts, refetch, isRefetching, lastUpdated }: ProjectsSectionProps) {
+function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstanceCounts, refetch, lastUpdated }: ProjectsSectionProps) {
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = React.useState("");
   const [selectedTags, setSelectedTags] = React.useState<string[]>([]);
   const [selectedNode, setSelectedNode] = React.useState<string>("all");
   const { isReadOnly } = useReadOnlyMode();
-  const queryClient = useQueryClient();
-
-  // Refresh both instances AND projects
-  const handleRefresh = React.useCallback(() => {
-    refetch(); // refresh instances
-    queryClient.invalidateQueries({ queryKey: ["projects", "all"] }); // refresh projects
-  }, [refetch, queryClient]);
 
   // Get unique nodes from projects
   const availableNodes = React.useMemo(() => {
@@ -1203,12 +1195,6 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
             </p>
           )}
         </div>
-        <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
-          label="Refresh projects"
-          onClick={handleRefresh}
-        />
       </div>
 
       {/* Search Bar and Node Filter */}
@@ -1229,20 +1215,7 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
               onClick={() => setSearchQuery("")}
             >
               <span className="sr-only">Clear search</span>
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="18" y1="6" x2="6" y2="18"></line>
-                <line x1="6" y1="6" x2="18" y2="18"></line>
-              </svg>
+              <X className="h-4 w-4" />
             </Button>
           )}
         </div>
@@ -1278,8 +1251,8 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {projectsLoading ? (
-          <div className="col-span-full">
-            <LoadingLottieMediumEnhanced showProgress={true} />
+          <div className="col-span-full flex justify-center py-8">
+            <LoadingLottieMediumEnhanced showProgress={false} />
           </div>
         ) : (
           <>
@@ -1483,12 +1456,42 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
 
 export function Dashboard() {
   const { data: vmsData, isLoading: vmsLoading, refetch, isRefetching, dataUpdatedAt } = useInstances();
-  const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
-  const { data: clustersData, isLoading: clustersLoading } = useClusters();
+  const { data: projectsData, isLoading: projectsLoading, isRefetching: projectsRefetching } = useAllProjects();
+  const { data: clustersData, isLoading: clustersLoading, isRefetching: clustersRefetching } = useClusters();
+  const queryClient = useQueryClient();
+  const [isOverviewRefreshing, setIsOverviewRefreshing] = React.useState(false);
 
   // pre-fetch alarm & node data in parallel with primary queries (eliminates waterfall)
-  const { data: warningsData } = useWarnings();
-  const { data: systemWarnings } = useSystemWarnings();
+  const { data: warningsData, isRefetching: warningsRefetching } = useWarnings();
+  const { data: systemWarnings, isRefetching: systemWarningsRefetching } = useSystemWarnings();
+
+  const handleOverviewRefresh = React.useCallback(async () => {
+    setIsOverviewRefreshing(true);
+    try {
+      await Promise.all([
+        refetch(),
+        queryClient.refetchQueries({ queryKey: queryKeys.allProjects, type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["clusters"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["warnings"], type: "active" }),
+        queryClient.refetchQueries({ queryKey: ["systemWarnings"], type: "active" }),
+      ]);
+
+      toast({
+        title: "Overview refreshed",
+        description: "Dashboard data is up to date.",
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Refresh failed",
+        description: error instanceof Error ? error.message : "Unable to refresh dashboard data.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsOverviewRefreshing(false);
+    }
+  }, [queryClient, refetch]);
 
   const lastUpdated = dataUpdatedAt
     ? new Date(dataUpdatedAt).toLocaleTimeString('en-GB', {
@@ -1506,12 +1509,29 @@ export function Dashboard() {
     projectInstanceCounts.set(projectKey, (projectInstanceCounts.get(projectKey) || 0) + 1);
   });
 
-  // Progressive loading: render layout immediately with skeleton placeholders
-  // instead of blocking the entire page with a full-page loading animation
   const isPrimaryLoading = vmsLoading || projectsLoading || clustersLoading;
+  const isRefreshingOverview = isOverviewRefreshing
+    || isRefetching
+    || projectsRefetching
+    || clustersRefetching
+    || warningsRefetching
+    || systemWarningsRefetching;
+
+  if (isPrimaryLoading) {
+    return <LoadingLottiePageEnhanced context="dashboard" title="Loading dashboard overview" />;
+  }
 
   return (
     <div className="space-y-8">
+      <div className="flex justify-end">
+        <RefreshButton
+          disabled={isRefreshingOverview}
+          isRefreshing={isRefreshingOverview}
+          label="Refresh overview"
+          onClick={handleOverviewRefresh}
+        />
+      </div>
+
       {/* Stats Overview - shows its own loading state */}
       <StatsOverview data={vmsData} clustersData={clustersData} isLoading={vmsLoading} clustersLoading={clustersLoading} />
 
@@ -1528,7 +1548,6 @@ export function Dashboard() {
         vmsData={vmsData?.vms || []}
         projectInstanceCounts={projectInstanceCounts}
         refetch={refetch}
-        isRefetching={isRefetching}
         lastUpdated={lastUpdated}
       />
     </div>

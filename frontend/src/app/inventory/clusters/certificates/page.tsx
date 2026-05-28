@@ -557,7 +557,7 @@ export default function CertificatesPage() {
                   <Label>Trust Password (Optional)</Label>
                   <Input
                     type="password"
-                    placeholder="Enter LXD trust password"
+                    placeholder="Enter cluster trust password"
                     value={trustPassword}
                     onChange={(e) => setTrustPassword(e.target.value)}
                   />

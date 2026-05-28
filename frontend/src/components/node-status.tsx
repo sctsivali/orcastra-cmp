@@ -6,9 +6,9 @@ import { CheckCircle2, XCircle, Server, Cloud, Cpu, MemoryStick, Sparkles, MoreV
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LXDVersionChecker } from "./lxd-version-checker";
+import { NodeConnectionSummary } from "./node-connection-summary";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,7 +28,7 @@ import { Label } from "@/components/ui/label";
 import { NodeStatus } from "@/types";
 import { useNodesStatus, useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import { cn, formatHypervisorType } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { NodeDetailModal } from "./node-detail-modal";
 import { TagManager, TagFilter } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
@@ -128,9 +128,6 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
     return ((used / total) * 100).toFixed(0);
   };
 
-  // helper to get display name for node type
-  const getNodeTypeDisplay = formatHypervisorType;
-
   const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
 
   return (
@@ -167,11 +164,6 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="font-semibold truncate">{node.display_name || node.name}</h3>
-                {node.node_type && (
-                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">
-                    {getNodeTypeDisplay(node.node_type)}
-                  </Badge>
-                )}
               </div>
               {node.display_name && (
                 <p className="text-xs text-muted-foreground truncate">
@@ -228,10 +220,10 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
             </span>
             {node.api_version && (
               <span>
-                <span className="font-medium">Hypervisor API:</span> {getNodeTypeDisplay(node.node_type)} {node.api_version}
+                <span className="font-medium">Hypervisor API:</span> {node.api_version}
               </span>
             )}
-            {/* LXD/Incus Version checker - works for LXD, MicroCloud, and Incus */}
+            {/* Version checker supports the current hypervisor families. */}
             <LXDVersionChecker currentVersion={node.server_version} nodeType={node.node_type ?? undefined} />
           </div>
         )}
@@ -411,7 +403,7 @@ function LoadingSkeleton() {
 }
 
 export function NodeStatusCards() {
-  const { data, isLoading, refetch, isRefetching } = useNodesStatus();
+  const { data, isLoading, refetch } = useNodesStatus();
   const [selectedNode, setSelectedNode] = useState<NodeStatus | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -461,27 +453,13 @@ export function NodeStatusCards() {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-semibold">Clusters</h2>
-            {data?.nodes && data.nodes.length > 0 ? (
-              data.all_connected ? (
-                <p className="text-xs text-muted-foreground mt-1">All Connected</p>
-              ) : (
-                <p className="text-xs text-muted-foreground mt-1">Some nodes not connected</p>
-              )
-            ) : (
-              <p className="text-xs text-muted-foreground mt-1">No Clusters</p>
-            )}
+            <NodeConnectionSummary nodes={data?.nodes} allConnected={data?.all_connected} />
             {selectedTags.length > 0 && (
               <Badge variant="outline" className="text-xs">
                 {filteredNodes.length} of {data?.nodes.length || 0}
               </Badge>
             )}
           </div>
-          <RefreshButton
-            disabled={isRefetching}
-            isRefreshing={isRefetching}
-            label="Refresh clusters"
-            onClick={() => refetch()}
-          />
         </div>
 
         {/* Tag Filter */}

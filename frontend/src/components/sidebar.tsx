@@ -374,8 +374,8 @@ export function Sidebar({ className }: SidebarProps) {
   // Software stack
   const softwareData: SoftwareInfo[] = [
     {
-      name: "LXD",
-      version: "5.x",
+      name: "Hypervisor",
+      version: "Detected",
       purpose: "Container & VM Management",
     },
     {
@@ -477,8 +477,7 @@ export function Sidebar({ className }: SidebarProps) {
           settings.colors.useCustomSidebarBg && "sidebar-custom-bg",
           // When not customized, use default theme colors (bg-card for consistency)
           !settings.colors.useCustomSidebarBg && "bg-card",
-          // Height - use 100dvh for mobile compatibility, fallback to 100vh
-          "h-[100dvh] h-screen",
+          "h-[100dvh]",
           // Ensure sidebar stays on top during scroll with proper positioning
           "overscroll-contain",
           // When opened via hamburger: always full width, always visible

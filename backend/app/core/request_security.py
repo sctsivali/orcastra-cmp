@@ -236,15 +236,21 @@ def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Addres
 
 
 def _trusted_networks(cidr_text: str | None) -> Iterable[ipaddress._BaseNetwork]:
-    cidrs = cidr_text or DEFAULT_TRUSTED_PROXY_CIDRS
-    for raw_cidr in cidrs.split(","):
-        raw_cidr = raw_cidr.strip()
-        if not raw_cidr:
-            continue
-        try:
-            yield ipaddress.ip_network(raw_cidr, strict=False)
-        except ValueError:
-            continue
+    cidr_sources = [DEFAULT_TRUSTED_PROXY_CIDRS]
+    if cidr_text:
+        cidr_sources.append(cidr_text)
+
+    seen_cidrs: set[str] = set()
+    for cidrs in cidr_sources:
+        for raw_cidr in cidrs.split(","):
+            raw_cidr = raw_cidr.strip()
+            if not raw_cidr or raw_cidr in seen_cidrs:
+                continue
+            seen_cidrs.add(raw_cidr)
+            try:
+                yield ipaddress.ip_network(raw_cidr, strict=False)
+            except ValueError:
+                continue
 
 
 def _is_trusted_proxy(ip_value: str | None, cidr_text: str | None) -> bool:

@@ -74,3 +74,4 @@ backup/
 CHANGELOG.md
 COMMIT-MESSAGE.md
 .github/instructions/
+backend/app/routers/integrations.py.bak-20260527-1430

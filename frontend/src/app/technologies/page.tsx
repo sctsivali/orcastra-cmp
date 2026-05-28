@@ -58,7 +58,7 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   const firstEnv: NodeEnvironment | null = connectedNodes[0]?.environment || null;
   
   // Get versions from first connected node's environment
-  const lxdVersion = cleanVersion(connectedNodes[0]?.server_version || firstEnv?.server_version as string | undefined);
+  const hypervisorVersion = cleanVersion(connectedNodes[0]?.server_version || firstEnv?.server_version as string | undefined);
   const kernelVersion = cleanVersion(firstEnv?.kernel_version);
   const osName = String(firstEnv?.os_name || "Linux");
   const osVersion = cleanVersion(firstEnv?.os_version);
@@ -68,8 +68,8 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   
   return [
     {
-      name: "LXD",
-      version: lxdVersion,
+      name: "Hypervisor Platform",
+      version: hypervisorVersion,
       purpose: "System container and virtual machine manager",
       category: "Virtualization",
       icon: Server,
@@ -77,7 +77,7 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
     {
       name: osName,
       version: osVersion,
-      purpose: "Host operating system reported by the connected LXD node inventory",
+      purpose: "Host operating system reported by the connected node inventory",
       category: "Operating System",
       icon: Server,
     },
@@ -98,21 +98,21 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
     {
       name: "QEMU/KVM",
       version: driverVersion,
-      purpose: "Virtual machine acceleration provided through Linux KVM and the LXD VM driver",
+      purpose: "Virtual machine acceleration provided through Linux KVM and the hypervisor VM driver",
       category: "Virtualization",
       icon: Server,
     },
     {
       name: "Network Stack",
       version: firewallStack,
-      purpose: "Linux bridge, firewall, and optional OVN/Open vSwitch networking used by LXD networks",
+      purpose: "Linux bridge, firewall, and optional OVN/Open vSwitch networking used by hypervisor networks",
       category: "Networking",
       icon: Network,
     },
     {
       name: "LXC",
       version: "",
-      purpose: "Linux system container runtime used by LXD for container workloads",
+      purpose: "Linux system container runtime used by the platform for container workloads",
       category: "Container Runtime",
       icon: Package,
     },
@@ -433,7 +433,7 @@ export default function TechnologiesPage() {
                     Live Production Software Inventory
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Versions below are detected from connected LXD nodes. Missing version badges mean the node API does not report that component directly; updates are managed through the host operating system and LXD channel.
+                    Versions below are detected from connected nodes. Missing version badges mean the node API does not report that component directly; updates are managed through the host operating system and platform channel.
                   </p>
                 </div>
               </div>

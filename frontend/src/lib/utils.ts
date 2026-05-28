@@ -57,11 +57,13 @@ export function truncateFingerprint(fingerprint: string, length = 12): string {
   return fingerprint.substring(0, length) + "...";
 }
 
-// standardize hypervisor type display: LXD, MicroCloud, Incus
+// standardize known hypervisor type display while preserving future providers
 export function formatHypervisorType(type: string | null | undefined): string {
-  if (!type) return "LXD";
-  const t = type.toLowerCase();
+  if (!type) return "Hypervisor";
+  const trimmed = type.trim();
+  const t = trimmed.toLowerCase();
   if (t === "incus") return "Incus";
   if (t === "microcloud") return "MicroCloud";
-  return "LXD";
+  if (t === "lxd") return "LXD";
+  return trimmed || "Hypervisor";
 }

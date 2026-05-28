@@ -19,7 +19,7 @@ import { Badge } from "./ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { NodeStatus } from "@/types";
-import { cn, formatHypervisorType } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 interface NodeDetailModalProps {
   node: NodeStatus | null;
@@ -47,9 +47,6 @@ export function NodeDetailModal({
     return ((used / total) * 100).toFixed(1);
   };
 
-  // helper to get display name for node type
-  const getNodeTypeDisplay = formatHypervisorType;
-
   // Determine if node is truly connected (authenticated) or just pending trust
   const isAuthenticated = node.connected && node.server_version;
   const isPendingTrust = !node.connected && !node.error;
@@ -61,11 +58,6 @@ export function NodeDetailModal({
           <div className="flex-1">
             <DialogTitle className="text-2xl flex items-center gap-2">
               {node.display_name || node.name}
-              {node.node_type && (
-                <Badge variant="outline" className="text-xs">
-                  {getNodeTypeDisplay(node.node_type)}
-                </Badge>
-              )}
               {isPendingTrust && (
                 <Badge variant="secondary" className="text-xs">
                   Pending Trust

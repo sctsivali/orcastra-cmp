@@ -157,7 +157,7 @@ export function MicroCloudVersionChecker({ currentVersion }: MicroCloudVersionCh
           <div className="text-xs text-muted-foreground space-y-1">
             <p>• MicroCloud updates should be coordinated across all cluster members</p>
             <p>• Review release notes at <a href="https://snapcraft.io/microcloud" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">snapcraft.io/microcloud</a></p>
-            <p>• Ensure you also check for LXD, MicroCeph, and MicroOVN updates</p>
+            <p>• Ensure you also check for hypervisor, MicroCeph, and MicroOVN updates</p>
           </div>
 
           <div className="flex gap-2">
