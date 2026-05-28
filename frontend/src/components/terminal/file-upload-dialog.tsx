@@ -1,5 +1,5 @@
 /**
- * File Upload Dialog - Upload files to LXD instances from the terminal window.
+ * File Upload Dialog - Upload files to instances from the terminal window.
  * Supports both file picker and drag-and-drop. Shows upload progress.
  */
 
@@ -281,7 +281,7 @@ export function FileUploadDialog({
 
   return (
     <Dialog open={open} onOpenChange={isUploading ? undefined : onOpenChange}>
-      <DialogContent className="sm:max-w-lg bg-[#1a1b26] border-[#292e42] text-gray-200">
+      <DialogContent className="sm:max-w-lg bg-[#1a1b26] border-[#292e42] text-gray-200 space-y-4">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-gray-100">
             <Upload className="h-5 w-5 text-blue-400" />
@@ -387,19 +387,21 @@ export function FileUploadDialog({
           </div>
         )}
 
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 pt-2 sm:space-x-2">
           <Button
             variant="ghost"
             onClick={() => onOpenChange(false)}
             disabled={isUploading}
-            className="text-gray-400 hover:text-gray-200"
+            size="sm"
+            className="h-8 px-3 text-gray-400 hover:text-gray-200"
           >
             Cancel
           </Button>
           <Button
             onClick={uploadAll}
             disabled={isUploading || pendingCount === 0}
-            className="bg-blue-600 hover:bg-blue-700 text-white"
+            size="sm"
+            className="h-8 min-w-[84px] px-3 bg-blue-600 hover:bg-blue-700 text-white"
           >
             {isUploading ? (
               <>

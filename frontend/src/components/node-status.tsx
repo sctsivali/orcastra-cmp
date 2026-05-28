@@ -6,6 +6,7 @@ import { CheckCircle2, XCircle, Server, Cloud, Cpu, MemoryStick, Sparkles, MoreV
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LXDVersionChecker } from "./lxd-version-checker";
 import { NodeConnectionSummary } from "./node-connection-summary";
@@ -402,7 +403,12 @@ function LoadingSkeleton() {
   );
 }
 
-export function NodeStatusCards() {
+interface NodeStatusCardsProps {
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
+}
+
+export function NodeStatusCards({ onRefresh, isRefreshing = false }: NodeStatusCardsProps) {
   const { data, isLoading, refetch } = useNodesStatus();
   const [selectedNode, setSelectedNode] = useState<NodeStatus | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -450,7 +456,7 @@ export function NodeStatusCards() {
   return (
     <>
       <div className="space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold">Clusters</h2>
             <NodeConnectionSummary nodes={data?.nodes} allConnected={data?.all_connected} />
@@ -460,6 +466,12 @@ export function NodeStatusCards() {
               </Badge>
             )}
           </div>
+          <RefreshButton
+            disabled={isRefreshing}
+            isRefreshing={isRefreshing}
+            label="Refresh overview"
+            onClick={onRefresh ?? (() => refetch())}
+          />
         </div>
 
         {/* Tag Filter */}

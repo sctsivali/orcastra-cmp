@@ -93,6 +93,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { cn, formatHypervisorType } from "@/lib/utils";
@@ -122,6 +123,25 @@ const formatBytes = (bytes: number, decimals = 2): string => {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
 };
+
+const toVmInfoFromMonitoringSummary = (instance: InstanceMonitoringSummary): VMInfo => ({
+  name: instance.name,
+  status: instance.status as VMInfo["status"],
+  status_code: instance.status === "Running" ? 103 : 102,
+  ip_addresses: [],
+  host: instance.host,
+  host_endpoint: "",
+  project: instance.project || "default",
+  architecture: null,
+  created_at: null,
+  last_used_at: null,
+  description: null,
+  type: instance.type,
+  resources: null,
+  config: null,
+  profiles: [],
+  tags: [],
+});
 
 // Format bytes per second
 const formatBytesPerSec = (bytes: number): string => {
@@ -403,9 +423,10 @@ interface TopConsumerCardProps {
   instance: InstanceMonitoringSummary;
   rank: number;
   type: "cpu" | "memory" | "storage" | "network";
+  onOpen: (instance: InstanceMonitoringSummary) => void;
 }
 
-const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type }: TopConsumerCardProps) {
+const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type, onOpen }: TopConsumerCardProps) {
   const renderValue = () => {
     switch (type) {
       case "cpu":
@@ -444,7 +465,12 @@ const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type }: 
   };
 
   return (
-    <div className="flex items-center gap-3 p-3 rounded-lg bg-muted/50 hover:bg-muted transition-colors">
+    <button
+      type="button"
+      aria-label={`Open resource details for ${instance.name}`}
+      onClick={() => onOpen(instance)}
+      className="flex w-full items-center gap-3 rounded-lg bg-muted/50 p-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+    >
       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary font-bold text-sm">
         {rank}
       </div>
@@ -458,7 +484,7 @@ const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type }: 
           {instance.type === "virtual-machine" ? "VM" : "CT"}
         </Badge>
       </div>
-    </div>
+    </button>
   );
 });
 
@@ -895,6 +921,7 @@ export default function MonitoringContent() {
   const [instanceFilterType, setInstanceFilterType] = useState<"running" | "stopped" | "other" | "container" | "vm" | null>(null);
   const [allInstances, setAllInstances] = useState<VMInfo[]>([]);
   const [instancesLoading, setInstancesLoading] = useState(false);
+  const [selectedTopConsumer, setSelectedTopConsumer] = useState<InstanceMonitoringSummary | null>(null);
   
   // Sort order for top consumers (true = highest first, false = lowest first)
   const [sortDescending, setSortDescending] = useState(true);
@@ -1191,6 +1218,9 @@ export default function MonitoringContent() {
   const filteredStats = useMemo(() => {
     if (!dashboardData) return null;
     if (selectedNode === "all") {
+      const singleNode = dashboardData.nodes?.length === 1 ? dashboardData.nodes[0] : null;
+      const allNodesCpuPercent = singleNode?.cpu_usage_percent ?? dashboardData.realtime_cpu_percent;
+
       return {
         total_instances: dashboardData.total_instances,
         running_instances: dashboardData.running_instances,
@@ -1201,8 +1231,8 @@ export default function MonitoringContent() {
         online_nodes: dashboardData.online_nodes,
         inactive_nodes: dashboardData.inactive_nodes,
         total_nodes: dashboardData.total_nodes,
-        cpu_usage_percent: dashboardData.cpu_usage_percent,
-        realtime_cpu_percent: dashboardData.realtime_cpu_percent,
+        cpu_usage_percent: singleNode?.cpu_usage_percent ?? dashboardData.cpu_usage_percent,
+        realtime_cpu_percent: allNodesCpuPercent,
         memory_usage_percent: dashboardData.memory_usage_percent,
         storage_usage_percent: dashboardData.storage_usage_percent,
         total_cpu: dashboardData.total_cpu,
@@ -1214,6 +1244,8 @@ export default function MonitoringContent() {
         total_gpu: dashboardData.total_gpu,
         used_gpu: dashboardData.used_gpu,
         warnings: dashboardData.warnings,
+        cluster_status: singleNode?.cluster_status,
+        status_message: singleNode?.status_message,
       };
     }
     
@@ -1283,6 +1315,16 @@ export default function MonitoringContent() {
       let networkRxBytes = point.network_rx_bytes;
       let networkTxBytes = point.network_tx_bytes;
       let runningInstances = point.running_instances;
+      const nodeEntries = point.nodes ? Object.entries(point.nodes) : [];
+      const singleAggregateNode = selectedNode === "all" && nodeEntries.length === 1 ? nodeEntries[0][1] : null;
+      if (singleAggregateNode) {
+        cpuPercent = singleAggregateNode.cpu_usage_percent;
+        memoryPercent = singleAggregateNode.memory_usage_percent;
+        storagePercent = singleAggregateNode.storage_usage_percent || 0;
+        networkRxBytes = singleAggregateNode.network_rx_bytes;
+        networkTxBytes = singleAggregateNode.network_tx_bytes;
+        runningInstances = singleAggregateNode.running_instances;
+      }
       
       // If a specific node is selected and per-node data is available, use it
       if (selectedNode !== "all" && point.nodes && point.nodes[selectedNode]) {
@@ -1468,6 +1510,11 @@ export default function MonitoringContent() {
         : (a.memory_usage_bytes || 0) - (b.memory_usage_bytes || 0))
       .slice(0, topNCount);
   }, [filteredMemoryConsumers, sortDescending, topNCount]);
+
+  const selectedTopConsumerVm = useMemo(
+    () => selectedTopConsumer ? toVmInfoFromMonitoringSummary(selectedTopConsumer) : null,
+    [selectedTopConsumer]
+  );
 
   // Calculate dynamic Y-axis domain based on data
   // This creates a "zoom-in" effect when values are low
@@ -2589,7 +2636,13 @@ export default function MonitoringContent() {
               <TabsContent value="cpu" className="space-y-2 max-h-[280px] overflow-y-auto">
                 {sortedCpuConsumers.length > 0 ? (
                   sortedCpuConsumers.map((instance, idx) => (
-                    <TopConsumerCard key={instance.name} instance={instance} rank={idx + 1} type="cpu" />
+                    <TopConsumerCard
+                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
+                      instance={instance}
+                      rank={idx + 1}
+                      type="cpu"
+                      onOpen={setSelectedTopConsumer}
+                    />
                   ))
                 ) : (
                   <p className="text-center text-muted-foreground py-4">No running instances</p>
@@ -2598,7 +2651,13 @@ export default function MonitoringContent() {
               <TabsContent value="memory" className="space-y-2 max-h-[280px] overflow-y-auto">
                 {sortedMemoryConsumers.length > 0 ? (
                   sortedMemoryConsumers.map((instance, idx) => (
-                    <TopConsumerCard key={instance.name} instance={instance} rank={idx + 1} type="memory" />
+                    <TopConsumerCard
+                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
+                      instance={instance}
+                      rank={idx + 1}
+                      type="memory"
+                      onOpen={setSelectedTopConsumer}
+                    />
                   ))
                 ) : (
                   <p className="text-center text-muted-foreground py-4">No running instances</p>
@@ -2607,7 +2666,13 @@ export default function MonitoringContent() {
               <TabsContent value="storage" className="space-y-2 max-h-[280px] overflow-y-auto">
                 {topStorageConsumers.length > 0 ? (
                   topStorageConsumers.map((instance, idx) => (
-                    <TopConsumerCard key={instance.name} instance={instance} rank={idx + 1} type="storage" />
+                    <TopConsumerCard
+                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
+                      instance={instance}
+                      rank={idx + 1}
+                      type="storage"
+                      onOpen={setSelectedTopConsumer}
+                    />
                   ))
                 ) : (
                   <p className="text-center text-muted-foreground py-4">No running instances</p>
@@ -2616,7 +2681,13 @@ export default function MonitoringContent() {
               <TabsContent value="network" className="space-y-2 max-h-[280px] overflow-y-auto">
                 {topNetworkConsumers.length > 0 ? (
                   topNetworkConsumers.map((instance, idx) => (
-                    <TopConsumerCard key={instance.name} instance={instance} rank={idx + 1} type="network" />
+                    <TopConsumerCard
+                      key={`${instance.host}:${instance.project || "default"}:${instance.name}`}
+                      instance={instance}
+                      rank={idx + 1}
+                      type="network"
+                      onOpen={setSelectedTopConsumer}
+                    />
                   ))
                 ) : (
                   <p className="text-center text-muted-foreground py-4">No running instances</p>
@@ -2844,6 +2915,13 @@ export default function MonitoringContent() {
         filterType={instanceFilterType}
         instances={allInstances}
         isLoading={instancesLoading}
+      />
+
+      <InstanceMonitoringModal
+        instance={selectedTopConsumerVm}
+        isOpen={!!selectedTopConsumer}
+        onClose={() => setSelectedTopConsumer(null)}
+        project={selectedTopConsumer?.project || "default"}
       />
     </div>
   );

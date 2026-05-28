@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
+import { formatHypervisorType } from "@/lib/utils";
 import type { NodeStatus, NodeEnvironment } from "@/types/api";
 
 interface HardwareCategory {
@@ -51,6 +52,21 @@ function formatStorageVersion(env: NodeEnvironment | null, nodes: NodeStatus[]):
   return Array.from(storageBackends).filter(Boolean).join(", ");
 }
 
+function formatDetectedHypervisorName(nodes: NodeStatus[]): string {
+  const detectedTypes = Array.from(
+    new Set(
+      nodes
+        .map((node) => node.node_type)
+        .filter((type): type is string => Boolean(type?.trim()))
+        .map(formatHypervisorType)
+    )
+  );
+
+  if (detectedTypes.length === 1) return detectedTypes[0];
+  if (detectedTypes.length > 1) return "Mixed Hypervisors";
+  return "Hypervisor Platform";
+}
+
 // Helper function to generate software stack with real versions
 function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   // Aggregate environment data from connected nodes
@@ -65,10 +81,11 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
   const driverVersion = cleanDriverVersion(firstEnv?.driver_version as string | undefined);
   const storageVersion = formatStorageVersion(firstEnv, connectedNodes);
   const firewallStack = cleanVersion(firstEnv?.firewall as string | undefined);
+  const hypervisorName = formatDetectedHypervisorName(connectedNodes);
   
   return [
     {
-      name: "Hypervisor Platform",
+      name: hypervisorName,
       version: hypervisorVersion,
       purpose: "System container and virtual machine manager",
       category: "Virtualization",

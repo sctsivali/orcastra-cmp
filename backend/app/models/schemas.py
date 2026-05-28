@@ -757,6 +757,7 @@ class InstanceMonitoringSummary(BaseModel):
     """Summary metrics for an instance (for top consumers list)."""
     name: str = Field(..., description="Instance name")
     host: str = Field(..., description="Host node")
+    project: str = Field("default", description="Project name")
     type: str = Field("container", description="Instance type")
     status: str = Field(..., description="Instance status")
     cpu_usage: float = Field(0, description="CPU usage")

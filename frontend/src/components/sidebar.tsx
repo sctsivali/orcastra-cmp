@@ -34,9 +34,7 @@ import {
   Terminal,
   MapPin,
   Globe,
-  Lightbulb,
   MonitorPlay,
-  Workflow,
   UserPlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -304,7 +302,6 @@ function ConsoleMenuItem() {
 
 export function Sidebar({ className }: SidebarProps) {
   const { sidebarCollapsed: isCollapsed, setSidebarCollapsed: setIsCollapsed, sidebarOpen, setSidebarOpen } = useLayout();
-  const [servicesExpanded, setServicesExpanded] = useState(false);
   const [techExpanded, setTechExpanded] = useState(false);
   const [hardwareExpanded, setHardwareExpanded] = useState(false);
   const [softwareExpanded, setSoftwareExpanded] = useState(false);
@@ -868,48 +865,6 @@ export function Sidebar({ className }: SidebarProps) {
                       "ml-3 flex-1 text-left",
                       isCollapsed && !sidebarOpen && "md:hidden"
                     )}>Regions</span>
-                  </SidebarLink>
-                </Button>
-              </div>
-
-              {/* Services Menu */}
-              <div>
-                <Button
-                  variant={pathname === "/service-providers" ? "default" : "ghost"}
-                  className={cn(
-                    "w-full justify-start",
-                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2",
-                    pathname === "/service-providers" && "sidebar-active"
-                  )}
-                  asChild
-                >
-                  <SidebarLink href="/service-providers">
-                    <Workflow className="h-5 w-5" />
-                    <span className={cn(
-                      "ml-3 flex-1 text-left",
-                      isCollapsed && !sidebarOpen && "md:hidden"
-                    )}>Services</span>
-                  </SidebarLink>
-                </Button>
-              </div>
-
-              {/* Solutions Menu */}
-              <div>
-                <Button
-                  variant={pathname === "/solutions" ? "default" : "ghost"}
-                  className={cn(
-                    "w-full justify-start",
-                    isCollapsed && !sidebarOpen && "md:justify-center md:px-2",
-                    pathname === "/solutions" && "sidebar-active"
-                  )}
-                  asChild
-                >
-                  <SidebarLink href="/solutions">
-                    <Lightbulb className="h-5 w-5" />
-                    <span className={cn(
-                      "ml-3 flex-1 text-left",
-                      isCollapsed && !sidebarOpen && "md:hidden"
-                    )}>Solutions</span>
                   </SidebarLink>
                 </Button>
               </div>

@@ -4,7 +4,6 @@ import * as React from "react";
 import Link from "next/link";
 import { FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { RefreshButton } from "@/components/ui/refresh-button";
 import { LoadingLottieMediumEnhanced, LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
@@ -1518,20 +1517,11 @@ export function Dashboard() {
     || systemWarningsRefetching;
 
   if (isPrimaryLoading) {
-    return <LoadingLottiePageEnhanced context="dashboard" title="Loading dashboard overview" />;
+    return <LoadingLottiePageEnhanced context="dashboard" />;
   }
 
   return (
     <div className="space-y-8">
-      <div className="flex justify-end">
-        <RefreshButton
-          disabled={isRefreshingOverview}
-          isRefreshing={isRefreshingOverview}
-          label="Refresh overview"
-          onClick={handleOverviewRefresh}
-        />
-      </div>
-
       {/* Stats Overview - shows its own loading state */}
       <StatsOverview data={vmsData} clustersData={clustersData} isLoading={vmsLoading} clustersLoading={clustersLoading} />
 
@@ -1539,7 +1529,7 @@ export function Dashboard() {
       <AlarmStatistics prefetchedWarnings={warningsData} prefetchedSystemWarnings={systemWarnings} />
 
       {/* Nodes Status */}
-      <NodeStatusCards />
+      <NodeStatusCards onRefresh={handleOverviewRefresh} isRefreshing={isRefreshingOverview} />
 
       {/* Projects Overview */}
       <ProjectsSection 

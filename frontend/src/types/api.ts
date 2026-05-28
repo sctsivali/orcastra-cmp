@@ -891,6 +891,7 @@ export interface ClusterMonitoringMetrics {
 export interface InstanceMonitoringSummary {
   name: string;
   host: string;
+  project?: string | null;
   type: string;
   status: string;
   cpu_usage: number;

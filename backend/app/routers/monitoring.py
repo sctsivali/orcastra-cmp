@@ -638,6 +638,7 @@ async def get_monitoring_dashboard(
             instance_summaries.append(InstanceMonitoringSummary(
                 name=metrics['name'],
                 host=metrics['host'],
+                project=metrics.get('project', 'default'),
                 type=vm_type,
                 status="Running",
                 cpu_usage=metrics.get('cpu_percent', 0),  # Now using calculated percentage
