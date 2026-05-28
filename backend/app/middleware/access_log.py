@@ -14,7 +14,7 @@ from starlette.responses import Response
 
 from app.core.config import get_settings
 from app.core.request_context import get_request_context
-from app.core.request_security import get_client_ip
+from app.core.request_security import resolve_client_ip
 from app.core.logging_config import get_access_logger
 
 
@@ -135,11 +135,16 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
                 "organizations": ctx.user_orgs,
             }
         
+        client_ip = ctx.client_ip if ctx else self._get_client_ip(request)
+
         # Build client info
         client_info = {
-            "ip": ctx.client_ip if ctx else self._get_client_ip(request),
+            "ip": client_ip,
             "user_agent": request.headers.get("user-agent"),
             "origin": request.headers.get("origin"),
+            "proxy_ip": getattr(request.state, "client_proxy_ip", None),
+            "ip_source": getattr(request.state, "client_ip_source", "direct"),
+            "proxy_trusted": getattr(request.state, "client_proxy_trusted", False),
         }
         
         return {
@@ -195,4 +200,14 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         """Extract client IP, considering proxies."""
         if hasattr(request.state, "client_ip") and request.state.client_ip:
             return request.state.client_ip
-        return get_client_ip(request, get_settings().trusted_proxy_cidrs)
+        settings = get_settings()
+        resolution = resolve_client_ip(
+            request,
+            settings.trusted_proxy_cidrs,
+            settings.allow_private_forwarded_ips,
+        )
+        request.state.client_ip = resolution.client_ip
+        request.state.client_ip_source = resolution.source
+        request.state.client_proxy_ip = resolution.direct_ip
+        request.state.client_proxy_trusted = resolution.trusted_proxy
+        return resolution.client_ip

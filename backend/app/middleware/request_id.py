@@ -10,7 +10,7 @@ from starlette.responses import Response
 
 from app.core.config import get_settings
 from app.core.request_context import RequestContext, set_request_context
-from app.core.request_security import get_client_ip
+from app.core.request_security import resolve_client_ip
 
 
 # Header name for request ID propagation
@@ -70,7 +70,17 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         """Extract client IP, considering proxies."""
         if hasattr(request.state, "client_ip") and request.state.client_ip:
             return request.state.client_ip
-        return get_client_ip(request, get_settings().trusted_proxy_cidrs)
+        settings = get_settings()
+        resolution = resolve_client_ip(
+            request,
+            settings.trusted_proxy_cidrs,
+            settings.allow_private_forwarded_ips,
+        )
+        request.state.client_ip = resolution.client_ip
+        request.state.client_ip_source = resolution.source
+        request.state.client_proxy_ip = resolution.direct_ip
+        request.state.client_proxy_trusted = resolution.trusted_proxy
+        return resolution.client_ip
     
     def _extract_user_id(self, request: Request) -> str | None:
         """Extract user ID from request (from JWT claims or auth middleware)."""

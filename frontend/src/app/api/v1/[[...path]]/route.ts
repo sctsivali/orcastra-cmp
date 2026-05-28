@@ -19,7 +19,13 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:4050";
 
-const FORWARD_CLIENT_IP_HEADERS = process.env.FORWARD_CLIENT_IP_HEADERS === "true";
+const FORWARD_CLIENT_IP_HEADERS = process.env.FORWARD_CLIENT_IP_HEADERS !== "false";
+const TRUSTED_CLIENT_IP_HEADERS = (
+  process.env.TRUSTED_CLIENT_IP_HEADERS || "cf-connecting-ip,true-client-ip"
+)
+  .split(",")
+  .map((headerName) => headerName.trim().toLowerCase())
+  .filter(Boolean);
 
 const HOP_BY_HOP_HEADERS = [
   "connection",
@@ -49,11 +55,61 @@ function buildTargetUrl(pathname: string, search: string): string {
   return targetUrl.toString();
 }
 
-function isValidIpHeader(value: string | null): value is string {
-  if (!value) return false;
-  const candidate = value.split(",")[0]?.trim();
+function isPrivateIpv4(candidate: string): boolean {
+  const parts = candidate.split(".").map((part) => Number(part));
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
+    return true;
+  }
+
+  const [first, second] = parts;
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    first >= 224 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168)
+  );
+}
+
+function isPrivateIpv6(candidate: string): boolean {
+  const normalized = candidate.toLowerCase();
+  return (
+    normalized === "::1" ||
+    normalized === "::" ||
+    normalized.startsWith("fc") ||
+    normalized.startsWith("fd") ||
+    normalized.startsWith("fe80:")
+  );
+}
+
+function firstIpHeaderValue(value: string | null): string | null {
+  if (!value) return null;
+  return value.split(",")[0]?.trim() || null;
+}
+
+function isValidPublicIpHeader(value: string | null): value is string {
+  const candidate = firstIpHeaderValue(value);
   if (!candidate || candidate.length > 45) return false;
   return /^[0-9a-f:.]+$/i.test(candidate);
+}
+
+function trustedForwardedClientIp(req: NextRequest): { ip: string; source: string } | null {
+  for (const headerName of TRUSTED_CLIENT_IP_HEADERS) {
+    const candidate = firstIpHeaderValue(req.headers.get(headerName));
+    if (!isValidPublicIpHeader(candidate)) continue;
+    if (candidate.includes(".") && candidate.includes(":")) continue;
+    if (candidate.includes(":")) {
+      if (isPrivateIpv6(candidate)) continue;
+    } else if (isPrivateIpv4(candidate)) {
+      continue;
+    }
+    return { ip: candidate, source: headerName };
+  }
+
+  return null;
 }
 
 function buildForwardHeaders(req: NextRequest): Headers {
@@ -62,18 +118,21 @@ function buildForwardHeaders(req: NextRequest): Headers {
   HOP_BY_HOP_HEADERS.forEach((headerName) => headers.delete(headerName));
   headers.delete("host");
   headers.delete("cf-connecting-ip");
+  headers.delete("true-client-ip");
   headers.delete("x-real-ip");
   headers.delete("x-forwarded-for");
+  headers.delete("forwarded");
+  headers.delete("x-orcastra-client-ip");
+  headers.delete("x-orcastra-client-ip-source");
 
   if (FORWARD_CLIENT_IP_HEADERS) {
-    const forwardedFor =
-      req.headers.get("cf-connecting-ip") ||
-      req.headers.get("x-real-ip") ||
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-      null;
+    const forwardedClientIp = trustedForwardedClientIp(req);
 
-    if (isValidIpHeader(forwardedFor)) {
-      headers.set("x-forwarded-for", forwardedFor.split(",")[0].trim());
+    if (forwardedClientIp) {
+      headers.set("x-orcastra-client-ip", forwardedClientIp.ip);
+      headers.set("x-orcastra-client-ip-source", forwardedClientIp.source);
+      headers.set("x-forwarded-for", forwardedClientIp.ip);
+      headers.set("x-real-ip", forwardedClientIp.ip);
     }
   }
 

@@ -17,6 +17,15 @@ DEFAULT_TRUSTED_PROXY_CIDRS = (
     "::1/128,fc00::/7,fe80::/10"
 )
 
+CLIENT_IP_HEADERS = (
+    "x-orcastra-client-ip",
+    "cf-connecting-ip",
+    "true-client-ip",
+    "x-real-ip",
+    "x-forwarded-for",
+    "forwarded",
+)
+
 TRAVERSAL_TARGETS = (
     "/etc/passwd",
     "/etc/shadow",
@@ -113,6 +122,16 @@ class SecurityDecision:
     reason: str
 
 
+@dataclass(frozen=True)
+class ClientIpResolution:
+    """Resolved client IP plus proxy metadata for logs and rate limiting."""
+
+    client_ip: str
+    direct_ip: str
+    source: str
+    trusted_proxy: bool
+
+
 def decode_repeatedly(value: str, rounds: int = 3) -> str:
     """Decode URL escapes a few times to catch double-encoded probes."""
     decoded = value
@@ -188,10 +207,28 @@ def inspect_request_target(method: str, path: str, query: str = "") -> SecurityD
     return None
 
 
-def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+def _clean_ip_candidate(value: str | None) -> str | None:
     if not value:
         return None
-    candidate = value.strip().split(":", 1)[0] if value.count(":") == 1 else value.strip()
+
+    candidate = value.strip().strip('"')
+    if not candidate or candidate.lower() == "unknown" or candidate.startswith("_"):
+        return None
+
+    if candidate.startswith("["):
+        end_index = candidate.find("]")
+        return candidate[1:end_index] if end_index > 0 else None
+
+    if candidate.count(":") == 1 and "." in candidate.rsplit(":", 1)[0]:
+        return candidate.rsplit(":", 1)[0]
+
+    return candidate
+
+
+def _parse_ip(value: str | None) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    candidate = _clean_ip_candidate(value)
+    if not candidate:
+        return None
     try:
         return ipaddress.ip_address(candidate)
     except ValueError:
@@ -217,28 +254,93 @@ def _is_trusted_proxy(ip_value: str | None, cidr_text: str | None) -> bool:
     return any(direct_ip in network for network in _trusted_networks(cidr_text))
 
 
-def _first_valid_header_ip(header_value: str | None) -> str | None:
+def _is_allowed_forwarded_ip(
+    parsed: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    allow_private_forwarded_ips: bool,
+) -> bool:
+    if allow_private_forwarded_ips:
+        return True
+    return parsed.is_global
+
+
+def _forwarded_header_values(header_value: str) -> Iterable[str]:
+    for forwarded_entry in header_value.split(","):
+        for parameter in forwarded_entry.split(";"):
+            key, separator, value = parameter.strip().partition("=")
+            if separator and key.lower() == "for":
+                yield value.strip()
+
+
+def _header_ip_values(header_name: str, header_value: str) -> Iterable[str]:
+    if header_name == "forwarded":
+        yield from _forwarded_header_values(header_value)
+        return
+
+    yield from (part.strip() for part in header_value.split(","))
+
+
+def _first_valid_header_ip(
+    header_name: str,
+    header_value: str | None,
+    allow_private_forwarded_ips: bool = False,
+) -> str | None:
     if not header_value:
         return None
-    for raw_part in header_value.split(","):
+    for raw_part in _header_ip_values(header_name, header_value):
         parsed = _parse_ip(raw_part)
-        if parsed:
+        if parsed and _is_allowed_forwarded_ip(parsed, allow_private_forwarded_ips):
             return str(parsed)
     return None
 
 
-def get_client_ip(request: Request, trusted_proxy_cidrs: str | None = None) -> str:
-    """Return client IP while trusting forwarding headers only from proxies."""
+def resolve_client_ip(
+    request: Request,
+    trusted_proxy_cidrs: str | None = None,
+    allow_private_forwarded_ips: bool = False,
+) -> ClientIpResolution:
+    """Resolve client IP while trusting forwarding headers only from proxies."""
     direct_ip = request.client.host if request.client else "unknown"
     if not _is_trusted_proxy(direct_ip, trusted_proxy_cidrs):
-        return direct_ip
+        return ClientIpResolution(
+            client_ip=direct_ip,
+            direct_ip=direct_ip,
+            source="direct",
+            trusted_proxy=False,
+        )
 
-    for header_name in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for"):
-        candidate = _first_valid_header_ip(request.headers.get(header_name))
+    for header_name in CLIENT_IP_HEADERS:
+        candidate = _first_valid_header_ip(
+            header_name,
+            request.headers.get(header_name),
+            allow_private_forwarded_ips,
+        )
         if candidate:
-            return candidate
+            return ClientIpResolution(
+                client_ip=candidate,
+                direct_ip=direct_ip,
+                source=header_name,
+                trusted_proxy=True,
+            )
 
-    return direct_ip
+    return ClientIpResolution(
+        client_ip=direct_ip,
+        direct_ip=direct_ip,
+        source="direct",
+        trusted_proxy=True,
+    )
+
+
+def get_client_ip(
+    request: Request,
+    trusted_proxy_cidrs: str | None = None,
+    allow_private_forwarded_ips: bool = False,
+) -> str:
+    """Return the resolved client IP for rate limiting and access logs."""
+    return resolve_client_ip(
+        request,
+        trusted_proxy_cidrs,
+        allow_private_forwarded_ips,
+    ).client_ip
 
 
 def get_client_subnet(ip_value: str) -> str | None:

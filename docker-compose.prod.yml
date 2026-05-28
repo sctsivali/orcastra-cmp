@@ -100,7 +100,7 @@ services:
       - no-new-privileges:true
     read_only: false
     tmpfs:
-      - /tmp:mode=1777,size=100m
+      - /tmp:mode=1777,size=${BACKEND_TMPFS_SIZE:-256m}
 
   # Frontend (port: 4321)
   frontend:
@@ -112,7 +112,8 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
-      - FORWARD_CLIENT_IP_HEADERS=${FORWARD_CLIENT_IP_HEADERS:-false}
+      - FORWARD_CLIENT_IP_HEADERS=${FORWARD_CLIENT_IP_HEADERS:-true}
+      - TRUSTED_CLIENT_IP_HEADERS=${TRUSTED_CLIENT_IP_HEADERS:-cf-connecting-ip,true-client-ip}
       # Internal Docker URL for server-side API proxying (avoids external DNS/firewall issues)
       - INTERNAL_BACKEND_URL=http://backend:4050
       - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}

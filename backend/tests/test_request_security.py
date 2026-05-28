@@ -6,6 +6,7 @@ from app.core.request_security import (
     get_client_ip,
     get_client_subnet,
     inspect_request_target,
+    resolve_client_ip,
 )
 from app.core.safe_paths import safe_filename
 from app.middleware.security import WindowedRateLimiter
@@ -80,25 +81,56 @@ class RequestSecurityInspectionTests(unittest.TestCase):
 
 class ClientIpTrustTests(unittest.TestCase):
     def test_ignores_forwarded_for_from_untrusted_client(self) -> None:
-        request = make_request({"x-forwarded-for": "203.0.113.10"}, "198.51.100.20")
+        request = make_request({"x-forwarded-for": "195.178.110.104"}, "142.132.147.94")
 
-        self.assertEqual(get_client_ip(request), "198.51.100.20")
+        self.assertEqual(get_client_ip(request), "142.132.147.94")
 
     def test_accepts_forwarded_for_from_private_proxy(self) -> None:
-        request = make_request({"x-forwarded-for": "203.0.113.10, 172.18.0.2"}, "172.18.0.2")
+        request = make_request({"x-forwarded-for": "195.178.110.104, 172.18.0.2"}, "172.18.0.2")
 
-        self.assertEqual(get_client_ip(request), "203.0.113.10")
+        self.assertEqual(get_client_ip(request), "195.178.110.104")
 
     def test_prefers_cloudflare_header_from_trusted_proxy(self) -> None:
         request = make_request(
             {
-                "cf-connecting-ip": "203.0.113.55",
-                "x-forwarded-for": "198.51.100.99",
+                "cf-connecting-ip": "142.132.147.94",
+                "x-forwarded-for": "195.178.110.104",
             },
             "172.18.0.2",
         )
 
-        self.assertEqual(get_client_ip(request), "203.0.113.55")
+        self.assertEqual(get_client_ip(request), "142.132.147.94")
+
+    def test_prefers_internal_orcastra_client_ip_from_trusted_proxy(self) -> None:
+        request = make_request(
+            {
+                "x-orcastra-client-ip": "195.178.110.104",
+                "cf-connecting-ip": "142.132.147.94",
+            },
+            "172.18.0.2",
+        )
+
+        resolution = resolve_client_ip(request)
+
+        self.assertEqual(resolution.client_ip, "195.178.110.104")
+        self.assertEqual(resolution.direct_ip, "172.18.0.2")
+        self.assertEqual(resolution.source, "x-orcastra-client-ip")
+        self.assertTrue(resolution.trusted_proxy)
+
+    def test_rejects_private_forwarded_ip_by_default(self) -> None:
+        request = make_request({"cf-connecting-ip": "172.18.0.5"}, "172.18.0.2")
+
+        self.assertEqual(get_client_ip(request), "172.18.0.2")
+
+    def test_allows_private_forwarded_ip_when_explicitly_enabled(self) -> None:
+        request = make_request({"cf-connecting-ip": "172.18.0.5"}, "172.18.0.2")
+
+        self.assertEqual(get_client_ip(request, allow_private_forwarded_ips=True), "172.18.0.5")
+
+    def test_accepts_standard_forwarded_header_from_trusted_proxy(self) -> None:
+        request = make_request({"forwarded": "for=195.178.110.104;proto=https"}, "172.18.0.2")
+
+        self.assertEqual(get_client_ip(request), "195.178.110.104")
 
     def test_generates_ipv4_subnet_bucket(self) -> None:
         self.assertEqual(get_client_subnet("195.178.110.104"), "195.178.110.0/24")

@@ -203,6 +203,23 @@ class SyncDataResponse(BaseModel):
     members_removed: int = Field(default=0, description="Number of members removed")
 
 
+def _public_location_data(location_data: Dict[str, Any]) -> Dict[str, Any]:
+    allowed_keys = {
+        "region_id",
+        "region_name",
+        "city",
+        "country_code",
+        "country_name",
+        "latitude",
+        "longitude",
+        "continent",
+        "timezone",
+        "facility_name",
+        "facility_provider",
+    }
+    return {key: location_data.get(key) for key in allowed_keys if location_data.get(key) is not None}
+
+
 class ProxyRequest(BaseModel):
     """Request to proxy an LXD operation."""
     cluster_id: str = Field(..., description="Target cluster ID")
@@ -1188,6 +1205,7 @@ async def sync_data(
                         cluster_info = cert_manager.get_cluster_info(cluster_id)
                         # Return only non-sensitive info
                         location_data = cluster_info.get("metadata", {}).get("location", {})
+                        public_location = _public_location_data(location_data)
                         zone_name = location_data.get("region_name") or location_data.get("city") or None
                         result.clusters.append({
                             "id": cluster_id,
@@ -1196,6 +1214,16 @@ async def sync_data(
                             "server_type": cluster_info.get("metadata", {}).get("server_type", "lxd"),
                             "registered_at": cluster_info.get("metadata", {}).get("registered_at"),
                             "zone": zone_name,
+                            "location_data": public_location or None,
+                            "region_id": public_location.get("region_id"),
+                            "region_name": public_location.get("region_name"),
+                            "city": public_location.get("city"),
+                            "country_code": public_location.get("country_code"),
+                            "country_name": public_location.get("country_name"),
+                            "latitude": public_location.get("latitude"),
+                            "longitude": public_location.get("longitude"),
+                            "facility_name": public_location.get("facility_name"),
+                            "facility_provider": public_location.get("facility_provider"),
                         })
                     except Exception as e:
                         logger.warning(f"Could not get cluster info for {cluster_id}: {e}")
@@ -1237,6 +1265,72 @@ async def sync_data(
         raise
     except Exception as e:
         logger.error(f"Error syncing data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@external_router.get(
+    "/regions",
+    summary="Get integration region coordinates",
+    description="Return non-sensitive geographic region coordinates for clusters allowed by the API key.",
+)
+async def get_integration_regions(api_key: Dict[str, Any] = Depends(validate_api_key)):
+    """Expose real cluster location metadata to external integrations using API-key auth."""
+    try:
+        settings = get_settings()
+        allowed_clusters = {
+            permission["cluster_id"] for permission in api_key.get("cluster_permissions", [])
+        }
+        regions: Dict[str, Dict[str, Any]] = {}
+
+        if settings.vault_enabled and settings.vault_token:
+            from app.services.lxd_cert_manager import LXDCertificateManager
+            vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
+            cert_manager = LXDCertificateManager(
+                vault_client=vault_client,
+                clusters_path=settings.vault_clusters_path
+            )
+
+            for cluster_id in allowed_clusters:
+                try:
+                    cluster_info = cert_manager.get_cluster_info(cluster_id)
+                    location_data = _public_location_data(
+                        cluster_info.get("metadata", {}).get("location", {})
+                    )
+                    if not location_data.get("latitude") or not location_data.get("longitude"):
+                        continue
+
+                    region_id = location_data.get("region_id") or cluster_id
+                    if region_id not in regions:
+                        regions[region_id] = {
+                            "region_id": region_id,
+                            "region_name": location_data.get("region_name") or location_data.get("city") or cluster_id,
+                            "country_code": location_data.get("country_code") or "XX",
+                            "country_name": location_data.get("country_name") or "Unknown",
+                            "city": location_data.get("city") or location_data.get("region_name") or "Unknown",
+                            "latitude": location_data.get("latitude"),
+                            "longitude": location_data.get("longitude"),
+                            "continent": location_data.get("continent") or "XX",
+                            "facility_name": location_data.get("facility_name"),
+                            "facility_provider": location_data.get("facility_provider"),
+                            "node_count": 0,
+                            "instance_count": 0,
+                            "instance_running": 0,
+                        }
+                    regions[region_id]["node_count"] += 1
+                except Exception as e:
+                    logger.warning(f"Could not get region info for {cluster_id}: {e}")
+
+        return {
+            "regions": list(regions.values()),
+            "total_nodes": sum(region["node_count"] for region in regions.values()),
+            "total_instances": 0,
+            "total_cpu": 0,
+            "total_memory": 0,
+            "total_storage": 0,
+            "total_gpu": 0,
+        }
+    except Exception as e:
+        logger.error(f"Error loading integration regions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

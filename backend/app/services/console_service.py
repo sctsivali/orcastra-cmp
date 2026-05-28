@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 import ssl
-import os
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 from enum import Enum
@@ -19,7 +18,7 @@ from app.services.lxd_service import get_lxd_service
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
-from app.core.safe_paths import safe_filename
+from app.services.lxd_ssl import create_lxd_ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -173,27 +172,7 @@ class ConsoleService:
         """Create SSL context for WebSocket connection to LXD."""
         cert_data = self.cert_manager.get_cluster_certificate(host)
         
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        
-        cert_dir = "/tmp/lxd-certs"
-        os.makedirs(cert_dir, exist_ok=True)
-        
-        safe_host = safe_filename(host, fallback="cluster")
-        cert_path = os.path.join(cert_dir, f"{safe_host}.crt")
-        key_path = os.path.join(cert_dir, f"{safe_host}.key")
-        
-        with open(cert_path, 'w') as f:
-            f.write(cert_data["client.crt"])
-        with open(key_path, 'w') as f:
-            f.write(cert_data["client.key"])
-        
-        os.chmod(cert_path, 0o600)
-        os.chmod(key_path, 0o600)
-        ssl_context.load_cert_chain(cert_path, key_path)
-        
-        return ssl_context
+        return create_lxd_ssl_context(cert_data)
     
     async def get_instance_capabilities(
         self,

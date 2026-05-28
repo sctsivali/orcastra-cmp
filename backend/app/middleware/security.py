@@ -12,11 +12,12 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.core.request_context import get_request_context
 from app.core.request_security import (
     SecurityDecision,
-    get_client_ip,
     get_client_subnet,
     inspect_request_target,
+    resolve_client_ip,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,23 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
         self.limiter = limiter or WindowedRateLimiter()
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        client_ip = get_client_ip(request, self.settings.trusted_proxy_cidrs)
+        resolution = resolve_client_ip(
+            request,
+            self.settings.trusted_proxy_cidrs,
+            self.settings.allow_private_forwarded_ips,
+        )
+        client_ip = resolution.client_ip
         request.state.client_ip = client_ip
+        request.state.client_ip_source = resolution.source
+        request.state.client_proxy_ip = resolution.direct_ip
+        request.state.client_proxy_trusted = resolution.trusted_proxy
+
+        ctx = get_request_context()
+        if ctx:
+            ctx.client_ip = client_ip
+            ctx.extra["client_ip_source"] = resolution.source
+            ctx.extra["client_proxy_ip"] = resolution.direct_ip
+            ctx.extra["client_proxy_trusted"] = resolution.trusted_proxy
 
         if self.settings.security_probe_block_enabled:
             decision = inspect_request_target(

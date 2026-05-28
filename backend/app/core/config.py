@@ -71,6 +71,11 @@ class Settings(BaseSettings):
         alias="TRUSTED_PROXY_CIDRS",
         description="Comma-separated proxy CIDRs allowed to supply client IP headers"
     )
+    allow_private_forwarded_ips: bool = Field(
+        default=False,
+        alias="ALLOW_PRIVATE_FORWARDED_IPS",
+        description="Allow private/reserved IPs from trusted client IP headers. Keep false for public Cloudflare deployments."
+    )
     
     # Domain Configuration
     orcastra_domain: str = Field(

@@ -307,6 +307,9 @@ OPENSEARCH_PASSWORD=your-opensearch-password
 # security
 CORS_ORIGINS=http://your-server:2025
 RATE_LIMIT_ENABLED=true
+FORWARD_CLIENT_IP_HEADERS=true
+TRUSTED_CLIENT_IP_HEADERS=cf-connecting-ip,true-client-ip
+ALLOW_PRIVATE_FORWARDED_IPS=false
 SECRET_KEY=your-secret-key                 # openssl rand -hex 32
 READ_ONLY_MODE=false
 ```

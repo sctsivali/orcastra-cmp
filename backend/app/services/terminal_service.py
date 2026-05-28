@@ -16,7 +16,7 @@ from app.services.lxd_service import get_lxd_service
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
-from app.core.safe_paths import safe_filename
+from app.services.lxd_ssl import create_lxd_ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -228,36 +228,7 @@ class TerminalService:
         # Get certificates from Vault
         cert_data = self.cert_manager.get_cluster_certificate(host)
         
-        # Create SSL context
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE  # LXD uses self-signed certs
-        
-        # Write certs to temp files in a dedicated directory
-        # These persist for the container lifetime to avoid SSL errors
-        import os
-        
-        cert_dir = "/tmp/lxd-certs"
-        os.makedirs(cert_dir, exist_ok=True)
-        
-        safe_host = safe_filename(host, fallback="cluster")
-        cert_path = os.path.join(cert_dir, f"{safe_host}.crt")
-        key_path = os.path.join(cert_dir, f"{safe_host}.key")
-        
-        # Write certs (overwrite if exists - certs may have been rotated)
-        with open(cert_path, 'w') as f:
-            f.write(cert_data["client.crt"])
-        with open(key_path, 'w') as f:
-            f.write(cert_data["client.key"])
-        
-        # Secure permissions
-        os.chmod(cert_path, 0o600)
-        os.chmod(key_path, 0o600)
-        
-        # Load cert chain
-        ssl_context.load_cert_chain(cert_path, key_path)
-        
-        return ssl_context
+        return create_lxd_ssl_context(cert_data)
     
     async def resize_terminal(
         self,
