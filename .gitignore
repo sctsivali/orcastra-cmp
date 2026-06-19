@@ -61,6 +61,9 @@ certs/node2/*.key
 # Misc
 infrastructure/
 *.bak
+*.bak-*
+*.gpubak
+*.orig
 *.zip
 *.rar
 .cache/
@@ -72,6 +75,8 @@ scripts/
 config/
 backup/
 CHANGELOG.md
-COMMIT-MESSAGE.md
 .github/instructions/
-backend/app/routers/integrations.py.bak-20260527-1430
+
+# Claude Code (local AI tooling - not committed to this public repo)
+.claude/
+CLAUDE.md

@@ -75,3 +75,9 @@ infrastructure/
 scripts/
 .venv/
 .github/
+
+# Recursive excludes (the bare patterns above only match the context ROOT).
+# These **/ variants also catch nested editor backups under src/.
+**/*.bak*
+**/*.gpubak
+**/*.orig

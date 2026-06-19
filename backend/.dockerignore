@@ -74,3 +74,12 @@ infrastructure/
 scripts/
 .venv/
 .github/
+
+# Recursive excludes (the bare patterns above only match the context ROOT).
+# These **/ variants also catch nested files under app/, so editor backups
+# and Python bytecode never leak into the release image.
+**/*.bak*
+**/*.gpubak
+**/*.orig
+**/__pycache__/
+**/*.py[cod]
