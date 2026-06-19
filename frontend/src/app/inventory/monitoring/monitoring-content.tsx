@@ -550,6 +550,10 @@ const CHART_COLORS = {
 
 const PIE_COLORS = ["#10b981", "#ef4444", "#6b7280"];
 
+// important: lift recharts tooltips above the chart Legend - the Legend is a sibling div
+// rendered after the tooltip wrapper, so without this it paints over a tall tooltip
+const CHART_TOOLTIP_STYLE = { zIndex: 50 };
+
 // Custom tooltip for pie chart - moved outside component for performance
 const PieChartTooltip = ({ active, payload }: { active?: boolean; payload?: any[] }) => {
   if (active && payload && payload.length) {
@@ -653,32 +657,17 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
     storage: "Storage Usage",
   };
 
-  // Helper to get status badge for a node - INFER from historical data point
-  // If node has data at this timestamp, it was online at that time
-  // Only show badge when value is 0 or node has no data at this timestamp
-  const getStatusBadge = (nodeName: string, value: number, dataPoint?: any) => {
-    // For historical data: infer status from whether node has data at this timestamp
-    // If the node has a value > 0 at this timestamp, it was online/connected
-    // If value is 0 or undefined, the node was likely offline/disconnected
-    
-    const hasDataAtTimestamp = value !== undefined && value > 0;
-    
-    // Only show status badge if there's an issue (value is 0 or missing)
-    if (hasDataAtTimestamp) {
-      return null; // Node was working fine at this timestamp, no badge needed
-    }
-    
-    // Value is 0 or missing - check if we can determine why
-    // Check if other metrics exist for this node at this timestamp
+  // important: infer historical connectivity from the data point - a node with no value for
+  // any metric at this timestamp was offline/disconnected then (vs a genuine 0% reading)
+  const isNodeOffline = (nodeName: string, value: number, dataPoint?: any): boolean => {
+    if (value !== undefined && value > 0) return false;
     const otherMetricValue = dataPoint?.[`cpu_${nodeName}`] ?? dataPoint?.[`memory_${nodeName}`] ?? dataPoint?.[`storage_${nodeName}`];
     const nodeHadAnyData = otherMetricValue !== undefined && otherMetricValue > 0;
-    
-    if (nodeHadAnyData) {
-      // Node had data for other metrics, so it was online but this specific metric was 0
-      return null; // This is normal (ex; 0% CPU usage)
-    }
-    
-    // Node had no data at this timestamp - it was offline/disconnected
+    return !nodeHadAnyData;
+  };
+
+  const getStatusBadge = (nodeName: string, value: number, dataPoint?: any) => {
+    if (!isNodeOffline(nodeName, value, dataPoint)) return null;
     return (
       <div className="flex items-center gap-1.5 mt-1">
         <span className="text-xs text-muted-foreground italic">Not connected at this time</span>
@@ -689,31 +678,41 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
   // Multi-node view (when "All Nodes" selected)
   if (selectedNode === "all" && payload.length > 1) {
     const dataPoint = payload[0]?.payload;
+    // Many registered nodes make this tooltip very tall - switch to a compact 2-column grid
+    // and bound the height so it never sprawls over the legend below the chart
+    const dense = payload.length > 8;
     return (
-      <div className="bg-card border rounded-lg shadow-lg p-3 max-w-xs">
+      <div className={cn(
+        "bg-card border rounded-lg shadow-lg p-3 max-h-[70vh] overflow-hidden",
+        dense ? "max-w-md" : "max-w-xs"
+      )}>
         <p className="text-xs text-muted-foreground mb-2 font-medium border-b pb-1">{label}</p>
-        {payload.map((entry: any, idx: number) => {
-          const nodeName = entry.dataKey?.replace(`${metricType}_`, '') || 'Unknown';
-          const value = Number(entry.value || 0);
-          
-          return (
-            <div key={idx} className="mb-1.5 last:mb-0">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-1.5">
-                  <span 
-                    className="inline-block w-2.5 h-2.5 rounded-sm" 
+        <div className={cn("grid gap-x-4 gap-y-1", dense ? "grid-cols-2" : "grid-cols-1")}>
+          {payload.map((entry: any, idx: number) => {
+            const nodeName = entry.dataKey?.replace(`${metricType}_`, '') || 'Unknown';
+            const value = Number(entry.value || 0);
+            const offline = isNodeOffline(nodeName, value, dataPoint);
+
+            return (
+              <div key={idx} className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className="inline-block w-2.5 h-2.5 rounded-sm shrink-0"
                     style={{ backgroundColor: entry.color }}
                   />
-                  <span className="text-sm">{nodeName}</span>
+                  <span className="text-sm truncate">{nodeName}</span>
                 </div>
-                <span className="text-sm font-semibold" style={{ color: entry.color }}>
-                  {value.toFixed(1)}%
-                </span>
+                {offline ? (
+                  <span className="text-xs text-muted-foreground italic shrink-0">offline</span>
+                ) : (
+                  <span className="text-sm font-semibold shrink-0" style={{ color: entry.color }}>
+                    {value.toFixed(1)}%
+                  </span>
+                )}
               </div>
-              {getStatusBadge(nodeName, value, dataPoint)}
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -2079,10 +2078,11 @@ export default function MonitoringContent() {
                     tickFormatter={percentTickFormatter}
                     className="text-muted-foreground"
                   />
-                  <Tooltip 
+                  <Tooltip
+                    wrapperStyle={CHART_TOOLTIP_STYLE}
                     content={
-                      <ResourceMetricsTooltip 
-                        metricType="cpu" 
+                      <ResourceMetricsTooltip
+                        metricType="cpu"
                         nodeStatusMap={nodeStatusMap}
                         nodeNames={nodeNames}
                         selectedNode={selectedNode}
@@ -2205,10 +2205,11 @@ export default function MonitoringContent() {
                     tickFormatter={percentTickFormatter}
                     className="text-muted-foreground"
                   />
-                  <Tooltip 
+                  <Tooltip
+                    wrapperStyle={CHART_TOOLTIP_STYLE}
                     content={
-                      <ResourceMetricsTooltip 
-                        metricType="memory" 
+                      <ResourceMetricsTooltip
+                        metricType="memory"
                         nodeStatusMap={nodeStatusMap}
                         nodeNames={nodeNames}
                         selectedNode={selectedNode}
@@ -2329,10 +2330,11 @@ export default function MonitoringContent() {
                     tickFormatter={percentTickFormatter}
                     className="text-muted-foreground"
                   />
-                  <Tooltip 
+                  <Tooltip
+                    wrapperStyle={CHART_TOOLTIP_STYLE}
                     content={
-                      <ResourceMetricsTooltip 
-                        metricType="storage" 
+                      <ResourceMetricsTooltip
+                        metricType="storage"
                         nodeStatusMap={nodeStatusMap}
                         nodeNames={nodeNames}
                         selectedNode={selectedNode}
@@ -2465,7 +2467,8 @@ export default function MonitoringContent() {
                     tickFormatter={networkTickFormatter}
                     className="text-muted-foreground"
                   />
-                  <Tooltip 
+                  <Tooltip
+                    wrapperStyle={CHART_TOOLTIP_STYLE}
                     contentStyle={tooltipContentStyle}
                     formatter={networkTooltipFormatter}
                   />
@@ -2532,7 +2535,7 @@ export default function MonitoringContent() {
                       <Cell key={`cell-${index}`} fill={entry.color} />
                     ))}
                   </Pie>
-                  <Tooltip content={<PieChartTooltip />} />
+                  <Tooltip wrapperStyle={CHART_TOOLTIP_STYLE} content={<PieChartTooltip />} />
                 </PieChart>
               </ResponsiveContainer>
               {/* Clickable Legend */}

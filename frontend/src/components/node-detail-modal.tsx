@@ -365,20 +365,9 @@ export function NodeDetailModal({
                               {/* GPU Header */}
                               <div className="flex justify-between items-start">
                                 <div className="flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <p className="font-semibold text-base">
-                                      {gpu.nvidia?.model || gpu.product || `GPU ${gpu.index}`}
-                                    </p>
-                                    {gpu.in_use ? (
-                                      <Badge variant="default" className="bg-purple-600 text-xs">
-                                        In Use
-                                      </Badge>
-                                    ) : (
-                                      <Badge variant="secondary" className="text-xs">
-                                        Available
-                                      </Badge>
-                                    )}
-                                  </div>
+                                  <p className="font-semibold text-base">
+                                    {gpu.model_name || gpu.nvidia?.model || gpu.product || `GPU ${gpu.index}`}
+                                  </p>
                                   {gpu.vendor && (
                                     <p className="text-sm text-muted-foreground">
                                       {gpu.vendor}
@@ -426,6 +415,21 @@ export function NodeDetailModal({
                                     <p className="font-medium">{gpu.numa_node}</p>
                                   </div>
                                 )}
+                              </div>
+
+                              {/* Classification + memory (unified vs dedicated) */}
+                              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-2 border-t border-dashed">
+                                <div>
+                                  <p className="text-muted-foreground text-xs">Type</p>
+                                  <p className="font-medium">{(gpu.gpu_class === "display" || gpu.is_compute === false) ? "Display controller" : (gpu.is_integrated ? "Compute (integrated)" : "Compute")}</p>
+                                </div>
+                                {gpu.memory_total ? (
+                                  <div>
+                                    <p className="text-muted-foreground text-xs">Memory</p>
+                                    <p className="font-medium">{formatBytes(gpu.memory_total)}{gpu.memory_shared ? " (unified)" : ""}</p>
+                                    {gpu.memory_shared && (<p className="text-xs text-muted-foreground">shared with system RAM</p>)}
+                                  </div>
+                                ) : null}
                               </div>
 
                               {/* NVIDIA-specific info */}
