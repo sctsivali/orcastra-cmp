@@ -15,7 +15,7 @@ Control plane for managing LXD/Incus hypervisors across multiple nodes and organ
 | **Backend** | FastAPI, Python 3.11+, SQLAlchemy (async), Alembic |
 | **Frontend** | Next.js 15, React 18, TailwindCSS, Radix UI |
 | **Database** | PostgreSQL 17 |
-| **Cache** | Redis 8 (encrypted, LRU eviction) |
+| **Cache** | Redis 8 (LRU eviction, Fernet-encrypted values) |
 | **Auth** | Authentik (OAuth2/OIDC), NextAuth.js 5, JWT |
 | **Secrets** | HashiCorp Vault (PKI, cluster certificates) |
 | **Logging** | Fluent Bit -> OpenSearch (centralized log aggregation) |
@@ -89,35 +89,52 @@ Control plane for managing LXD/Incus hypervisors across multiple nodes and organ
 
 ## Architecture
 
+The browser loads a Next.js frontend, which proxies API calls to a FastAPI backend. The backend keeps
+state in PostgreSQL, caches LXD responses in Redis, validates tokens against Authentik, and reads
+cluster certificates and secrets from Vault. It drives the managed LXD/Incus clusters over mTLS.
+Container logs are shipped to OpenSearch by a Fluent Bit sidecar that tails Docker stdout, so Redis is
+not part of the logging path.
+
+```mermaid
+graph TB
+    U["User Browser"]
+
+    subgraph dash["Orcastra Dashboard"]
+        FE["Frontend<br/>Next.js"]
+        BE["Backend<br/>FastAPI"]
+        PG[("PostgreSQL")]
+        RD[("Redis cache")]
+        FB["Fluent Bit<br/>sidecar"]
+    end
+
+    subgraph platform["Platform Services"]
+        AK["Authentik<br/>OAuth2 / OIDC"]
+        VT["Vault<br/>PKI / secrets"]
+        OS["OpenSearch"]
+        OSD["OpenSearch<br/>Dashboards"]
+    end
+
+    subgraph managed["Managed Infrastructure"]
+        LXD["LXD / Incus / MicroCloud<br/>clusters & nodes"]
+    end
+
+    U -->|"HTTPS"| FE
+    U -->|"SSO login"| AK
+    FE -->|"/api/v1 proxy"| BE
+    BE --> PG
+    BE --> RD
+    BE -->|"JWT validation (JWKS)"| AK
+    BE -->|"cluster certs & secrets"| VT
+    BE -->|"REST + WebSocket over mTLS"| LXD
+    BE -.->|"stdout"| FB
+    FE -.->|"stdout"| FB
+    FB -->|"access / audit / app logs"| OS
+    OS --> OSD
 ```
-+-------------------------------------------------------------------+
-|                       ORCASTRA DASHBOARD                          |
-+-------------------------------------------------------------------+
-|                                                                   |
-|   +-----------+     +------------+     +----------------------+   |
-|   | Frontend  |---->|  Backend   |---->|     PostgreSQL       |   |
-|   | (Next.js) |     | (FastAPI)  |     |                      |   |
-|   +-----------+     +-----+------+     +----------------------+   |
-|                           |                                       |
-|                           v                                       |
-|                     +-----------+                                 |
-|                     |   Redis   | <-- Caching (LXD responses,     |
-|                     |  (Cache)  |     API results, sessions)      |
-|                     +-----------+                                 |
-|                           |                                       |
-|                           v                                       |
-|                     +------------+     +----------------------+   |
-|                     | Fluent Bit |---->|     OpenSearch       |   |
-|                     |(Log Router)|     | (Log Storage/Search) |   |
-|                     +------------+     +----------+-----------+   |
-|                                                  |                |
-|                                                  v                |
-|                                       +----------------------+    |
-|                                       | OpenSearch Dashboards|    |
-|                                       |   (Visualization)    |    |
-|                                       +----------------------+    |
-+-------------------------------------------------------------------+
-```
+
+Authentik, Vault, and OpenSearch run as separate hosts in production. See
+[docs.orcastra.io](https://docs.orcastra.io) for the full multi-host (4-VM) deployment topology and
+the detailed logging pipeline.
 
 ### Ports
 
@@ -131,20 +148,21 @@ Control plane for managing LXD/Incus hypervisors across multiple nodes and organ
 <details>
 <summary>Show API endpoints</summary>
 
-All endpoints prefixed with `/api/v1`:
+Most endpoints are prefixed with `/api/v1`; the health check is served at the root:
 
 ### Core Operations
-- `/instances` – Container/VM lifecycle management
+- `/instances`, `/vms` – Container and VM lifecycle management
 - `/images` – Image import, list, delete
 - `/projects` – Project isolation and management
 - `/profiles` – Instance configuration templates
-- `/networks` - Virtual network management
-- `/network-acls` - Network access control rules
-- `/storage-pools` – Storage pool provisioning
-- `/storage-volumes` – Volume operations and snapshots
+- `/networks` – Virtual network management
+- `/network-acls` – Network access control rules
+- `/storage/pools` – Storage pool provisioning
+- `/storage/volumes` – Volume operations and snapshots
 - `/nodes` – Node health and resources
+- `/clusters` – Cluster registration and discovery
 - `/cluster-members` – MicroCloud cluster members
-- `/cluster-registration` – Register new clusters/facilities
+- `/certificates` – Cluster certificate lifecycle
 
 ### Interactive Access
 - `/terminal` – WebSocket terminal sessions (create, list, close, history)
@@ -154,15 +172,14 @@ All endpoints prefixed with `/api/v1`:
 ### Monitoring & Observability
 - `/monitoring` – Real-time metrics, history, WebSocket live feed
 - `/regions` – Geographic region and cluster grouping
-- `/lxd-warnings` – Cluster warnings and alerts
-- `/lxd-operations` – Async operation polling
-- `/lxd-server` – Server metadata and resources
+- `/warnings` – Cluster warnings and alerts
+- `/operations` – Async LXD operation polling
+- `/server` – Server metadata and resources
 - `/archive` – OpenSearch log archive management
-- `/activity` – Audit trail logs
 - `/tags` – Instance tagging
 
 ### User & Access Management
-- `/permissions` – LXD identity and group management
+- `/identities`, `/groups` – LXD identity and group management
 - `/my-keys` – Personal TLS key generation
 - `/user-preferences` – Theme, branding, personalization
 - `/organizations` – Multi-tenant organization management
@@ -170,13 +187,12 @@ All endpoints prefixed with `/api/v1`:
 - `/tenant-access` – ACL policies and rules
 
 ### Integration
-- `/integrations` – API key management, OrcaHub sync
-- `/external-proxy` – Raw HTTP proxy to LXD
+- `/integrations` – API key management, OrcaHub sync, and raw LXD proxy for external apps
 
 ### System
 - `/system` – System info and cache control
 - `/ipam` – IP address management
-- `/health` – Health check
+- `/health` – Health check (served at root, not under `/api/v1`)
 
 See `/docs` for interactive Swagger API documentation.
 
@@ -219,15 +235,18 @@ make build-frontend     # build frontend only
 
 # lifecycle
 make up                 # start all services
+make up-build           # start all services, building first
 make down               # stop all services
-make restart             # restart all services
+make restart            # restart all services
 make restart-backend    # restart backend only
+make update             # pull latest images and restart
 
 # diagnostics
 make logs               # view all logs
 make logs-backend       # view backend logs
 make logs-frontend      # view frontend logs
 make logs-redis         # view redis logs
+make logs-last          # last 100 lines from all services
 make ps                 # list running containers
 make status             # show service status
 make health             # check service health
@@ -238,6 +257,12 @@ make dev-frontend       # run frontend locally
 make shell-backend      # exec into backend container
 make shell-frontend     # exec into frontend container
 
+# quality
+make lint-backend       # pylint app/
+make lint-frontend      # next lint
+make test-backend       # run backend pytest in container
+make test-frontend      # run frontend tests in container
+
 # version management
 make version            # show current version
 make version-set VERSION=x.x.x  # set and sync version
@@ -245,9 +270,13 @@ make version-sync       # sync version across all files
 make version-check      # check version consistency
 
 # data
-make backup             # backup database
-make restore BACKUP_FILE=path  # restore database
+make backup-redis       # snapshot Redis to ./backup-files/redis
+make restore-redis BACKUP_FILE=path  # restore Redis from a dump.rdb
 make redis-cli          # open redis CLI
+
+# vault PKI
+make vault-status       # check Vault PKI certificate status
+make vault-renew        # renew Vault intermediate CA (interactive)
 
 # deployment
 make deploy-package     # create tar.gz for on-prem deployment
