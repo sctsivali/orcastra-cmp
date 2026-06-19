@@ -74,6 +74,7 @@ tasks/
 scripts/
 config/
 backup/
+documentation/
 CHANGELOG.md
 .github/instructions/
 
