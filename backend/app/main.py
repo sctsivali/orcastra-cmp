@@ -400,6 +400,9 @@ Ensure your client certificates are properly configured.
     from app.routers.integrations import router as integrations_router, external_router as integrations_external_router
     app.include_router(integrations_router, prefix=settings.api_prefix)
     app.include_router(integrations_external_router, prefix=settings.api_prefix)
+
+    from app.routers.image_uploads import router as image_uploads_router
+    app.include_router(image_uploads_router, prefix=settings.api_prefix)
     
     # Cluster Registration Router (Vault Integration)
     app.include_router(cluster_registration_router, prefix=settings.api_prefix)

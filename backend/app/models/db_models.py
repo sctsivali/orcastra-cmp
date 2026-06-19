@@ -676,3 +676,43 @@ class MetricsSnapshot(Base):
         Index("ix_metrics_snap_collected", "collected_at"),
     )
 
+
+
+# ============================================
+# Image Upload Session (OrcaHub custom-image file uploads)
+# ============================================
+
+class ImageUploadSession(Base):
+    """Resumable upload + LXD import session for an OrcaHub partner custom image.
+
+    Source of truth across the 4 uvicorn workers and restarts. Bytes stage on a host-mounted dir
+    (staging_path); the row tracks the resumable offset and the import result. Status flow:
+    pending -> uploading -> uploaded -> importing -> ready | failed.
+    """
+    __tablename__ = "image_upload_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), unique=True, nullable=False, index=True)
+    cluster_id = Column(String(255), nullable=False, index=True)
+    project = Column(String(255), nullable=False, server_default="default")
+    alias = Column(String(255), nullable=False)
+    instance_type = Column(String(32), nullable=False)  # container | virtual-machine
+    image_ref = Column(String(255), nullable=True)       # OrcaHub MarketplaceImage id
+    api_key_id = Column(String(255), nullable=True)
+    expected_sha256 = Column(String(64), nullable=True)
+    max_bytes = Column(BigInteger, nullable=False)
+    total_bytes = Column(BigInteger, nullable=False)
+    upload_offset = Column(BigInteger, nullable=False, server_default="0")
+    status = Column(String(32), nullable=False, server_default="pending", index=True)
+    fingerprint = Column(String(64), nullable=True)
+    size = Column(BigInteger, nullable=True)
+    error = Column(Text, nullable=True)
+    staging_path = Column(String(512), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)

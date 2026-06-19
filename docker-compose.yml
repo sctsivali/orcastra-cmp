@@ -82,6 +82,7 @@ services:
 
     volumes:
       - ./config:/app/config:rw
+      - /var/orcastra/uploads:/app/uploads:rw
     networks:
       - orcastra-dashboard
     extra_hosts:
