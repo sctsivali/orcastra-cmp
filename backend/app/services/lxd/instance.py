@@ -24,9 +24,8 @@ logger = logging.getLogger(__name__)
 # Enterprise setting: 50 workers for high concurrency
 _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="instance_state_")
 
-# Cache failed nodes for 60 seconds to avoid repeated reconnection attempts
-_failed_nodes_cache: Dict[str, float] = {}
-_FAILED_NODE_CACHE_TTL = 60.0
+# Failed-node skip is delegated to the shared circuit breaker
+# (app.services.lxd.health) so every connection path skips the same dead cluster.
 
 
 class InstanceManager:
@@ -270,17 +269,14 @@ class InstanceManager:
         Fetch all VMs from a single node (synchronous, for thread pool execution).
         Returns tuple of (vm_list, is_connected).
         """
-        global _failed_nodes_cache
+        from app.services.lxd import health
         vms: List[VMInfo] = []
-        
-        # Check failed node cache first - skip recently failed nodes
-        if node_name in _failed_nodes_cache:
-            if time.time() - _failed_nodes_cache[node_name] < _FAILED_NODE_CACHE_TTL:
-                logger.debug(f"Skipping {node_name} - recently failed (cached)")
-                return [], False
-            else:
-                del _failed_nodes_cache[node_name]
-        
+
+        # Skip clusters the shared breaker marked as recently failed.
+        if health.is_tripped(node_name):
+            logger.debug(f"Skipping {node_name} - recently failed (cached)")
+            return [], False
+
         try:
             # Try to get or reconnect client
             client = self.connection_manager.get_client(node_name)
@@ -300,11 +296,11 @@ class InstanceManager:
                     logger.info(f"Reconnected to {node_name}")
                 except Exception as e:
                     logger.warning(f"Reconnect failed for {node_name}: {e}")
-                    _failed_nodes_cache[node_name] = time.time()
+                    health.record_failure(node_name, str(e))
                     return [], False
             
             if client is None:
-                _failed_nodes_cache[node_name] = time.time()
+                health.record_failure(node_name, "Client not connected")
                 return [], False
             
             # Get all projects on this node

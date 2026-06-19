@@ -66,9 +66,25 @@ export const API_URL = API_PREFIX;
  * fetchAPI() automatically attaches it to all backend requests.
  */
 let _accessToken: string | null = null;
+let _onTokenRefreshed: (() => void) | null = null;
+
+/**
+ * Register a callback fired when the access token is REPLACED with a new value
+ * (silent refresh / rotation), so cached query errors from the old token can be
+ * refetched. Registered by a component inside QueryClientProvider.
+ */
+export function onTokenRefreshed(fn: () => void) {
+  _onTokenRefreshed = fn;
+}
 
 export function setAccessToken(token: string | null | undefined) {
-  _accessToken = token ?? null;
+  const next = token ?? null;
+  // token rotated (not the initial set) - let listeners recover failed queries
+  const rotated = next !== null && _accessToken !== null && next !== _accessToken;
+  _accessToken = next;
+  if (rotated && _onTokenRefreshed) {
+    _onTokenRefreshed();
+  }
 }
 
 export function getAccessToken(): string | null {
@@ -132,7 +148,7 @@ export function reset401Counter() {
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
-  timeoutMs: number = 90000
+  timeoutMs: number = 45000
 ): Promise<Response> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
@@ -164,7 +180,7 @@ const _inflightGets = new Map<string, Promise<unknown>>();
 async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {},
-  timeoutMs: number = 90000,
+  timeoutMs: number = 45000,
   _isRetry: boolean = false,
 ): Promise<T> {
   const url = `${API_BASE_URL}${API_PREFIX}${endpoint}`;

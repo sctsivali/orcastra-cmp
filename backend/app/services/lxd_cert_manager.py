@@ -278,7 +278,7 @@ class LXDCertificateManager:
             logger.error(f"Failed to connect to cluster {cluster_id}: {e}")
             raise LXDCertManagerError(f"Connection failed: {str(e)}")
     
-    def verify_connection(self, cluster_id: str) -> Tuple[bool, str]:
+    def verify_connection(self, cluster_id: str, use_breaker: bool = True) -> Tuple[bool, str]:
         """
         Verify connection to LXD cluster and authentication status.
         
@@ -288,6 +288,14 @@ class LXDCertificateManager:
         Uses temporary files that are immediately cleaned up after verification.
         Certificate data is fetched fresh from Vault each time.
         """
+        # important: shared circuit breaker - skip clusters that failed to connect
+        # within the TTL window so a dead cluster does not cost the full connect
+        # timeout on every dashboard fan-out. User-initiated checks pass
+        # use_breaker=False to force a fresh probe.
+        from app.services.lxd.health import is_tripped, record_failure, clear, get_reason
+        if use_breaker and is_tripped(cluster_id):
+            return False, get_reason(cluster_id) or "Cluster recently unreachable - retry shortly"
+
         cert_path = None
         key_path = None
         
@@ -315,32 +323,37 @@ class LXDCertificateManager:
             # `/1.0/instances` requires authentication, `/1.0` doesn't always
             test_url = f"{endpoint}/1.0/instances"
             
-            # Retry with increasing timeout for resilience
+            # Fail fast: short connect budget (3s) + bounded read (8s). Retry once
+            # on a timeout, but never retry a refused/DNS failure - an unreachable
+            # host must not cost 45s on every dashboard fan-out request.
             last_error = None
             response = None
-            for attempt, timeout_info in enumerate([(10, "first"), (15, "second"), (20, "third")], 1):
+            for attempt in range(2):
                 try:
                     response = requests.get(
                         test_url,
                         cert=(cert_path, key_path),
                         verify=False,
-                        timeout=timeout_info[0]
+                        timeout=(3, 8)
                     )
-                    break  # Success, exit retry loop
+                    break  # got an HTTP response, exit retry loop
                 except requests.exceptions.Timeout as e:
                     last_error = e
-                    logger.warning(f"Timeout on {timeout_info[1]} attempt for {cluster_id}, retrying...")
+                    logger.warning(f"Timeout on attempt {attempt + 1} for {cluster_id}")
                     continue
                 except requests.exceptions.ConnectionError as e:
                     last_error = e
-                    logger.warning(f"Connection error on {timeout_info[1]} attempt for {cluster_id}: {e}")
-                    continue
-            
+                    logger.warning(f"Connection error for {cluster_id}: {e}")
+                    break  # unreachable host - do not retry
+
             if response is None:
-                # All retries exhausted
-                logger.error(f"All connection attempts failed for {cluster_id}: {last_error}")
-                return False, "Connection failed after multiple retries. Check network connectivity."
+                logger.error(f"Connection failed for {cluster_id}: {last_error}")
+                record_failure(cluster_id, "Cannot connect to LXD endpoint. Check if server is running.")
+                return False, "Cannot connect to LXD endpoint. Check if server is running."
             
+            # Host is reachable (we got an HTTP response) - clear any breaker trip.
+            clear(cluster_id)
+
             # Check response status
             if response.status_code == 200:
                 # Successfully authenticated
@@ -359,9 +372,11 @@ class LXDCertificateManager:
             return False, "Certificate error. Verify certificate is valid."
         except requests.exceptions.ConnectionError as e:
             logger.error(f"Connection error for {cluster_id}: {e}")
+            record_failure(cluster_id, "Cannot connect to LXD endpoint. Check if server is running.")
             return False, "Cannot connect to LXD endpoint. Check if server is running."
         except requests.exceptions.Timeout as e:
             logger.error(f"Timeout for {cluster_id}: {e}")
+            record_failure(cluster_id, "Connection timeout. Check network connectivity.")
             return False, "Connection timeout. Check network connectivity."
         except Exception as e:
             logger.error(f"Verification failed for {cluster_id}: {e}")

@@ -26,7 +26,7 @@ router = APIRouter(
 )
 
 # Thread pool for parallel operations
-_executor = ThreadPoolExecutor(max_workers=5)
+_executor = ThreadPoolExecutor(max_workers=16)
 
 
 class WarningInfo(BaseModel):
@@ -276,7 +276,10 @@ async def get_all_system_warnings(
                 
                 cluster_ids = apply_cluster_filter(cert_manager.list_clusters(use_cache=False))
                 
-                for cluster_id in cluster_ids:
+                # important: per-cluster check extracted into a helper so the
+                # sweep runs in parallel - this was a serial loop that summed
+                # every dead cluster's connect timeout (the main dashboard stall).
+                def _check_one(cluster_id):
                     try:
                         # Get metadata
                         metadata = cert_manager.vault.vault_read(
@@ -339,7 +342,16 @@ async def get_all_system_warnings(
                             
                     except Exception as e:
                         logger.debug(f"Error checking {cluster_id}: {e}")
-                        
+
+                # fan the per-cluster checks out in parallel; dead clusters now
+                # fail fast (circuit breaker + short verify timeout), so the sweep
+                # finishes in ~one slow-cluster time instead of the serial sum.
+                loop = asyncio.get_event_loop()
+                await asyncio.gather(
+                    *[loop.run_in_executor(_executor, _check_one, cid) for cid in cluster_ids],
+                    return_exceptions=True,
+                )
+
         except Exception as e:
             logger.warning(f"Could not fetch certificate warnings: {e}")
         

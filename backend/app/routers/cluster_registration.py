@@ -334,7 +334,7 @@ async def check_cluster_authentication(
         cluster_id = request.cluster_id
         
         # Verify connection
-        connected, message = cert_manager.verify_connection(cluster_id)
+        connected, message = cert_manager.verify_connection(cluster_id, use_breaker=False)
         
         if connected:
             # Get server info

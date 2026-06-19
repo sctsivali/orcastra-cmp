@@ -1,13 +1,29 @@
 "use client";
 
 import * as React from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { ThemeProvider } from "./theme-provider";
 import { PersonalizationProvider } from "./personalization-provider";
 import { StorageCleanupProvider } from "./storage-cleanup-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./auth-provider";
 import { APIError } from "@/types";
+import { onTokenRefreshed } from "@/lib/api";
+
+/**
+ * Refetches queries that errored under an expired token once the access token
+ * is silently refreshed. Lives inside QueryClientProvider so it can reach the
+ * client; api.ts fires onTokenRefreshed when the Bearer token rotates.
+ */
+function QueryInvalidationBridge() {
+  const queryClient = useQueryClient();
+  React.useEffect(() => {
+    onTokenRefreshed(() => {
+      queryClient.invalidateQueries();
+    });
+  }, [queryClient]);
+  return null;
+}
 
 function makeQueryClient() {
   return new QueryClient({
@@ -55,6 +71,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClient}>
+        <QueryInvalidationBridge />
         <StorageCleanupProvider>
           <PersonalizationProvider>
             <ThemeProvider>

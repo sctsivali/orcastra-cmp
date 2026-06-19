@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 # Shared thread pool for blocking operations
 _blocking_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_blocking")
 
-# Cache failed nodes for 60 seconds to avoid repeated reconnection attempts
-_failed_nodes_cache: Dict[str, float] = {}
-_FAILED_NODE_CACHE_TTL = 60.0
+# Failed-node skip is delegated to the shared circuit breaker
+# (app.services.lxd.health) so every connection path - status checks, instance
+# and project fan-outs, warning sweeps - skips the same dead cluster.
 
 
 class LXDService:
@@ -67,6 +67,7 @@ class LXDService:
         """
         # Org-scope guard: prevent reconnecting to clusters outside the user's org
         from app.core.org_scope import get_current_allowed_clusters
+        from app.services.lxd import health
         allowed = get_current_allowed_clusters()
         if allowed is not None and cluster_id not in allowed:
             return False
@@ -75,7 +76,13 @@ class LXDService:
         client = self.connection_manager.get_client(cluster_id)
         if client:
             return True
-        
+
+        # important: fast-skip clusters the breaker marked as recently failed -
+        # this is the project/instance lazy-connect path; without it every
+        # fan-out re-pays the dead-cluster connect timeout (the projects stall).
+        if health.is_tripped(cluster_id):
+            return False
+
         # Try to connect
         try:
             cluster_info = self.cert_manager.get_cluster_info(cluster_id)
@@ -89,9 +96,11 @@ class LXDService:
                 verify=False
             )
             logger.info(f"Lazy-connected to cluster: {cluster_id}")
+            health.clear(cluster_id)
             return True
         except Exception as e:
             logger.error(f"Failed to connect cluster {cluster_id}: {e}")
+            health.record_failure(cluster_id, str(e))
             return False
     
     def get_client_with_reconnect(self, cluster_id: str):
@@ -131,21 +140,18 @@ class LXDService:
     
     def _check_single_node_status(self, node_name: str, settings) -> NodeStatus:
         """Check status for a single node (internal helper)."""
-        global _failed_nodes_cache
-        
-        # Check failed node cache first - skip recently failed nodes
-        if node_name in _failed_nodes_cache:
-            if time.time() - _failed_nodes_cache[node_name] < _FAILED_NODE_CACHE_TTL:
-                logger.debug(f"Skipping {node_name} - recently failed (cached)")
-                return NodeStatus(
-                    name=node_name,
-                    endpoint="unknown",
-                    connected=False,
-                    error="Node recently failed - retry later"
-                )
-            else:
-                del _failed_nodes_cache[node_name]
-        
+        from app.services.lxd import health
+
+        # Skip clusters the shared breaker marked as recently failed.
+        if health.is_tripped(node_name):
+            logger.debug(f"Skipping {node_name} - recently failed (cached)")
+            return NodeStatus(
+                name=node_name,
+                endpoint="unknown",
+                connected=False,
+                error=health.get_reason(node_name) or "Node recently failed - retry later"
+            )
+
         try:
             # Get endpoint from Vault metadata
             endpoint = "unknown"
@@ -163,7 +169,7 @@ class LXDService:
                 status = self.resource_manager.check_node_status(client, node_name, endpoint)
                 return status
             else:
-                _failed_nodes_cache[node_name] = time.time()
+                health.record_failure(node_name, "Client not connected")
                 return NodeStatus(
                     name=node_name,
                     endpoint=endpoint,
@@ -172,7 +178,7 @@ class LXDService:
                 )
         except Exception as e:
             logger.warning(f"Node {node_name} health check failed: {e}")
-            _failed_nodes_cache[node_name] = time.time()
+            health.record_failure(node_name, str(e))
             return NodeStatus(
                 name=node_name,
                 endpoint="unknown",

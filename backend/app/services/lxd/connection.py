@@ -62,6 +62,7 @@ class LXDConnectionManager:
                 
                 retry_strategy = Retry(
                     total=3,
+                    connect=0,
                     backoff_factor=0.5,
                     status_forcelist=[429, 500, 502, 503, 504],
                     allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
@@ -87,6 +88,7 @@ class LXDConnectionManager:
         
         retry_strategy = Retry(
             total=3,
+            connect=0,
             backoff_factor=1,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],

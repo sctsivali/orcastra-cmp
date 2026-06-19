@@ -159,8 +159,17 @@ async def lifespan(app: FastAPI):
             except Exception as vault_err:
                 logger.warning(f"Could not initialize Vault clusters: {vault_err}")
         
-        statuses = lxd_service.check_nodes_status()
-        
+        # important: bounded, parallel readiness check - never let a dead/slow
+        # cluster wedge startup. The parallel _connect_cluster pass above already
+        # populated the connection pool; this only logs per-node status.
+        try:
+            statuses = await asyncio.wait_for(
+                lxd_service.check_nodes_status_async(), timeout=30
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Node status check timed out at startup; continuing without it")
+            statuses = []
+
         for status in statuses:
             if status.connected:
                 logger.info(
