@@ -4,6 +4,7 @@ Handles resource usage tracking, node resources, and instance metrics.
 """
 
 import logging
+import re
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import time
@@ -37,10 +38,32 @@ class ResourceManager:
         # CPU usage tracking: {"host:instance": {"usage_ns": int, "timestamp": float}}
         self._cpu_history: Dict[str, Dict[str, any]] = {}
     
+    # Drivers that expose a compute-capable GPU vs a display-only controller. A Tegra/Jetson iGPU
+    # enumerates BOTH (driver "nv_platform"/"nvidia" = compute, driver "drm"/"tegra" = display), so
+    # a naive card count double-counts. Classification is driver-first since the Jetson cards carry
+    # no "nvidia" info block.
+    _GPU_COMPUTE_DRIVERS = {"nvidia", "nv_platform", "nvgpu"}
+    _GPU_DISPLAY_DRIVERS = {"drm", "tegra", "tegra-drm"}
+
+    def _classify_gpu_card(self, card: dict) -> tuple:
+        """Return (gpu_class, is_compute, is_integrated) for one raw LXD gpu card."""
+        driver = (card.get("driver") or "").lower()
+        driver_version = (card.get("driver_version") or "").lower()
+        has_nvidia = bool(card.get("nvidia"))
+        if driver in self._GPU_COMPUTE_DRIVERS or has_nvidia:
+            is_integrated = driver == "nv_platform" or "tegra" in driver or "tegra" in driver_version
+            return ("compute", True, is_integrated)
+        if driver in self._GPU_DISPLAY_DRIVERS:
+            return ("display", False, False)
+        # fail-closed: never count an unrecognized card as sellable compute capacity
+        return ("unknown", False, False)
+
     def _parse_gpu_cards(
-        self, 
-        gpu_cards_raw: list, 
-        gpu_usage_map: Dict[str, str] = None
+        self,
+        gpu_cards_raw: list,
+        gpu_usage_map: Dict[str, str] = None,
+        system_memory_total: int = None,
+        system_product: str = None,
     ) -> list[GPUCardInfo]:
         """
         Parse detailed GPU card information from LXD resources API.
@@ -121,7 +144,21 @@ class ResourceManager:
                         in_use = True
                         used_by = gpu_usage_map[identifier]
                         break
-                
+
+                # Classify compute vs display, and derive an accurate model + memory for iGPUs.
+                gpu_class, is_compute, is_integrated = self._classify_gpu_card(card)
+                model_name = (nvidia_raw.get("model") if nvidia_raw else None) or card.get("product")
+                if not model_name and is_integrated:
+                    # Tegra iGPU has no card-level product; the host system block names the device
+                    # exactly (LXD /1.0/resources system.product). Fall back to a generic label.
+                    model_name = system_product or "NVIDIA Jetson (Tegra iGPU)"
+                memory_total = None
+                memory_shared = False
+                if is_integrated and system_memory_total:
+                    # Unified memory: the iGPU shares system RAM (no separate VRAM).
+                    memory_total = system_memory_total
+                    memory_shared = True
+
                 gpu_card = GPUCardInfo(
                     index=index,
                     driver=card.get("driver"),
@@ -135,6 +172,12 @@ class ResourceManager:
                     numa_node=card.get("numa_node"),
                     in_use=in_use,
                     used_by=used_by,
+                    gpu_class=gpu_class,
+                    is_compute=is_compute,
+                    is_integrated=is_integrated,
+                    model_name=model_name,
+                    memory_total=memory_total,
+                    memory_shared=memory_shared,
                     drm=drm_info,
                     nvidia=nvidia_info,
                     sriov=sriov_info,
@@ -180,8 +223,51 @@ class ResourceManager:
                                 usage_map[f"{gpu_vendorid}:{gpu_productid}"] = instance.name
         except Exception as e:
             logger.debug(f"Could not build GPU usage map: {e}")
-        
+
         return usage_map
+
+    # Compute-GPU device-node markers - matches an instance that gets the GPU via raw unix-char
+    # passthrough rather than a `type: gpu` device (the shape our GPU containers use).
+    _COMPUTE_GPU_NODE_RE = re.compile(
+        r"/dev/(nvidia\d*|nvidiactl|nvmap|nvgpu/|nvhost-[a-z\-]*gpu|dri/renderD\d+)", re.IGNORECASE
+    )
+
+    def _count_compute_gpu_instances(self, client: pylxd.Client) -> int:
+        """
+        Count DISTINCT running instances that hold a compute GPU. Detects all three allocation
+        shapes: a `type: gpu` device, `nvidia.runtime`/`nvidia.driver.capabilities` config, OR
+        unix-char devices pointing at compute GPU nodes. Without the latter two, a GPU container
+        provisioned via raw passthrough would not be counted and the single GPU could be oversold.
+        """
+        names = set()
+        try:
+            for instance in client.instances.all():
+                if getattr(instance, "status", "") != "Running":
+                    continue
+                cfg = getattr(instance, "config", {}) or {}
+                ld = str(cfg.get("environment.LD_LIBRARY_PATH", "")).lower()
+                holds = (
+                    str(cfg.get("nvidia.runtime", "")).lower() in ("true", "1")
+                    or bool(cfg.get("nvidia.driver.capabilities"))
+                    or "/tegra" in ld or "/nvidia" in ld
+                )
+                if not holds:
+                    devices = getattr(instance, "devices", {}) or {}
+                    for dev in devices.values():
+                        if not isinstance(dev, dict):
+                            continue
+                        if dev.get("type") == "gpu":
+                            holds = True
+                            break
+                        ref = f"{dev.get('source', '')} {dev.get('path', '')}"
+                        if self._COMPUTE_GPU_NODE_RE.search(ref):
+                            holds = True
+                            break
+                if holds:
+                    names.add(instance.name)
+        except Exception as e:
+            logger.debug(f"Could not count compute GPU instances: {e}")
+        return len(names)
 
     def get_resource_usage(self, instance) -> Optional[ResourceUsage]:
         """Get resource usage for a running instance."""
@@ -406,20 +492,27 @@ class ResourceManager:
                 # Get GPU information with detailed card info
                 gpu_total = 0
                 gpu_used = 0
+                gpu_cards_total = 0
                 gpu_cards_detailed = []
                 try:
                     raw_resources = client.resources
                     gpu_info = raw_resources.get("gpu", {})
                     gpu_cards_raw = gpu_info.get("cards", [])
-                    gpu_total = len(gpu_cards_raw)
-                    
-                    # Build GPU usage map from running instances
+                    gpu_cards_total = len(gpu_cards_raw)
+                    sys_mem_total = (raw_resources.get("memory", {}) or {}).get("total")
+                    sys_product = (raw_resources.get("system", {}) or {}).get("product")
+
+                    # Per-card in_use flags (by pci/uuid) for the detail view.
                     gpu_usage_map = self._get_gpu_usage_map(client)
-                    gpu_used = len(gpu_usage_map)
-                    
-                    # Parse detailed GPU card information
-                    gpu_cards_detailed = self._parse_gpu_cards(gpu_cards_raw, gpu_usage_map)
-                    
+
+                    # Parse detailed GPU card information (with compute/display classification).
+                    gpu_cards_detailed = self._parse_gpu_cards(gpu_cards_raw, gpu_usage_map, sys_mem_total, sys_product)
+
+                    # Capacity = COMPUTE GPUs only (exclude display controllers). Used = distinct
+                    # running instances holding a compute GPU (catches nvidia.runtime/unix-char).
+                    gpu_total = sum(1 for c in gpu_cards_detailed if c.is_compute)
+                    gpu_used = min(gpu_total, self._count_compute_gpu_instances(client))
+
                 except Exception as gpu_err:
                     logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")
                 
@@ -454,6 +547,7 @@ class ResourceManager:
                                 gpu_used=gpu_used,
                                 gpu_available=gpu_total - gpu_used,
                                 gpu_cards=gpu_cards_detailed,
+                                gpu_cards_total=gpu_cards_total,
                                 storage_total=resources_data.get("storage_total", 0),
                                 storage_available=resources_data.get("storage_available", 0),
                                 storage_pools=resources_data.get("storage_pools", []),
@@ -625,7 +719,9 @@ class ResourceManager:
                             # Extract GPU resources
                             gpu_info = member_resources.get("gpu", {})
                             gpu_cards_raw = gpu_info.get("cards", [])
-                            member_gpu_total = len(gpu_cards_raw)
+                            member_gpu_cards_total = len(gpu_cards_raw)
+                            member_sys_mem = memory_info.get("total")
+                            member_sys_product = (member_resources.get("system", {}) or {}).get("product")
                             
                             # Parse detailed GPU cards for this member
                             # Build member-specific GPU usage map
@@ -644,7 +740,9 @@ class ResourceManager:
                             except Exception:
                                 pass
                             
-                            member_gpu_cards = self._parse_gpu_cards(gpu_cards_raw, member_gpu_usage)
+                            member_gpu_cards = self._parse_gpu_cards(gpu_cards_raw, member_gpu_usage, member_sys_mem, member_sys_product)
+                            # COMPUTE GPUs only are sellable capacity (exclude display controllers).
+                            member_gpu_total = sum(1 for c in member_gpu_cards if c.is_compute)
                             # Adjust indices to be unique across cluster
                             base_index = len(all_gpu_cards)
                             for card in member_gpu_cards:
@@ -717,16 +815,30 @@ class ResourceManager:
                                         else:
                                             member_cpu_used += 1
                                         
-                                        # Count GPU
-                                        devices = getattr(instance, 'devices', {}) or {}
-                                        for device_name, device_config in devices.items():
-                                            if device_config.get('type') == 'gpu':
-                                                member_gpu_used += 1
-                                                break
+                                        # Count compute GPU: a type:gpu device OR nvidia.runtime /
+                                        # unix-char passthrough (the shape our GPU containers use).
+                                        cfg_ld = str(config.get('environment.LD_LIBRARY_PATH', '')).lower()
+                                        holds_gpu = (
+                                            str(config.get('nvidia.runtime', '')).lower() in ('true', '1')
+                                            or bool(config.get('nvidia.driver.capabilities'))
+                                            or '/tegra' in cfg_ld or '/nvidia' in cfg_ld
+                                        )
+                                        if not holds_gpu:
+                                            devices = getattr(instance, 'devices', {}) or {}
+                                            for dev in devices.values():
+                                                if isinstance(dev, dict) and (
+                                                    dev.get('type') == 'gpu'
+                                                    or self._COMPUTE_GPU_NODE_RE.search(f"{dev.get('source','')} {dev.get('path','')}")
+                                                ):
+                                                    holds_gpu = True
+                                                    break
+                                        if holds_gpu:
+                                            member_gpu_used += 1
                             except Exception as usage_err:
                                 logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
                             
-                            # Aggregate totals
+                            # Aggregate totals (clamp GPU used to the member's compute capacity)
+                            member_gpu_used = min(member_gpu_used, member_gpu_total)
                             total_cpu_cores += member_cpu_total
                             total_cpu_used += member_cpu_used
                             total_cpu_sockets += cpu_sockets
@@ -773,6 +885,7 @@ class ResourceManager:
                     gpu_used=total_gpu_used,
                     gpu_available=total_gpu - total_gpu_used,
                     gpu_cards=all_gpu_cards,
+                    gpu_cards_total=len(all_gpu_cards),
                     storage_total=total_storage,
                     storage_available=total_storage_available,
                     storage_pools=storage_pools_list,

@@ -240,7 +240,17 @@ class GPUCardInfo(BaseModel):
     # Usage status
     in_use: bool = Field(False, description="Whether this GPU is currently in use by an instance")
     used_by: Optional[str] = Field(None, description="Instance name using this GPU (if in use)")
-    
+
+    # Classification (compute vs display; integrated/unified-memory) for accurate, sellable counts.
+    # A Tegra/Jetson iGPU enumerates TWO DRM cards (display controller + compute), so only the
+    # compute card is allocatable capacity.
+    gpu_class: str = Field("unknown", description="'compute' | 'display' | 'unknown'")
+    is_compute: bool = Field(False, description="True for a compute-capable (sellable) GPU")
+    is_integrated: bool = Field(False, description="True for an integrated/unified-memory iGPU (no separate VRAM)")
+    model_name: Optional[str] = Field(None, description="Human GPU model (ex; 'NVIDIA Jetson Orin NX')")
+    memory_total: Optional[int] = Field(None, description="GPU memory in bytes (for integrated GPUs, equals system RAM)")
+    memory_shared: bool = Field(False, description="True when GPU memory is unified/shared with system RAM")
+
     # DRM info
     drm: Optional[GPUDRMInfo] = Field(None, description="Direct Rendering Manager info")
     
@@ -263,10 +273,11 @@ class NodeResources(BaseModel):
     memory_total: int = Field(0, description="Total memory in bytes")
     memory_used: int = Field(0, description="Used memory in bytes")
     memory_available: int = Field(0, description="Available memory in bytes")
-    gpu_total: int = Field(0, description="Total GPU cards")
-    gpu_used: int = Field(0, description="Used GPU cards")
-    gpu_available: int = Field(0, description="Available GPU cards")
-    gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information")
+    gpu_total: int = Field(0, description="Total compute GPUs (sellable; excludes display-only DRM cards)")
+    gpu_used: int = Field(0, description="Compute GPUs currently allocated to instances")
+    gpu_available: int = Field(0, description="Available compute GPUs")
+    gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information (all cards, incl. display)")
+    gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
@@ -283,10 +294,11 @@ class MemberResources(BaseModel):
     memory_used: int = Field(0, description="Used memory in bytes")
     memory_available: int = Field(0, description="Available memory in bytes")
     memory_usage_percent: float = Field(0.0, description="Memory usage percentage")
-    gpu_total: int = Field(0, description="Total GPU cards")
-    gpu_used: int = Field(0, description="Used GPU cards")
-    gpu_available: int = Field(0, description="Available GPU cards")
-    gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information")
+    gpu_total: int = Field(0, description="Total compute GPUs (sellable; excludes display-only DRM cards)")
+    gpu_used: int = Field(0, description="Compute GPUs currently allocated to instances")
+    gpu_available: int = Field(0, description="Available compute GPUs")
+    gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information (all cards, incl. display)")
+    gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_used: int = Field(0, description="Used storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")

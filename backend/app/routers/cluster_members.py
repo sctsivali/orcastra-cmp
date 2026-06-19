@@ -57,116 +57,19 @@ class ClusterMembersResponse(BaseModel):
     total: int = Field(0, description="Total number of members")
 
 
-def parse_gpu_cards(gpu_cards_raw: list, gpu_usage_map: dict = None) -> List[GPUCardInfo]:
-    """
-    Parse detailed GPU card information from LXD resources API.
-    """
-    if not gpu_cards_raw:
-        return []
-    
-    if gpu_usage_map is None:
-        gpu_usage_map = {}
-    
-    gpu_cards = []
-    for index, card in enumerate(gpu_cards_raw):
-        try:
-            # Parse DRM info
-            drm_info = None
-            drm_raw = card.get("drm")
-            if drm_raw:
-                drm_info = GPUDRMInfo(
-                    id=drm_raw.get("id"),
-                    card_name=drm_raw.get("card_name"),
-                    card_device=drm_raw.get("card_device"),
-                    control_name=drm_raw.get("control_name"),
-                    control_device=drm_raw.get("control_device"),
-                    render_name=drm_raw.get("render_name"),
-                    render_device=drm_raw.get("render_device"),
-                )
-            
-            # Parse NVIDIA-specific info
-            nvidia_info = None
-            nvidia_raw = card.get("nvidia")
-            if nvidia_raw:
-                nvidia_info = GPUNvidiaInfo(
-                    cuda_version=nvidia_raw.get("cuda_version"),
-                    nvrm_version=nvidia_raw.get("nvrm_version"),
-                    brand=nvidia_raw.get("brand"),
-                    model=nvidia_raw.get("model"),
-                    uuid=nvidia_raw.get("uuid"),
-                    architecture=nvidia_raw.get("architecture"),
-                    card_name=nvidia_raw.get("card_name"),
-                    card_device=nvidia_raw.get("card_device"),
-                )
-            
-            # Parse SR-IOV info
-            sriov_info = None
-            sriov_raw = card.get("sriov")
-            if sriov_raw:
-                vfs = sriov_raw.get("vfs", [])
-                sriov_info = GPUSRIOVInfo(
-                    current_vfs=sriov_raw.get("current_vfs", 0),
-                    maximum_vfs=sriov_raw.get("maximum_vfs", 0),
-                    vfs_count=len(vfs) if isinstance(vfs, list) else 0,
-                )
-            
-            # Parse mdev profiles
-            mdev_profiles = []
-            mdev_raw = card.get("mdev")
-            if mdev_raw and isinstance(mdev_raw, dict):
-                for profile_name, profile_data in mdev_raw.items():
-                    if isinstance(profile_data, dict):
-                        mdev_profiles.append(GPUMdevProfile(
-                            name=profile_data.get("name", profile_name),
-                            api=profile_data.get("api"),
-                            available=profile_data.get("available", 0),
-                            description=profile_data.get("description"),
-                            devices=profile_data.get("devices", []),
-                        ))
-            
-            # Determine if GPU is in use
-            pci_address = card.get("pci_address", "")
-            usb_address = card.get("usb_address", "")
-            nvidia_uuid = nvidia_raw.get("uuid") if nvidia_raw else None
-            
-            in_use = False
-            used_by = None
-            for identifier in [pci_address, usb_address, nvidia_uuid, str(index)]:
-                if identifier and identifier in gpu_usage_map:
-                    in_use = True
-                    used_by = gpu_usage_map[identifier]
-                    break
-            
-            gpu_card = GPUCardInfo(
-                index=index,
-                driver=card.get("driver"),
-                driver_version=card.get("driver_version"),
-                pci_address=pci_address or None,
-                usb_address=usb_address or None,
-                vendor=card.get("vendor"),
-                vendor_id=card.get("vendor_id"),
-                product=card.get("product"),
-                product_id=card.get("product_id"),
-                numa_node=card.get("numa_node"),
-                in_use=in_use,
-                used_by=used_by,
-                drm=drm_info,
-                nvidia=nvidia_info,
-                sriov=sriov_info,
-                mdev_profiles=mdev_profiles,
-            )
-            gpu_cards.append(gpu_card)
-            
-        except Exception as e:
-            logger.warning(f"Failed to parse GPU card {index}: {e}")
-            # Add a minimal entry for failed cards
-            gpu_cards.append(GPUCardInfo(
-                index=index,
-                vendor=card.get("vendor", "Unknown"),
-                product=card.get("product", "Unknown GPU"),
-            ))
-    
-    return gpu_cards
+def parse_gpu_cards(
+    gpu_cards_raw: list,
+    gpu_usage_map: dict = None,
+    system_memory_total: int = None,
+    system_product: str = None,
+) -> List[GPUCardInfo]:
+    """Parse GPU cards via the canonical ResourceManager parser so compute/display
+    classification, device model (incl. system.product for an integrated iGPU) and unified-memory
+    enrichment stay consistent with the /nodes view (single source of truth)."""
+    from app.services.lxd.resources import ResourceManager
+    return ResourceManager()._parse_gpu_cards(
+        gpu_cards_raw, gpu_usage_map, system_memory_total, system_product
+    )
 
 
 @router.get(
@@ -528,7 +431,7 @@ async def get_member_resources(
             logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
         
         # Parse detailed GPU cards
-        gpu_cards_detailed = parse_gpu_cards(gpu_cards_raw, gpu_usage_map)
+        gpu_cards_detailed = parse_gpu_cards(gpu_cards_raw, gpu_usage_map, memory_total, (member_resources.get("system", {}) or {}).get("product"))
         
         # Calculate percentages
         cpu_usage_percent = round((cpu_used / cpu_total * 100), 2) if cpu_total > 0 else 0.0

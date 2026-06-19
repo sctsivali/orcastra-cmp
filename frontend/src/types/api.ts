@@ -195,6 +195,14 @@ export interface GPUCardInfo {
   in_use: boolean;
   used_by?: string;
   
+  // Classification + enrichment (compute vs display, device model, unified memory) - backend-set.
+  gpu_class?: "compute" | "display" | "unknown";
+  is_compute?: boolean;
+  is_integrated?: boolean;
+  model_name?: string;
+  memory_total?: number;
+  memory_shared?: boolean;
+
   // Detailed info
   drm?: GPUDRMInfo;
   nvidia?: GPUNvidiaInfo;
