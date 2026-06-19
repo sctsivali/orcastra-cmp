@@ -152,9 +152,9 @@ class Settings(BaseSettings):
         description="Vault KV v2 path for cluster data"
     )
     vault_cert_ttl: str = Field(
-        default="87600h",
+        default="720h",
         alias="VAULT_CERT_TTL",
-        description="Default TTL for generated certificates (ex; 87600h = 10 years, 720h = 30 days)"
+        description="Default TTL for generated certificates (720h = 30 days). Must stay <= the pki_int/lxd role max_ttl (8760h = 1 year) or Vault rejects issuance."
     )
     
     # OpenSearch Archive Configuration
