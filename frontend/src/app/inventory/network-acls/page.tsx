@@ -23,13 +23,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworkACLs } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-
-type SortField = "name" | "description" | "used_by";
-type SortDirection = "asc" | "desc";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 interface ACLInfo {
   name: string;
@@ -49,24 +48,31 @@ export default function NetworkACLsPage() {
   const [filterNode, setFilterNode] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
+
+  const sortAccessors = useMemo(
+    () => ({
+      name: (i: any) => i.name,
+      description: (i: any) => i.description,
+      node: (i: any) => i.node,
+      ingress: (i: any) => i.ingress?.length ?? 0,
+      egress: (i: any) => i.egress?.length ?? 0,
+      used_by: (i: any) => i.used_by?.length ?? 0,
+      projects: (i: any) => i.used_by?.length ?? 0,
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "name",
+    "asc",
+    () => setCurrentPage(1),
+  );
 
   const nodes = useMemo(() => {
     const nodeSet = new Set(acls.map((a: any) => a.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [acls]);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
 
   const filteredACLs = useMemo(() => {
     let filtered = acls;
@@ -84,48 +90,16 @@ export default function NetworkACLsPage() {
       filtered = filtered.filter((acl: any) => acl.node === filterNode);
     }
 
-    filtered.sort((a: any, b: any) => {
-      let aVal, bVal;
-      
-      switch (sortField) {
-        case "name":
-          aVal = a.name;
-          bVal = b.name;
-          break;
-        case "description":
-          aVal = a.description || "";
-          bVal = b.description || "";
-          break;
-        case "used_by":
-          aVal = a.used_by?.length || 0;
-          bVal = b.used_by?.length || 0;
-          break;
-        default:
-          return 0;
-      }
-
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
     return filtered;
-  }, [acls, searchQuery, filterNode, sortField, sortDirection]);
+  }, [acls, searchQuery, filterNode]);
 
-  const totalPages = Math.ceil(filteredACLs.length / pageSize);
-  const paginatedACLs = filteredACLs.slice(
+  const sortedACLs = useMemo(() => sortItems(filteredACLs), [filteredACLs, sortItems]);
+
+  const totalPages = Math.ceil(sortedACLs.length / pageSize);
+  const paginatedACLs = sortedACLs.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
-
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return null;
-    return sortDirection === "asc" ? (
-      <ArrowUp className="h-3 w-3 inline ml-1" />
-    ) : (
-      <ArrowDown className="h-3 w-3 inline ml-1" />
-    );
-  };
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -198,28 +172,13 @@ export default function NetworkACLsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("name")}
-                >
-                  Name <SortIcon field="name" />
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("description")}
-                >
-                  Description <SortIcon field="description" />
-                </TableHead>
-                {nodes.length > 0 && <TableHead>Node</TableHead>}
-                <TableHead>Ingress Rules</TableHead>
-                <TableHead>Egress Rules</TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("used_by")}
-                >
-                  Used By <SortIcon field="used_by" />
-                </TableHead>
-                <TableHead>Projects</TableHead>
+                <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {nodes.length > 0 && <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
+                <SortableTableHead label="Ingress Rules" field="ingress" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Egress Rules" field="egress" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>

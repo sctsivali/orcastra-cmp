@@ -33,6 +33,8 @@ import {
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
 import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import type {
   AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
   TenantPermission, IntegrationOrganization,
@@ -529,6 +531,24 @@ export function PolicyManagementSection({ showRefresh = true }: PolicyManagement
   );
   const policies = policiesData?.policies || [];
 
+  // policy table sorting (org column sorts by the resolved org name shown in the row)
+  const policySortAccessors = useMemo(
+    () => ({
+      name: (p: any) => p.name,
+      organization: (p: any) =>
+        organizations.find((o) => o.id === p.organization_id)?.name || `ID ${p.organization_id}`,
+      rules: (p: any) => p.rules?.length ?? 0,
+      assigned: (p: any) => p.assignments_count,
+    }),
+    [organizations],
+  );
+  const {
+    sortField: policySortField,
+    sortDirection: policySortDirection,
+    handleSort: handlePolicySort,
+    sortItems: sortPolicies,
+  } = useTableSort(policySortAccessors, "name");
+
   // mutations
   const createMutation = useMutation({
     mutationFn: (data: PolicyCreateRequest) => api.tenantAccess.createPolicy(data),
@@ -649,15 +669,43 @@ export function PolicyManagementSection({ showRefresh = true }: PolicyManagement
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="text-xs">Policy Name</TableHead>
-                      <TableHead className="text-xs">Organization</TableHead>
-                      <TableHead className="text-xs">Rules</TableHead>
-                      <TableHead className="text-xs">Assigned</TableHead>
+                      <SortableTableHead
+                        label="Policy Name"
+                        field="name"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                        className="text-xs"
+                      />
+                      <SortableTableHead
+                        label="Organization"
+                        field="organization"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                        className="text-xs"
+                      />
+                      <SortableTableHead
+                        label="Rules"
+                        field="rules"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                        className="text-xs"
+                      />
+                      <SortableTableHead
+                        label="Assigned"
+                        field="assigned"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                        className="text-xs"
+                      />
                       <TableHead className="text-xs w-[100px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {policies.map((policy) => {
+                    {sortPolicies(policies).map((policy) => {
                       // find org name
                       const org = organizations.find(o => o.id === policy.organization_id);
                       return (

@@ -50,6 +50,8 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 interface VMTableProps {
   vms: VMInfo[];
@@ -401,6 +403,18 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
 
   const projectNames = Object.keys(groupedVMs).sort();
 
+  // Single sort state shared across all project groups; applied within each group.
+  const sortAccessors = React.useMemo(
+    () => ({
+      instance: (vm: VMInfo) => vm.name,
+      status: (vm: VMInfo) => vm.status,
+      ip_addresses: (vm: VMInfo) => vm.ip_addresses?.length ?? 0,
+      host: (vm: VMInfo) => vm.host,
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "instance", "asc");
+
   if (isLoading) {
     return (
       <div className="rounded-xl border bg-card overflow-hidden">
@@ -481,15 +495,15 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
               <Table>
                 <TableHeader>
                   <TableRow className="bg-muted/50 hover:bg-muted/50">
-                    <TableHead className="w-[300px]">Instance</TableHead>
-                    <TableHead className="w-[120px]">Status</TableHead>
-                    <TableHead className="w-[200px]">IP Addresses</TableHead>
-                    <TableHead className="w-[100px]">Host</TableHead>
+                    <SortableTableHead className="w-[300px]" label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead className="w-[120px]" label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead className="w-[200px]" label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead className="w-[100px]" label="Host" field="host" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <TableHead className="w-[160px] text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {projectVMs.map((vm, index) => (
+                  {sortItems(projectVMs).map((vm, index) => (
                     <TableRow
                       key={`${vm.host}-${vm.project || "default"}-${vm.name}`}
                       className="animate-fade-in"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useIsFetching, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
@@ -59,6 +59,8 @@ import { api, integrationsAPI } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 import { PolicyManagementSection } from "@/components/policy-management-section";
 import { TenantAccessDialog } from "@/components/tenant-access-dialog";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import type {
   UserGroupEntry,
   IntegrationOrganization,
@@ -105,6 +107,22 @@ export function UserGroupsSettings() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("tenant");
   const [orgId, setOrgId] = useState<string>("");
+
+  // user table sorting
+  const userSortAccessors = useMemo(
+    () => ({
+      email: (u: any) => u.user_email,
+      role: (u: any) => u.role,
+      organizations: (u: any) => u.organizations?.length ?? 0,
+    }),
+    [],
+  );
+  const {
+    sortField: userSortField,
+    sortDirection: userSortDirection,
+    handleSort: handleUserSort,
+    sortItems: sortUsers,
+  } = useTableSort(userSortAccessors, "email");
 
   // fetch user list
   const {
@@ -429,14 +447,32 @@ export function UserGroupsSettings() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Organizations</TableHead>
+                    <SortableTableHead
+                      label="Email"
+                      field="email"
+                      currentField={userSortField}
+                      direction={userSortDirection}
+                      onSort={handleUserSort}
+                    />
+                    <SortableTableHead
+                      label="Role"
+                      field="role"
+                      currentField={userSortField}
+                      direction={userSortDirection}
+                      onSort={handleUserSort}
+                    />
+                    <SortableTableHead
+                      label="Organizations"
+                      field="organizations"
+                      currentField={userSortField}
+                      direction={userSortDirection}
+                      onSort={handleUserSort}
+                    />
                     <TableHead className="w-[120px]">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {users.map((user: UserGroupEntry) => (
+                  {sortUsers(users).map((user: UserGroupEntry) => (
                     <TableRow key={user.user_email}>
                       <TableCell className="font-medium text-sm">
                         {user.user_email}

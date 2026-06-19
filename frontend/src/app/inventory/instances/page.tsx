@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Play, Square, RotateCw, Trash2, Search, Filter, ArrowUp, ArrowDown, Terminal, Monitor } from "lucide-react";
+import { Play, Square, RotateCw, Trash2, Search, Filter, Terminal, Monitor } from "lucide-react";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -37,9 +37,8 @@ import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
-
-type SortField = "name" | "host" | "project" | "status";
-type SortDirection = "asc" | "desc";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function InstancesPage() {
   const { data, isLoading, refetch, isRefetching } = useInstances();
@@ -56,13 +55,30 @@ export default function InstancesPage() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
   const { hasPermission } = useTenantAccess();
+
+  const sortAccessors = useMemo(
+    () => ({
+      name: (i: any) => i.name,
+      status: (i: any) => i.status,
+      type: (i: any) => i.type,
+      host: (i: any) => i.host,
+      project: (i: any) => i.project || "default",
+      ip_addresses: (i: any) => i.ip_addresses?.length ?? 0,
+      profiles: (i: any) => i.profiles?.length ?? 0,
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "name",
+    "asc",
+    () => setCurrentPage(1),
+  );
 
   const handleInstanceClick = (instance: VMInfo) => {
     setSelectedInstance(instance);
@@ -136,70 +152,30 @@ export default function InstancesPage() {
     return projects.sort();
   }, [instances]);
 
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
-
   // Filter and search instances
   const filteredInstances = useMemo(() => {
-    let filtered = instances.filter((instance: any) => {
-      const matchesSearch = 
+    return instances.filter((instance: any) => {
+      const matchesSearch =
         instance.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         instance.host.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (instance.project && instance.project.toLowerCase().includes(searchQuery.toLowerCase()));
-      
+
       const matchesNode = filterNode === "all" || instance.host === filterNode;
       const matchesProject = filterProject === "all" || (instance.project || "default") === filterProject;
       const matchesStatus = filterStatus === "all" || instance.status.toLowerCase() === filterStatus.toLowerCase();
-      
+
       return matchesSearch && matchesNode && matchesProject && matchesStatus;
     });
+  }, [instances, searchQuery, filterNode, filterProject, filterStatus]);
 
-    // Apply sorting
-    filtered.sort((a: any, b: any) => {
-      let aVal, bVal;
-      
-      switch (sortField) {
-        case "name":
-          aVal = a.name;
-          bVal = b.name;
-          break;
-        case "host":
-          aVal = a.host;
-          bVal = b.host;
-          break;
-        case "project":
-          aVal = a.project || "default";
-          bVal = b.project || "default";
-          break;
-        case "status":
-          aVal = a.status;
-          bVal = b.status;
-          break;
-        default:
-          return 0;
-      }
-
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
-    return filtered;
-  }, [instances, searchQuery, filterNode, filterProject, filterStatus, sortField, sortDirection]);
+  const sortedInstances = useMemo(() => sortItems(filteredInstances), [filteredInstances, sortItems]);
 
   // Pagination
-  const totalPages = Math.ceil(filteredInstances.length / pageSize);
+  const totalPages = Math.ceil(sortedInstances.length / pageSize);
   const paginatedInstances = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
-    return filteredInstances.slice(startIndex, startIndex + pageSize);
-  }, [filteredInstances, currentPage, pageSize]);
+    return sortedInstances.slice(startIndex, startIndex + pageSize);
+  }, [sortedInstances, currentPage, pageSize]);
 
   // Full-page loading state
   if (isLoading) {
@@ -287,33 +263,13 @@ export default function InstancesPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("name")}
-                >
-                  Name {sortField === "name" && (sortDirection === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />)}
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("status")}
-                >
-                  Status {sortField === "status" && (sortDirection === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />)}
-                </TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("host")}
-                >
-                  Node {sortField === "host" && (sortDirection === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />)}
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("project")}
-                >
-                  Project {sortField === "project" && (sortDirection === "asc" ? <ArrowUp className="h-3 w-3 inline ml-1" /> : <ArrowDown className="h-3 w-3 inline ml-1" />)}
-                </TableHead>
-                <TableHead>IP Addresses</TableHead>
-                <TableHead>Profiles</TableHead>
+                <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Node" field="host" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>

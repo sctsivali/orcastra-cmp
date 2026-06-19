@@ -23,13 +23,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useStoragePools } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-
-type SortField = "name" | "driver" | "status" | "used_by";
-type SortDirection = "asc" | "desc";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 interface PoolInfo {
   name: string;
@@ -62,9 +61,25 @@ export default function StoragePoolsPage() {
   const [filterDriver, setFilterDriver] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
+
+  const sortAccessors = useMemo(
+    () => ({
+      name: (i: any) => i.name,
+      driver: (i: any) => i.driver,
+      node: (i: any) => i.node,
+      status: (i: any) => i.status,
+      used_by: (i: any) => i.used_by?.length ?? 0,
+      projects: (i: any) => i.used_by?.length ?? 0,
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "name",
+    "asc",
+    () => setCurrentPage(1),
+  );
 
   const nodes = useMemo(() => {
     const nodeSet = new Set(pools.map((p: any) => p.node).filter((n: any): n is string => Boolean(n)));
@@ -75,16 +90,6 @@ export default function StoragePoolsPage() {
     const driverSet = new Set(pools.map((p: any) => p.driver));
     return Array.from(driverSet).sort();
   }, [pools]);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return "0 B";
@@ -114,52 +119,16 @@ export default function StoragePoolsPage() {
       filtered = filtered.filter((pool: any) => pool.driver === filterDriver);
     }
 
-    filtered.sort((a: any, b: any) => {
-      let aVal, bVal;
-      
-      switch (sortField) {
-        case "name":
-          aVal = a.name;
-          bVal = b.name;
-          break;
-        case "driver":
-          aVal = a.driver || "";
-          bVal = b.driver || "";
-          break;
-        case "status":
-          aVal = a.status || "";
-          bVal = b.status || "";
-          break;
-        case "used_by":
-          aVal = a.used_by?.length || 0;
-          bVal = b.used_by?.length || 0;
-          break;
-        default:
-          return 0;
-      }
-
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
     return filtered;
-  }, [pools, searchQuery, filterNode, filterDriver, sortField, sortDirection]);
+  }, [pools, searchQuery, filterNode, filterDriver]);
 
-  const totalPages = Math.ceil(filteredPools.length / pageSize);
-  const paginatedPools = filteredPools.slice(
+  const sortedPools = useMemo(() => sortItems(filteredPools), [filteredPools, sortItems]);
+
+  const totalPages = Math.ceil(sortedPools.length / pageSize);
+  const paginatedPools = sortedPools.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
-
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return null;
-    return sortDirection === "asc" ? (
-      <ArrowUp className="h-3 w-3 inline ml-1" />
-    ) : (
-      <ArrowDown className="h-3 w-3 inline ml-1" />
-    );
-  };
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -248,33 +217,15 @@ export default function StoragePoolsPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("name")}
-                >
-                  Name <SortIcon field="name" />
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("driver")}
-                >
-                  Driver <SortIcon field="driver" />
-                </TableHead>
-                {nodes.length > 0 && <TableHead>Node</TableHead>}
+                <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Driver" field="driver" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {nodes.length > 0 && (
+                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                )}
                 <TableHead>Size (Used / Total)</TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("status")}
-                >
-                  Status <SortIcon field="status" />
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("used_by")}
-                >
-                  Used By <SortIcon field="used_by" />
-                </TableHead>
-                <TableHead>Projects</TableHead>
+                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>

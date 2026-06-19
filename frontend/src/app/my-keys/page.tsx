@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -66,6 +66,8 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function MyKeysPage() {
   const { toast } = useToast();
@@ -90,9 +92,24 @@ export default function MyKeysPage() {
     queryFn: () => api.myKeys.list(activeTab, searchQuery),
   });
 
-  const keys = (keysData as any)?.keys || [];
+  const keys = useMemo(() => (keysData as any)?.keys || [], [keysData]);
   const activeCount = (keysData as any)?.active || 0;
   const expiredCount = (keysData as any)?.expired || 0;
+
+  const sortAccessors = useMemo(
+    () => ({
+      name: (k: KeyInfo) => k.name,
+      node: (k: KeyInfo) => k.node,
+      project: (k: KeyInfo) => k.project,
+      auth_level: (k: KeyInfo) => k.auth_level,
+      created: (k: KeyInfo) => (k.created_at ? new Date(k.created_at).getTime() : null),
+      expires: (k: KeyInfo) => (k.expires_at ? new Date(k.expires_at).getTime() : null),
+      status: (k: KeyInfo) => (k.is_expired ? 1 : 0),
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "name", "asc");
+  const sortedKeys = useMemo(() => sortItems(keys), [keys, sortItems]);
 
   // Fetch nodes for dropdown
   const { data: nodesData } = useQuery({
@@ -332,18 +349,18 @@ export default function MyKeysPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Node</TableHead>
-                    <TableHead>Project</TableHead>
-                    <TableHead>Access Level</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead>Expires</TableHead>
-                    <TableHead>Status</TableHead>
+                    <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Access Level" field="auth_level" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Created" field="created" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Expires" field="expires" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {keys.map((key: KeyInfo) => (
+                  {sortedKeys.map((key: KeyInfo) => (
                     <TableRow key={key.id}>
                       <TableCell className="font-medium">{key.name}</TableCell>
                       <TableCell>

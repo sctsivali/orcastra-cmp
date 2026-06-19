@@ -45,6 +45,15 @@ import {
 } from "@/components/ui/tooltip";
 import { usePermissions } from "@/hooks/use-permissions";
 import { formatDateTime } from "@/lib/utils";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { SEVERITY_RANK } from "@/lib/sort";
+
+const toTime = (v: string | null | undefined): number | null => {
+  if (!v) return null;
+  const t = new Date(v).getTime();
+  return isNaN(t) ? null : t;
+};
 
 // Separate component that uses useSearchParams
 function WarningsContent() {
@@ -52,11 +61,11 @@ function WarningsContent() {
   const searchParams = useSearchParams();
   const { data, isLoading, refetch, isRefetching } = useWarnings();
   const { data: systemWarnings, isLoading: isLoadingSystem, refetch: refetchSystem, isRefetching: isRefetchingSystem } = useSystemWarnings();
-  const allWarnings = (data as any)?.warnings || [];
-  
+  const allWarnings = useMemo(() => (data as any)?.warnings || [], [data]);
+
   // Certificate and node warnings from system warnings
-  const certWarnings = systemWarnings?.certificate_warnings || [];
-  const nodeWarnings = systemWarnings?.node_warnings || [];
+  const certWarnings = useMemo(() => systemWarnings?.certificate_warnings || [], [systemWarnings]);
+  const nodeWarnings = useMemo(() => systemWarnings?.node_warnings || [], [systemWarnings]);
   
   // Active tab - read from URL params
   const initialTab = searchParams.get("tab") || "all";
@@ -106,7 +115,63 @@ function WarningsContent() {
     
     return filtered;
   }, [allWarnings, severityFilter, nodeFilter]);
-  
+
+  // Per-table sorting (3 independent tables: platform / certificates / offline nodes)
+  const platformSortAccessors = useMemo(
+    () => ({
+      type: (w: any) => w.type,
+      message: (w: any) => w.last_message,
+      severity: (w: any) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
+      node: (w: any) => w.location || w.source_node || "",
+      count: (w: any) => w.count ?? 0,
+      last_seen: (w: any) => toTime(w.last_seen_at),
+    }),
+    [],
+  );
+  const {
+    sortField: platformSortField,
+    sortDirection: platformSortDirection,
+    handleSort: platformHandleSort,
+    sortItems: platformSortItems,
+  } = useTableSort(platformSortAccessors, "severity", "asc");
+  const sortedWarnings = useMemo(() => platformSortItems(warnings), [warnings, platformSortItems]);
+
+  const certSortAccessors = useMemo(
+    () => ({
+      cluster: (w: any) => w.display_name || w.cluster_id || "",
+      status: (w: any) => (w.warning_type === "cert_expired" || w.days_until_expiry <= 0 ? "Expired" : "Expiring"),
+      severity: (w: any) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
+      days: (w: any) => w.days_until_expiry,
+      expires: (w: any) => toTime(w.expires_at),
+    }),
+    [],
+  );
+  const {
+    sortField: certSortField,
+    sortDirection: certSortDirection,
+    handleSort: certHandleSort,
+    sortItems: certSortItems,
+  } = useTableSort(certSortAccessors, "days", "asc");
+  const sortedCertWarnings = useMemo(() => certSortItems(certWarnings), [certWarnings, certSortItems]);
+
+  const nodeSortAccessors = useMemo(
+    () => ({
+      cluster: (w: any) => w.display_name || w.cluster_id || "",
+      endpoint: (w: any) => w.endpoint || "",
+      severity: (w: any) => SEVERITY_RANK[String(w.severity || "critical").toLowerCase()] ?? 99,
+      error: (w: any) => w.error || "",
+      checked_at: (w: any) => toTime(w.checked_at),
+    }),
+    [],
+  );
+  const {
+    sortField: nodeSortField,
+    sortDirection: nodeSortDirection,
+    handleSort: nodeHandleSort,
+    sortItems: nodeSortItems,
+  } = useTableSort(nodeSortAccessors, "cluster", "asc");
+  const sortedNodeWarnings = useMemo(() => nodeSortItems(nodeWarnings), [nodeWarnings, nodeSortItems]);
+
   // Clear node filter and update URL
   const clearNodeFilter = () => {
     setNodeFilter("");
@@ -326,30 +391,37 @@ function WarningsContent() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="min-w-[100px]">Type</TableHead>
-                  <TableHead className="min-w-[200px]">Message</TableHead>
-                  <TableHead className="min-w-[80px]">Severity</TableHead>
-                  <TableHead className="min-w-[100px]">Node</TableHead>
-                  <TableHead className="min-w-[60px]">
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="flex items-center gap-1 cursor-help">
-                            Count
-                            <HelpCircle className="h-3 w-3 text-muted-foreground" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="z-50">
-                          <p>Number of times this warning has occurred</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </TableHead>
-                  <TableHead className="min-w-[150px]">Last Seen</TableHead>
+                  <SortableTableHead className="min-w-[100px]" label="Type" field="type" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
+                  <SortableTableHead className="min-w-[200px]" label="Message" field="message" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
+                  <SortableTableHead className="min-w-[80px]" label="Severity" field="severity" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
+                  <SortableTableHead className="min-w-[100px]" label="Node" field="node" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
+                  <SortableTableHead
+                    className="min-w-[60px]"
+                    field="count"
+                    currentField={platformSortField}
+                    direction={platformSortDirection}
+                    onSort={platformHandleSort}
+                    label={
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="flex items-center gap-1 cursor-help">
+                              Count
+                              <HelpCircle className="h-3 w-3 text-muted-foreground" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="top" className="z-50">
+                            <p>Number of times this warning has occurred</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    }
+                  />
+                  <SortableTableHead className="min-w-[150px]" label="Last Seen" field="last_seen" currentField={platformSortField} direction={platformSortDirection} onSort={platformHandleSort} />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {warnings.map((warning: any) => (
+                {sortedWarnings.map((warning: any) => (
                   <TableRow 
                     key={warning.uuid}
                     className="cursor-pointer hover:bg-accent/50 transition-colors"
@@ -409,16 +481,16 @@ function WarningsContent() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Cluster</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Severity</TableHead>
-                      <TableHead>Days Until Expiry</TableHead>
-                      <TableHead>Expires At</TableHead>
+                      <SortableTableHead label="Cluster" field="cluster" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
+                      <SortableTableHead label="Status" field="status" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
+                      <SortableTableHead label="Severity" field="severity" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
+                      <SortableTableHead label="Days Until Expiry" field="days" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
+                      <SortableTableHead label="Expires At" field="expires" currentField={certSortField} direction={certSortDirection} onSort={certHandleSort} />
                       <TableHead>Action</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {certWarnings.map((warning: any) => {
+                    {sortedCertWarnings.map((warning: any) => {
                       const isExpired = warning.warning_type === "cert_expired" || warning.days_until_expiry <= 0;
                       const statusLabel = isExpired ? "Expired" : "Expiring";
                       
@@ -492,15 +564,15 @@ function WarningsContent() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="min-w-[100px]">Cluster</TableHead>
-                      <TableHead className="min-w-[150px]">Endpoint</TableHead>
-                      <TableHead className="min-w-[80px]">Severity</TableHead>
-                      <TableHead className="min-w-[150px]">Error</TableHead>
-                      <TableHead className="min-w-[150px]">Checked At</TableHead>
+                      <SortableTableHead className="min-w-[100px]" label="Cluster" field="cluster" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
+                      <SortableTableHead className="min-w-[150px]" label="Endpoint" field="endpoint" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
+                      <SortableTableHead className="min-w-[80px]" label="Severity" field="severity" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
+                      <SortableTableHead className="min-w-[150px]" label="Error" field="error" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
+                      <SortableTableHead className="min-w-[150px]" label="Checked At" field="checked_at" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {nodeWarnings.map((warning: any) => (
+                    {sortedNodeWarnings.map((warning: any) => (
                       <TableRow key={warning.cluster_id}>
                         <TableCell>
                           <div>

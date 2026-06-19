@@ -29,6 +29,8 @@ import {
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
 import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import type {
   AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
   PolicyAssignment, AssignmentCreateRequest, TenantPermission,
@@ -916,6 +918,26 @@ function AssignedPolicyCard({
   const [expanded, setExpanded] = useState(false);
   const rules = policy?.rules || [];
 
+  // rule table sorting (cluster column sorts by the resolved display name shown in the row)
+  const ruleSortAccessors = useMemo(
+    () => ({
+      cluster: (r: any) =>
+        r.cluster_id === "*"
+          ? "All Clusters"
+          : clusters.find((c) => c.cluster_id === r.cluster_id)?.display_name || r.cluster_id,
+      project: (r: any) => r.project_name,
+      instance: (r: any) => r.instance_name,
+      permissions: (r: any) => r.permissions?.length ?? 0,
+    }),
+    [clusters],
+  );
+  const {
+    sortField: ruleSortField,
+    sortDirection: ruleSortDirection,
+    handleSort: handleRuleSort,
+    sortItems: sortRules,
+  } = useTableSort(ruleSortAccessors, "cluster");
+
   return (
     <div className="border rounded-lg overflow-hidden">
       {/* header */}
@@ -1006,14 +1028,42 @@ function AssignedPolicyCard({
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="text-[10px] h-7 px-3">Cluster</TableHead>
-                <TableHead className="text-[10px] h-7 px-3">Project</TableHead>
-                <TableHead className="text-[10px] h-7 px-3">Instance</TableHead>
-                <TableHead className="text-[10px] h-7 px-3">Permissions</TableHead>
+                <SortableTableHead
+                  label="Cluster"
+                  field="cluster"
+                  currentField={ruleSortField}
+                  direction={ruleSortDirection}
+                  onSort={handleRuleSort}
+                  className="text-[10px] h-7 px-3"
+                />
+                <SortableTableHead
+                  label="Project"
+                  field="project"
+                  currentField={ruleSortField}
+                  direction={ruleSortDirection}
+                  onSort={handleRuleSort}
+                  className="text-[10px] h-7 px-3"
+                />
+                <SortableTableHead
+                  label="Instance"
+                  field="instance"
+                  currentField={ruleSortField}
+                  direction={ruleSortDirection}
+                  onSort={handleRuleSort}
+                  className="text-[10px] h-7 px-3"
+                />
+                <SortableTableHead
+                  label="Permissions"
+                  field="permissions"
+                  currentField={ruleSortField}
+                  direction={ruleSortDirection}
+                  onSort={handleRuleSort}
+                  className="text-[10px] h-7 px-3"
+                />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rules.map((r, idx) => (
+              {sortRules(rules).map((r, idx) => (
                 <TableRow key={idx} className="hover:bg-muted/30">
                   <TableCell className="text-xs px-3 py-1.5">
                     {r.cluster_id === "*" ? (
@@ -1060,6 +1110,27 @@ function EffectivePermissionsSection({
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  // effective rules sorting (cluster column sorts by the resolved display name shown in the row)
+  const effectiveSortAccessors = useMemo(
+    () => ({
+      cluster: (r: any) =>
+        r.cluster_id === "*"
+          ? "All Clusters"
+          : clusters.find((c) => c.cluster_id === r.cluster_id)?.display_name || r.cluster_id,
+      project: (r: any) => r.project_name,
+      instance: (r: any) => r.instance_name,
+      permissions: (r: any) => r.permissions?.length ?? 0,
+      policy: (r: any) => r.policy_name,
+    }),
+    [clusters],
+  );
+  const {
+    sortField: effectiveSortField,
+    sortDirection: effectiveSortDirection,
+    handleSort: handleEffectiveSort,
+    sortItems: sortEffectiveRules,
+  } = useTableSort(effectiveSortAccessors, "cluster");
+
   return (
     <div>
       <button
@@ -1084,15 +1155,50 @@ function EffectivePermissionsSection({
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent bg-muted/30">
-                <TableHead className="text-[10px] h-7 px-3">Cluster</TableHead>
-                <TableHead className="text-[10px] h-7 px-3">Project</TableHead>
-                <TableHead className="text-[10px] h-7 px-3">Instance</TableHead>
-                <TableHead className="text-[10px] h-7 px-3">Permissions</TableHead>
-                <TableHead className="text-[10px] h-7 px-3">Source Policy</TableHead>
+                <SortableTableHead
+                  label="Cluster"
+                  field="cluster"
+                  currentField={effectiveSortField}
+                  direction={effectiveSortDirection}
+                  onSort={handleEffectiveSort}
+                  className="text-[10px] h-7 px-3"
+                />
+                <SortableTableHead
+                  label="Project"
+                  field="project"
+                  currentField={effectiveSortField}
+                  direction={effectiveSortDirection}
+                  onSort={handleEffectiveSort}
+                  className="text-[10px] h-7 px-3"
+                />
+                <SortableTableHead
+                  label="Instance"
+                  field="instance"
+                  currentField={effectiveSortField}
+                  direction={effectiveSortDirection}
+                  onSort={handleEffectiveSort}
+                  className="text-[10px] h-7 px-3"
+                />
+                <SortableTableHead
+                  label="Permissions"
+                  field="permissions"
+                  currentField={effectiveSortField}
+                  direction={effectiveSortDirection}
+                  onSort={handleEffectiveSort}
+                  className="text-[10px] h-7 px-3"
+                />
+                <SortableTableHead
+                  label="Source Policy"
+                  field="policy"
+                  currentField={effectiveSortField}
+                  direction={effectiveSortDirection}
+                  onSort={handleEffectiveSort}
+                  className="text-[10px] h-7 px-3"
+                />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rules.map((r, idx) => (
+              {sortEffectiveRules(rules).map((r, idx) => (
                 <TableRow key={idx} className="hover:bg-muted/20">
                   <TableCell className="text-xs px-3 py-1.5 font-medium">
                     {r.cluster_id === "*" ? (

@@ -55,6 +55,8 @@ import { EditGroupDialog } from "@/components/groups/edit-group-dialog";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function GroupsPage() {
   const { data, isLoading, refetch, isRefetching } = useGroups();
@@ -99,26 +101,57 @@ export default function GroupsPage() {
     return identity?.name || null;
   };
 
+  // Main table sort (count columns: identities = tls+oidc, permissions array length)
+  const sortAccessors = useMemo(() => ({
+    name: (g: any) => g.name,
+    description: (g: any) => g.description,
+    node: (g: any) => g.node,
+    identities: (g: any) => (g.identities?.tls?.length || 0) + (g.identities?.oidc?.length || 0),
+    permissions: (g: any) => g.permissions?.length || 0,
+  }), []);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "name",
+    "asc",
+    () => setCurrentPage(1),
+  );
+
   // Filter and search groups
   const filteredGroups = useMemo(() => {
     return groups.filter((group: any) => {
-      const matchesSearch = 
+      const matchesSearch =
         group.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (group.description && group.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
         (group.node && group.node.toLowerCase().includes(searchQuery.toLowerCase()));
-      
+
       const matchesNode = filterNode === "all" || group.node === filterNode;
-      
+
       return matchesSearch && matchesNode;
     });
   }, [groups, searchQuery, filterNode]);
 
+  // Sort across the full filtered set before paginating
+  const sortedGroups = useMemo(() => sortItems(filteredGroups), [filteredGroups, sortItems]);
+
   // Pagination
-  const totalPages = Math.ceil(filteredGroups.length / pageSize);
+  const totalPages = Math.ceil(sortedGroups.length / pageSize);
   const paginatedGroups = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
-    return filteredGroups.slice(startIndex, startIndex + pageSize);
-  }, [filteredGroups, currentPage, pageSize]);
+    return sortedGroups.slice(startIndex, startIndex + pageSize);
+  }, [sortedGroups, currentPage, pageSize]);
+
+  // Permissions modal sort (separate instance, no pagination)
+  const permSortAccessors = useMemo(() => ({
+    entity_type: (p: any) => p.entity_type,
+    url: (p: any) => p.url,
+    entitlement: (p: any) => p.entitlement,
+  }), []);
+  const {
+    sortField: permSortField,
+    sortDirection: permSortDirection,
+    handleSort: permHandleSort,
+    sortItems: permSortItems,
+  } = useTableSort(permSortAccessors, "entity_type");
 
   const handleShowIdentities = (group: any) => {
     setSelectedGroup(group);
@@ -259,11 +292,11 @@ export default function GroupsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Description</TableHead>
-                  <TableHead>Node</TableHead>
-                  <TableHead>Identities</TableHead>
-                  <TableHead>Permissions</TableHead>
+                  <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Identities" field="identities" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Permissions" field="permissions" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -456,13 +489,13 @@ export default function GroupsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Entity Type</TableHead>
-                    <TableHead>Resource URL</TableHead>
-                    <TableHead>Entitlement</TableHead>
+                    <SortableTableHead label="Entity Type" field="entity_type" currentField={permSortField} direction={permSortDirection} onSort={permHandleSort} />
+                    <SortableTableHead label="Resource URL" field="url" currentField={permSortField} direction={permSortDirection} onSort={permHandleSort} />
+                    <SortableTableHead label="Entitlement" field="entitlement" currentField={permSortField} direction={permSortDirection} onSort={permHandleSort} />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {selectedGroup.permissions.map((permission: any, index: number) => (
+                  {permSortItems(selectedGroup.permissions).map((permission: any, index: number) => (
                     <TableRow key={index}>
                       <TableCell>
                         <Badge variant="outline">{permission.entity_type || "N/A"}</Badge>

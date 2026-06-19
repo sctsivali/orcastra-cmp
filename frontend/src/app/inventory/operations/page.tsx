@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,12 +37,14 @@ import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
 import { formatDateTime } from "@/lib/utils";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function OperationsPage() {
   const router = useRouter();
   const { isPartner } = usePermissions();
   const { data, isLoading, refetch, isRefetching } = useOperations();
-  const operations = (data as any)?.operations || [];
+  const operations = useMemo(() => (data as any)?.operations || [], [data]);
   const nodes = (data as any)?.nodes || [];
   
   const [cancellingId, setCancellingId] = useState<string | null>(null);
@@ -62,6 +64,35 @@ export default function OperationsPage() {
       router.replace("/");
     }
   }, [isPartner, router]);
+
+  // Sorting. Instance accessor mirrors the per-row derivation (instance_name, else
+  // extract from a websocket console op's resources, else empty).
+  const sortAccessors = useMemo(() => ({
+    id: (o: any) => o.id,
+    instance: (o: any) => {
+      if (o.instance_name) return o.instance_name;
+      if (o.class_name === "websocket" && o.description === "Executing command" && !o.metadata?.command) {
+        const instances = o.metadata?.resources?.instances || [];
+        if (instances.length > 0) {
+          const match = String(instances[0]).match(/\/instances\/([^?]+)/);
+          if (match) return match[1];
+        }
+      }
+      return "";
+    },
+    description: (o: any) => o.description,
+    node: (o: any) => o.node_name,
+    project: (o: any) => o.project || "default",
+    status: (o: any) => o.status,
+    class: (o: any) => o.class_name,
+    created: (o: any) => (o.created_at ? new Date(o.created_at).getTime() : null),
+  }), []);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "created",
+    "desc",
+  );
+  const sortedOperations = useMemo(() => sortItems(operations), [operations, sortItems]);
 
   if (!isPartner) return null;
 
@@ -288,19 +319,19 @@ export default function OperationsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Operation ID</TableHead>
-                    <TableHead>Instance</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Node</TableHead>
-                    <TableHead>Project</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Class</TableHead>
-                    <TableHead>Created</TableHead>
+                    <SortableTableHead label="Operation ID" field="id" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Class" field="class" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Created" field="created" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {operations.map((operation: any) => {
+                  {sortedOperations.map((operation: any) => {
                     // Use instance_name from backend, or extract from metadata
                     const instanceName = operation.instance_name || extractInstanceName(operation) || "";
                     const isConsoleOp = operation.class_name === "websocket";

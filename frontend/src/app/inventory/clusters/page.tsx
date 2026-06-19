@@ -4,6 +4,8 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import { formatHypervisorType } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { 
   Server, 
   CheckCircle, 
@@ -100,7 +102,16 @@ export default function ClustersPage() {
   const checkClusterAuth = useCheckClusterAuth();
   const deleteCluster = useDeleteCluster();
   const regenerateCert = useRegenerateCert();
-  
+
+  const sortAccessors = React.useMemo(() => ({
+    cluster: (c: any) => c.display_name,
+    endpoint: (c: any) => c.endpoint,
+    type: (c: any) => c.cluster_type,
+    zone: (c: any) => c.zone,
+    status: (c: any) => c.status,
+  }), []);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "cluster");
+
   // redirect if not Partner+
   React.useEffect(() => {
     if (!isPartner) {
@@ -478,16 +489,16 @@ EOF`}
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Cluster</TableHead>
-                  <TableHead>Endpoint</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Zone</TableHead>
-                  <TableHead>Status</TableHead>
+                  <SortableTableHead label="Cluster" field="cluster" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Endpoint" field="endpoint" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Zone" field="zone" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {clusters.map((cluster: any) => {
+                {sortItems(clusters).map((cluster: any) => {
                   const StatusIcon = statusConfig[cluster.status as ClusterStatus]?.icon || AlertTriangle;
                   return (
                     <TableRow key={cluster.cluster_id}>

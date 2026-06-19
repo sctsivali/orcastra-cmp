@@ -32,6 +32,8 @@ import { api, integrationsAPI } from "@/lib/api";
 import { useClusters } from "@/hooks/use-lxd";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useToast } from "@/hooks/use-toast";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import type {
   AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
   PolicyListResponse, PolicyAssignment, AssignmentListResponse,
@@ -656,6 +658,40 @@ export function AccessPoliciesSettings() {
   const policies = policiesData?.policies || [];
   const assignments = assignmentsData?.assignments || [];
 
+  // ── Table sorting (independent instances per table) ──
+  const policySortAccessors = useMemo(
+    () => ({
+      name: (p: any) => p.name,
+      rules: (p: any) => p.rules?.length ?? 0,
+      assignments: (p: any) => p.assignments_count,
+      source: (p: any) => p.source,
+    }),
+    [],
+  );
+  const {
+    sortField: policySortField,
+    sortDirection: policySortDirection,
+    handleSort: handlePolicySort,
+    sortItems: sortPolicies,
+  } = useTableSort(policySortAccessors, "name");
+
+  const assignSortAccessors = useMemo(
+    () => ({
+      user: (a: any) => a.user_email,
+      policy: (a: any) => a.policy_name,
+      organization: (a: any) => a.organization_name,
+      assigned_by: (a: any) => a.assigned_by,
+      assigned: (a: any) => (a.assigned_at ? new Date(a.assigned_at).getTime() : null),
+    }),
+    [],
+  );
+  const {
+    sortField: assignSortField,
+    sortDirection: assignSortDirection,
+    handleSort: handleAssignSort,
+    sortItems: sortAssignments,
+  } = useTableSort(assignSortAccessors, "user");
+
   // ── Mutations ──
 
   const createMutation = useMutation({
@@ -853,15 +889,39 @@ export function AccessPoliciesSettings() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Policy Name</TableHead>
-                      <TableHead>Rules</TableHead>
-                      <TableHead>Assignments</TableHead>
-                      <TableHead>Source</TableHead>
+                      <SortableTableHead
+                        label="Policy Name"
+                        field="name"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                      />
+                      <SortableTableHead
+                        label="Rules"
+                        field="rules"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                      />
+                      <SortableTableHead
+                        label="Assignments"
+                        field="assignments"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                      />
+                      <SortableTableHead
+                        label="Source"
+                        field="source"
+                        currentField={policySortField}
+                        direction={policySortDirection}
+                        onSort={handlePolicySort}
+                      />
                       <TableHead className="w-[120px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {policies.map((policy) => (
+                    {sortPolicies(policies).map((policy) => (
                       <TableRow key={policy.id}>
                         <TableCell>
                           <div>
@@ -1010,16 +1070,46 @@ export function AccessPoliciesSettings() {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>User</TableHead>
-                      <TableHead>Policy</TableHead>
-                      <TableHead>Organization</TableHead>
-                      <TableHead>Assigned By</TableHead>
-                      <TableHead>Assigned</TableHead>
+                      <SortableTableHead
+                        label="User"
+                        field="user"
+                        currentField={assignSortField}
+                        direction={assignSortDirection}
+                        onSort={handleAssignSort}
+                      />
+                      <SortableTableHead
+                        label="Policy"
+                        field="policy"
+                        currentField={assignSortField}
+                        direction={assignSortDirection}
+                        onSort={handleAssignSort}
+                      />
+                      <SortableTableHead
+                        label="Organization"
+                        field="organization"
+                        currentField={assignSortField}
+                        direction={assignSortDirection}
+                        onSort={handleAssignSort}
+                      />
+                      <SortableTableHead
+                        label="Assigned By"
+                        field="assigned_by"
+                        currentField={assignSortField}
+                        direction={assignSortDirection}
+                        onSort={handleAssignSort}
+                      />
+                      <SortableTableHead
+                        label="Assigned"
+                        field="assigned"
+                        currentField={assignSortField}
+                        direction={assignSortDirection}
+                        onSort={handleAssignSort}
+                      />
                       <TableHead className="w-[80px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {assignments.map((a) => (
+                    {sortAssignments(assignments).map((a) => (
                       <TableRow key={a.id}>
                         <TableCell className="font-medium text-sm">{a.user_email}</TableCell>
                         <TableCell>

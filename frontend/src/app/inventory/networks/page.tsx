@@ -12,24 +12,22 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { 
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworks } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-
-type SortField = "name" | "type" | "status" | "used_by";
-type SortDirection = "asc" | "desc";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 interface NetworkInfo {
   name: string;
@@ -51,9 +49,28 @@ export default function NetworksPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
+
+  const sortAccessors = useMemo(
+    () => ({
+      name: (i: any) => i.name,
+      type: (i: any) => i.type,
+      node: (i: any) => i.node,
+      ipv4: (i: any) => i.config?.["ipv4.address"],
+      ipv6: (i: any) => i.config?.["ipv6.address"],
+      status: (i: any) => i.status,
+      managed: (i: any) => i.managed,
+      used_by: (i: any) => i.used_by?.length ?? 0,
+      projects: (i: any) => i.used_by?.length ?? 0,
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "name",
+    "asc",
+    () => setCurrentPage(1),
+  );
 
   const nodes = useMemo(() => {
     const nodeSet = new Set(networks.map((n: any) => n.node).filter((n: any): n is string => Boolean(n)));
@@ -64,16 +81,6 @@ export default function NetworksPage() {
     const typeSet = new Set(networks.map((n: any) => n.type));
     return Array.from(typeSet).sort();
   }, [networks]);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
 
   const filteredNetworks = useMemo(() => {
     let filtered = networks;
@@ -95,52 +102,16 @@ export default function NetworksPage() {
       filtered = filtered.filter((network: any) => network.type === filterType);
     }
 
-    filtered.sort((a: any, b: any) => {
-      let aVal, bVal;
-      
-      switch (sortField) {
-        case "name":
-          aVal = a.name;
-          bVal = b.name;
-          break;
-        case "type":
-          aVal = a.type || "";
-          bVal = b.type || "";
-          break;
-        case "status":
-          aVal = a.status || "";
-          bVal = b.status || "";
-          break;
-        case "used_by":
-          aVal = a.used_by?.length || 0;
-          bVal = b.used_by?.length || 0;
-          break;
-        default:
-          return 0;
-      }
-
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
     return filtered;
-  }, [networks, searchQuery, filterNode, filterType, sortField, sortDirection]);
+  }, [networks, searchQuery, filterNode, filterType]);
 
-  const totalPages = Math.ceil(filteredNetworks.length / pageSize);
-  const paginatedNetworks = filteredNetworks.slice(
+  const sortedNetworks = useMemo(() => sortItems(filteredNetworks), [filteredNetworks, sortItems]);
+
+  const totalPages = Math.ceil(sortedNetworks.length / pageSize);
+  const paginatedNetworks = sortedNetworks.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
-
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return null;
-    return sortDirection === "asc" ? (
-      <ArrowUp className="h-3 w-3 inline ml-1" />
-    ) : (
-      <ArrowDown className="h-3 w-3 inline ml-1" />
-    );
-  };
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -229,35 +200,17 @@ export default function NetworksPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("name")}
-                >
-                  Name <SortIcon field="name" />
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("type")}
-                >
-                  Type <SortIcon field="type" />
-                </TableHead>
-                {nodes.length > 0 && <TableHead>Node</TableHead>}
-                <TableHead>IPv4 Address</TableHead>
-                <TableHead>IPv6 Address</TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("status")}
-                >
-                  Status <SortIcon field="status" />
-                </TableHead>
-                <TableHead>Managed</TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("used_by")}
-                >
-                  Used By <SortIcon field="used_by" />
-                </TableHead>
-                <TableHead>Projects</TableHead>
+                <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {nodes.length > 0 && (
+                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                )}
+                <SortableTableHead label="IPv4 Address" field="ipv4" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="IPv6 Address" field="ipv6" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Managed" field="managed" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>

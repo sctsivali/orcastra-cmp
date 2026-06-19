@@ -23,14 +23,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Search } from "lucide-react";
 import { ProfileInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useProfiles } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-
-type SortField = "name" | "description" | "devices" | "used_by";
-type SortDirection = "asc" | "desc";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function ProfilesPage() {
   const { data, isLoading, refetch, isRefetching } = useProfiles();
@@ -40,26 +39,31 @@ export default function ProfilesPage() {
   const [filterNode, setFilterNode] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [sortField, setSortField] = useState<SortField>("name");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
+
+  const sortAccessors = useMemo(
+    () => ({
+      name: (i: any) => i.name,
+      description: (i: any) => i.description,
+      node: (i: any) => i.node,
+      devices: (i: any) => Object.keys(i.devices || {}).length,
+      used_by: (i: any) => i.used_by?.length ?? 0,
+      projects: (i: any) => i.used_by?.length ?? 0,
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "name",
+    "asc",
+    () => setCurrentPage(1),
+  );
 
   // Get unique nodes
   const nodes = useMemo(() => {
     const nodeSet = new Set(profiles.map((p: any) => p.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [profiles]);
-
-  // Handle column sort
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
 
   // Filter and search
   const filteredProfiles = useMemo(() => {
@@ -80,54 +84,17 @@ export default function ProfilesPage() {
       filtered = filtered.filter((profile: any) => profile.node === filterNode);
     }
 
-    // Sort
-    filtered.sort((a: any, b: any) => {
-      let aVal, bVal;
-      
-      switch (sortField) {
-        case "name":
-          aVal = a.name;
-          bVal = b.name;
-          break;
-        case "description":
-          aVal = a.description || "";
-          bVal = b.description || "";
-          break;
-        case "devices":
-          aVal = Object.keys(a.devices || {}).length;
-          bVal = Object.keys(b.devices || {}).length;
-          break;
-        case "used_by":
-          aVal = a.used_by?.length || 0;
-          bVal = b.used_by?.length || 0;
-          break;
-        default:
-          return 0;
-      }
-
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
     return filtered;
-  }, [profiles, searchQuery, filterNode, sortField, sortDirection]);
+  }, [profiles, searchQuery, filterNode]);
+
+  const sortedProfiles = useMemo(() => sortItems(filteredProfiles), [filteredProfiles, sortItems]);
 
   // Pagination
-  const totalPages = Math.ceil(filteredProfiles.length / pageSize);
-  const paginatedProfiles = filteredProfiles.slice(
+  const totalPages = Math.ceil(sortedProfiles.length / pageSize);
+  const paginatedProfiles = sortedProfiles.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
-
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return null;
-    return sortDirection === "asc" ? (
-      <ArrowUp className="h-3 w-3 inline ml-1" />
-    ) : (
-      <ArrowDown className="h-3 w-3 inline ml-1" />
-    );
-  };
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -200,32 +167,12 @@ export default function ProfilesPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("name")}
-                >
-                  Name <SortIcon field="name" />
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("description")}
-                >
-                  Description <SortIcon field="description" />
-                </TableHead>
-                <TableHead>Node</TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("devices")}
-                >
-                  Devices <SortIcon field="devices" />
-                </TableHead>
-                <TableHead 
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("used_by")}
-                >
-                  Used By <SortIcon field="used_by" />
-                </TableHead>
-                <TableHead>Projects</TableHead>
+                <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Devices" field="devices" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>

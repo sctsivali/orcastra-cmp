@@ -21,14 +21,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Search } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useImages } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { ImageListResponse } from "@/types/api";
-
-type SortField = "fingerprint" | "size" | "architecture" | "type";
-type SortDirection = "asc" | "desc";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 interface ImageInfo {
   fingerprint: string;
@@ -55,9 +54,27 @@ export default function ImagesPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [sortField, setSortField] = useState<SortField>("fingerprint");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const { toast } = useToast();
+
+  const sortAccessors = useMemo(
+    () => ({
+      fingerprint: (i: any) => i.fingerprint,
+      alias: (i: any) => i.aliases?.length ?? 0,
+      architecture: (i: any) => i.architecture,
+      type: (i: any) => i.type,
+      size: (i: any) => i.size ?? 0,
+      node: (i: any) => i.node,
+      status: (i: any) =>
+        (i.public ? 1 : 0) + (i.cached ? 1 : 0) + (i.auto_update ? 1 : 0),
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "fingerprint",
+    "asc",
+    () => setCurrentPage(1),
+  );
 
   const allImages = useMemo(() => {
     return (imagesByHost as ImageListResponse[]).flatMap((host) =>
@@ -74,16 +91,6 @@ export default function ImagesPage() {
     const typeSet = new Set(allImages.map((img: any) => img.type));
     return Array.from(typeSet).sort();
   }, [allImages]);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
 
   const filteredImages = useMemo(() => {
     let filtered = allImages;
@@ -109,40 +116,13 @@ export default function ImagesPage() {
       filtered = filtered.filter((img) => img.type === filterType);
     }
 
-    filtered.sort((a, b) => {
-      let aVal, bVal;
-
-      switch (sortField) {
-        case "fingerprint":
-          aVal = a.fingerprint;
-          bVal = b.fingerprint;
-          break;
-        case "size":
-          aVal = a.size || 0;
-          bVal = b.size || 0;
-          break;
-        case "architecture":
-          aVal = a.architecture || "";
-          bVal = b.architecture || "";
-          break;
-        case "type":
-          aVal = a.type || "";
-          bVal = b.type || "";
-          break;
-        default:
-          return 0;
-      }
-
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
     return filtered;
-  }, [allImages, searchQuery, filterNode, filterType, sortField, sortDirection]);
+  }, [allImages, searchQuery, filterNode, filterType]);
 
-  const totalPages = Math.ceil(filteredImages.length / pageSize);
-  const paginatedImages = filteredImages.slice(
+  const sortedImages = useMemo(() => sortItems(filteredImages), [filteredImages, sortItems]);
+
+  const totalPages = Math.ceil(sortedImages.length / pageSize);
+  const paginatedImages = sortedImages.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
@@ -153,15 +133,6 @@ export default function ImagesPage() {
     const sizes = ["B", "KB", "MB", "GB", "TB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
-  };
-
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return null;
-    return sortDirection === "asc" ? (
-      <ArrowUp className="h-3 w-3 inline ml-1" />
-    ) : (
-      <ArrowDown className="h-3 w-3 inline ml-1" />
-    );
   };
 
   if (isLoading) {
@@ -259,33 +230,13 @@ export default function ImagesPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("fingerprint")}
-                >
-                  Fingerprint <SortIcon field="fingerprint" />
-                </TableHead>
-                <TableHead>Alias</TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("architecture")}
-                >
-                  Architecture <SortIcon field="architecture" />
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("type")}
-                >
-                  Type <SortIcon field="type" />
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("size")}
-                >
-                  Size <SortIcon field="size" />
-                </TableHead>
-                {nodes.length > 0 && <TableHead>Node</TableHead>}
-                <TableHead>Status</TableHead>
+                <SortableTableHead label="Fingerprint" field="fingerprint" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Alias" field="alias" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Architecture" field="architecture" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Size" field="size" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {nodes.length > 0 && <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
+                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>

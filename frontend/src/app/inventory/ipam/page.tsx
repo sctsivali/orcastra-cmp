@@ -21,12 +21,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, ArrowUp, ArrowDown } from "lucide-react";
+import { Search } from "lucide-react";
 import { useIPAM } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-
-type SortField = "address" | "type" | "used_by" | "network";
-type SortDirection = "asc" | "desc";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 interface IPAMAllocation {
   address: string;
@@ -49,8 +48,25 @@ export default function IPAMPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const [sortField, setSortField] = useState<SortField>("address");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
+
+  const sortAccessors = useMemo(
+    () => ({
+      address: (i: any) => i.address,
+      type: (i: any) => i.type,
+      used_by: (i: any) => i.used_by,
+      hardware_address: (i: any) => i.hardware_address,
+      network: (i: any) => i.network,
+      node: (i: any) => i.node,
+      project: (i: any) => i.project || "default",
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "address",
+    "asc",
+    () => setCurrentPage(1),
+  );
 
   const networks = useMemo(() => {
     const networkSet = new Set(allocations.map((a: any) => a.network).filter(Boolean));
@@ -61,16 +77,6 @@ export default function IPAMPage() {
     const typeSet = new Set(allocations.map((a: any) => a.type).filter(Boolean));
     return Array.from(typeSet).sort();
   }, [allocations]);
-
-  const handleSort = (field: SortField) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("asc");
-    }
-    setCurrentPage(1);
-  };
 
   const filteredAllocations = useMemo(() => {
     let filtered = allocations;
@@ -97,52 +103,16 @@ export default function IPAMPage() {
       filtered = filtered.filter((alloc: any) => alloc.type === filterType);
     }
 
-    filtered.sort((a: any, b: any) => {
-      let aVal, bVal;
-
-      switch (sortField) {
-        case "address":
-          aVal = a.address;
-          bVal = b.address;
-          break;
-        case "type":
-          aVal = a.type;
-          bVal = b.type;
-          break;
-        case "used_by":
-          aVal = a.used_by;
-          bVal = b.used_by;
-          break;
-        case "network":
-          aVal = a.network;
-          bVal = b.network;
-          break;
-        default:
-          return 0;
-      }
-
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-
     return filtered;
-  }, [allocations, searchQuery, filterNode, filterNetwork, filterType, sortField, sortDirection]);
+  }, [allocations, searchQuery, filterNode, filterNetwork, filterType]);
 
-  const totalPages = Math.ceil(filteredAllocations.length / pageSize);
-  const paginatedAllocations = filteredAllocations.slice(
+  const sortedAllocations = useMemo(() => sortItems(filteredAllocations), [filteredAllocations, sortItems]);
+
+  const totalPages = Math.ceil(sortedAllocations.length / pageSize);
+  const paginatedAllocations = sortedAllocations.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
   );
-
-  const SortIcon = ({ field }: { field: SortField }) => {
-    if (sortField !== field) return null;
-    return sortDirection === "asc" ? (
-      <ArrowUp className="h-3 w-3 inline ml-1" />
-    ) : (
-      <ArrowDown className="h-3 w-3 inline ml-1" />
-    );
-  };
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -258,33 +228,13 @@ export default function IPAMPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("address")}
-                >
-                  IP Address <SortIcon field="address" />
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("type")}
-                >
-                  Type <SortIcon field="type" />
-                </TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("used_by")}
-                >
-                  Used By <SortIcon field="used_by" />
-                </TableHead>
-                <TableHead>MAC Address</TableHead>
-                <TableHead
-                  className="cursor-pointer hover:bg-muted/50"
-                  onClick={() => handleSort("network")}
-                >
-                  Network <SortIcon field="network" />
-                </TableHead>
-                <TableHead>Node</TableHead>
-                <TableHead>Project</TableHead>
+                <SortableTableHead label="IP Address" field="address" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="MAC Address" field="hardware_address" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Network" field="network" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>

@@ -62,6 +62,8 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { formatDate } from "@/lib/utils";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 const statusConfig = {
   [CertificateStatus.VALID]: {
@@ -142,6 +144,21 @@ export default function CertificatesPage() {
   const initiateCertRenewal = useInitiateCertRenewal();
   const verifyCertRenewal = useVerifyCertRenewal();
   const cancelPendingCert = useCancelPendingCert();
+
+  const toTime = (value: string | null | undefined): number | null => {
+    if (!value) return null;
+    const t = new Date(value).getTime();
+    return Number.isNaN(t) ? null : t;
+  };
+  const sortAccessors = React.useMemo(() => ({
+    cluster: (c: any) => c.cluster_id,
+    status: (c: any) => c.status,
+    issuer: (c: any) => c.issuer,
+    issued: (c: any) => toTime(c.issued_at),
+    expires: (c: any) => toTime(c.expires_at),
+    days: (c: any) => c.days_until_expiry,
+  }), []);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "expires");
 
   // redirect if not Partner+
   React.useEffect(() => {
@@ -377,17 +394,17 @@ export default function CertificatesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="min-w-[120px]">Cluster</TableHead>
-                  <TableHead className="min-w-[100px]">Status</TableHead>
-                  <TableHead className="min-w-[100px] hidden md:table-cell">Issuer</TableHead>
-                  <TableHead className="min-w-[120px] hidden lg:table-cell">Issued</TableHead>
-                  <TableHead className="min-w-[120px]">Expires</TableHead>
-                  <TableHead className="min-w-[100px]">Days Left</TableHead>
+                  <SortableTableHead label="Cluster" field="cluster" currentField={sortField} direction={sortDirection} onSort={handleSort} className="min-w-[120px]" />
+                  <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} className="min-w-[100px]" />
+                  <SortableTableHead label="Issuer" field="issuer" currentField={sortField} direction={sortDirection} onSort={handleSort} className="min-w-[100px] hidden md:table-cell" />
+                  <SortableTableHead label="Issued" field="issued" currentField={sortField} direction={sortDirection} onSort={handleSort} className="min-w-[120px] hidden lg:table-cell" />
+                  <SortableTableHead label="Expires" field="expires" currentField={sortField} direction={sortDirection} onSort={handleSort} className="min-w-[120px]" />
+                  <SortableTableHead label="Days Left" field="days" currentField={sortField} direction={sortDirection} onSort={handleSort} className="min-w-[100px]" />
                   <TableHead className="text-right min-w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {certificates.map((cert) => {
+                {sortItems(certificates).map((cert) => {
                   const config = statusConfig[cert.status] || statusConfig[CertificateStatus.UNKNOWN];
                   const StatusIcon = config.icon;
 

@@ -46,13 +46,12 @@ import {
   History,
   LogIn,
   LogOut,
-  ArrowUpDown,
-  ChevronUp,
-  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getAccessToken } from "@/lib/api";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 // ============ Types ============
 
@@ -90,8 +89,6 @@ interface AuditLogEntry {
   upload_bytes: number | null;
   created_at: string;
 }
-
-type SortDirection = "asc" | "desc";
 
 // ============ Utility functions ============
 
@@ -139,44 +136,6 @@ function formatTime(date: Date): string {
 // Use relative URLs - Next.js rewrites proxy to backend
 const API_URL = "";
 
-// ============ Sort Helper ============
-
-function SortableTableHead<T extends string>({
-  label,
-  field,
-  currentField,
-  direction,
-  onSort,
-  className,
-}: {
-  label: string;
-  field: T;
-  currentField: T;
-  direction: SortDirection;
-  onSort: (field: T) => void;
-  className?: string;
-}) {
-  return (
-    <TableHead
-      className={cn("cursor-pointer select-none hover:bg-muted/50", className)}
-      onClick={() => onSort(field)}
-    >
-      <div className="flex items-center gap-1">
-        {label}
-        {currentField === field ? (
-          direction === "asc" ? (
-            <ChevronUp className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronDown className="h-3.5 w-3.5" />
-          )
-        ) : (
-          <ArrowUpDown className="h-3.5 w-3.5 opacity-30" />
-        )}
-      </div>
-    </TableHead>
-  );
-}
-
 // ============ Main Component ============
 
 export default function SessionsPage() {
@@ -223,8 +182,6 @@ export default function SessionsPage() {
 
 // ============ Active Sessions Tab ============
 
-type ActiveSortField = "instance" | "protocol" | "duration" | "bandwidth" | "rate" | "status";
-
 function ActiveSessionsTab() {
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [loading, setLoading] = useState(true);
@@ -232,20 +189,20 @@ function ActiveSessionsTab() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [sortField, setSortField] = useState<ActiveSortField>("duration");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const handleSort = useCallback((field: ActiveSortField) => {
-    setSortField((prev) => {
-      if (prev === field) {
-        setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
-        return prev;
-      }
-      setSortDirection("asc");
-      return field;
-    });
-  }, []);
+  const sortAccessors = useMemo(
+    () => ({
+      instance: (s: SessionData) => s.instance_name,
+      protocol: (s: SessionData) => s.protocol,
+      duration: (s: SessionData) => s.duration_seconds,
+      bandwidth: (s: SessionData) => s.bandwidth.download_bytes + s.bandwidth.upload_bytes,
+      rate: (s: SessionData) => s.bandwidth.download_rate_bps + s.bandwidth.upload_rate_bps,
+      status: (s: SessionData) => s.connection_status,
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "duration", "desc");
 
   const fetchSessions = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -287,42 +244,7 @@ function ActiveSessionsTab() {
     );
   }, [sessions, searchTerm]);
 
-  const sorted = useMemo(() => {
-    return [...filtered].sort((a, b) => {
-      let aVal: string | number, bVal: string | number;
-      switch (sortField) {
-        case "instance":
-          aVal = a.instance_name.toLowerCase();
-          bVal = b.instance_name.toLowerCase();
-          break;
-        case "protocol":
-          aVal = a.protocol;
-          bVal = b.protocol;
-          break;
-        case "duration":
-          aVal = a.duration_seconds;
-          bVal = b.duration_seconds;
-          break;
-        case "bandwidth":
-          aVal = a.bandwidth.download_bytes + a.bandwidth.upload_bytes;
-          bVal = b.bandwidth.download_bytes + b.bandwidth.upload_bytes;
-          break;
-        case "rate":
-          aVal = a.bandwidth.download_rate_bps + a.bandwidth.upload_rate_bps;
-          bVal = b.bandwidth.download_rate_bps + b.bandwidth.upload_rate_bps;
-          break;
-        case "status":
-          aVal = a.connection_status;
-          bVal = b.connection_status;
-          break;
-        default:
-          return 0;
-      }
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [filtered, sortField, sortDirection]);
+  const sorted = useMemo(() => sortItems(filtered), [filtered, sortItems]);
 
   const totalDlRate = sessions.reduce((sum, s) => sum + s.bandwidth.download_rate_bps, 0);
   const totalUlRate = sessions.reduce((sum, s) => sum + s.bandwidth.upload_rate_bps, 0);
@@ -433,29 +355,31 @@ function ActiveSessionsTab() {
 
 // ============ Session History Tab ============
 
-type HistorySortField = "event" | "instance" | "protocol" | "duration" | "transfer" | "time";
-
 function SessionHistoryTab() {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [sortField, setSortField] = useState<HistorySortField>("time");
-  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  const handleSort = useCallback((field: HistorySortField) => {
-    setSortField((prev) => {
-      if (prev === field) {
-        setSortDirection((d) => (d === "asc" ? "desc" : "asc"));
-        return prev;
-      }
-      setSortDirection("desc");
-      return field;
-    });
-    setCurrentPage(1);
-  }, []);
+  const sortAccessors = useMemo(
+    () => ({
+      event: (l: AuditLogEntry) => l.event_type,
+      instance: (l: AuditLogEntry) => l.instance_name,
+      protocol: (l: AuditLogEntry) => l.protocol,
+      duration: (l: AuditLogEntry) => l.duration_seconds ?? 0,
+      transfer: (l: AuditLogEntry) => (l.download_bytes ?? 0) + (l.upload_bytes ?? 0),
+      time: (l: AuditLogEntry) => (l.created_at ? new Date(l.created_at).getTime() : null),
+    }),
+    [],
+  );
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "time",
+    "desc",
+    () => setCurrentPage(1),
+  );
 
   const fetchLogs = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -489,42 +413,7 @@ function SessionHistoryTab() {
     );
   }, [logs, searchTerm]);
 
-  const sorted = useMemo(() => {
-    return [...filtered].sort((a, b) => {
-      let aVal: string | number, bVal: string | number;
-      switch (sortField) {
-        case "event":
-          aVal = a.event_type;
-          bVal = b.event_type;
-          break;
-        case "instance":
-          aVal = a.instance_name.toLowerCase();
-          bVal = b.instance_name.toLowerCase();
-          break;
-        case "protocol":
-          aVal = a.protocol;
-          bVal = b.protocol;
-          break;
-        case "duration":
-          aVal = a.duration_seconds ?? 0;
-          bVal = b.duration_seconds ?? 0;
-          break;
-        case "transfer":
-          aVal = (a.download_bytes ?? 0) + (a.upload_bytes ?? 0);
-          bVal = (b.download_bytes ?? 0) + (b.upload_bytes ?? 0);
-          break;
-        case "time":
-          aVal = a.created_at || "";
-          bVal = b.created_at || "";
-          break;
-        default:
-          return 0;
-      }
-      if (aVal < bVal) return sortDirection === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDirection === "asc" ? 1 : -1;
-      return 0;
-    });
-  }, [filtered, sortField, sortDirection]);
+  const sorted = useMemo(() => sortItems(filtered), [filtered, sortItems]);
 
   // pagination
   const totalPages = Math.ceil(sorted.length / pageSize);

@@ -44,6 +44,8 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function IdentitiesPage() {
   const { data, isLoading, refetch, isRefetching } = useIdentities();
@@ -96,12 +98,28 @@ export default function IdentitiesPage() {
     });
   }, [identities, searchQuery, filterNode, filterType]);
 
+  // Sorting
+  const sortAccessors = useMemo(() => ({
+    id: (i: any) => i.id,
+    name: (i: any) => i.name,
+    type: (i: any) => i.type,
+    node: (i: any) => i.node,
+    groups: (i: any) => i.groups?.length ?? 0,
+  }), []);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "name",
+    "asc",
+    () => setCurrentPage(1),
+  );
+  const sortedIdentities = useMemo(() => sortItems(filteredIdentities), [filteredIdentities, sortItems]);
+
   // Pagination
-  const totalPages = Math.ceil(filteredIdentities.length / pageSize);
+  const totalPages = Math.ceil(sortedIdentities.length / pageSize);
   const paginatedIdentities = useMemo(() => {
     const startIndex = (currentPage - 1) * pageSize;
-    return filteredIdentities.slice(startIndex, startIndex + pageSize);
-  }, [filteredIdentities, currentPage, pageSize]);
+    return sortedIdentities.slice(startIndex, startIndex + pageSize);
+  }, [sortedIdentities, currentPage, pageSize]);
 
   const handleDeleteClick = (identity: any) => {
     setIdentityToDelete(identity);
@@ -218,11 +236,11 @@ export default function IdentitiesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Node</TableHead>
-                    <TableHead>Groups</TableHead>
+                    <SortableTableHead label="ID" field="id" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Groups" field="groups" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -282,7 +300,7 @@ export default function IdentitiesPage() {
               <DataTablePagination
                 currentPage={currentPage}
                 totalPages={totalPages || 1}
-                totalItems={filteredIdentities.length}
+                totalItems={sortedIdentities.length}
                 pageSize={pageSize}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={setPageSize}

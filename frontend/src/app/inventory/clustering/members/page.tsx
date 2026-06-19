@@ -29,7 +29,6 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
@@ -38,6 +37,8 @@ import { ClusterMember } from "@/types/api";
 import { useClusters, useClusterMembers, useMemberResources } from "@/hooks/use-lxd";
 import { MemberResourceModal } from "@/components/member-resource-modal";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 function ClusterMembersContent() {
   const searchParams = useSearchParams();
@@ -56,7 +57,7 @@ function ClusterMembersContent() {
   }, [clustersData]);
   
   const { data: membersData, isLoading, refetch, isRefetching, error } = useClusterMembers(node);
-  const members = membersData?.members || [];
+  const members = React.useMemo(() => membersData?.members || [], [membersData]);
   const isClustered = membersData?.is_clustered || false;
   const nodeName = membersData?.node || "";
   
@@ -100,6 +101,22 @@ function ClusterMembersContent() {
     setNode(value);
     router.replace(`/inventory/clustering/members?node=${value}`);
   };
+
+  // Sorting
+  const sortAccessors = React.useMemo(() => ({
+    server_name: (m: any) => m.server_name,
+    url: (m: any) => m.url,
+    roles: (m: any) => m.roles?.length ?? 0,
+    status: (m: any) => m.status,
+    architecture: (m: any) => m.architecture,
+    failure_domain: (m: any) => m.failure_domain || "default",
+  }), []);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    "server_name",
+    "asc",
+  );
+  const sortedMembers = React.useMemo(() => sortItems(members), [members, sortItems]);
 
   // Full-page loading state
   if (isLoading && node) {
@@ -186,16 +203,16 @@ function ClusterMembersContent() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Server Name</TableHead>
-                  <TableHead>URL</TableHead>
-                  <TableHead>Roles</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Architecture</TableHead>
-                  <TableHead>Failure Domain</TableHead>
+                  <SortableTableHead label="Server Name" field="server_name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="URL" field="url" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Roles" field="roles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Architecture" field="architecture" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Failure Domain" field="failure_domain" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {members.map((member: any) => (
+                {sortedMembers.map((member: any) => (
                   <TableRow key={member.server_name}>
                     <TableCell className="font-medium">
                       <button
