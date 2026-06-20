@@ -309,6 +309,11 @@ def _sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
+# important: explicit timeouts so a slow/flaky cluster cannot block the import indefinitely.
+_IMPORT_UPLOAD_TIMEOUT = int(os.getenv("IMAGE_IMPORT_UPLOAD_TIMEOUT", "600"))  # stream the file in
+_IMPORT_WAIT_TIMEOUT = int(os.getenv("IMAGE_IMPORT_WAIT_TIMEOUT", "900"))      # wait for LXD to import (slow ARM ok)
+
+
 def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, description: str) -> Dict[str, Any]:
     """Stream the staged unified image into the cluster's LXD image store and alias it.
 
@@ -331,6 +336,7 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
             data=f,
             headers={"Content-Type": "application/octet-stream", "X-LXD-public": "false"},
             verify=False,
+            timeout=_IMPORT_UPLOAD_TIMEOUT,
         )
     if resp.status_code >= 400:
         raise RuntimeError(f"LXD image import failed: {resp.status_code} {resp.text[:300]}")
@@ -339,11 +345,20 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
     op_path = op.get("operation")  # /1.0/operations/<id>
     if not op_path:
         raise RuntimeError("LXD did not return an import operation")
-    wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False)
-    wdata = wresp.json().get("metadata", {})
-    if wdata.get("status") != "Success":
-        raise RuntimeError(f"LXD import operation failed: {wdata.get('err') or wdata.get('status')}")
-    fingerprint = (wdata.get("metadata") or {}).get("fingerprint")
+    try:
+        wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=_IMPORT_WAIT_TIMEOUT)
+        wdata = wresp.json().get("metadata", {})
+        if wdata.get("status") != "Success":
+            raise RuntimeError(f"LXD import operation failed: {wdata.get('err') or wdata.get('status')}")
+        fingerprint = (wdata.get("metadata") or {}).get("fingerprint")
+    except Exception:
+        # important: cancel the operation so a timed-out/failed import does not leave a half-created,
+        # alias-less image orphaned in the store (the alias is a separate step we never reach on failure).
+        try:
+            session.delete(f"{endpoint}{op_path[4:]}", verify=False, timeout=60)
+        except Exception:
+            pass
+        raise
     if not fingerprint:
         raise RuntimeError("LXD import did not yield a fingerprint")
 
@@ -352,11 +367,12 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
         f"{endpoint}/images/aliases{project_q}",
         json={"name": alias, "target": fingerprint, "description": description},
         verify=False,
+        timeout=60,
     )
     if aresp.status_code >= 400 and "already exists" not in aresp.text.lower():
         raise RuntimeError(f"Failed to create image alias: {aresp.status_code} {aresp.text[:200]}")
 
-    gresp = session.get(f"{endpoint}/images/{fingerprint}{project_q}", verify=False)
+    gresp = session.get(f"{endpoint}/images/{fingerprint}{project_q}", verify=False, timeout=60)
     size = (gresp.json().get("metadata") or {}).get("size") if gresp.status_code < 400 else None
     return {"fingerprint": fingerprint, "size": size}
 
