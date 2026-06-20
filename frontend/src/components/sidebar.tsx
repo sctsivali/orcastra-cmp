@@ -848,6 +848,52 @@ export function Sidebar({ className }: SidebarProps) {
                 )}
               </div>
 
+              {/* Administration (mini / client-cert deployment) - Admin only */}
+              {isAdmin && process.env.NEXT_PUBLIC_AUTH_MODE === "client-cert" && (
+                <div>
+                  <p className={cn(
+                    "text-xs font-semibold text-muted-foreground mb-1 mt-2 px-2",
+                    isCollapsed && !sidebarOpen && "md:hidden"
+                  )}>
+                    Administration
+                  </p>
+                  <Button
+                    variant={pathname === "/admin/local-identities" ? "secondary" : "ghost"}
+                    className={cn(
+                      "w-full justify-start text-sm",
+                      isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                    )}
+                    size="sm"
+                    asChild
+                  >
+                    <SidebarLink href="/admin/local-identities">
+                      <UserPlus className="h-4 w-4" />
+                      <span className={cn(
+                        "ml-2 flex-1 text-left",
+                        isCollapsed && !sidebarOpen && "md:hidden"
+                      )}>Identities</span>
+                    </SidebarLink>
+                  </Button>
+                  <Button
+                    variant={pathname === "/admin/audit-log" ? "secondary" : "ghost"}
+                    className={cn(
+                      "w-full justify-start text-sm",
+                      isCollapsed && !sidebarOpen && "md:justify-center md:px-2"
+                    )}
+                    size="sm"
+                    asChild
+                  >
+                    <SidebarLink href="/admin/audit-log">
+                      <Shield className="h-4 w-4" />
+                      <span className={cn(
+                        "ml-2 flex-1 text-left",
+                        isCollapsed && !sidebarOpen && "md:hidden"
+                      )}>Audit Log</span>
+                    </SidebarLink>
+                  </Button>
+                </div>
+              )}
+
               {/* Regions Menu */}
               <div>
                 <Button

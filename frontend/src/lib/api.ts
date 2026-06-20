@@ -1210,7 +1210,7 @@ export const myKeysAPI = {
     });
   },
 
-  download: async (keyId: string) => {
+  download: async (keyId: string): Promise<{ blob: Blob; password: string }> => {
     const url = `${API_BASE_URL}${API_PREFIX}/my-keys/${keyId}/download`;
     const response = await fetch(url, {
       headers: {
@@ -1220,7 +1220,10 @@ export const myKeysAPI = {
     if (!response.ok) {
       throw new Error("Failed to download key");
     }
-    return response.blob();
+    // The .p12 is encrypted; the one-time import password rides in a response header.
+    const password = response.headers.get("X-P12-Password") || "";
+    const blob = await response.blob();
+    return { blob, password };
   },
 
   delete: async (keyId: string) => {
@@ -1228,6 +1231,115 @@ export const myKeysAPI = {
       method: "DELETE",
     });
   },
+};
+
+// ---- Mini deployment (AUTH_MODE=client-cert) ----
+
+export interface LocalIdentity {
+  fingerprint: string;
+  common_name: string;
+  display_name?: string | null;
+  role: string;
+  status: string;
+  serial?: string | null;
+  not_after?: string | null;
+  created_by?: string | null;
+  created_at?: string | null;
+}
+
+export interface IdentityIssueRequest {
+  common_name: string;
+  display_name?: string;
+  role: string;
+  ttl_days?: number;
+}
+
+export const localIdentitiesAPI = {
+  list: async (): Promise<LocalIdentity[]> => fetchAPI<LocalIdentity[]>("/local-identities"),
+
+  // Issues a cert and returns the one-time .p12 blob plus its password (from the header).
+  issue: async (
+    request: IdentityIssueRequest
+  ): Promise<{ blob: Blob; password: string; filename: string }> => {
+    const url = `${API_BASE_URL}${API_PREFIX}/local-identities/issue`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+      },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      let detail = "Failed to issue certificate";
+      try {
+        detail = (await response.json()).detail || detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(detail);
+    }
+    const password = response.headers.get("X-P12-Password") || "";
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : "identity.p12";
+    return { blob: await response.blob(), password, filename };
+  },
+
+  update: async (
+    fingerprint: string,
+    payload: { role?: string; status?: string }
+  ): Promise<LocalIdentity> =>
+    fetchAPI<LocalIdentity>(`/local-identities/${fingerprint}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  remove: async (fingerprint: string): Promise<void> =>
+    fetchAPI(`/local-identities/${fingerprint}`, { method: "DELETE" }),
+};
+
+export interface AuditEntry {
+  id: number;
+  event_id: string;
+  occurred_at: string;
+  actor_id?: string | null;
+  actor_email?: string | null;
+  actor_role?: string | null;
+  action: string;
+  category?: string | null;
+  severity?: string | null;
+  result?: string | null;
+  target_type?: string | null;
+  target_id?: string | null;
+  target_host?: string | null;
+  target_project?: string | null;
+  source_ip?: string | null;
+  details?: Record<string, unknown> | null;
+}
+
+export const auditLogAPI = {
+  list: async (params: {
+    limit?: number;
+    offset?: number;
+    action?: string;
+    actor?: string;
+    result?: string;
+    start?: string;
+    end?: string;
+    sort_by?: string;
+    sort_dir?: string;
+  } = {}): Promise<{ total: number; items: AuditEntry[] }> => {
+    const qs = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+    });
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return fetchAPI<{ total: number; items: AuditEntry[] }>(`/audit-log${suffix}`);
+  },
+
+  verify: async (): Promise<{ valid: boolean; checked: number; broken_at_id: number | null }> =>
+    fetchAPI("/audit-log/verify"),
 };
 
 // Monitoring API

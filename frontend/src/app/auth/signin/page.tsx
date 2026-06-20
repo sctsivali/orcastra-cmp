@@ -24,6 +24,11 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, LogIn, ShieldCheck, AlertCircle } from "lucide-react";
 
+// Auth backend selection (mini vs full).
+const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE || "authentik";
+const IS_CERT_MODE = AUTH_MODE === "client-cert";
+const PROVIDER_ID = IS_CERT_MODE ? "client-cert" : "authentik";
+
 // Error messages mapping
 const errorMessages: Record<string, string> = {
   OAuthSignin: "Error starting OAuth sign-in flow. Please try again.",
@@ -60,7 +65,7 @@ function SignInContent() {
     setIsLoading(true);
     setAutoRedirect(false);
     try {
-      await signIn("authentik", { callbackUrl });
+      await signIn(PROVIDER_ID, { callbackUrl });
     } catch (err) {
       console.error("Sign in error:", err);
       setIsLoading(false);
@@ -83,7 +88,9 @@ function SignInContent() {
               Orcastra Dashboard
             </CardTitle>
             <CardDescription className="mt-2">
-              Sign in with your organization account to continue
+              {IS_CERT_MODE
+                ? "Sign in with your client certificate to continue"
+                : "Sign in with your organization account to continue"}
             </CardDescription>
           </div>
         </CardHeader>
@@ -123,7 +130,7 @@ function SignInContent() {
               ) : (
                 <>
                   <LogIn className="mr-2 h-5 w-5" />
-                  Sign in with SSO
+                  {IS_CERT_MODE ? "Sign in with Certificate" : "Sign in with SSO"}
                 </>
               )}
             </Button>

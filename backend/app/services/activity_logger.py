@@ -148,6 +148,18 @@ HIGH_SEVERITY_ACTIONS = {
     "lxd.connection.reconnect",
 }
 
+# High-frequency, system-initiated read/list operations. These are operational telemetry,
+# not security-significant events, so they are NOT persisted to the Postgres audit table
+# when they SUCCEED (they still go to stdout for the full-version OpenSearch sink). A
+# FAILURE of any of these IS persisted - it is an anomaly worth keeping.
+AUDIT_DB_SKIP_ON_SUCCESS = {
+    "vault.kv.list",
+    "vault.kv.get",
+    "vault.secret.read",
+    "vault.cert.list",
+    "vault.health.check",
+}
+
 
 class ActivityLogger:
     """
@@ -161,7 +173,7 @@ class ActivityLogger:
         self.version = version
         self.logger = logging.getLogger("orcastra.audit")
     
-    def log_activity(
+    def _build_audit_log(
         self,
         action: str,
         target_type: str,
@@ -175,24 +187,18 @@ class ActivityLogger:
         duration_ms: Optional[float] = None,
         before_state: Optional[Dict[str, Any]] = None,
         after_state: Optional[Dict[str, Any]] = None,
-    ) -> str:
-        """
-        Log an activity/audit event.
-        """
-        # Generate event ID
+    ) -> tuple[str, Dict[str, Any]]:
+        """Build the structured audit event (shared by log_activity + log_security_event)."""
         event_id = generate_event_id()
-        
-        # Get request context
+
         ctx = get_request_context()
         request_id = ctx.request_id if ctx else get_request_id()
-        
-        # Determine category and severity
+
         category = ACTION_CATEGORIES.get(action, EventCategory.LXD_INFRA)
         severity = EventSeverity.HIGH if action in HIGH_SEVERITY_ACTIONS else EventSeverity.MEDIUM
         if result == "failure":
             severity = EventSeverity.HIGH
-        
-        # Build audit log entry
+
         audit_log = {
             "@timestamp": datetime.now(timezone.utc).isoformat(),
             "log_type": "audit",
@@ -220,6 +226,7 @@ class ActivityLogger:
             "result": result,
             "error_code": error_code,
             "error_message": error_message,
+            "source_ip": getattr(ctx, "client_ip", None) if ctx else None,
             "details": self._sanitize_details(details) if details else None,
             "metadata": {
                 "duration_ms": duration_ms,
@@ -227,15 +234,87 @@ class ActivityLogger:
                 "after": after_state,
             } if any([duration_ms, before_state, after_state]) else None,
         }
-        
-        # Log with appropriate level
-        log_level = logging.WARNING if result == "failure" else logging.INFO
+        return event_id, audit_log
+
+    def _emit_stdout(self, audit_log: Dict[str, Any]) -> None:
+        log_level = logging.WARNING if audit_log.get("result") == "failure" else logging.INFO
+        tgt = audit_log.get("target", {})
         self.logger.log(
             log_level,
-            f"AUDIT: {action} on {target_type}/{target_id} - {result}",
-            extra={"audit_log_data": audit_log}
+            f"AUDIT: {audit_log.get('action')} on {tgt.get('type')}/{tgt.get('id')} - {audit_log.get('result')}",
+            extra={"audit_log_data": audit_log},
         )
-        
+
+    @staticmethod
+    def _should_persist_db(action: str, result: str) -> bool:
+        """Mini deployment: persist to Postgres unless it is a routine successful
+        system read/list (kept security-focused). Failures are always persisted."""
+        return get_settings().audit_db_enabled and (
+            result != "success" or action not in AUDIT_DB_SKIP_ON_SUCCESS
+        )
+
+    def log_activity(
+        self,
+        action: str,
+        target_type: str,
+        target_id: str,
+        target_host: Optional[str] = None,
+        target_project: Optional[str] = None,
+        result: str = "success",
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        duration_ms: Optional[float] = None,
+        before_state: Optional[Dict[str, Any]] = None,
+        after_state: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Log an activity/audit event (non-blocking DB persistence)."""
+        event_id, audit_log = self._build_audit_log(
+            action, target_type, target_id, target_host, target_project, result,
+            error_code, error_message, details, duration_ms, before_state, after_state,
+        )
+        self._emit_stdout(audit_log)
+
+        # Mini deployment: also persist to the hash-chained Postgres audit_log table.
+        # Non-blocking - the request path never waits on the DB write.
+        try:
+            if self._should_persist_db(action, result):
+                from app.services.audit_writer import get_audit_writer
+                get_audit_writer().enqueue(audit_log)
+        except Exception:
+            pass
+
+        return event_id
+
+    async def log_security_event(
+        self,
+        action: str,
+        target_type: str,
+        target_id: str,
+        target_host: Optional[str] = None,
+        target_project: Optional[str] = None,
+        result: str = "success",
+        error_code: Optional[str] = None,
+        error_message: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+        duration_ms: Optional[float] = None,
+        before_state: Optional[Dict[str, Any]] = None,
+        after_state: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Durable, fail-CLOSED audit for security-critical events (auth, identity
+        issue/revoke/role-change, key ops). In mini mode the DB write is awaited and a
+        failure RAISES, so the operation cannot complete without an audit record. In full
+        mode (audit DB off) this behaves like log_activity (stdout only, non-blocking)."""
+        event_id, audit_log = self._build_audit_log(
+            action, target_type, target_id, target_host, target_project, result,
+            error_code, error_message, details, duration_ms, before_state, after_state,
+        )
+        self._emit_stdout(audit_log)
+
+        if get_settings().audit_db_enabled:
+            from app.services.audit_writer import get_audit_writer
+            await get_audit_writer().write_now(audit_log)  # raises on failure -> fail closed
+
         return event_id
     
     def _sanitize_details(self, details: Dict[str, Any]) -> Dict[str, Any]:

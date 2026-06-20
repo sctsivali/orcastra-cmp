@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 # Cache namespaces
 _NS_RBAC_GLOBAL = "rbac_global"
 _NS_RBAC_USER = "rbac_user"
+_NS_AUTH_SESSION = "auth_session"
+
+# Default revocation flag lifetime - covers one minted-token TTL window. After the token
+# expires the flag is moot (the JWT is dead), so a short TTL keeps the cache tiny.
+SESSION_REVOKE_TTL = 1800  # 30 minutes
 
 # Cache TTLs (seconds)
 GLOBAL_CACHE_TTL = 300   # 5 minutes - role definitions rarely change
@@ -79,6 +84,27 @@ class RBACCache:
         """Clear all per-user RBAC caches (ex; after bulk role change)."""
         self._cm.delete_pattern(_NS_RBAC_USER, "*")
         logger.info("RBAC cache invalidated for ALL users")
+
+    # ------------------------------------------------------------------
+    # Client-cert session revocation (mini deployment)
+    # ------------------------------------------------------------------
+    def revoke_identity_sessions(self, fingerprint: str, ttl: int = SESSION_REVOKE_TTL) -> None:
+        """Flag all live minted tokens for a cert fingerprint as revoked.
+
+        Called when an identity is revoked or its role changes; get_current_user rejects
+        flagged sessions on the next request. Propagates across workers via Redis.
+        """
+        self._cm.set(_NS_AUTH_SESSION, f"revoked:{fingerprint}", {"v": 1}, ttl=ttl)
+        self.invalidate_user(fingerprint)
+        logger.info(f"Revoked active sessions for identity: {fingerprint[:16]}...")
+
+    def is_identity_session_revoked(self, fingerprint: str) -> bool:
+        """True if a fingerprint's sessions have been flagged revoked."""
+        return self._cm.get(_NS_AUTH_SESSION, f"revoked:{fingerprint}") is not None
+
+    def clear_identity_revocation(self, fingerprint: str) -> None:
+        """Drop the revoke flag (ex; after an identity is re-activated or re-logs in)."""
+        self._cm.delete(_NS_AUTH_SESSION, f"revoked:{fingerprint}")
 
     def invalidate_global(self) -> None:
         """Clear global RBAC cache (ex; after permission matrix update)."""

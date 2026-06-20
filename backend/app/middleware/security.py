@@ -4,6 +4,7 @@ Application-level security middleware for request hardening.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import time
 from typing import Iterable
@@ -83,7 +84,27 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
         self.settings = settings
         self.limiter = limiter or WindowedRateLimiter()
 
+    def _strip_untrusted_cert_headers(self, request: Request) -> None:
+        """Remove forwarded X-SSL-* cert headers unless the proxy secret matches."""
+        expected = self.settings.auth_proxy_secret or ""
+        provided = request.headers.get("x-auth-proxy-secret", "")
+        trusted = bool(expected) and hmac.compare_digest(provided, expected)
+        if trusted:
+            return
+        raw = request.scope.get("headers")
+        if not raw:
+            return
+        request.scope["headers"] = [
+            (k, v) for (k, v) in raw if not k.lower().startswith(b"x-ssl-client-")
+        ]
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Defense in depth: in client-cert mode, never let X-SSL-* cert headers reach the
+        # app unless the request carries the matching proxy secret. extract_client_cert
+        # also checks the secret, but stripping here protects any other reader too.
+        if self.settings.auth_mode == "client-cert":
+            self._strip_untrusted_cert_headers(request)
+
         resolution = resolve_client_ip(
             request,
             self.settings.trusted_proxy_cidrs,

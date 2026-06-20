@@ -6,8 +6,16 @@
  */
 
 import NextAuth from "next-auth";
+import Credentials from "next-auth/providers/credentials";
 import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
+
+// Auth backend: "authentik" (full SSO) or "client-cert" (mini single-instance).
+const AUTH_MODE = process.env.AUTH_MODE || "authentik";
+const INTERNAL_BACKEND_URL =
+  process.env.INTERNAL_BACKEND_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:4050";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -80,6 +88,50 @@ const authentikProvider = {
   },
 };
 
+// Client-certificate provider (mini mode). The browser presents its TLS client cert
+// to nginx, which forwards X-SSL-* headers on the sign-in callback request. authorize()
+// runs server-side, reads those headers, and exchanges them for a backend-minted session
+// token. The cert headers themselves never reach the browser-facing session.
+const clientCertProvider = Credentials({
+  id: "client-cert",
+  name: "Client Certificate",
+  credentials: {},
+  async authorize(_credentials, request) {
+    try {
+      const h = (request as Request).headers;
+      const res = await fetch(`${INTERNAL_BACKEND_URL}/api/v1/auth/cert-login`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-ssl-client-verify": h.get("x-ssl-client-verify") || "",
+          "x-ssl-client-cert": h.get("x-ssl-client-cert") || "",
+          "x-ssl-client-s-dn": h.get("x-ssl-client-s-dn") || "",
+          "x-auth-proxy-secret": process.env.AUTH_PROXY_SECRET || "",
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        console.warn(`[AUTH] cert-login rejected: ${res.status}`);
+        return null;
+      }
+      const data = await res.json();
+      const groups: string[] = data.groups || [];
+      return {
+        id: data.fingerprint,
+        name: data.display_name,
+        email: data.display_name,
+        groups,
+        roles: groups.filter((g: string) => g.startsWith("role_")),
+        accessToken: data.access_token,
+        expiresAt: Math.floor(Date.now() / 1000) + (data.expires_in || 900),
+      } as any;
+    } catch (e) {
+      console.warn(`[AUTH] cert-login error: ${e instanceof Error ? e.message : String(e)}`);
+      return null;
+    }
+  },
+});
+
 // Cooldown period (seconds) before retrying a failed token refresh.
 // Prevents flooding the IdP with requests when it's unreachable.
 const TOKEN_REFRESH_COOLDOWN_SECONDS = 60;
@@ -134,7 +186,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       error: undefined,
     };
   } catch (error) {
-    // Compact log - avoid dumping the full stack on every request
+    // Mini log - avoid dumping the full stack on every request
     const reason = error instanceof Error ? error.message : String(error);
     console.warn(`[AUTH] Token refresh failed: ${reason}`);
 
@@ -153,7 +205,7 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
 
 // NextAuth configuration
 export const authConfig: NextAuthConfig = {
-  providers: [authentikProvider],
+  providers: AUTH_MODE === "client-cert" ? [clientCertProvider] : [authentikProvider],
 
   // Use JWT for session management (stateless)
   session: {
@@ -171,6 +223,18 @@ export const authConfig: NextAuthConfig = {
     async jwt({ token, user, account }) {
       // Initial sign in
       if (account && user) {
+        // Client-cert (Credentials) path: token fields come from authorize()'s return.
+        if ((user as any).accessToken) {
+          return {
+            ...token,
+            accessToken: (user as any).accessToken,
+            expiresAt: (user as any).expiresAt,
+            groups: (user as any).groups || [],
+            roles: (user as any).roles || [],
+            authentikId: user.id || user.email || "",
+            error: undefined,
+          };
+        }
         // Use EMAIL as the persistent user identifier
         // This is more reliable than Authentik sub which can change per session
         const persistentUserId = user.email || user.id;
@@ -201,7 +265,14 @@ export const authConfig: NextAuthConfig = {
         // when the cooldown period has also elapsed, so proceed to retry.
       }
 
-      // Access token has expired, try to refresh it
+      // Access token has expired.
+      // Client-cert mode has no refresh token; clear the dead token and signal the client
+      // to re-authenticate. Re-auth is transparent: the browser re-presents its imported
+      // cert to nginx, so the auth-provider can silently call signIn() with no user action.
+      if (AUTH_MODE === "client-cert") {
+        return { ...token, accessToken: undefined, error: "SessionExpired" };
+      }
+      // Authentik mode: try to refresh.
       return await refreshAccessToken(token);
     },
 
@@ -273,6 +344,15 @@ export const authConfig: NextAuthConfig = {
       );
 
       if (isAdminOrPartnerRoute && !isPartner) {
+        return Response.redirect(new URL("/", nextUrl));
+      }
+
+      // Strictly admin-only routes (mini deployment management surfaces)
+      const adminOnlyPaths = ["/admin/local-identities", "/admin/audit-log"];
+      const isAdminOnlyRoute = adminOnlyPaths.some(
+        (p) => nextUrl.pathname === p || nextUrl.pathname.startsWith(p + "/")
+      );
+      if (isAdminOnlyRoute && !isAdmin) {
         return Response.redirect(new URL("/", nextUrl));
       }
 

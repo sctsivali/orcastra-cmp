@@ -125,6 +125,14 @@ function buildForwardHeaders(req: NextRequest): Headers {
   headers.delete("x-orcastra-client-ip");
   headers.delete("x-orcastra-client-ip-source");
 
+  // SECURITY: never let a browser inject client-cert auth headers through the generic
+  // proxy. The only legitimate carrier of these is the NextAuth cert-login flow, which
+  // calls the backend directly (server-side) with the proxy secret.
+  headers.delete("x-auth-proxy-secret");
+  for (const name of Array.from(headers.keys())) {
+    if (name.toLowerCase().startsWith("x-ssl-client-")) headers.delete(name);
+  }
+
   if (FORWARD_CLIENT_IP_HEADERS) {
     const forwardedClientIp = trustedForwardedClientIp(req);
 
@@ -174,15 +182,26 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
       duplex: "half",
     });
 
-    // Buffer the full (decompressed) body so Content-Length is accurate
-    const body = await upstream.arrayBuffer();
-
     const responseHeaders = new Headers(upstream.headers);
     // Remove hop-by-hop and encoding headers that are no longer valid
     responseHeaders.delete("transfer-encoding");
     responseHeaders.delete("connection");
     responseHeaders.delete("content-encoding");
-    // Set correct Content-Length for the decompressed body
+
+    // Null-body statuses (204 No Content, 304 Not Modified, 1xx) must not carry a body
+    // or Content-Length - constructing a Response with one throws and surfaces as a 502.
+    const nullBody = upstream.status === 204 || upstream.status === 304 || upstream.status < 200;
+    if (nullBody) {
+      responseHeaders.delete("content-length");
+      return new Response(null, {
+        status: upstream.status,
+        statusText: upstream.statusText,
+        headers: responseHeaders,
+      });
+    }
+
+    // Buffer the full (decompressed) body so Content-Length is accurate
+    const body = await upstream.arrayBuffer();
     responseHeaders.set("content-length", String(body.byteLength));
 
     return new Response(body, {

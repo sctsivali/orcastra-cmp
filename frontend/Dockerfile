@@ -24,17 +24,24 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # Build arguments for version management
-ARG APP_VERSION=1.0.0-RC2
+ARG APP_VERSION=1.0.0-RC1
 
 # Auth build arguments - ONLY public/non-secret values needed at build time
 # Secrets (CLIENT_SECRET, NEXTAUTH_SECRET) are injected at RUNTIME via env vars
 ARG AUTHENTIK_ISSUER
 ARG AUTHENTIK_CLIENT_ID
 
-# NEXT_PUBLIC_* vars use placeholder URLs at build time.
-# Actual values are injected at container startup via entrypoint.sh
+# AUTH_MODE must be baked at BUILD time: it is used in `=== "client-cert"` comparisons
+# that the minifier constant-folds and dead-code-eliminates, so a runtime placeholder swap
+# would be too late (the wrong branch is already gone). Default "authentik" keeps the full
+# image unchanged; the mini image passes --build-arg NEXT_PUBLIC_AUTH_MODE=client-cert.
+ARG NEXT_PUBLIC_AUTH_MODE=authentik
+
+# NEXT_PUBLIC_* URL vars use placeholders at build time (they are used as plain strings,
+# so the runtime swap in entrypoint.sh works). Actual values injected at container startup.
 ENV NEXT_PUBLIC_API_URL=http://NEXT_PUBLIC_API_URL_PLACEHOLDER
 ENV NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=http://NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL_PLACEHOLDER
+ENV NEXT_PUBLIC_AUTH_MODE=$NEXT_PUBLIC_AUTH_MODE
 ENV APP_VERSION=$APP_VERSION
 ENV NEXT_TELEMETRY_DISABLED=1
 

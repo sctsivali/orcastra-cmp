@@ -77,6 +77,7 @@ export default function MyKeysPage() {
   const [activeTab, setActiveTab] = useState("active");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [keyToDelete, setKeyToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [downloadedPassword, setDownloadedPassword] = useState<string | null>(null);
   const { isReadOnly } = useReadOnlyMode();
   const { isPartner } = usePermissions();
   const router = useRouter();
@@ -186,7 +187,7 @@ export default function MyKeysPage() {
   // Download key handler
   const handleDownload = async (keyId: string) => {
     try {
-      const blob = await api.myKeys.download(keyId);
+      const { blob, password } = await api.myKeys.download(keyId);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -195,10 +196,16 @@ export default function MyKeysPage() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
-      toast({
-        title: "Success",
-        description: "Key downloaded successfully",
-      });
+      // The .p12 is encrypted; reveal the one-time import password so the user can
+      // unlock it. Without this the downloaded file cannot be imported.
+      if (password) {
+        setDownloadedPassword(password);
+      } else {
+        toast({
+          title: "Success",
+          description: "Key downloaded successfully",
+        });
+      }
     } catch (error: any) {
       toast({
         title: "Error",
@@ -465,6 +472,47 @@ export default function MyKeysPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* One-time .p12 import password reveal */}
+      <Dialog
+        open={!!downloadedPassword}
+        onOpenChange={(open) => {
+          if (!open) setDownloadedPassword(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Key downloaded - import password</DialogTitle>
+            <DialogDescription>
+              The .p12 file is encrypted. Use this one-time password to import it. It is shown
+              only once and is not stored anywhere - copy it now.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 break-all rounded bg-muted px-3 py-2 font-mono text-sm">
+              {downloadedPassword}
+            </code>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (downloadedPassword) {
+                  navigator.clipboard?.writeText(downloadedPassword);
+                  toast({ title: "Copied", description: "Password copied to clipboard" });
+                }
+              }}
+            >
+              Copy
+            </Button>
+          </div>
+          <DialogFooter>
+            <Button type="button" onClick={() => setDownloadedPassword(null)}>
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

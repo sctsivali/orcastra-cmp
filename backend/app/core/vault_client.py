@@ -144,7 +144,9 @@ class VaultClient:
         - Only Vault should hold sensitive credentials
         - Memory caching in connection manager is acceptable (process-local)
         """
-        sensitive_patterns = ['/certs', '/certificates', '/keys', '/private', '/secrets']
+        # /credentials covers my_keys/<id>/credentials (holds the private key); the
+        # underscore in "my_keys" means "/keys" alone does not match that path.
+        sensitive_patterns = ['/certs', '/certificates', '/keys', '/private', '/secrets', '/credentials']
         path_lower = path.lower()
         return any(pattern in path_lower for pattern in sensitive_patterns)
     
@@ -421,6 +423,14 @@ class VaultClient:
         
         try:
             response = self.session.request('LIST', url, headers=self.headers, timeout=(2, 3))
+            # important: a KV v2 LIST of an empty/nonexistent path returns 404. That means
+            # "no keys", not an error - return empty without raising or auditing a failure
+            # (otherwise idle background polling floods the audit log).
+            if response.status_code == 404:
+                if use_cache and cache:
+                    cache.set("vault_list", path, [], 600)
+                logger.debug(f"Vault list path {path} is empty (404)")
+                return []
             response.raise_for_status()
             result = response.json()
             keys = result.get("data", {}).get("keys", [])

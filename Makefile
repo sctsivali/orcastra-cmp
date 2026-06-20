@@ -1,10 +1,11 @@
 # Makefile for Orcastra Dashboard
 # This Makefile provides convenient commands for managing the development and production environment
 
-.PHONY: help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
+.PHONY: help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild up-mini down-mini logs-mini ps-mini config-mini
 
 # Variables
 COMPOSE_FILE := docker-compose.yml
+MINI_COMPOSE_FILE := docker-compose.mini.yml
 DOCKER_COMPOSE := $(shell which docker-compose 2>/dev/null)
 ifeq ($(DOCKER_COMPOSE),)
 	DOCKER_COMPOSE := docker compose
@@ -88,6 +89,24 @@ down-v: ## Stop and remove all containers with volumes
 	@echo "$(COLOR_YELLOW)Stopping all services and removing volumes...$(COLOR_RESET)"
 	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) down -v
 	@echo "$(COLOR_GREEN)✓ All services stopped and volumes removed$(COLOR_RESET)"
+
+# ---- Mini single-instance profile (docker-compose.mini.yml) ----
+up-mini: ## Start the mini (client-cert) stack with build
+	@echo "$(COLOR_YELLOW)Starting mini single-instance stack...$(COLOR_RESET)"
+	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(MINI_COMPOSE_FILE) up -d --build
+	@echo "$(COLOR_GREEN)✓ Mini stack up (remember to unseal Vault)$(COLOR_RESET)"
+
+down-mini: ## Stop the mini stack
+	@$(DOCKER_COMPOSE) -f $(MINI_COMPOSE_FILE) down
+
+logs-mini: ## Tail mini stack logs
+	@$(DOCKER_COMPOSE) -f $(MINI_COMPOSE_FILE) logs -f
+
+ps-mini: ## List mini stack containers
+	@$(DOCKER_COMPOSE) -f $(MINI_COMPOSE_FILE) ps
+
+config-mini: ## Validate the mini compose file
+	@$(DOCKER_COMPOSE) -f $(MINI_COMPOSE_FILE) config >/dev/null && echo "$(COLOR_GREEN)✓ docker-compose.mini.yml is valid$(COLOR_RESET)"
 
 restart: ## Restart all services
 	@echo "$(COLOR_YELLOW)Restarting all services...$(COLOR_RESET)"

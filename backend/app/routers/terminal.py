@@ -227,6 +227,7 @@ class TerminalProxy:
             asyncio.create_task(self._forward_browser_to_lxd(), name="browser_to_lxd"),
             asyncio.create_task(self._forward_lxd_to_browser(), name="lxd_to_browser"),
             asyncio.create_task(self._monitor_control(), name="control_monitor"),
+            asyncio.create_task(self._revocation_watchdog(), name="revocation_watchdog"),
         ]
         
         try:
@@ -259,7 +260,45 @@ class TerminalProxy:
                 )
             except asyncio.TimeoutError:
                 logger.warning("Task cancellation timed out for %s", self.instance_name)
-    
+
+    async def _revocation_watchdog(self):
+        """Re-check identity revocation for the life of the session so a revoked or
+        role-changed cert loses an open root shell within ~60s. The connect-time check
+        alone cannot cover a long-lived socket."""
+        from app.core.config import get_settings
+        applies = (
+            get_settings().auth_mode == "client-cert"
+            and self.user_id
+            and self.user_id != "anonymous"
+        )
+        if not applies:
+            # idle until the session ends; must NOT complete first and trigger teardown
+            await self._shutdown.wait()
+            return
+        from app.core.rbac_cache import get_rbac_cache
+        cache = get_rbac_cache()
+        while not self._shutdown.is_set():
+            try:
+                await asyncio.wait_for(self._shutdown.wait(), timeout=60.0)
+            except asyncio.TimeoutError:
+                pass
+            if self._shutdown.is_set():
+                return
+            try:
+                if cache.is_identity_session_revoked(self.user_id):
+                    logger.warning(
+                        "Terminal session revoked mid-stream: user=%s instance=%s",
+                        self.user_id, self.instance_name,
+                    )
+                    self._shutdown.set()
+                    try:
+                        await self.browser_ws.close(code=1008, reason="Session revoked")
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
     async def _forward_browser_to_lxd(self):
         """Forward input from browser to LXD data WebSocket."""
         try:
@@ -462,15 +501,44 @@ async def terminal_websocket(
     Acts as a proxy between browser and LXD instance exec.
     Auth token is passed as ``token`` query parameter.
     """
-    # Validate auth when enabled
+    # Validate auth when enabled (fail-closed, independent of auth backend).
+    # NOTE: do NOT gate on authentik_issuer - that bypassed auth entirely in client-cert mode.
     from app.core.config import get_settings as _gs
     _settings = _gs()
-    if _settings.auth_enabled and _settings.authentik_issuer and user is None:
+    if _settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
 
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
+
+    # important: enforce the per-instance tenant ACL BEFORE accepting / connecting upstream.
+    # Resolve the instance's REAL project server-side (never trust the client project param),
+    # then check the ACL. Admin/partner have no ACL (no-op); a tenant outside the instance
+    # ACL is rejected. This stops cross-instance exec/console on an otherwise-allowed cluster.
+    from app.services.lxd_service import get_lxd_service
+    from app.core.org_scope import verify_tenant_permission
+    try:
+        _vm = await get_lxd_service().get_vm(instance_name, host)
+    except Exception:
+        _vm = None
+    if _vm is None:
+        await websocket.close(code=1008, reason="Instance not found or not accessible")
+        return
+    real_project = (
+        getattr(_vm, "project", None)
+        or (_vm.config.get("project") if getattr(_vm, "config", None) else None)
+        or "default"
+    )
+    try:
+        verify_tenant_permission(host, real_project, instance_name, "view")
+    except HTTPException:
+        logger.warning(
+            "Terminal ACL denied: user=%s instance=%s@%s project=%s",
+            user.user_id if user else "anonymous", instance_name, host, real_project,
+        )
+        await websocket.close(code=1008, reason="Access denied for this instance")
+        return
 
     await websocket.accept()
     user_id = user.user_id if user else "anonymous"
@@ -491,12 +559,12 @@ async def terminal_websocket(
         browser_ws=websocket,
         instance_name=instance_name,
         host=host,
-        project=project,
+        project=real_project,
         user_id=user_id,
         user_email=user_email,
         user_role=user_role,
     )
-    
+
     await proxy.run()
 
 

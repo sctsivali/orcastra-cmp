@@ -97,6 +97,11 @@ class Settings(BaseSettings):
         alias="AUTH_ENABLED",
         description="Enable JWT authentication. Disable only for local development."
     )
+    auth_mode: str = Field(
+        default="authentik",
+        alias="AUTH_MODE",
+        description="Authentication backend: 'authentik' (OIDC SSO, full version) or 'client-cert' (mini single-instance, TLS client certificates)."
+    )
     authentik_issuer: str = Field(
         default="",
         alias="AUTHENTIK_ISSUER",
@@ -124,7 +129,58 @@ class Settings(BaseSettings):
         alias="AUTHENTIK_API_TOKEN",
         description="Authentik Admin API token for user/group management"
     )
-    
+
+    # Mini / Client-Certificate Authentication (AUTH_MODE=client-cert)
+    # The reverse proxy (nginx) terminates TLS, requests a client cert, and forwards
+    # the verified cert to the backend via X-SSL-* headers. The backend recomputes the
+    # SHA-256 fingerprint, maps it to a local identity/role, and mints its own JWT so the
+    # rest of the app keeps using bearer tokens exactly as in Authentik mode.
+    local_jwt_secret: str = Field(
+        default="",
+        alias="LOCAL_JWT_SECRET",
+        description="HS256 signing secret for minted session tokens in client-cert mode (REQUIRED when AUTH_MODE=client-cert; generate with: openssl rand -hex 32). Must differ from SECRET_KEY."
+    )
+    local_jwt_ttl_seconds: int = Field(
+        default=3600,
+        alias="LOCAL_JWT_TTL_SECONDS",
+        description="Lifetime of minted session tokens in seconds (default 1h). Active revocation is enforced PER REQUEST via the Redis flag, so TTL length does not weaken it - TTL only bounds the fallback window during a Redis outage. On expiry the frontend silently re-auths via the client cert."
+    )
+    local_jwt_issuer: str = Field(
+        default="orcastra-local",
+        alias="LOCAL_JWT_ISSUER",
+        description="Issuer claim for minted session tokens (kept distinct from the Authentik issuer so tokens cannot cross modes)."
+    )
+    local_jwt_audience: str = Field(
+        default="orcastra-dashboard",
+        alias="LOCAL_JWT_AUDIENCE",
+        description="Audience claim for minted session tokens."
+    )
+    bootstrap_admin_token: str = Field(
+        default="",
+        alias="BOOTSTRAP_ADMIN_TOKEN",
+        description="One-time secret required to enroll the FIRST admin certificate (trust-on-first-use). Bootstrap is refused when this is empty."
+    )
+    trusted_auth_proxy_cidrs: str = Field(
+        default="",
+        alias="TRUSTED_AUTH_PROXY_CIDRS",
+        description="Narrow CIDR(s) of the auth-terminating reverse proxy allowed to supply X-SSL-* headers. Deliberately NOT the broad TRUSTED_PROXY_CIDRS."
+    )
+    auth_proxy_secret: str = Field(
+        default="",
+        alias="AUTH_PROXY_SECRET",
+        description="Shared secret injected by the reverse proxy (X-Auth-Proxy-Secret). The backend honors X-SSL-* headers only when this matches (REQUIRED when AUTH_MODE=client-cert)."
+    )
+    client_cert_ttl_days: int = Field(
+        default=365,
+        alias="CLIENT_CERT_TTL_DAYS",
+        description="Default validity (days) for user client certificates issued via Vault PKI."
+    )
+    client_cert_cn_suffix: str = Field(
+        default="users.orcastra.internal",
+        alias="CLIENT_CERT_CN_SUFFIX",
+        description="Non-routable domain suffix for user client-cert CNs (ICANN-reserved .internal never resolves publicly, so a CN like jane.users.orcastra.internal is clearly an internal cert subject, not a visitable site)."
+    )
+
     # Vault Configuration
     vault_enabled: bool = Field(
         default=False,
@@ -233,7 +289,17 @@ class Settings(BaseSettings):
         alias="VAULT_ENCRYPTION_KEY_PATH",
         description="Vault path to fetch encryption key from. Key should be stored as {data: {key: '<fernet-key>'}}"
     )
-    
+
+    # Audit logging persistence
+    # In the full version audit events ship to OpenSearch via Fluent Bit. The mini
+    # version drops OpenSearch and persists audit events to an append-only, hash-chained
+    # Postgres table instead.
+    audit_db_enabled: bool = Field(
+        default=False,
+        alias="AUDIT_DB_ENABLED",
+        description="Persist audit events to the Postgres audit_log table (tamper-evident hash chain). Enable for the mini deployment that has no OpenSearch."
+    )
+
     def get_cors_origins(self) -> list[str]:
         """Parse CORS origins from comma-separated string."""
         if self.cors_origins == "*":

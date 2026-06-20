@@ -37,6 +37,8 @@ const nextConfig = {
     // NEXT_PUBLIC_API_URL is REQUIRED - set via .env or build args
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
     NEXT_PUBLIC_APP_VERSION: appVersion, // Priority: APP_VERSION env > package.json
+    // Auth backend selection: "authentik" (default) or "client-cert" (mini build)
+    NEXT_PUBLIC_AUTH_MODE: process.env.NEXT_PUBLIC_AUTH_MODE,
   },
   // Server-side environment variables (not exposed to client)
   // These are automatically available via process.env on the server

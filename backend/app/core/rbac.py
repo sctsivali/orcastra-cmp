@@ -19,11 +19,34 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request, status
 
 from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.config import get_settings
 from app.core.request_context import get_request_context
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
+
+
+def _dev_user_or_401() -> AuthenticatedUser:
+    """Resolve the no-credentials case safely.
+
+    get_current_user returns None ONLY when AUTH_ENABLED=false (dev bypass). Previously
+    every RBAC dependency fabricated a full admin here, which fails OPEN to admin whenever
+    auth is unconfigured (exactly the client-cert/misconfig case). Now the dev admin is
+    granted only under an explicit local-dev combination; otherwise we fail closed.
+    main.py additionally refuses to start AUTH_ENABLED=false when DEBUG is off.
+    """
+    settings = get_settings()
+    if not settings.auth_enabled and settings.debug:
+        return AuthenticatedUser(
+            user_id="dev-user", email="dev@localhost",
+            groups=["admin"], roles=["role_admin"],
+        )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +190,10 @@ def _resolve_roles_uncached(user: AuthenticatedUser) -> list[Role]:
             stripped = group_lower[5:]
             if stripped in AUTHENTIK_GROUP_MAP:
                 roles.append(AUTHENTIK_GROUP_MAP[stripped])
-    return list(set(roles)) if roles else [Role.TENANT]
+    # important: no default grant. An identity whose groups map to no known role gets
+    # ZERO roles (denied at require_roles), never an implicit TENANT - role-group
+    # membership must be required, not assumed.
+    return list(set(roles))
 
 
 def resolve_roles(user: AuthenticatedUser) -> list[Role]:
@@ -246,12 +272,18 @@ def require_roles(*allowed_roles: Role):
         user: Optional[AuthenticatedUser] = Depends(get_current_user),
     ) -> AuthenticatedUser:
         if user is None:
-            return AuthenticatedUser(
-                user_id="dev-user", email="dev@localhost",
-                groups=["admin"], roles=["role_admin"],
-            )
+            return _dev_user_or_401()
         _populate_request_state(request, user)
         user_roles = resolve_roles(user)
+        if not user_roles:
+            logger.warning(
+                f"RBAC denied: user={user.user_id} has no mapped role "
+                f"required={[r.value for r in allowed_roles]} path={request.url.path}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Insufficient permissions",
+            )
         user_max = max(ROLE_HIERARCHY.get(r, 0) for r in user_roles)
         required_min = min(ROLE_HIERARCHY.get(r, 0) for r in allowed_roles)
 
@@ -287,10 +319,7 @@ def require_permissions(*required_permissions: Permission):
         user: Optional[AuthenticatedUser] = Depends(get_current_user),
     ) -> AuthenticatedUser:
         if user is None:
-            return AuthenticatedUser(
-                user_id="dev-user", email="dev@localhost",
-                groups=["admin"], roles=["role_admin"],
-            )
+            return _dev_user_or_401()
         _populate_request_state(request, user)
         user_roles = resolve_roles(user)
         user_perms = get_user_permissions(user_roles)
@@ -328,10 +357,7 @@ def require_authenticated():
         user: Optional[AuthenticatedUser] = Depends(get_current_user),
     ) -> AuthenticatedUser:
         if user is None:
-            return AuthenticatedUser(
-                user_id="dev-user", email="dev@localhost",
-                groups=["admin"], roles=["role_admin"],
-            )
+            return _dev_user_or_401()
         _populate_request_state(request, user)
         return user
     return _dependency

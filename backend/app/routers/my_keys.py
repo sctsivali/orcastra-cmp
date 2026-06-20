@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 import logging
 import io
 import json
+import secrets
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes, serialization
@@ -29,6 +30,7 @@ from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key
+from app.core.rbac import resolve_roles, Role
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
@@ -149,13 +151,37 @@ def save_key_to_vault(vault_client, key_id: str, cert_pem: bytes, key_pem: bytes
 def get_key_from_vault(vault_client, key_id: str) -> tuple[bytes, bytes]:
     """Get certificate and private key from Vault."""
     try:
-        credentials = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/credentials")
+        # important: never cache private-key material in Redis (defense in depth on top
+        # of _is_sensitive_path; the credentials path holds the private key)
+        credentials = vault_client.vault_read(
+            f"secret/data/{VAULT_KEYS_PATH}/{key_id}/credentials", use_cache=False
+        )
         cert_pem = credentials.get("certificate", "").encode('utf-8')
         key_pem = credentials.get("private_key", "").encode('utf-8')
         return cert_pem, key_pem
     except Exception as e:
         logger.error(f"Failed to get key from Vault: {e}")
         raise HTTPException(status_code=404, detail="Key not found in secure storage")
+
+
+def _is_admin(user: AuthenticatedUser) -> bool:
+    """True when the caller resolves to the admin role."""
+    return Role.ADMIN in resolve_roles(user)
+
+
+def _assert_key_access(key_meta: Dict[str, Any], user: AuthenticatedUser) -> None:
+    """Object-level authz for a stored key: owner or admin only.
+
+    Legacy keys created before ownership was tracked have no ``owner`` field and are
+    therefore admin-only. Raises 404 (not 403) so a non-owner cannot probe which key
+    IDs exist.
+    """
+    if _is_admin(user):
+        return
+    owner = key_meta.get("owner")
+    if owner and owner == user.user_id:
+        return
+    raise HTTPException(status_code=404, detail="Key not found")
 
 
 def delete_key_from_vault(vault_client, key_id: str):
@@ -217,34 +243,8 @@ def generate_certificate(common_name: str, expire_days: int) -> tuple[bytes, byt
     return cert_pem, key_pem, fingerprint
 
 
-def create_pfx(cert_pem: bytes, key_pem: bytes, password: str = "") -> bytes:
-    """Create PFX/PKCS12 file from certificate and key using cryptography library."""
-    # Load certificate
-    cert = x509.load_pem_x509_certificate(cert_pem, default_backend())
-    
-    # Load private key
-    private_key = serialization.load_pem_private_key(
-        key_pem,
-        password=None,
-        backend=default_backend()
-    )
-    
-    # Create PKCS12 with optional encryption
-    encryption = (
-        serialization.BestAvailableEncryption(password.encode()) 
-        if password 
-        else serialization.NoEncryption()
-    )
-    
-    pfx_data = pkcs12.serialize_key_and_certificates(
-        name=b"orcastra-key",
-        key=private_key,
-        cert=cert,
-        cas=None,
-        encryption_algorithm=encryption,
-    )
-    
-    return pfx_data
+# create_pfx moved to app.services.pkcs12_util (shared with mini client-cert issuance)
+from app.services.pkcs12_util import create_pfx  # noqa: E402  (kept here for call-site compatibility)
 
 
 @router.post(
@@ -499,13 +499,17 @@ async def create_key(
             "identity_id": identity_id,
             "group_name": group_name,
             "fingerprint": fingerprint,
+            # important: object-level authz - only the creator (or an admin) may
+            # list/download/delete this key. user_id is the stable OIDC subject.
+            "owner": _rbac.user_id,
+            "owner_email": _rbac.email or "",
         }
         
         # Save to Vault (secure storage)
         save_key_to_vault(vault_client, key_id, cert_pem, key_pem, key_metadata)
         
         # Log activity for audit trail (HIGH severity - SSH key creation)
-        activity_logger.log_activity(
+        await activity_logger.log_security_event(
             action="user.ssh_key.create",
             target_type="ssh_key",
             target_id=key_id,
@@ -554,8 +558,9 @@ async def create_key(
 async def list_keys(
     status_filter: Optional[str] = Query(None, description="Filter by status: active, expired, or all"),
     search: Optional[str] = Query(None, description="Search by name, project, or node"),
+    current_user: AuthenticatedUser = Depends(require_tenant()),
 ):
-    """List all keys from Vault."""
+    """List keys from Vault, scoped to the caller (admins see all)."""
     vault_client = get_vault_keys_client()
     
     try:
@@ -576,7 +581,15 @@ async def list_keys(
         active_count = 0
         expired_count = 0
         
+        is_admin = _is_admin(current_user)
         for key_meta in keys_metadata:
+            # object-level authz: non-admins only see their own keys; legacy
+            # ownerless keys are admin-only
+            if not is_admin:
+                owner = key_meta.get("owner")
+                if not owner or owner != current_user.user_id:
+                    continue
+
             expires_at_str = key_meta.get("expires_at")
             is_expired = False
             
@@ -641,29 +654,43 @@ async def list_keys(
     summary="Download PFX file",
     description="Download the PFX certificate file for a key from Vault.",
 )
-async def download_key(key_id: str):
-    """Download PFX file for a key."""
+async def download_key(
+    key_id: str,
+    current_user: AuthenticatedUser = Depends(require_tenant()),
+):
+    """Download the password-protected PFX for a key the caller owns (or any, as admin)."""
     vault_client = get_vault_keys_client()
-    
+
     try:
+        # object-level authz: confirm ownership BEFORE touching key material
+        key_meta = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
+        if not key_meta:
+            raise HTTPException(status_code=404, detail="Key not found")
+        _assert_key_access(key_meta, current_user)
+
         # Get certificate and key from Vault
         cert_pem, key_pem = get_key_from_vault(vault_client, key_id)
-        
+
         if not cert_pem or not key_pem:
             raise HTTPException(status_code=404, detail="Key not found")
-        
-        # Create PFX
-        pfx_data = create_pfx(cert_pem, key_pem)
-        
-        # Return as streaming response
+
+        # important: encrypt the PKCS#12 with a random password delivered out-of-band
+        # (X-P12-Password header) so a leaked/cached .pfx is not a plaintext private key
+        p12_password = secrets.token_urlsafe(18)
+        pfx_data = create_pfx(cert_pem, key_pem, password=p12_password)
+
+        # Return as streaming response - never cache private-key material
         return StreamingResponse(
             io.BytesIO(pfx_data),
             media_type="application/x-pkcs12",
             headers={
-                "Content-Disposition": f'attachment; filename="{key_id}.pfx"'
+                "Content-Disposition": f'attachment; filename="{key_id}.pfx"',
+                "X-P12-Password": p12_password,
+                "Cache-Control": "no-store",
+                "Pragma": "no-cache",
             }
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -689,10 +716,13 @@ async def delete_key(
     try:
         # Get metadata from Vault
         key_meta = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
-        
+
         if not key_meta:
             raise HTTPException(status_code=404, detail="Key not found")
-        
+
+        # object-level authz: only the owner (or an admin) may delete
+        _assert_key_access(key_meta, _rbac)
+
         # Delete from LXD
         cleanup_errors = []
         try:
@@ -752,7 +782,7 @@ async def delete_key(
         delete_key_from_vault(vault_client, key_id)
         
         # Log activity for audit trail (HIGH severity - SSH key deletion)
-        activity_logger.log_activity(
+        await activity_logger.log_security_event(
             action="user.ssh_key.delete",
             target_type="ssh_key",
             target_id=key_id,

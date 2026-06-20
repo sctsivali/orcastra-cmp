@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Cpu, HardDrive, Server, Database, Network, Package, Info, Monitor } from "lucide-react";
+import { Cpu, HardDrive, Server, ServerOff, Database, Network, Package, Info, Monitor } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
@@ -24,6 +24,25 @@ interface SoftwareItem {
   purpose: string;
   category: string;
   icon: React.ElementType;
+}
+
+// Shown on the Technologies tabs when no cluster is connected yet, so the page never
+// implies data exists when it does not. `what` is the kind of data the tab would show.
+function NoClusterState({ what }: { what: string }) {
+  return (
+    <Card>
+      <CardContent className="flex flex-col items-center justify-center text-center py-16 px-6">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted mb-4">
+          <ServerOff className="h-6 w-6 text-muted-foreground" />
+        </div>
+        <h3 className="text-lg font-semibold mb-1">No cluster connected yet</h3>
+        <p className="text-sm text-muted-foreground max-w-md">
+          {what} details appear once a cluster is registered and connected. Register a
+          cluster, then this page shows live data aggregated from its nodes.
+        </p>
+      </CardContent>
+    </Card>
+  );
 }
 
 function cleanVersion(value?: string | null): string {
@@ -341,6 +360,10 @@ export default function TechnologiesPage() {
 
         {/* Hardware Tab */}
         <TabsContent value="hardware" className="space-y-6 mt-6">
+          {nodes.length === 0 ? (
+            <NoClusterState what="Hardware" />
+          ) : (
+          <>
           <Card className="bg-muted/50">
             <CardContent className="p-6">
               <div className="flex items-start gap-3">
@@ -402,45 +425,16 @@ export default function TechnologiesPage() {
             </div>
           )}
 
-          {/* Hardware Brands & Vendors */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Available Hardware</CardTitle>
-              <CardDescription>
-                Compatible with industry-standard server hardware
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { name: "Intel", logo: "/brands/intel.png" },
-                  { name: "AMD", logo: "/brands/amd.png" },
-                  { name: "Dell", logo: "/brands/dell.png" },
-                  { name: "HP", logo: "/brands/hp.png" },
-                  { name: "Supermicro", logo: "/brands/supermicro.png" },
-                  { name: "Lenovo", logo: "/brands/lenovo.png" },
-                  { name: "Cisco", logo: "/brands/cisco.png" },
-                  { name: "Western Digital", logo: "/brands/wd.png" },
-                ].map((brand) => (
-                  <div
-                    key={brand.name}
-                    className="flex items-center justify-center p-6 rounded-lg border bg-card hover:bg-muted/50 hover:border-primary/20 transition-all duration-200 group"
-                  >
-                    <img
-                      src={brand.logo}
-                      alt={brand.name}
-                      className="h-8 w-auto object-contain brightness-0 dark:invert opacity-70 group-hover:opacity-100 transition-opacity"
-                      title={brand.name}
-                    />
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
+          </>
+          )}
         </TabsContent>
 
         {/* Software Tab */}
         <TabsContent value="software" className="space-y-6 mt-6">
+          {nodes.length === 0 ? (
+            <NoClusterState what="Software" />
+          ) : (
+          <>
           <Card className="bg-muted/50">
             <CardContent className="p-6">
               <div className="flex items-start gap-3">
@@ -557,6 +551,8 @@ export default function TechnologiesPage() {
               </div>
             </CardContent>
           </Card>
+          </>
+          )}
         </TabsContent>
       </Tabs>
     </div>

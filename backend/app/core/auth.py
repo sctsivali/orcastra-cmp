@@ -268,22 +268,153 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
         )
 
 
+# ---------------------------------------------------------------------------
+# Mini (client-cert) mode: locally-minted HS256 session tokens
+#
+# In client-cert mode the reverse proxy verifies the user's TLS client cert and the
+# backend mints its own short-lived JWT. This keeps the rest of the app (bearer tokens,
+# RBAC, websockets) byte-for-byte identical to Authentik mode - only the token SOURCE
+# differs. The two token families are kept apart by algorithm (HS256 vs RS256) and by
+# distinct issuer/audience so a token from one mode is always rejected by the other.
+# ---------------------------------------------------------------------------
+
+def _local_jwt_secret(settings: Settings) -> str:
+    """Signing secret for minted tokens; falls back to SECRET_KEY only if unset."""
+    return settings.local_jwt_secret or settings.secret_key
+
+
+def mint_local_jwt(
+    fingerprint: str,
+    display_name: Optional[str],
+    role: str,
+    settings: Settings,
+) -> tuple[str, int]:
+    """Mint a short-lived HS256 session token for a client-cert identity.
+
+    Returns (token, ttl_seconds). The role is embedded as a ``role_<role>`` group so the
+    existing ``resolve_roles`` / ``AUTHENTIK_GROUP_MAP`` machinery works unchanged.
+    """
+    secret = _local_jwt_secret(settings)
+    if not secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Client-cert auth not configured (LOCAL_JWT_SECRET missing)",
+        )
+    now = int(time.time())
+    ttl = settings.local_jwt_ttl_seconds
+    payload = {
+        "sub": fingerprint,
+        "email": display_name,
+        "name": display_name,
+        "groups": [f"role_{role}"],
+        "iss": settings.local_jwt_issuer,
+        "aud": settings.local_jwt_audience,
+        "iat": now,
+        "exp": now + ttl,
+    }
+    token = jwt.encode(payload, secret, algorithm="HS256")
+    return token, ttl
+
+
+def validate_local_jwt(token: str, settings: Settings) -> AuthenticatedUser:
+    """Validate a locally-minted HS256 session token (client-cert mode)."""
+    secret = _local_jwt_secret(settings)
+    if not secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Client-cert auth not configured (LOCAL_JWT_SECRET missing)",
+        )
+    try:
+        payload = jwt.decode(
+            token,
+            key=secret,
+            algorithms=["HS256"],  # pinned - never accept RS256 here (alg-confusion guard)
+            audience=settings.local_jwt_audience,
+            issuer=settings.local_jwt_issuer,
+            options={
+                "verify_exp": True,
+                "verify_iss": True,
+                "verify_aud": True,
+                "require": ["exp", "iss", "sub"],
+            },
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except jwt.PyJWTError as e:
+        logger.warning(f"Local JWT validation failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid session token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    fingerprint = payload.get("sub", "")
+    groups = payload.get("groups", [])
+    roles = [g for g in groups if g.startswith("role_")]
+    return AuthenticatedUser(
+        user_id=fingerprint,
+        email=payload.get("email"),
+        name=payload.get("name"),
+        groups=groups,
+        roles=roles,
+        raw_claims=payload,
+    )
+
+
+def _validate_token(token: str, settings: Settings) -> AuthenticatedUser:
+    """Dispatch token validation by AUTH_MODE. Always fail-closed (raises on invalid)."""
+    if settings.auth_mode == "client-cert":
+        return validate_local_jwt(token, settings)
+    if not settings.authentik_issuer:
+        # authentik mode but misconfigured - never fall through to anonymous access
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication backend not configured",
+        )
+    return validate_jwt(token, settings)
+
+
+def _ensure_session_active(user: AuthenticatedUser, settings: Settings) -> None:
+    """Enforce app-layer revocation for client-cert sessions.
+
+    TLS ``optional_no_ca`` does not consult a CRL, and minted tokens outlive a revoke,
+    so a revoked/role-changed identity is flagged in the shared cache and rejected here
+    on every request (near-immediate revocation without a per-request DB hit).
+    """
+    if settings.auth_mode != "client-cert":
+        return
+    try:
+        from app.core.rbac_cache import get_rbac_cache
+        if get_rbac_cache().is_identity_session_revoked(user.user_id):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Session revoked",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except HTTPException:
+        raise
+    except Exception as e:  # cache unreachable - rely on short token TTL, never fail open
+        logger.warning(f"Revocation cache check failed (relying on token TTL): {e}")
+
+
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme),
     settings: Settings = Depends(get_settings),
 ) -> Optional[AuthenticatedUser]:
     """
-    FastAPI dependency that extracts and validates the current user from JWT.
+    FastAPI dependency that extracts and validates the current user.
 
-    - If AUTH_ENABLED=true: requires valid Bearer token, raises 401 otherwise
-    - If AUTH_ENABLED=false: returns None (dev mode / no auth)
+    - If AUTH_ENABLED=true: requires a valid Bearer token, raises 401 otherwise.
+      The token is validated per AUTH_MODE (Authentik RS256 vs locally-minted HS256).
+    - If AUTH_ENABLED=false: returns None (dev bypass; main.py refuses to start this
+      combination unless DEBUG=true).
     """
     if not settings.auth_enabled:
-        return None
-
-    if not settings.authentik_issuer:
-        logger.warning("AUTH_ENABLED=true but AUTHENTIK_ISSUER not configured - bypassing auth")
         return None
 
     if not credentials:
@@ -293,7 +424,8 @@ async def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    user = validate_jwt(credentials.credentials, settings)
+    user = _validate_token(credentials.credentials, settings)
+    _ensure_session_active(user, settings)
 
     # attach user to request state for access by middleware/logging
     # user_role is populated later by RBAC dependency (_populate_request_state)
@@ -316,14 +448,15 @@ async def get_optional_user(
     Returns None if no valid token is present.
     Useful for endpoints that work for both authenticated and anonymous users.
     """
-    if not settings.auth_enabled or not settings.authentik_issuer:
+    if not settings.auth_enabled:
         return None
 
     if not credentials:
         return None
 
     try:
-        user = validate_jwt(credentials.credentials, settings)
+        user = _validate_token(credentials.credentials, settings)
+        _ensure_session_active(user, settings)
         request.state.user_id = user.user_id
         request.state.user_email = user.email
         request.state.user_groups = user.groups
@@ -346,7 +479,7 @@ async def get_ws_user(
     """
     from starlette.websockets import WebSocket as _WS  # type check only
 
-    if not settings.auth_enabled or not settings.authentik_issuer:
+    if not settings.auth_enabled:
         return None
 
     token = websocket.query_params.get("token")
@@ -355,7 +488,8 @@ async def get_ws_user(
         return None
 
     try:
-        user = validate_jwt(token, settings)
+        user = _validate_token(token, settings)
+        _ensure_session_active(user, settings)
         return user
     except HTTPException as exc:
         logger.warning(f"WebSocket JWT validation failed: {exc.detail}")

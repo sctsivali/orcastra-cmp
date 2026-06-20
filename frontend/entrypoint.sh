@@ -24,6 +24,8 @@ echo "[entrypoint] Applying runtime environment variables..."
 
 replace_env "http://NEXT_PUBLIC_API_URL_PLACEHOLDER" "$NEXT_PUBLIC_API_URL"
 replace_env "http://NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL_PLACEHOLDER" "$NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL"
+# NEXT_PUBLIC_AUTH_MODE is baked at BUILD time (used in === comparisons that get
+# constant-folded), so there is no placeholder to swap here.
 
 # Ensure the API proxy route handler can reach the backend via Docker-internal URL.
 # Default to http://backend:4050 (Docker Compose service name) if not explicitly set.

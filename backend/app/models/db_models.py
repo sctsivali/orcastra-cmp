@@ -632,7 +632,7 @@ class MetricsSnapshot(Base):
     # aggregate cluster metrics
     cpu_usage_percent = Column(
         "cpu_usage_percent", 
-        Integer,  # stored as basis points (0.25% -> 25) for compact storage
+        Integer,  # stored as basis points (0.25% -> 25) for mini storage
         nullable=False, default=0,
         comment="CPU usage in basis points (value / 100 = percent)",
     )
@@ -716,3 +716,112 @@ class ImageUploadSession(Base):
         nullable=False,
     )
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+# ============================================
+# Mini deployment: local cert identities + audit log
+# ============================================
+
+class LocalIdentity(Base):
+    """Local user identity for client-certificate authentication (AUTH_MODE=client-cert).
+
+    Replaces the Authentik user/group directory in the mini single-instance build.
+    Keyed on the SHA-256 fingerprint of the user's client certificate; the role is held
+    here, NOT in the cert (LXD-style trust is binary). Provisioning-method agnostic: a
+    future CSR flow only needs to insert a row with the right fingerprint+role.
+    """
+    __tablename__ = "local_identities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fingerprint = Column(String(64), unique=True, nullable=False, index=True)  # sha256 hex of DER cert
+    common_name = Column(String(255), nullable=False)
+    display_name = Column(String(255), nullable=True)
+    role = Column(String(20), nullable=False, default="tenant")   # admin | partner | tenant
+    status = Column(String(20), nullable=False, default="active", index=True)  # active | revoked | pending
+    serial = Column(String(128), nullable=True)
+    not_after = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(String(255), nullable=True)  # fingerprint/CN of the admin who issued it, or "bootstrap"
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<LocalIdentity(cn={self.common_name}, role={self.role}, status={self.status})>"
+
+
+class AuditLogEntry(Base):
+    """Append-only, hash-chained audit log persisted to Postgres.
+
+    Replaces the OpenSearch audit sink in the mini build. Each row links to its
+    predecessor via row_hash = sha256(prev_hash + canonical(payload)), making in-place
+    edits and reordering tamper-evident. Writes are serialized (see AuditWriter) so the
+    chain head has no race. The app DB role should be restricted to INSERT+SELECT in
+    production so rows cannot be mutated.
+    """
+    __tablename__ = "audit_log"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    event_id = Column(String(64), nullable=False, index=True)  # generate_event_id() -> "evt_<uuid4>"
+    occurred_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    # actor
+    actor_id = Column(String(255), nullable=True, index=True)
+    actor_email = Column(String(255), nullable=True)
+    actor_role = Column(String(50), nullable=True)
+
+    # event classification
+    action = Column(String(120), nullable=False, index=True)
+    category = Column(String(60), nullable=True)
+    severity = Column(String(20), nullable=True, default="info")
+    result = Column(String(20), nullable=True, default="success")
+
+    # target
+    target_type = Column(String(60), nullable=True)
+    target_id = Column(String(255), nullable=True)
+    target_host = Column(String(255), nullable=True)
+    target_project = Column(String(120), nullable=True)
+
+    # request context
+    request_id = Column(String(64), nullable=True)
+    source_ip = Column(String(64), nullable=True)
+
+    # sanitized payload
+    details = Column(JSONB, nullable=True)
+
+    # tamper-evident hash chain
+    prev_hash = Column(String(64), nullable=True)
+    row_hash = Column(String(64), nullable=False)
+
+    __table_args__ = (
+        Index("ix_audit_log_occurred", "occurred_at"),
+        Index("ix_audit_log_actor_action", "actor_id", "action"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AuditLogEntry(action={self.action}, actor={self.actor_id}, result={self.result})>"
+
+
+class AuditLogAnchor(Base):
+    """Single-row high-water mark for the audit chain - a tail-truncation detector.
+
+    The hash chain proves rows were not edited or reordered, but it cannot detect deletion
+    of a contiguous tail (a shorter chain still verifies). /audit-log/verify advances this
+    anchor (max_id, row_count, head_hash) only when the chain is intact; if a later verify
+    sees fewer rows or a lower max id than the anchor, rows were deleted. For a stronger
+    guarantee against a DB-level attacker, ship head_hash to an external append-only sink.
+    """
+    __tablename__ = "audit_log_anchor"
+
+    id = Column(Integer, primary_key=True)  # always 1 (single row)
+    max_id = Column(BigInteger, nullable=False, default=0)
+    row_count = Column(BigInteger, nullable=False, default=0)
+    head_hash = Column(String(64), nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )

@@ -68,7 +68,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     
     # Pre-warm JWKS cache to avoid blocking first auth request (~5s savings)
-    if settings.auth_enabled and settings.authentik_issuer:
+    # Authentik mode only - client-cert mode mints local HS256 tokens (no JWKS).
+    if settings.auth_enabled and settings.auth_mode == "authentik" and settings.authentik_issuer:
         try:
             from app.core.auth import _jwks_client
             await _jwks_client.warm_up(settings)
@@ -82,7 +83,15 @@ async def lifespan(app: FastAPI):
         logger.info("PostgreSQL database initialized")
     except Exception as db_err:
         logger.warning(f"Could not initialize database: {db_err}")
-    
+
+    # Start the append-only audit writer (mini deployment without OpenSearch)
+    if settings.audit_db_enabled:
+        try:
+            from app.services.audit_writer import get_audit_writer
+            await get_audit_writer().start()
+        except Exception as audit_err:
+            logger.warning(f"Could not start audit DB writer: {audit_err}")
+
     # Initialize LXD service and check connections
     try:
         lxd_service = get_lxd_service()
@@ -261,6 +270,13 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     
+    # Stop the audit writer (drains the queue) before closing the DB
+    try:
+        from app.services.audit_writer import get_audit_writer
+        await get_audit_writer().stop()
+    except Exception:
+        pass
+
     # Close database connection
     try:
         from app.core.database import close_db
@@ -268,7 +284,7 @@ async def lifespan(app: FastAPI):
         logger.info("Database connection closed")
     except Exception:
         pass
-    
+
     # Stop background collector
     try:
         from app.services.metrics_collector import stop_background_collector
@@ -286,13 +302,61 @@ async def lifespan(app: FastAPI):
         pass
 
 
+def _validate_auth_config(settings, is_debug: bool) -> None:
+    """Fail-closed startup checks for the auth backend.
+
+    Prevents the dangerous misconfigurations the client-cert mode could otherwise
+    expose (silent anonymous-admin, header trust without a proxy secret). Refuses to
+    start rather than run insecure - mirrors the CORS wildcard refusal above.
+    """
+    valid_modes = {"authentik", "client-cert"}
+    if settings.auth_mode not in valid_modes:
+        raise RuntimeError(
+            f"AUTH_MODE='{settings.auth_mode}' is invalid. Use one of: {sorted(valid_modes)}."
+        )
+
+    # Dev bypass (AUTH_ENABLED=false) is only permissible in local development.
+    if not settings.auth_enabled and not is_debug:
+        raise RuntimeError(
+            "AUTH_ENABLED=false is forbidden when DEBUG=false (it disables all "
+            "authentication). Enable auth for production or set DEBUG=true for local dev."
+        )
+
+    if not settings.auth_enabled:
+        return  # explicit, debug-only no-auth dev mode
+
+    if settings.auth_mode == "client-cert":
+        if not (settings.local_jwt_secret or settings.secret_key):
+            raise RuntimeError(
+                "AUTH_MODE=client-cert requires LOCAL_JWT_SECRET (or SECRET_KEY) to sign "
+                "session tokens. Generate with: openssl rand -hex 32."
+            )
+        if settings.local_jwt_secret and settings.local_jwt_secret == settings.secret_key:
+            logger.warning(
+                "LOCAL_JWT_SECRET equals SECRET_KEY - use a separate secret for key separation."
+            )
+        if not settings.auth_proxy_secret and not is_debug:
+            raise RuntimeError(
+                "AUTH_MODE=client-cert requires AUTH_PROXY_SECRET so the backend can "
+                "distinguish reverse-proxy traffic from direct (spoofable) requests."
+            )
+    elif settings.auth_mode == "authentik":
+        if not settings.authentik_issuer and not is_debug:
+            raise RuntimeError(
+                "AUTH_MODE=authentik requires AUTHENTIK_ISSUER. Refusing to start without "
+                "an identity provider (would otherwise reject all requests)."
+            )
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
-    
+
     # disable API docs in production (when DEBUG=false)
     is_debug = settings.debug if hasattr(settings, 'debug') else False
-    
+
+    _validate_auth_config(settings, is_debug)
+
     app = FastAPI(
         title=settings.api_title,
         version=settings.app_version,
@@ -465,6 +529,20 @@ Ensure your client certificates are properly configured.
         from app.routers.archive import router as archive_router
         app.include_router(archive_router, prefix=settings.api_prefix)
         logger.info("Archive management API enabled")
+
+    # Mini deployment: client-certificate login + local identity management
+    if settings.auth_mode == "client-cert":
+        from app.routers.auth_local import router as auth_local_router
+        from app.routers.local_identities import router as local_identities_router
+        app.include_router(auth_local_router, prefix=settings.api_prefix)
+        app.include_router(local_identities_router, prefix=settings.api_prefix)
+        logger.info("Client-certificate auth enabled (AUTH_MODE=client-cert)")
+
+    # Mini deployment: Postgres-backed audit log viewer (replaces OpenSearch)
+    if settings.audit_db_enabled:
+        from app.routers.audit_log import router as audit_log_router
+        app.include_router(audit_log_router, prefix=settings.api_prefix)
+        logger.info("Postgres audit log API enabled")
     
     # Health check endpoint
     @app.get("/health", tags=["Health"])
