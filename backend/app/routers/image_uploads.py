@@ -11,6 +11,12 @@ Session state lives in Postgres (image_upload_sessions) so it survives across th
 and restarts. Bytes are staged on a writable host-mounted dir, verified (SHA-256, optional) before
 import, and the staging file is removed afterwards. No new public surface: these ride the same
 API-key auth as the raw-proxy and are only reached via OrcaHub.
+
+Durability: the import runs as a detached in-process task, so a worker restart/crash would otherwise
+strand a session at 'importing' forever (the killed task never reaches its own timeout). A heartbeat
+marks a live import; a recovery sweep (startup + periodic) re-drives or fails any 'importing' row whose
+heartbeat has gone stale. The import is idempotent - it short-circuits if the image is already in the
+store - so re-driving is safe and skips the multi-GB re-stream.
 """
 
 import asyncio
@@ -24,7 +30,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
@@ -268,7 +274,8 @@ async def finalize_upload(
 
     row.status = "importing"
     await db.commit()
-    # Import is long-running (multi-GB stream to LXD); run detached so the request returns fast.
+    # Import is long-running (multi-GB stream to LXD); run detached so the request returns fast. The
+    # recovery sweep below re-drives this if the worker dies before it finishes.
     asyncio.create_task(_run_import(session_id))
     return _status_payload(row)
 
@@ -313,12 +320,71 @@ def _sha256_file(path: str) -> str:
 _IMPORT_UPLOAD_TIMEOUT = int(os.getenv("IMAGE_IMPORT_UPLOAD_TIMEOUT", "600"))  # stream the file in
 _IMPORT_WAIT_TIMEOUT = int(os.getenv("IMAGE_IMPORT_WAIT_TIMEOUT", "900"))      # wait for LXD to import (slow ARM ok)
 
+# Durability knobs: a live import bumps updated_at every _HEARTBEAT_INTERVAL_SECONDS; the recovery sweep
+# treats an 'importing' row with no heartbeat for _RECOVERY_STALE_SECONDS as orphaned (its worker died)
+# and re-drives it. A row importing for longer than _RECOVERY_MAX_AGE_SECONDS is failed outright - this
+# bounds a poison file / a permanently-gone cluster and converges with OrcaHub's ~30-min poll deadline.
+_HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("IMAGE_IMPORT_HEARTBEAT_INTERVAL", "30"))
+_RECOVERY_STALE_SECONDS = int(os.getenv("IMAGE_IMPORT_HEARTBEAT_STALE", "180"))
+_RECOVERY_MAX_AGE_SECONDS = int(os.getenv("IMAGE_IMPORT_RECOVERY_MAX_AGE", "2100"))
+_RECOVERY_INTERVAL_SECONDS = int(os.getenv("IMAGE_IMPORT_RECOVERY_INTERVAL", "180"))
 
-def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, description: str) -> Dict[str, Any]:
+
+def _ensure_alias(session, endpoint: str, project_q: str, alias: str, fingerprint: str, description: str) -> None:
+    """Create the private alias, or repoint it if it exists but targets a different fingerprint.
+    Idempotent: a correct existing alias is left as-is, so a re-drive never leaves a stale pointer."""
+    r = session.post(
+        f"{endpoint}/images/aliases{project_q}",
+        json={"name": alias, "target": fingerprint, "description": description},
+        verify=False,
+        timeout=60,
+    )
+    if r.status_code < 400:
+        return
+    if "already exists" not in r.text.lower():
+        raise RuntimeError(f"Failed to create image alias: {r.status_code} {r.text[:200]}")
+    # Alias name is taken -> repoint only if it points somewhere else.
+    g = session.get(f"{endpoint}/images/aliases/{alias}{project_q}", verify=False, timeout=60)
+    if g.status_code < 400 and ((g.json().get("metadata") or {}).get("target") == fingerprint):
+        return
+    session.delete(f"{endpoint}/images/aliases/{alias}{project_q}", verify=False, timeout=60)
+    r2 = session.post(
+        f"{endpoint}/images/aliases{project_q}",
+        json={"name": alias, "target": fingerprint, "description": description},
+        verify=False,
+        timeout=60,
+    )
+    if r2.status_code >= 400 and "already exists" not in r2.text.lower():
+        raise RuntimeError(f"Failed to repoint image alias: {r2.status_code} {r2.text[:200]}")
+
+
+def _resolve_alias_sync(cluster_id: str, alias: str, project: str) -> Optional[Dict[str, Any]]:
+    """Return {fingerprint, size} if the alias already resolves to an image on the cluster, else None."""
+    svc = get_lxd_service()
+    client = svc.connection_manager.get_client(cluster_id)
+    if client is None:
+        return None
+    endpoint = client.api._api_endpoint
+    session = client.api.session
+    project_q = f"?project={project}" if project and project != "default" else ""
+    r = session.get(f"{endpoint}/images/aliases/{alias}{project_q}", verify=False, timeout=60)
+    if r.status_code >= 400:
+        return None
+    target = (r.json().get("metadata") or {}).get("target")
+    if not target:
+        return None
+    g = session.get(f"{endpoint}/images/{target}{project_q}", verify=False, timeout=60)
+    size = (g.json().get("metadata") or {}).get("size") if g.status_code < 400 else None
+    return {"fingerprint": target, "size": size}
+
+
+def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, description: str,
+                     precomputed_fp: Optional[str] = None) -> Dict[str, Any]:
     """Stream the staged unified image into the cluster's LXD image store and alias it.
 
     Mirrors the raw-proxy's low-level session usage so the image lands in the same project as
-    publish-from-instance images (provisioning resolves the alias unchanged).
+    publish-from-instance images (provisioning resolves the alias unchanged). Idempotent: if the image
+    is already present (recovery, or an identical re-upload) the multi-GB stream is skipped.
     """
     svc = get_lxd_service()
     client = svc.connection_manager.get_client(cluster_id)
@@ -329,74 +395,123 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
     session = client.api.session
     project_q = f"?project={project}" if project and project != "default" else ""
 
-    # Stream the file as the image body (requests streams a real file object - no full read).
-    with open(path, "rb") as f:
-        resp = session.post(
-            f"{endpoint}/images{project_q}",
-            data=f,
-            headers={"Content-Type": "application/octet-stream", "X-LXD-public": "false"},
-            verify=False,
-            timeout=_IMPORT_UPLOAD_TIMEOUT,
-        )
-    if resp.status_code >= 400:
-        raise RuntimeError(f"LXD image import failed: {resp.status_code} {resp.text[:300]}")
+    fingerprint: Optional[str] = None
+    size = None
 
-    op = resp.json()
-    op_path = op.get("operation")  # /1.0/operations/<id>
-    if not op_path:
-        raise RuntimeError("LXD did not return an import operation")
-    try:
-        wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=_IMPORT_WAIT_TIMEOUT)
-        wdata = wresp.json().get("metadata", {})
-        if wdata.get("status") != "Success":
-            raise RuntimeError(f"LXD import operation failed: {wdata.get('err') or wdata.get('status')}")
-        fingerprint = (wdata.get("metadata") or {}).get("fingerprint")
-    except Exception:
-        # important: cancel the operation so a timed-out/failed import does not leave a half-created,
-        # alias-less image orphaned in the store (the alias is a separate step we never reach on failure).
-        try:
-            session.delete(f"{endpoint}{op_path[4:]}", verify=False, timeout=60)
-        except Exception:
-            pass
-        raise
+    # Fast-path: image already in the store. A unified image's LXD fingerprint == its file sha256, so a
+    # caller that hashed the staging file can probe by that fingerprint and skip re-streaming.
+    if precomputed_fp:
+        probe = session.get(f"{endpoint}/images/{precomputed_fp}{project_q}", verify=False, timeout=60)
+        if probe.status_code < 400:
+            meta = probe.json().get("metadata") or {}
+            fingerprint = meta.get("fingerprint") or precomputed_fp
+            size = meta.get("size")
+
+    if fingerprint is None:
+        # Stream the file as the image body (requests streams a real file object - no full read).
+        with open(path, "rb") as f:
+            resp = session.post(
+                f"{endpoint}/images{project_q}",
+                data=f,
+                headers={"Content-Type": "application/octet-stream", "X-LXD-public": "false"},
+                verify=False,
+                timeout=_IMPORT_UPLOAD_TIMEOUT,
+            )
+        if resp.status_code >= 400:
+            # A duplicate-fingerprint store error means the image is already there - resolve + continue.
+            if precomputed_fp and "already exists" in resp.text.lower():
+                g = session.get(f"{endpoint}/images/{precomputed_fp}{project_q}", verify=False, timeout=60)
+                if g.status_code < 400:
+                    meta = g.json().get("metadata") or {}
+                    fingerprint = meta.get("fingerprint") or precomputed_fp
+                    size = meta.get("size")
+            if fingerprint is None:
+                raise RuntimeError(f"LXD image import failed: {resp.status_code} {resp.text[:300]}")
+        else:
+            op = resp.json()
+            op_path = op.get("operation")  # /1.0/operations/<id>
+            if not op_path:
+                raise RuntimeError("LXD did not return an import operation")
+            try:
+                wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=_IMPORT_WAIT_TIMEOUT)
+                wbody = wresp.json() or {}
+                # /wait can return an error envelope {"type":"error","error":...,"metadata":null} (ex; a bad
+                # image -> "Unsupported compression") OR a success envelope {"metadata":{"status":"Success"}}.
+                # Surface the real LXD error instead of crashing on a null metadata.
+                if wbody.get("type") == "error" or wbody.get("error"):
+                    raise RuntimeError(f"LXD import failed: {wbody.get('error') or 'unknown error'}")
+                wdata = wbody.get("metadata") or {}
+                if wdata.get("status") != "Success":
+                    raise RuntimeError(f"LXD import operation failed: {wdata.get('err') or wdata.get('status') or 'unknown'}")
+                fingerprint = (wdata.get("metadata") or {}).get("fingerprint")
+            except Exception:
+                # important: cancel the operation so a timed-out/failed import does not leave a half-created,
+                # alias-less image orphaned in the store (the alias is a separate step we never reach on failure).
+                try:
+                    session.delete(f"{endpoint}{op_path[4:]}", verify=False, timeout=60)
+                except Exception:
+                    pass
+                raise
+
     if not fingerprint:
         raise RuntimeError("LXD import did not yield a fingerprint")
 
-    # Create the private alias (idempotent: ignore 'already exists').
-    aresp = session.post(
-        f"{endpoint}/images/aliases{project_q}",
-        json={"name": alias, "target": fingerprint, "description": description},
-        verify=False,
-        timeout=60,
-    )
-    if aresp.status_code >= 400 and "already exists" not in aresp.text.lower():
-        raise RuntimeError(f"Failed to create image alias: {aresp.status_code} {aresp.text[:200]}")
+    # Create the private alias (idempotent: repoints if it pointed elsewhere, ignores 'already exists').
+    _ensure_alias(session, endpoint, project_q, alias, fingerprint, description)
 
-    gresp = session.get(f"{endpoint}/images/{fingerprint}{project_q}", verify=False, timeout=60)
-    size = (gresp.json().get("metadata") or {}).get("size") if gresp.status_code < 400 else None
+    if size is None:
+        gresp = session.get(f"{endpoint}/images/{fingerprint}{project_q}", verify=False, timeout=60)
+        size = (gresp.json().get("metadata") or {}).get("size") if gresp.status_code < 400 else None
     return {"fingerprint": fingerprint, "size": size}
 
 
-async def _run_import(session_id: str) -> None:
+async def _heartbeat(session_id: str) -> None:
+    """Bump updated_at while an import runs so the recovery sweep can tell a live import from a dead one
+    (a killed worker stops beating -> the row goes stale -> recovery re-drives it)."""
+    try:
+        while True:
+            await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
+            async with async_session_maker() as db:
+                await db.execute(
+                    update(ImageUploadSession)
+                    .where(ImageUploadSession.session_id == session_id, ImageUploadSession.status == "importing")
+                    .values(updated_at=_now())
+                )
+                await db.commit()
+    except asyncio.CancelledError:
+        return
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Import heartbeat error session=%s: %s", session_id, e)
+
+
+async def _run_import(session_id: str, recovery: bool = False) -> None:
     loop = asyncio.get_event_loop()
+    hb = asyncio.create_task(_heartbeat(session_id))  # start before the long sha256/stream so the claim->beat gap is zero
+    path = None
     async with async_session_maker() as db:
         row = await _get_session(db, session_id)
         path = row.staging_path
         try:
-            if row.expected_sha256:
+            # The digest doubles as the optional integrity check AND the existence-probe key (a unified
+            # image's LXD fingerprint == its file sha256). Compute it only when needed: a normal first
+            # import with no expected checksum skips it so the happy path adds no full-file read; a
+            # recovery re-drive computes it so it can short-circuit if the image is already in the store.
+            digest = None
+            if (recovery or row.expected_sha256) and path and os.path.isfile(path):
                 digest = await loop.run_in_executor(_executor, _sha256_file, path)
-                if digest.lower() != row.expected_sha256.lower():
-                    row.status = "failed"
-                    row.error = "checksum mismatch - uploaded file is corrupt"
-                    await db.commit()
-                    return
+            if row.expected_sha256 and digest and digest.lower() != row.expected_sha256.lower():
+                row.status = "failed"
+                row.error = "checksum mismatch - uploaded file is corrupt"
+                await db.commit()
+                return
             result = await loop.run_in_executor(
-                _executor, _lxd_import_sync, row.cluster_id, path, row.alias, row.project, f"OrcaHub custom image {row.alias}"
+                _executor, _lxd_import_sync, row.cluster_id, path, row.alias, row.project,
+                f"OrcaHub custom image {row.alias}", digest,
             )
             row.fingerprint = result["fingerprint"]
             row.size = result.get("size")
             row.status = "ready"
-            await db.commit()
+            await db.commit()  # important: commit ready BEFORE deleting staging so a crash here is recoverable
             logger.info("Image upload imported: session=%s alias=%s fp=%s", session_id, row.alias, row.fingerprint)
         except Exception as e:  # noqa: BLE001 - record the failure for the partner
             row.status = "failed"
@@ -404,4 +519,123 @@ async def _run_import(session_id: str) -> None:
             await db.commit()
             logger.error("Image upload import failed: session=%s error=%s", session_id, e)
         finally:
+            hb.cancel()
             _cleanup_file(path)
+
+
+async def _finalize_from_existing(session_id: str) -> None:
+    """Recovery for a stranded row whose staging file is already gone: if the image is on the cluster
+    under the alias the import had effectively succeeded -> ready; otherwise there is nothing to retry
+    -> failed."""
+    loop = asyncio.get_event_loop()
+    async with async_session_maker() as db:
+        row = await _get_session(db, session_id)
+        try:
+            result = await loop.run_in_executor(_executor, _resolve_alias_sync, row.cluster_id, row.alias, row.project)
+            if result and result.get("fingerprint"):
+                row.fingerprint = result["fingerprint"]
+                row.size = result.get("size")
+                row.status = "ready"
+                logger.info("Recovery: alias already on cluster session=%s -> ready", session_id)
+            else:
+                row.status = "failed"
+                row.error = "import incomplete and no staged file remained to retry"
+                logger.warning("Recovery: no staging + alias absent session=%s -> failed", session_id)
+            await db.commit()
+        except Exception as e:  # noqa: BLE001
+            row.status = "failed"
+            row.error = str(e)[:1000]
+            await db.commit()
+            logger.error("Recovery finalize-from-existing failed session=%s error=%s", session_id, e)
+
+
+async def _recover_orphaned_imports() -> None:
+    """Re-drive or fail imports stranded at 'importing' by a worker death/restart (their detached task
+    did not survive). Multi-worker safe: each candidate is claimed with a conditional UPDATE so exactly
+    one of the 4 workers acts on it."""
+    now = _now()
+    stale_before = now - timedelta(seconds=_RECOVERY_STALE_SECONDS)
+    too_old_before = now - timedelta(seconds=_RECOVERY_MAX_AGE_SECONDS)
+
+    async with async_session_maker() as db:
+        res = await db.execute(
+            select(
+                ImageUploadSession.session_id,
+                ImageUploadSession.cluster_id,
+                ImageUploadSession.staging_path,
+                ImageUploadSession.created_at,
+            ).where(
+                ImageUploadSession.status == "importing",
+                ImageUploadSession.updated_at < stale_before,
+            )
+        )
+        candidates = res.all()
+
+    for sid, cluster_id, staging_path, created_at in candidates:
+        # 1) Too old -> terminal fail (bounds poison files / a permanently-gone cluster; converges with
+        #    OrcaHub's deadline). Conditional UPDATE so only one worker fails it.
+        if created_at < too_old_before:
+            async with async_session_maker() as db:
+                claimed = await db.execute(
+                    update(ImageUploadSession)
+                    .where(ImageUploadSession.session_id == sid,
+                           ImageUploadSession.status == "importing",
+                           ImageUploadSession.created_at < too_old_before)
+                    .values(status="failed", error="import did not complete within the recovery window")
+                    .returning(ImageUploadSession.session_id)
+                )
+                won = claimed.scalar_one_or_none()
+                await db.commit()
+            if won:
+                _cleanup_file(staging_path)
+                logger.warning("Recovery: failed stale import session=%s (exceeded recovery window)", sid)
+            continue
+
+        # 2) Cluster offline -> leave for a later sweep (a transient Tailscale blip must not fail it).
+        svc = get_lxd_service()
+        if svc.connection_manager.get_client(cluster_id) is None:
+            logger.info("Recovery: cluster %s offline; deferring import session=%s", cluster_id, sid)
+            continue
+
+        # 3) Claim (atomic: bump updated_at out of the stale window) then re-drive.
+        async with async_session_maker() as db:
+            claimed = await db.execute(
+                update(ImageUploadSession)
+                .where(ImageUploadSession.session_id == sid,
+                       ImageUploadSession.status == "importing",
+                       ImageUploadSession.updated_at < stale_before)
+                .values(updated_at=now)
+                .returning(ImageUploadSession.session_id)
+            )
+            won = claimed.scalar_one_or_none()
+            await db.commit()
+        if not won:
+            continue
+
+        if staging_path and os.path.isfile(staging_path):
+            logger.info("Recovery: re-driving import session=%s", sid)
+            asyncio.create_task(_run_import(sid, recovery=True))
+        else:
+            logger.info("Recovery: no staging file for session=%s; checking cluster for the alias", sid)
+            asyncio.create_task(_finalize_from_existing(sid))
+
+
+async def import_recovery_loop() -> None:
+    """Runs in every worker; the per-row atomic claim makes concurrent sweeps safe. The first pass runs
+    immediately so a restart recovers stranded imports without waiting a full interval."""
+    while True:
+        try:
+            await _recover_orphaned_imports()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Import recovery sweep error: %s", e)
+        await asyncio.sleep(_RECOVERY_INTERVAL_SECONDS)
+
+
+_recovery_task = None
+
+
+def start_import_recovery() -> None:
+    """Start the background import-recovery loop. Call once from the app lifespan (per worker)."""
+    global _recovery_task
+    if _recovery_task is None or _recovery_task.done():
+        _recovery_task = asyncio.create_task(import_recovery_loop())

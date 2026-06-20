@@ -199,6 +199,15 @@ async def lifespan(app: FastAPI):
         logger.info("Metrics retention cleanup loop started (7-day retention, every 6h)")
     except Exception as retention_err:
         logger.warning(f"Could not start metrics retention loop: {retention_err}")
+
+    # Recover custom-image imports stranded at 'importing' by a worker restart/crash (the import is a
+    # detached in-process task; without this a rebuild leaves them stuck until OrcaHub's 30-min deadline).
+    try:
+        from app.routers.image_uploads import start_import_recovery
+        start_import_recovery()
+        logger.info("Custom-image import recovery loop started")
+    except Exception as recovery_err:
+        logger.warning(f"Could not start import recovery loop: {recovery_err}")
     
     # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
     try:
