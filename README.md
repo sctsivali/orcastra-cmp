@@ -1,12 +1,33 @@
-# Orcastra Dashboard
+# Orcastra Dashboard - Mini (orcastra-mini)
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0--RC2-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases/tag/v1.0.0-RC2)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--RC1-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases/tag/v1.0.0-RC1)
 [![Stability](https://img.shields.io/badge/Stability-Release_Candidate-1F6FEB?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases)
 [![License](https://img.shields.io/badge/License-GPLv3-2EA043?style=flat-square)](LICENSE)
 [![Community](https://img.shields.io/badge/Community-Forum-5865F2?style=flat-square)](https://discourse.orca.id)
 [![Docs](https://img.shields.io/badge/Docs-docs.orcastra.io-555555?style=flat-square)](https://docs.orcastra.io)
 
-Control plane for managing LXD/Incus hypervisors across multiple nodes and organizations. Supports multi-cluster orchestration, real-time monitoring, RBAC, and centralized logging.
+A single-host build of the Orcastra Dashboard for managing LXD/Incus hypervisors. It runs the
+control plane and HashiCorp Vault on one machine and authenticates operators with TLS client
+certificates, so there is no separate identity provider and no external log cluster to operate.
+The full 3-tier RBAC, instance lifecycle, console/terminal, and monitoring are all kept.
+
+This branch (`orcastra-mini`) is the mini profile of the same codebase as the mainline
+Orcastra Dashboard. The Authentik and OpenSearch integrations are not removed, only switched
+off behind feature flags, so a site can move to the full multi-host topology later without a
+rewrite.
+
+## Mini vs Full
+
+| Concern | Mini (this branch) | Full (mainline) |
+|---------|-----------------------|-----------------|
+| Hosts | One (Dashboard + Vault) | Up to four (Dashboard, Authentik, Vault, OpenSearch) |
+| Operator auth | TLS client certificate (trust-on-first-use) | Authentik OAuth2/OIDC SSO |
+| Audit log | Append-only, hash-chained PostgreSQL table | Fluent Bit to OpenSearch |
+| Central logging | None (stdout + Postgres audit) | OpenSearch + dashboards |
+| Public surface | One HTTPS port via nginx (mTLS) | Frontend/backend per the full topology |
+| Best for | Edge sites, single-tenant labs, air-gapped or small deployments | Multi-org, multi-region, centralized compliance |
+
+Switch is by `AUTH_MODE`: `client-cert` selects this profile, `authentik` is the full version.
 
 ## Stack
 
@@ -14,349 +35,234 @@ Control plane for managing LXD/Incus hypervisors across multiple nodes and organ
 |-------|-----------|
 | **Backend** | FastAPI, Python 3.11+, SQLAlchemy (async), Alembic |
 | **Frontend** | Next.js 15, React 18, TailwindCSS, Radix UI |
-| **Database** | PostgreSQL 17 |
-| **Cache** | Redis 8 (LRU eviction, Fernet-encrypted values) |
-| **Auth** | Authentik (OAuth2/OIDC), NextAuth.js 5, JWT |
-| **Secrets** | HashiCorp Vault (PKI, cluster certificates) |
-| **Logging** | Fluent Bit -> OpenSearch (centralized log aggregation) |
-| **Deployment** | Docker (dev + prod) |
+| **Database** | PostgreSQL 17 (application state + audit log) |
+| **Cache** | Redis 8 (LRU eviction, session revocation flags) |
+| **Auth** | TLS client certificates, NextAuth.js 5 (Credentials), minted HS256 JWT |
+| **Secrets / PKI** | HashiCorp Vault (issues user and cluster certificates) |
+| **Edge** | nginx (TLS termination + client-cert request, single public port) |
+| **Deployment** | Docker Compose (`docker-compose.mini.yml`) |
 
 ## Features
 
-### Virtualization Management
-- Multi-node LXD/Incus/MicroCloud cluster support
-- Instance lifecycle (create, start, stop, restart, delete VMs and containers)
-- Image management, project isolation, profile templates
-- Storage pool and volume operations
-- Virtual network management with ACLs and IPAM
+### Certificate authentication
+- TLS client-certificate login with trust-on-first-use enrollment, like the LXD/Incus UI.
+- The first certificate enrolls as Admin through a one-time bootstrap token; the Admin then
+  issues Partner and Tenant certificates from the UI.
+- Identity is the SHA-256 fingerprint of the presented certificate, recomputed server-side; the
+  role is read from the local identity store, never from the certificate subject.
+- Certificates are issued by Vault PKI as password-protected `.p12` bundles, downloaded once,
+  with the import password delivered out of band.
+- Revocation and role changes take effect on the next request (Redis-backed), independent of
+  the certificate's own validity window.
 
-### Interactive Console & Terminal
-- Full terminal access over WebSocket (xterm.js)
-- SPICE graphics console for VGA/remote desktop
-- Session management (list, close all, show all)
-- Session recording and download
-- Drag-and-drop file upload to instances
-- Resource info overlay while console is running
+### Virtualization management
+- Multi-node LXD/Incus/MicroCloud support.
+- Instance lifecycle for containers and VMs (create, start, stop, restart, delete).
+- Images, projects, profiles, storage pools and volumes, virtual networks with ACLs and IPAM.
 
-### Security & Access Control
-- OAuth2/OIDC SSO via Authentik
-- JWT token validation on backend
-- 3-tier RBAC (Admin / Partner / Tenant) integrated with Authentik user groups
-- Fine-grained per-resource permissions (create, read, update, delete)
-- Tenant access policies (cluster/project/instance ACLs)
-- Read-only demo mode
-- Rate limiting, encrypted Redis cache, HMAC-SHA256 API keys
+### Interactive console and terminal
+- Terminal over WebSocket (xterm.js) and SPICE graphics console.
+- Per-instance tenant ACL enforced before the upstream connection opens.
+- A live session drops within about a minute if the operator's certificate is revoked.
 
-### Multi-Cluster & Region Management
-- Vault-based cluster registry with dynamic discovery
-- Region/geographic grouping with cluster zone and hardware info
-- Cluster health monitoring and automatic certificate refresh
-- Cluster/facility registration
+### Access control
+- 3-tier RBAC (Admin / Partner / Tenant) with per-resource permissions.
+- Tenant access policies scoped by cluster, project, and instance.
+- No default-grant: an identity that maps to no role is denied, never silently treated as a tenant.
 
-### Monitoring & Observability
-- Real-time CPU, memory, disk, network metrics (WebSocket)
-- Historical metrics stored in PostgreSQL (time-series snapshots)
-- Warnings and alerts from LXD with redirection links
-- Activity audit log with action, result, user tracking
-- Session tracker for terminal and console access
-
-### Logging & Compliance
-- Fluent Bit log collector (sidecar) forwarding to OpenSearch
-- Centralized log storage with index lifecycle management
-- Log archival with ISM policies and snapshot scheduling
-- OpenSearch dashboards for access logs, audit logs, and overview
-
-### Personalization & Branding
-- Per-user theme preference (light/dark) synced to database
-- Custom accent colors, sidebar, logo upload (light + dark)
-- Organization-level branding (app name, tagline, footer)
-- Undo/redo support in personalization settings
-
-### Integration & External APIs
-- API key management (create, revoke, expire)
-- OrcaHub integration for external orchestration
-- Raw HTTP proxy to LXD for third-party tools
-- User mapping between external systems and Orcastra
+### Audit and monitoring
+- Append-only, hash-chained audit log in PostgreSQL: each row links to its predecessor, so
+  in-place edits and reordering are tamper-evident, and `/audit-log/verify` also detects tail
+  truncation against a stored high-water mark.
+- Security-critical events (login, certificate issue/revoke, key operations) are written
+  synchronously and fail closed.
+- Real-time CPU, memory, disk, and network metrics over WebSocket, with history in PostgreSQL.
+- In-app audit viewer with date-range filter and server-side sorting.
 
 ## Prerequisites
 
-- Docker
-- LXD/Incus/MicroCloud nodes with API access enabled
-- Valid client certificates for each node
-- HashiCorp Vault (secrets and certificate management)
-- Authentik (SSO/identity provider)
-- OpenSearch (optional, for centralized logging)
+- Docker with the Compose plugin.
+- LXD/Incus/MicroCloud nodes with the API enabled (to manage real infrastructure).
+- A TLS server certificate for nginx (self-signed is fine for a single host).
+- No Authentik and no OpenSearch are required for this profile.
 
 ## Architecture
 
-The browser loads a Next.js frontend, which proxies API calls to a FastAPI backend. The backend keeps
-state in PostgreSQL, caches LXD responses in Redis, validates tokens against Authentik, and reads
-cluster certificates and secrets from Vault. It drives the managed LXD/Incus clusters over mTLS.
-Container logs are shipped to OpenSearch by a Fluent Bit sidecar that tails Docker stdout, so Redis is
-not part of the logging path.
+The browser connects to nginx over HTTPS and presents its client certificate. nginx terminates
+TLS, requests the certificate (`ssl_verify_client optional_no_ca`, trust-on-first-use), and
+forwards the verified certificate to the Next.js frontend, which exchanges it at the backend for
+a short-lived session token. The backend keeps state in PostgreSQL, caches in Redis, issues
+certificates from Vault, and drives the managed LXD/Incus clusters over mTLS. Only nginx is
+published to the host; the frontend and backend are reachable only on the Docker network.
 
 ```mermaid
 graph TB
-    U["User Browser"]
+    U["Operator Browser<br/>(client certificate)"]
 
-    subgraph dash["Orcastra Dashboard"]
+    subgraph host["Single Host"]
+        NG["nginx<br/>TLS + client-cert"]
         FE["Frontend<br/>Next.js"]
         BE["Backend<br/>FastAPI"]
-        PG[("PostgreSQL")]
-        RD[("Redis cache")]
-        FB["Fluent Bit<br/>sidecar"]
-    end
-
-    subgraph platform["Platform Services"]
-        AK["Authentik<br/>OAuth2 / OIDC"]
+        PG[("PostgreSQL<br/>state + audit log")]
+        RD[("Redis<br/>cache + revocation")]
         VT["Vault<br/>PKI / secrets"]
-        OS["OpenSearch"]
-        OSD["OpenSearch<br/>Dashboards"]
     end
 
     subgraph managed["Managed Infrastructure"]
         LXD["LXD / Incus / MicroCloud<br/>clusters & nodes"]
     end
 
-    U -->|"HTTPS"| FE
-    U -->|"SSO login"| AK
-    FE -->|"/api/v1 proxy"| BE
+    U -->|"HTTPS + client cert"| NG
+    NG -->|"X-SSL-* + proxy secret"| FE
+    NG -->|"WebSocket"| BE
+    FE -->|"/api/v1 proxy (Bearer)"| BE
     BE --> PG
     BE --> RD
-    BE -->|"JWT validation (JWKS)"| AK
-    BE -->|"cluster certs & secrets"| VT
+    BE -->|"issue user/cluster certs"| VT
     BE -->|"REST + WebSocket over mTLS"| LXD
-    BE -.->|"stdout"| FB
-    FE -.->|"stdout"| FB
-    FB -->|"access / audit / app logs"| OS
-    OS --> OSD
 ```
-
-Authentik, Vault, and OpenSearch run as separate hosts in production. See
-[docs.orcastra.io](https://docs.orcastra.io) for the full multi-host (4-VM) deployment topology and
-the detailed logging pipeline.
 
 ### Ports
 
-| Environment | Frontend | Backend |
-|-------------|----------|---------|
-| Development | 2025 | 4050 |
-| Production  | 4321 | 8765 |
+| Service | Port | Exposure |
+|---------|------|----------|
+| nginx (HTTPS) | `6969` | Published to the host (the only public port) |
+| Frontend | `2025` | Docker network only |
+| Backend | `4050` | Docker network only |
+| Vault | `8200` | Loopback only (`127.0.0.1`) |
 
-## API Endpoints
+The single public port is set with `HTTPS_PORT` in `.env`.
+
+## Security model
+
+- nginx overwrites the `X-SSL-*` headers from the real TLS layer, so a browser cannot forge
+  them. The backend accepts those headers only when a shared proxy secret matches and the caller
+  is in the trusted proxy CIDR; the generic API proxy strips them entirely.
+- The backend port is never published to the host, so cert headers cannot be injected directly.
+- The bootstrap of the first admin is one-shot, single-winner, constant-time, and the token is
+  never logged.
+- Minted session tokens are HS256 with a dedicated secret and distinct issuer/audience, so they
+  cannot be confused with full-version (RS256) tokens.
+- Downloaded `.p12` bundles are encrypted with a one-time password and never cached.
+
+## Quick start
+
+```bash
+# 1. Clone and switch to this branch
+git clone -b orcastra-mini https://github.com/sctsivali/orcastra-dashboard.git
+cd orcastra-dashboard
+
+# 2. Configure
+cp .env.example .env
+# In .env set at least: AUTH_MODE=client-cert, HTTPS_PORT=6969,
+#   POSTGRES_PASSWORD, SECRET_KEY, LOCAL_JWT_SECRET, AUTH_PROXY_SECRET,
+#   BOOTSTRAP_ADMIN_TOKEN, NEXTAUTH_URL/NEXT_PUBLIC_API_URL/CORS_ORIGINS (https://<host>:6969)
+
+# 3. Provide the nginx TLS server certificate (self-signed example)
+mkdir -p config/nginx/certs
+openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
+  -keyout config/nginx/certs/server.key -out config/nginx/certs/server.crt \
+  -subj "/CN=<host-or-ip>" -addext "subjectAltName=IP:<host-ip>"
+
+# 4. Build and start the mini stack
+make up-mini
+
+# 5. Initialise and unseal Vault, then enable PKI (one time)
+#    See the operator runbook for the exact init/unseal and pki_int steps.
+
+# 6. Enroll the first admin with the bootstrap token, then issue Partner/Tenant
+#    certificates from the Administration menu and import the .p12 into the browser.
+
+# Open https://<host>:6969 and sign in with the imported certificate.
+```
+
+Vault uses manual unseal by design; it must be unsealed after every restart.
+
+## Make commands
+
+```bash
+make up-mini       # build and start the mini (client-cert) stack
+make down-mini     # stop the mini stack
+make logs-mini     # tail mini stack logs
+make ps-mini       # list mini stack containers
+make config-mini   # validate docker-compose.mini.yml
+```
+
+The general targets (`make build`, `make version`, and so on) also apply; the `-mini` targets
+simply point at `docker-compose.mini.yml`.
+
+## Configuration
+
+Copy `.env.example` to `.env`. The settings specific to this profile:
+
+```bash
+# profile
+AUTH_MODE=client-cert            # selects certificate auth (authentik = full version)
+HTTPS_PORT=6969                  # the single public HTTPS port (nginx)
+
+# session tokens (client-cert mode)
+LOCAL_JWT_SECRET=                # openssl rand -hex 32 (must differ from SECRET_KEY)
+LOCAL_JWT_TTL_SECONDS=3600       # access-token lifetime; revocation is per-request
+
+# trust boundary (nginx -> backend)
+AUTH_PROXY_SECRET=               # shared secret nginx injects; backend requires it
+TRUSTED_AUTH_PROXY_CIDRS=        # optional: restrict cert-header acceptance to the proxy peer
+
+# first-admin enrollment (trust-on-first-use)
+BOOTSTRAP_ADMIN_TOKEN=           # one-time token; blank it again after the first admin exists
+
+# audit
+AUDIT_DB_ENABLED=true            # persist the hash-chained audit log to PostgreSQL
+
+# core (shared with the full version)
+POSTGRES_PASSWORD=               # database password
+SECRET_KEY=                      # openssl rand -hex 32
+VAULT_ENABLED=true
+VAULT_ADDR=http://vault:8200
+VAULT_TOKEN=                      # Vault token for PKI issuance
+NEXTAUTH_URL=https://<host>:6969
+NEXT_PUBLIC_API_URL=https://<host>:6969
+CORS_ORIGINS=https://<host>:6969
+```
+
+`AUTHENTIK_*` and `OPENSEARCH_*` are left unset in this profile; the related code paths stay
+disabled behind their feature flags.
+
+## Switching to the full version
+
+Set `AUTH_MODE=authentik`, provide the `AUTHENTIK_*` settings, optionally enable the OpenSearch
+archive, and deploy with the mainline `docker-compose.yml`. The data model is shared, so the same
+database carries over. See [docs.orcastra.io](https://docs.orcastra.io) for the multi-host topology.
+
+## API endpoints
 
 <details>
 <summary>Show API endpoints</summary>
 
-Most endpoints are prefixed with `/api/v1`; the health check is served at the root:
+Most endpoints are prefixed with `/api/v1`; the health check is served at the root. Endpoints
+specific to this profile:
 
-### Core Operations
-- `/instances`, `/vms` – Container and VM lifecycle management
-- `/images` – Image import, list, delete
-- `/projects` – Project isolation and management
-- `/profiles` – Instance configuration templates
-- `/networks` – Virtual network management
-- `/network-acls` – Network access control rules
-- `/storage/pools` – Storage pool provisioning
-- `/storage/volumes` – Volume operations and snapshots
-- `/nodes` – Node health and resources
-- `/clusters` – Cluster registration and discovery
-- `/cluster-members` – MicroCloud cluster members
-- `/certificates` – Cluster certificate lifecycle
+- `/auth/cert-login`, `/auth/cert-bootstrap` - certificate exchange and first-admin enrollment
+- `/local-identities` - admin certificate issuance, role change, revoke (mini identity store)
+- `/audit-log`, `/audit-log/verify` - audit viewer and chain integrity check
 
-### Interactive Access
-- `/terminal` – WebSocket terminal sessions (create, list, close, history)
-- `/console` – SPICE graphics console (create, capabilities, audit logs)
-- `/file-transfer` – Upload files to instances
+Shared with the full version: `/instances`, `/vms`, `/images`, `/projects`, `/profiles`,
+`/networks`, `/network-acls`, `/storage/pools`, `/storage/volumes`, `/nodes`, `/clusters`,
+`/certificates`, `/terminal`, `/console`, `/file-transfer`, `/monitoring`, `/regions`,
+`/warnings`, `/operations`, `/server`, `/tags`, `/my-keys`, `/user-preferences`,
+`/organizations`, `/tenant-access`, `/system`, `/ipam`.
 
-### Monitoring & Observability
-- `/monitoring` – Real-time metrics, history, WebSocket live feed
-- `/regions` – Geographic region and cluster grouping
-- `/warnings` – Cluster warnings and alerts
-- `/operations` – Async LXD operation polling
-- `/server` – Server metadata and resources
-- `/archive` – OpenSearch log archive management
-- `/tags` – Instance tagging
-
-### User & Access Management
-- `/identities`, `/groups` – LXD identity and group management
-- `/my-keys` – Personal TLS key generation
-- `/user-preferences` – Theme, branding, personalization
-- `/organizations` – Multi-tenant organization management
-- `/user-groups` – Admin user group assignment
-- `/tenant-access` – ACL policies and rules
-
-### Integration
-- `/integrations` – API key management, OrcaHub sync, and raw LXD proxy for external apps
-
-### System
-- `/system` – System info and cache control
-- `/ipam` – IP address management
-- `/health` – Health check (served at root, not under `/api/v1`)
-
-See `/docs` for interactive Swagger API documentation.
-
-</details>
-
-## Quick Start
-
-<details>
-<summary>Show quick start steps</summary>
-
-```bash
-# clone and configure
-git clone https://github.com/sctsivali/orcastra-dashboard.git
-cd orcastra-dashboard
-cp .env.example .env
-# edit .env with your values (vault, authentik, database, etc.)
-
-# build and start
-make build
-make up
-
-# check status
-make status
-make health
-```
-
-</details>
-
-## Make Commands
-
-<details>
-<summary>Show make commands</summary>
-
-```bash
-# build
-make build              # build all Docker images
-make build-nc           # build without cache
-make build-backend      # build backend only
-make build-frontend     # build frontend only
-
-# lifecycle
-make up                 # start all services
-make up-build           # start all services, building first
-make down               # stop all services
-make restart            # restart all services
-make restart-backend    # restart backend only
-make update             # pull latest images and restart
-
-# diagnostics
-make logs               # view all logs
-make logs-backend       # view backend logs
-make logs-frontend      # view frontend logs
-make logs-redis         # view redis logs
-make logs-last          # last 100 lines from all services
-make ps                 # list running containers
-make status             # show service status
-make health             # check service health
-
-# development
-make dev-backend        # run backend locally
-make dev-frontend       # run frontend locally
-make shell-backend      # exec into backend container
-make shell-frontend     # exec into frontend container
-
-# quality
-make lint-backend       # pylint app/
-make lint-frontend      # next lint
-make test-backend       # run backend pytest in container
-make test-frontend      # run frontend tests in container
-
-# version management
-make version            # show current version
-make version-set VERSION=x.x.x  # set and sync version
-make version-sync       # sync version across all files
-make version-check      # check version consistency
-
-# data
-make backup-redis       # snapshot Redis to ./backup-files/redis
-make restore-redis BACKUP_FILE=path  # restore Redis from a dump.rdb
-make redis-cli          # open redis CLI
-
-# vault PKI
-make vault-status       # check Vault PKI certificate status
-make vault-renew        # renew Vault intermediate CA (interactive)
-
-# deployment
-make deploy-package     # create tar.gz for on-prem deployment
-make config             # validate docker-compose configuration
-make env-check          # verify .env file exists
-```
-
-</details>
-
-## Configuration
-
-<details>
-<summary>Show configuration example</summary>
-
-Copy `.env.example` to `.env` and configure:
-
-```bash
-# version
-APP_VERSION=xxx
-
-# ports
-FRONTEND_PORT=xxx      # dev: 2025, prod: 4321
-BACKEND_PORT=xxx       # dev: 4050, prod: 8765
-
-# database
-POSTGRES_USER=orcastra
-POSTGRES_PASSWORD=your-secure-password
-DATABASE_URL=postgresql+asyncpg://user:pass@postgres:5432/orcastra_dashboard
-
-# vault
-VAULT_ENABLED=true
-VAULT_ADDR=http://vault:8200
-VAULT_TOKEN=your-vault-token
-
-# redis
-REDIS_ENABLED=true
-REDIS_ENCRYPTION_ENABLED=true
-REDIS_ENCRYPTION_KEY=your-fernet-key       # python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-
-# authentik (OAuth2/OIDC)
-AUTHENTIK_ISSUER=https://auth.example.com/application/o/orcastra-dashboard/
-AUTHENTIK_CLIENT_ID=your-client-id
-AUTHENTIK_CLIENT_SECRET=your-client-secret
-AUTHENTIK_API_URL=https://auth.example.com
-AUTHENTIK_API_TOKEN=your-admin-token
-
-# nextauth
-NEXTAUTH_URL=http://your-server:2025
-NEXTAUTH_SECRET=your-nextauth-secret       # openssl rand -base64 32
-
-# opensearch (logging)
-OPENSEARCH_HOST=your-opensearch-host
-OPENSEARCH_PORT=9200
-OPENSEARCH_USER=fluentbit
-OPENSEARCH_PASSWORD=your-opensearch-password
-
-# security
-CORS_ORIGINS=http://your-server:2025
-RATE_LIMIT_ENABLED=true
-FORWARD_CLIENT_IP_HEADERS=true
-TRUSTED_CLIENT_IP_HEADERS=cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-forwarded-for,x-real-ip
-ALLOW_PRIVATE_FORWARDED_IPS=false
-SECRET_KEY=your-secret-key                 # openssl rand -hex 32
-READ_ONLY_MODE=false
-```
+See `/docs` for interactive Swagger documentation.
 
 </details>
 
 ## Versioning
 
-Project follows [Semantic Versioning](https://semver.org/):
+The project follows [Semantic Versioning](https://semver.org/). `RC` marks a release candidate
+for testing before a stable release. The version is centralized in `APP_VERSION` (`.env`) and the
+frontend `package.json`, and propagates to all components at build time.
 
-- **MAJOR** (x.0.0) – Breaking changes incompatible with previous versions
-- **MINOR** (0.x.0) – New features with backward compatibility
-- **PATCH** (0.0.x) – Bug fixes without new features
-- **RC** (x.x.x-RCn) – Release candidate for testing before stable release
-
-Version is centralized in `.env` (`APP_VERSION`) and propagated to all components via `make version-sync`.
-
-## Key Resources
+## Key resources
 
 - License: GNU GPL v3 ([LICENSE](LICENSE))
 - Contribution workflow: [CONTRIBUTING.md](CONTRIBUTING.md)
