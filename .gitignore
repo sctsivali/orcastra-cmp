@@ -60,8 +60,7 @@ certs/node2/*.key
 
 # Misc
 infrastructure/
-*.bak
-*.bak-*
+*.bak*
 *.gpubak
 *.orig
 *.zip
