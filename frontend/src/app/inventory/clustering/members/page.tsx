@@ -18,13 +18,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table,
   TableBody,
@@ -128,24 +122,19 @@ function ClusterMembersContent() {
       <div className="mb-6">
         <div className="flex items-center gap-4 mb-4">
           <label className="text-sm font-medium">Select MicroCloud Node:</label>
-          <Select value={node} onValueChange={handleNodeChange}>
-            <SelectTrigger className="w-[300px]">
-              <SelectValue placeholder="Select a MicroCloud node" />
-            </SelectTrigger>
-            <SelectContent>
-              {clusters.length === 0 ? (
-                <SelectItem value="none" disabled>
-                  No MicroCloud clusters available
-                </SelectItem>
-              ) : (
-                clusters.map((cluster: any) => (
-                  <SelectItem key={cluster.cluster_id} value={cluster.cluster_id}>
-                    {cluster.display_name || cluster.cluster_id} ({formatHypervisorType(cluster.cluster_type)})
-                  </SelectItem>
-                ))
-              )}
-            </SelectContent>
-          </Select>
+          <SearchableSelect
+            value={node}
+            onValueChange={handleNodeChange}
+            className="w-[300px]"
+            placeholder="Select a MicroCloud node"
+            searchPlaceholder="Search clusters..."
+            emptyText="No MicroCloud clusters available"
+            options={clusters.map((cluster: any) => ({
+              value: cluster.cluster_id,
+              label: cluster.display_name || cluster.cluster_id,
+              badge: formatHypervisorType(cluster.cluster_type),
+            }))}
+          />
         </div>
         <div>
           <h1 className="text-3xl font-bold">Cluster Members</h1>

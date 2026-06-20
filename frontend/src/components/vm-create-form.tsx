@@ -18,6 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -267,26 +268,18 @@ export function VMCreateForm() {
                 {nodesLoading ? (
                   <Skeleton className="h-10 w-full" />
                 ) : (
-                  <Select
+                  <SearchableSelect
                     value={selectedHost}
                     onValueChange={(value) => {
                       setValue("host", value);
                       setValue("image", ""); // Reset image when host changes
                     }}
-                  >
-                    <SelectTrigger
-                      className={errors.host ? "border-red-500" : ""}
-                    >
-                      <SelectValue placeholder="Select a host" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {nodeNames?.map((name) => (
-                        <SelectItem key={name} value={name}>
-                          {name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    className={errors.host ? "border-red-500" : ""}
+                    placeholder="Select a host"
+                    searchPlaceholder="Search hosts..."
+                    emptyText="No hosts available"
+                    options={(nodeNames ?? []).map((name) => ({ value: name, label: name }))}
+                  />
                 )}
                 {errors.host && (
                   <p className="text-sm text-red-500">{errors.host.message}</p>

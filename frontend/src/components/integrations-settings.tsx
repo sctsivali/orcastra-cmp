@@ -53,9 +53,10 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import { cn, formatHypervisorType } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { formatClusterPermissionLabel, getClusterAccessDisplay } from "@/lib/integration-display";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ClusterAccessSelector } from "@/components/cluster-access-selector";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
@@ -116,8 +117,6 @@ function CreateAPIKeyDialog({
         : [...prev, clusterId]
     );
   };
-
-  const safeClusterList = Array.isArray(clusters) ? clusters : [];
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
@@ -202,62 +201,11 @@ function CreateAPIKeyDialog({
               </Select>
             </div>
 
-            <div className="space-y-2">
-              <Label>Cluster Access</Label>
-              <div className="h-48 border rounded-md p-3 overflow-y-auto">
-                {safeClusterList.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-4">
-                    No clusters available.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    {safeClusterList.map((cluster) => {
-                      if (!cluster || typeof cluster.id !== 'string') return null;
-                      const clusterId = String(cluster.id);
-                      const clusterName = String(cluster.name || '');
-                      const clusterEndpoint = String(cluster.endpoint || '');
-                      const clusterType = formatHypervisorType(cluster.server_type);
-                      const isSelected = selectedClusterIds.includes(clusterId);
-                      
-                      return (
-                        <label
-                          key={clusterId}
-                          htmlFor={`cluster-${clusterId}`}
-                          className={cn(
-                            "flex items-center justify-between p-2 rounded-md cursor-pointer transition-colors",
-                            isSelected
-                              ? "bg-primary/10 border border-primary"
-                              : "bg-muted/50 hover:bg-muted"
-                          )}
-                        >
-                          <div className="flex items-center gap-3">
-                            <input
-                              type="checkbox"
-                              id={`cluster-${clusterId}`}
-                              checked={isSelected}
-                              onChange={() => toggleCluster(clusterId)}
-                              className="h-4 w-4 rounded border-primary text-primary focus:ring-primary"
-                            />
-                            <div>
-                              <p className="font-medium text-sm">{clusterName}</p>
-                              <p className="text-xs text-muted-foreground font-mono">
-                                {clusterEndpoint}
-                              </p>
-                            </div>
-                          </div>
-                          <Badge variant="outline" className="text-xs">
-                            {clusterType}
-                          </Badge>
-                        </label>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Selected: {selectedClusterIds.length} cluster(s)
-              </p>
-            </div>
+            <ClusterAccessSelector
+              clusters={clusters}
+              selectedClusterIds={selectedClusterIds}
+              onToggle={toggleCluster}
+            />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

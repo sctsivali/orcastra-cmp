@@ -17,6 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCreateProject, useNodeNames } from "@/hooks/use-lxd";
@@ -276,34 +277,16 @@ export function ProjectCreateForm() {
               {/* Cluster Selection */}
               <div className="space-y-2">
                 <Label>Target Cluster</Label>
-                <Select
+                <SearchableSelect
                   value={selectedHost}
                   onValueChange={(value) => setValue("host", value)}
                   disabled={nodesLoading}
-                >
-                  <SelectTrigger
-                    className={errors.host ? "border-red-500" : ""}
-                  >
-                    <SelectValue placeholder={nodesLoading ? "Loading clusters..." : "Select a cluster"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {nodesLoading ? (
-                      <div className="p-2 text-sm text-muted-foreground text-center">
-                        Loading...
-                      </div>
-                    ) : nodeNames && nodeNames.length > 0 ? (
-                      nodeNames.map((name) => (
-                        <SelectItem key={name} value={name}>
-                          {name}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <div className="p-2 text-sm text-muted-foreground text-center">
-                        No clusters available
-                      </div>
-                    )}
-                  </SelectContent>
-                </Select>
+                  className={errors.host ? "border-red-500" : ""}
+                  placeholder={nodesLoading ? "Loading clusters..." : "Select a cluster"}
+                  searchPlaceholder="Search clusters..."
+                  emptyText="No clusters available"
+                  options={(nodeNames ?? []).map((name) => ({ value: name, label: name }))}
+                />
                 {errors.host && (
                   <p className="text-sm text-red-500">{errors.host.message}</p>
                 )}

@@ -14,6 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -194,7 +195,7 @@ function RuleEditor({
           <div className="grid grid-cols-3 gap-2">
             <div className="space-y-1">
               <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Cluster</Label>
-              <Select
+              <SearchableSelect
                 value={rule.cluster_id}
                 onValueChange={(v) => onUpdate(index, {
                   ...rule,
@@ -202,19 +203,17 @@ function RuleEditor({
                   project_name: "*",
                   instance_name: "*",
                 })}
-              >
-                <SelectTrigger className="h-7 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="*">* (All Clusters)</SelectItem>
-                  {clusters.map((c) => (
-                    <SelectItem key={c.cluster_id} value={c.cluster_id}>
-                      {c.display_name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                className="h-7 text-xs"
+                searchPlaceholder="Search clusters..."
+                options={[
+                  { value: "*", label: "* (All Clusters)" },
+                  ...clusters.map((c) => ({
+                    value: c.cluster_id,
+                    label: c.display_name,
+                    sublabel: c.endpoint,
+                  })),
+                ]}
+              />
             </div>
             <div className="space-y-1">
               <Label className="text-[10px] uppercase tracking-wider text-muted-foreground">Project</Label>
