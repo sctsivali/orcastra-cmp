@@ -20,14 +20,13 @@ from app.models.schemas import (
 )
 from app.services.lxd_service import (
     LXDService,
-    LXDConnectionError,
-    LXDOperationError,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, verify_tenant_permission
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
+from app.routers._lxd_action_errors import lxd_action_http_error, lxd_http_error
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -104,12 +103,8 @@ async def list_instances(
         logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
         
         return response
-    except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Error listing instances: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, what="list instances", host=host)
 
 
 @router.get(
@@ -132,12 +127,10 @@ async def get_instance(
         # enforce tenant ACL on individual instance access
         verify_tenant_permission(host, vm.project or "default", vm.name, "view")
         return vm
-    except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise  # preserve 404 (not found) / 403 (ACL) - never remap to 500
     except Exception as e:
-        logger.error(f"Error getting instance {instance_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, what=f"get instance '{instance_name}'", host=host)
 
 
 @router.post(
@@ -183,37 +176,8 @@ async def create_instance(
         )
         
         return result
-    except LXDOperationError as e:
-        logger.error(f"LXD operation error: {e}")
-        
-        # Log activity: instance creation failure
-        activity_logger.log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=request.name,
-            target_host=request.host,
-            result="failure",
-            error_code="LXD_OPERATION_ERROR",
-            error_message=str(e),
-            details={"image": request.image, "instance_type": request.instance_type}
-        )
-        
-        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating instance: {e}")
-        
-        # Log activity: instance creation failure
-        activity_logger.log_activity(
-            action="instance.create",
-            target_type="instance",
-            target_id=request.name,
-            target_host=request.host,
-            result="failure",
-            error_code="UNEXPECTED_ERROR",
-            error_message=str(e)
-        )
-        
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_action_http_error(e, "instance.create", request.name, request.host)
 
 
 @router.post(
@@ -256,19 +220,7 @@ async def start_instance(
             new_status=vm.status
         )
     except Exception as e:
-        logger.error(f"Error starting instance {instance_name}: {e}")
-        
-        # Log activity: instance start failure
-        activity_logger.log_activity(
-            action="instance.start",
-            target_type="instance",
-            target_id=instance_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_action_http_error(e, "instance.start", instance_name, request.host)
 
 
 @router.post(
@@ -313,19 +265,7 @@ async def stop_instance(
             new_status=VMStatus.STOPPED  # Stop always results in Stopped
         )
     except Exception as e:
-        logger.error(f"Error stopping instance {instance_name}: {e}")
-        
-        # Log activity: instance stop failure
-        activity_logger.log_activity(
-            action="instance.stop",
-            target_type="instance",
-            target_id=instance_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_action_http_error(e, "instance.stop", instance_name, request.host)
 
 
 @router.post(
@@ -370,19 +310,7 @@ async def restart_instance(
             new_status=VMStatus.RUNNING  # Restart ends in Running
         )
     except Exception as e:
-        logger.error(f"Error restarting instance {instance_name}: {e}")
-        
-        # Log activity: instance restart failure
-        activity_logger.log_activity(
-            action="instance.restart",
-            target_type="instance",
-            target_id=instance_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_action_http_error(e, "instance.restart", instance_name, request.host)
 
 
 @router.delete(
@@ -421,19 +349,7 @@ async def delete_instance(
             action="delete",
         )
     except Exception as e:
-        logger.error(f"Error deleting instance {instance_name}: {e}")
-        
-        # Log activity: instance deletion failure
-        activity_logger.log_activity(
-            action="instance.delete",
-            target_type="instance",
-            target_id=instance_name,
-            target_host=host,
-            result="failure",
-            error_message=str(e)
-        )
-        
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_action_http_error(e, "instance.delete", instance_name, host)
 
 
 @router.get(
@@ -454,6 +370,7 @@ async def get_instance_metrics(
         if not metrics:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
         return metrics
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting metrics for {instance_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, what=f"get metrics for '{instance_name}'", host=host)

@@ -20,8 +20,6 @@ from app.models.schemas import (
 )
 from app.services.lxd_service import (
     LXDService,
-    LXDConnectionError,
-    LXDOperationError,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -34,6 +32,7 @@ from app.core.org_scope import (
 )
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
+from app.routers._lxd_action_errors import lxd_action_http_error, lxd_http_error
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -43,6 +42,10 @@ router = APIRouter(
     tags=["Virtual Machines"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
+
+
+def _vm_action_http_error(exc: Exception, action: str, vm_name: str, host: str) -> HTTPException:
+    return lxd_action_http_error(exc, action, vm_name, host, target_type="vm")
 
 
 @router.get(
@@ -155,12 +158,8 @@ async def list_vms(
         
         return response
         
-    except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
-        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Error listing VMs: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, what="list VMs", host=host)
 
 
 @router.get(
@@ -195,11 +194,8 @@ async def get_vm(
         
     except HTTPException:
         raise
-    except LXDOperationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error getting VM {vm_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, what=f"get VM '{vm_name}'", host=host)
 
 
 @router.post(
@@ -264,44 +260,8 @@ async def create_vm(
             vm=vm,
         )
         
-    except LXDOperationError as e:
-        # Log activity: VM creation failure
-        activity_logger.log_activity(
-            action="vm.create",
-            target_type="vm",
-            target_id=request.name,
-            target_host=request.host,
-            result="failure",
-            error_code="LXD_OPERATION_ERROR",
-            error_message=str(e),
-            details={"image": request.image, "instance_type": request.instance_type}
-        )
-        raise HTTPException(status_code=400, detail=str(e))
-    except LXDConnectionError as e:
-        # Log activity: VM creation failure
-        activity_logger.log_activity(
-            action="vm.create",
-            target_type="vm",
-            target_id=request.name,
-            target_host=request.host,
-            result="failure",
-            error_code="LXD_CONNECTION_ERROR",
-            error_message=str(e)
-        )
-        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating VM: {e}")
-        # Log activity: VM creation failure
-        activity_logger.log_activity(
-            action="vm.create",
-            target_type="vm",
-            target_id=request.name,
-            target_host=request.host,
-            result="failure",
-            error_code="UNEXPECTED_ERROR",
-            error_message=str(e)
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_action_http_error(e, "vm.create", request.name, request.host, target_type="vm")
 
 
 @router.post(
@@ -349,31 +309,8 @@ async def start_vm(
             new_status=vm.status,
         )
         
-    except LXDOperationError as e:
-        # Log activity: VM start failure
-        activity_logger.log_activity(
-            action="vm.start",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error starting VM {vm_name}: {e}")
-        # Log activity: VM start failure
-        activity_logger.log_activity(
-            action="vm.start",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _vm_action_http_error(e, "vm.start", vm_name, request.host)
 
 
 @router.post(
@@ -423,31 +360,8 @@ async def stop_vm(
             new_status=vm.status,
         )
         
-    except LXDOperationError as e:
-        # Log activity: VM stop failure
-        activity_logger.log_activity(
-            action="vm.stop",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error stopping VM {vm_name}: {e}")
-        # Log activity: VM stop failure
-        activity_logger.log_activity(
-            action="vm.stop",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _vm_action_http_error(e, "vm.stop", vm_name, request.host)
 
 
 @router.post(
@@ -497,31 +411,8 @@ async def restart_vm(
             new_status=vm.status,
         )
         
-    except LXDOperationError as e:
-        # Log activity: VM restart failure
-        activity_logger.log_activity(
-            action="vm.restart",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error restarting VM {vm_name}: {e}")
-        # Log activity: VM restart failure
-        activity_logger.log_activity(
-            action="vm.restart",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=request.host,
-            result="failure",
-            error_message=str(e)
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _vm_action_http_error(e, "vm.restart", vm_name, request.host)
 
 
 @router.delete(
@@ -572,31 +463,8 @@ async def delete_vm(
             action="delete",
         )
         
-    except LXDOperationError as e:
-        # Log activity: VM delete failure
-        activity_logger.log_activity(
-            action="vm.delete",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=host,
-            result="failure",
-            error_message=str(e)
-        )
-        if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error deleting VM {vm_name}: {e}")
-        # Log activity: VM delete failure
-        activity_logger.log_activity(
-            action="vm.delete",
-            target_type="vm",
-            target_id=vm_name,
-            target_host=host,
-            result="failure",
-            error_message=str(e)
-        )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _vm_action_http_error(e, "vm.delete", vm_name, host)
 
 
 @router.get(
@@ -627,10 +495,5 @@ async def get_instance_metrics(
         
         return metrics
         
-    except LXDOperationError as e:
-        if "not found" in str(e).lower():
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error getting metrics for {instance_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, what=f"get metrics for '{instance_name}'", host=host)

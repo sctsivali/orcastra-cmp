@@ -412,17 +412,28 @@ class InstanceManager:
         project: Optional[str] = None,
     ) -> VMInfo:
         """Start a VM (searches all projects)."""
+        return await asyncio.to_thread(
+            self._start_vm_blocking, name, host, force, project
+        )
+
+    def _start_vm_blocking(
+        self,
+        name: str,
+        host: str,
+        force: bool,
+        project: Optional[str],
+    ) -> VMInfo:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             if instance.status == "Running":
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
             elif instance.status == "Frozen":
@@ -435,37 +446,52 @@ class InstanceManager:
                 instance.sync()
                 logger.info(f"Started VM {name} on {host} (project: {project_name})")
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            
+
             if vm_info.config is None:
                 vm_info.config = {}
             vm_info.config['project'] = project_name
-            
+
             return vm_info
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to start VM: {str(e)}")
     
     @audit_operation("lxd.instance.stop", "instance")
     async def stop_vm(
-        self, 
-        name: str, 
-        host: str, 
+        self,
+        name: str,
+        host: str,
         force: bool = False,
         timeout: int = 30,
         project: Optional[str] = None,
     ) -> VMInfo:
         """Stop a VM (searches all projects)."""
+        # note: pylxd is blocking; run off the event loop so a slow node does not
+        # stall every other request. asyncio.to_thread copies the contextvars, so
+        # org-scope guards in _get_client_with_reconnect still apply.
+        return await asyncio.to_thread(
+            self._stop_vm_blocking, name, host, force, timeout, project
+        )
+
+    def _stop_vm_blocking(
+        self,
+        name: str,
+        host: str,
+        force: bool,
+        timeout: int,
+        project: Optional[str],
+    ) -> VMInfo:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             if instance.status == "Stopped":
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
             else:
@@ -473,77 +499,100 @@ class InstanceManager:
                 instance.sync()
                 logger.info(f"Stopped VM {name} on {host} (project: {project_name})")
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            
+
             if vm_info.config is None:
                 vm_info.config = {}
             vm_info.config['project'] = project_name
-            
+
             return vm_info
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to stop VM: {str(e)}")
     
     @audit_operation("lxd.instance.restart", "instance")
     async def restart_vm(
-        self, 
-        name: str, 
-        host: str, 
+        self,
+        name: str,
+        host: str,
         force: bool = False,
         timeout: int = 30,
         project: Optional[str] = None,
     ) -> VMInfo:
         """Restart a VM (searches all projects)."""
+        return await asyncio.to_thread(
+            self._restart_vm_blocking, name, host, force, timeout, project
+        )
+
+    def _restart_vm_blocking(
+        self,
+        name: str,
+        host: str,
+        force: bool,
+        timeout: int,
+        project: Optional[str],
+    ) -> VMInfo:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             if instance.status == "Frozen":
                 raise LXDOperationError(
                     f"Instance {name} is frozen by billing policy and cannot be restarted. "
                     f"Please reactivate the subscription through the billing portal."
                 )
-            
+
             instance.restart(force=force, wait=True, timeout=timeout)
             instance.sync()
-            
+
             logger.info(f"Restarted VM {name} on {host} (project: {project_name})")
             vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            
+
             if vm_info.config is None:
                 vm_info.config = {}
             vm_info.config['project'] = project_name
-            
+
             return vm_info
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to restart VM: {str(e)}")
-    
+
     @audit_operation("lxd.instance.delete", "instance")
     async def delete_vm(
-        self, 
-        name: str, 
-        host: str, 
+        self,
+        name: str,
+        host: str,
         force: bool = False,
         project: Optional[str] = None,
     ) -> bool:
         """Delete a VM (searches all projects)."""
+        return await asyncio.to_thread(
+            self._delete_vm_blocking, name, host, force, project
+        )
+
+    def _delete_vm_blocking(
+        self,
+        name: str,
+        host: str,
+        force: bool,
+        project: Optional[str],
+    ) -> bool:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             # Stop if running and force is True
             if instance.status == "Running":
                 if force:
@@ -552,12 +601,12 @@ class InstanceManager:
                     raise LXDOperationError(
                         f"VM {name} is running. Stop it first or use force=true"
                     )
-            
+
             instance.delete(wait=True)
-            
+
             logger.info(f"Deleted VM {name} from {host} (project: {project_name})")
             return True
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to delete VM: {str(e)}")
     

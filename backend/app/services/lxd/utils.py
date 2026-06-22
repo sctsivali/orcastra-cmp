@@ -6,9 +6,11 @@ Includes helpers for parsing status, extracting IPs, and finding instances.
 import logging
 from typing import List, Tuple, Optional
 import pylxd
+import requests
 from pylxd import exceptions as pylxd_exceptions
 
 from app.models.schemas import VMStatus
+from .exceptions import LXDConnectionError, LXDTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -147,12 +149,24 @@ def wait_for_lxd_operation(
     if not operation_id:
         return
 
-    if timeout is not None:
+    # important: the HTTP read timeout must exceed the LXD-side operation wait,
+    # otherwise urllib3 raises ReadTimeout before LXD returns. This mismatch was
+    # the root cause of stop/restart failing with a raw "Read timed out" 500.
+    read_timeout = (timeout + 10) if timeout is not None else 60
+    wait_params = {"timeout": timeout} if timeout is not None else {}
+    try:
         wait_response = client.api.operations[operation_id].wait.get(
-            params={"timeout": timeout}
+            params=wait_params,
+            timeout=(5, read_timeout),
         )
-    else:
-        wait_response = client.api.operations[operation_id].wait.get()
+    except requests.exceptions.Timeout as exc:
+        raise LXDTimeoutError(
+            "The hypervisor did not finish the operation in time"
+        ) from exc
+    except (requests.exceptions.ConnectionError, requests.exceptions.RequestException) as exc:
+        raise LXDConnectionError(
+            "Lost connection to the hypervisor while waiting for the operation"
+        ) from exc
 
     try:
         wait_metadata = wait_response.json().get("metadata", {})
