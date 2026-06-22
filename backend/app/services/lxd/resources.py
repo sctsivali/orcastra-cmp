@@ -322,6 +322,174 @@ class ResourceManager:
             logger.debug(f"Could not get resources for {instance.name}: {e}")
             return None
     
+    @staticmethod
+    def _normalize_hardware(resources_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize raw GET /1.0/resources into a stable hardware shape for the UI.
+
+        Defensive throughout: LXD/Incus versions vary, so every lookup tolerates
+        missing sections rather than dropping the whole payload.
+        """
+        cpu_info = resources_data.get("cpu", {}) or {}
+        sockets_raw = cpu_info.get("sockets", []) or []
+        socket_list = []
+        total_cores = 0
+        total_threads = 0
+        numa_nodes = set()
+        for sock in sockets_raw:
+            cores = sock.get("cores", []) or []
+            thread_count = 0
+            for core in cores:
+                threads = core.get("threads", []) or []
+                thread_count += len(threads)
+                for thread in threads:
+                    nn = thread.get("numa_node")
+                    if nn is not None:
+                        numa_nodes.add(nn)
+            total_cores += len(cores)
+            total_threads += thread_count
+            socket_list.append({
+                "socket": sock.get("socket"),
+                "name": sock.get("name"),
+                "vendor": sock.get("vendor"),
+                "cores": len(cores),
+                "threads": thread_count,
+                "frequency": sock.get("frequency"),
+                "frequency_turbo": sock.get("frequency_turbo"),
+            })
+
+        mem = resources_data.get("memory", {}) or {}
+        mem_total = mem.get("total", 0)
+        mem_used = mem.get("used", 0)
+
+        gpu_cards = []
+        for card in (resources_data.get("gpu", {}) or {}).get("cards", []) or []:
+            drm = card.get("drm") or {}
+            nvidia = card.get("nvidia") or {}
+            gpu_cards.append({
+                "vendor": card.get("vendor"),
+                "vendor_id": card.get("vendor_id"),
+                "product": card.get("product"),
+                "product_id": card.get("product_id"),
+                "pci_address": card.get("pci_address"),
+                "usb_address": card.get("usb_address"),
+                "driver": card.get("driver"),
+                "driver_version": card.get("driver_version"),
+                "numa_node": card.get("numa_node"),
+                "drm": {
+                    "card_name": drm.get("card_name"),
+                    "card_device": drm.get("card_device"),
+                    "control_device": drm.get("control_device"),
+                } if drm else None,
+                "nvidia": {
+                    "model": nvidia.get("model"),
+                    "cuda_version": nvidia.get("cuda_version"),
+                    "nvrm_version": nvidia.get("nvrm_version"),
+                } if nvidia else None,
+            })
+
+        networks = []
+        for card in (resources_data.get("network", {}) or {}).get("cards", []) or []:
+            ports = []
+            for port in card.get("ports", []) or []:
+                ports.append({
+                    "id": port.get("id"),
+                    "address": port.get("address"),
+                    "port": port.get("port"),
+                    "protocol": port.get("protocol"),
+                    "port_type": port.get("port_type"),
+                    "transceiver_type": port.get("transceiver_type"),
+                    "auto_negotiation": port.get("auto_negotiation"),
+                    "link_detected": port.get("link_detected"),
+                    "link_speed": port.get("link_speed_mbit") or port.get("link_speed"),
+                    "link_duplex": port.get("link_duplex"),
+                })
+            networks.append({
+                "vendor": card.get("vendor"),
+                "vendor_id": card.get("vendor_id"),
+                "product": card.get("product"),
+                "product_id": card.get("product_id"),
+                "driver": card.get("driver"),
+                "driver_version": card.get("driver_version"),
+                "firmware_version": card.get("firmware_version"),
+                "pci_address": card.get("pci_address"),
+                "numa_node": card.get("numa_node"),
+                "ports": ports,
+            })
+
+        storage_devices = []
+        for disk in (resources_data.get("storage", {}) or {}).get("disks", []) or []:
+            storage_devices.append({
+                "id": disk.get("id"),
+                "device": disk.get("device"),
+                "model": disk.get("model"),
+                "type": disk.get("type"),
+                "size": disk.get("size", 0),
+                "serial": disk.get("serial"),
+                "numa_node": disk.get("numa_node"),
+                "removable": disk.get("removable"),
+                "read_only": disk.get("read_only"),
+                "firmware_version": disk.get("firmware_version"),
+                "block_size": disk.get("block_size"),
+                "partitions": len(disk.get("partitions", []) or []),
+            })
+
+        # System / firmware / motherboard. Absent on some drivers (ex; nested containers),
+        # so emit None and let the UI hide the section rather than show blank rows.
+        sys_raw = resources_data.get("system") or {}
+        firmware = sys_raw.get("firmware") or {}
+        chassis = sys_raw.get("chassis") or {}
+        motherboard = sys_raw.get("motherboard") or {}
+        system = {
+            "uuid": sys_raw.get("uuid"),
+            "vendor": sys_raw.get("vendor"),
+            "product": sys_raw.get("product"),
+            "family": sys_raw.get("family"),
+            "version": sys_raw.get("version"),
+            "sku": sys_raw.get("sku"),
+            "serial": sys_raw.get("serial"),
+            "type": sys_raw.get("type"),
+            "firmware": {
+                "vendor": firmware.get("vendor"),
+                "date": firmware.get("date"),
+                "version": firmware.get("version"),
+            } if firmware else None,
+            "chassis": {
+                "vendor": chassis.get("vendor"),
+                "type": chassis.get("type"),
+                "serial": chassis.get("serial"),
+                "version": chassis.get("version"),
+            } if chassis else None,
+            "motherboard": {
+                "vendor": motherboard.get("vendor"),
+                "product": motherboard.get("product"),
+                "serial": motherboard.get("serial"),
+                "version": motherboard.get("version"),
+            } if motherboard else None,
+        } if sys_raw else None
+
+        return {
+            "system": system,
+            "cpu": {
+                "architecture": cpu_info.get("architecture"),
+                "total": cpu_info.get("total", 0),
+                "cores": total_cores,
+                "threads": total_threads,
+                "sockets": socket_list,
+                "numa_nodes": len(numa_nodes) if numa_nodes else None,
+            },
+            "memory": {
+                "total": mem_total,
+                "used": mem_used,
+                "free": mem_total - mem_used,
+                "hugepages_total": mem.get("hugepages_total", 0),
+                "hugepages_used": mem.get("hugepages_used", 0),
+                "hugepages_size": mem.get("hugepages_size", 0),
+            },
+            "gpu_cards": gpu_cards,
+            "networks": networks,
+            "storage_devices": storage_devices,
+        }
+
     def get_node_resources(self, client: pylxd.Client, node_name: str) -> Dict[str, Any]:
         """Get available (unused) resources for a specific node."""
         try:
@@ -407,6 +575,8 @@ class ResourceManager:
                 "storage_total": sum(p.get("space_total", 0) for p in storage_pools),
                 "storage_available": storage_available,
                 "storage_pools": storage_pools,
+                # Full hardware detail (CPU topology, memory, GPU, NIC, disks) for the Server page.
+                "hardware": self._normalize_hardware(resources_data),
             }
             
         except Exception as e:

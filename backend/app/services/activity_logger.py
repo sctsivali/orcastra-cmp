@@ -88,6 +88,7 @@ ACTION_CATEGORIES = {
     "terminal.session.create": EventCategory.ADMIN,
     "console.session.create": EventCategory.ADMIN,
     "admin.audit.view": EventCategory.ADMIN,
+    "audit.export": EventCategory.ADMIN,
     
     # Settings
     "user.preference.update": EventCategory.SETTINGS,
@@ -135,6 +136,7 @@ HIGH_SEVERITY_ACTIONS = {
     "network.delete",
     "terminal.session.create",
     "console.session.create",
+    "audit.export",
     "user.ssh_key.create",
     "user.ssh_key.delete",
     "vault.cert.generate",

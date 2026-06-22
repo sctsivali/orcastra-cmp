@@ -4,23 +4,39 @@ Admin-only. Replaces the OpenSearch audit dashboards when centralized logging is
 The verify endpoint recomputes the hash chain to detect in-place edits or reordering.
 """
 
+import csv
 import hashlib
+import io
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.core.database import get_db, async_session_maker
 from app.core.dependencies import AuthenticatedUser, require_admin
 from app.models.db_models import AuditLogEntry, AuditLogAnchor
 from app.services.audit_writer import HASH_FIELDS
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
+
+# Hard ceiling on a single export so a huge log cannot exhaust memory/connection time.
+# Streamed row-by-row, but still bounded; a hit is reported in the audit event + (JSON) body.
+EXPORT_MAX_ROWS = 100_000
+
+# Column order for both CSV header and JSON objects (mirrors AuditEntryOut).
+_EXPORT_COLUMNS = [
+    "id", "event_id", "occurred_at", "actor_id", "actor_email", "actor_role",
+    "action", "category", "severity", "result", "target_type", "target_id",
+    "target_host", "target_project", "source_ip", "details",
+]
 
 router = APIRouter(
     prefix="/audit-log",
@@ -89,6 +105,31 @@ def _parse_range(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _audit_conditions(
+    action: Optional[str], actor: Optional[str], result: Optional[str],
+    start: Optional[str], end: Optional[str],
+) -> list:
+    """Build the SQLAlchemy filter list shared by the list and export endpoints."""
+    conditions = []
+    if action:
+        conditions.append(AuditLogEntry.action == action)
+    if actor:
+        conditions.append(AuditLogEntry.actor_id == actor)
+    if result:
+        conditions.append(AuditLogEntry.result == result)
+    start_dt = _parse_range(start)
+    if start_dt:
+        conditions.append(AuditLogEntry.occurred_at >= start_dt)
+    end_dt = _parse_range(end)
+    if end_dt:
+        # A bare date end (no time) is treated as inclusive of that whole day.
+        if end and len(end) <= 10:
+            conditions.append(AuditLogEntry.occurred_at < end_dt + timedelta(days=1))
+        else:
+            conditions.append(AuditLogEntry.occurred_at <= end_dt)
+    return conditions
+
+
 @router.get("", response_model=AuditListResponse)
 async def list_audit(
     db: AsyncSession = Depends(get_db),
@@ -103,25 +144,7 @@ async def list_audit(
     sort_by: str = Query("occurred_at"),
     sort_dir: str = Query("desc"),
 ) -> AuditListResponse:
-    conditions = []
-    if action:
-        conditions.append(AuditLogEntry.action == action)
-    if actor:
-        conditions.append(AuditLogEntry.actor_id == actor)
-    if result:
-        conditions.append(AuditLogEntry.result == result)
-
-    start_dt = _parse_range(start)
-    if start_dt:
-        conditions.append(AuditLogEntry.occurred_at >= start_dt)
-    end_dt = _parse_range(end)
-    if end_dt:
-        # A bare date end (no time) is treated as inclusive of that whole day.
-        if end and len(end) <= 10:
-            end_dt = end_dt + timedelta(days=1)
-            conditions.append(AuditLogEntry.occurred_at < end_dt)
-        else:
-            conditions.append(AuditLogEntry.occurred_at <= end_dt)
+    conditions = _audit_conditions(action, actor, result, start, end)
 
     sort_col = _SORTABLE.get(sort_by, AuditLogEntry.occurred_at)
     direction = sort_col.asc() if sort_dir == "asc" else sort_col.desc()
@@ -154,6 +177,137 @@ async def list_audit(
             for r in rows
         ],
     )
+
+
+def _csv_value(row: AuditLogEntry, col: str):
+    val = getattr(row, col)
+    if val is None:
+        return ""
+    if col == "occurred_at":
+        return val.isoformat()
+    if col == "details":
+        return json.dumps(val, default=str)
+    return val
+
+
+def _json_value(row: AuditLogEntry, col: str):
+    val = getattr(row, col)
+    if col == "occurred_at" and val is not None:
+        return val.isoformat()
+    return val
+
+
+@router.get("/export")
+async def export_audit(
+    db: AsyncSession = Depends(get_db),
+    _admin: AuthenticatedUser = Depends(require_admin()),
+    format: str = Query("csv", description="csv or json"),
+    action: Optional[str] = None,
+    actor: Optional[str] = None,
+    result: Optional[str] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    sort_by: str = Query("occurred_at"),
+    sort_dir: str = Query("desc"),
+):
+    """Stream the audit log as CSV or JSON honoring the active filters (admin-only).
+
+    Exports the FULL filtered set (not a page), capped at EXPORT_MAX_ROWS and streamed
+    row-by-row. The export is itself recorded as a fail-closed ``audit.export`` event.
+    """
+    fmt = format.lower()
+    if fmt not in ("csv", "json"):
+        raise HTTPException(status_code=400, detail="format must be 'csv' or 'json'")
+
+    conditions = _audit_conditions(action, actor, result, start, end)
+    sort_col = _SORTABLE.get(sort_by, AuditLogEntry.occurred_at)
+    direction = sort_col.asc() if sort_dir == "asc" else sort_col.desc()
+
+    # Snapshot the upper id bound BEFORE writing the audit.export event below, then bound
+    # both the count and the stream to it. This keeps meta.exported == streamed rows and
+    # excludes the export's own (higher-id) audit row from its own output.
+    max_id_q = select(func.max(AuditLogEntry.id))
+    count_q = select(func.count()).select_from(AuditLogEntry)
+    base = select(AuditLogEntry)
+    for c in conditions:
+        max_id_q = max_id_q.where(c)
+        count_q = count_q.where(c)
+        base = base.where(c)
+    snapshot_max = (await db.execute(max_id_q)).scalar() or 0
+    count_q = count_q.where(AuditLogEntry.id <= snapshot_max)
+    base = base.where(AuditLogEntry.id <= snapshot_max)
+    base = base.order_by(direction, AuditLogEntry.id.desc()).limit(EXPORT_MAX_ROWS)
+
+    matched = (await db.execute(count_q)).scalar_one()
+    truncated = matched > EXPORT_MAX_ROWS
+    exported = min(matched, EXPORT_MAX_ROWS)
+    filters = {"action": action, "actor": actor, "result": result, "start": start, "end": end}
+
+    # Exporting the audit log is security-relevant - record it fail-closed BEFORE streaming,
+    # so the export is captured even if the client aborts the download mid-stream.
+    await activity_logger.log_security_event(
+        action="audit.export",
+        target_type="audit_log",
+        target_id=fmt,
+        result="success",
+        details={"format": fmt, "filters": filters, "matched": matched,
+                 "exported": exported, "truncated": truncated},
+    )
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    headers = {
+        "Content-Disposition": f'attachment; filename="audit-log-{stamp}.{fmt}"',
+        "Cache-Control": "no-store",
+    }
+
+    if fmt == "csv":
+        async def gen_csv():
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(_EXPORT_COLUMNS)
+            yield buf.getvalue()
+            buf.seek(0)
+            buf.truncate(0)
+            # Own session so streaming survives the request-scoped session lifecycle.
+            async with async_session_maker() as session:
+                stream = await session.stream(base)
+                async for row in stream.scalars():
+                    writer.writerow([_csv_value(row, col) for col in _EXPORT_COLUMNS])
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate(0)
+        return StreamingResponse(gen_csv(), media_type="text/csv; charset=utf-8", headers=headers)
+
+    # JSON: include the chain head hash (at the snapshot bound) so an export is tied to the
+    # chain state at export time and stays consistent with the bounded item set.
+    head_hash = (
+        await db.execute(
+            select(AuditLogEntry.row_hash)
+            .where(AuditLogEntry.id <= snapshot_max)
+            .order_by(AuditLogEntry.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    async def gen_json():
+        meta = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "filters": filters,
+            "matched": matched,
+            "exported": exported,
+            "truncated": truncated,
+            "integrity": {"head_hash": head_hash},
+        }
+        yield '{"meta":' + json.dumps(meta, default=str) + ',"items":['
+        first = True
+        async with async_session_maker() as session:
+            stream = await session.stream(base)
+            async for row in stream.scalars():
+                item = {col: _json_value(row, col) for col in _EXPORT_COLUMNS}
+                yield ("" if first else ",") + json.dumps(item, default=str)
+                first = False
+        yield "]}"
+    return StreamingResponse(gen_json(), media_type="application/json", headers=headers)
 
 
 @router.get("/verify", response_model=AuditVerifyResponse)

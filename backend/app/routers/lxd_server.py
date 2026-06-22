@@ -51,7 +51,15 @@ class ServerListResponse(BaseModel):
 def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Optional[ServerInfo]:
     """Fetch server info for a single node - runs in thread pool."""
     try:
-        client = lxd_service.connection_manager.get_client(node_name)
+        # important: use the reconnect-aware getter, not connection_manager.get_client.
+        # On a cold start the in-memory client may not exist yet (connection info is
+        # hydrated from Vault lazily); plain get_client returns None and host_info then
+        # raises, so the whole list comes back empty and the page renders blank. The
+        # reconnect path Vault-connects on demand so the first load succeeds.
+        client = lxd_service.get_client_with_reconnect(node_name)
+        if client is None:
+            logger.warning(f"No LXD connection available for {node_name}")
+            return None
         # Get server info from host_info property
         server_data = client.host_info
         
