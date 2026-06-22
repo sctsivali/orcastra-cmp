@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
@@ -67,11 +68,16 @@ const personalizationInitScript = `
 })();
 `;
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // Read the sidebar collapsed hint on the server so the first paint already has the
+  // correct width/margin (no flash or layout shift). Default is expanded.
+  const cookieStore = await cookies();
+  const sidebarCollapsed = cookieStore.get("orcastra-sidebar-collapsed")?.value === "true";
+
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -88,7 +94,7 @@ export default function RootLayout({
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased min-h-screen bg-background`}
       >
         <Providers>
-          <LayoutProvider>
+          <LayoutProvider initialCollapsed={sidebarCollapsed}>
             <MainLayout>{children}</MainLayout>
             <Toaster />
           </LayoutProvider>

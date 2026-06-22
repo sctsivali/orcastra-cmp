@@ -42,6 +42,7 @@ function TokenSync({ children }: { children: ReactNode }) {
   const [authError, setAuthError] = useState(false);
   const retryCountRef = useRef(0);
   const reauthInFlightRef = useRef(false);
+  const certAutoLoginRef = useRef(false);
 
   // Register session refresh callback so api.ts can trigger re-auth on 401
   useEffect(() => {
@@ -107,7 +108,23 @@ function TokenSync({ children }: { children: ReactNode }) {
       setTokenReady(true);
     } else if (status === "unauthenticated") {
       setAccessToken(null);
-      setTokenReady(true); // resolved - no token needed
+      // In client-cert mode an "unauthenticated" status on load is the cert session not yet being
+      // established (NextAuth resolves it via a cert-login round-trip that re-navigates). Opening the
+      // gate now renders the app and fires tokenless queries that 401 and get discarded once auth
+      // completes, and the loader flashes across the re-navigation. Instead, silently establish the
+      // session via the client cert (no redirect, like the SessionExpired path) and keep the gate
+      // closed; the authenticated re-run opens it with a token. Attempt once; on failure (no/invalid
+      // cert) open the gate so the normal sign-in flow can take over.
+      if (AUTH_PROVIDER_ID === "client-cert") {
+        if (!certAutoLoginRef.current) {
+          certAutoLoginRef.current = true;
+          signIn(AUTH_PROVIDER_ID, { redirect: false })
+            .then((res) => { if (res?.error) setTokenReady(true); })
+            .catch(() => setTokenReady(true));
+        }
+      } else {
+        setTokenReady(true); // non-cert: resolved - render public / sign-in
+      }
     }
   }, [session, status]);
 

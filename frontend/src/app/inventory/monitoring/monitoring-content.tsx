@@ -73,6 +73,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -518,24 +519,6 @@ const ChartStats = memo(function ChartStats({ min, max, avg, unit = "%", color }
     </div>
   );
 });
-
-// Loading Component - lightweight skeleton instead of heavy Lottie animation
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-32 rounded-lg" />
-        ))}
-      </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <Skeleton key={i} className="h-72 rounded-lg" />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // Colors for charts
 const CHART_COLORS = {
@@ -1694,7 +1677,7 @@ export default function MonitoringContent() {
   }, [filteredStats]);
 
   if (dashboardLoading && !dashboardData) {
-    return <LoadingSkeleton />;
+    return <LoadingLottiePage />;
   }
 
   if (dashboardError) {

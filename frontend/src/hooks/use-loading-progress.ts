@@ -5,6 +5,7 @@
  */
 
 import * as React from "react";
+import { computeSimulatedProgress, getPhaseKey } from "@/lib/loading-progress-core";
 
 export interface LoadingPhase {
   id: string;
@@ -356,17 +357,7 @@ export function useSimulatedProgress(
   const [currentPhases, setCurrentPhases] = React.useState<LoadingPhase[]>([]);
   const [currentPhaseKey, setCurrentPhaseKey] = React.useState<keyof typeof DYNAMIC_MESSAGES>("initializing");
   const messageIndexRef = React.useRef(0);
-  
-  // Get current phase based on progress
-  const getPhaseKey = React.useCallback((prog: number): keyof typeof DYNAMIC_MESSAGES => {
-    if (prog < 15) return "initializing";
-    if (prog < 30) return "connecting";
-    if (prog < 50) return "fetching";
-    if (prog < 70) return "processing";
-    if (prog < 90) return "rendering";
-    return "almostDone";
-  }, []);
-  
+
   // Rotate messages within the same phase
   React.useEffect(() => {
     if (!isLoading) return;
@@ -419,13 +410,9 @@ export function useSimulatedProgress(
     const animate = () => {
       const elapsed = Date.now() - startTime;
       
-      // Use easing function for smooth progress
-      // Progress faster at start, slower near end (logarithmic easing)
-      const targetProgress = Math.min(
-        95, // Max 95% during loading, final 5% on complete
-        (1 - Math.exp(-elapsed / (minDuration * 2))) * 100
-      );
-      
+      // Logarithmic easing: fast at the start, slows near the cap (shared core).
+      const targetProgress = computeSimulatedProgress(elapsed, minDuration);
+
       setProgress(targetProgress);
       
       // Check if phase changed - if so, pick a new random message
@@ -473,7 +460,7 @@ export function useSimulatedProgress(
         cancelAnimationFrame(animationFrame);
       }
     };
-  }, [isLoading, minDuration, phases, getPhaseKey]);
+  }, [isLoading, minDuration, phases]);
   
   return {
     progress,

@@ -8,6 +8,9 @@ import { useLayout } from "./layout-provider";
 import { usePersonalization } from "./personalization-provider";
 import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
+import { CommandPalette } from "./sidebar/command-palette";
+import { TopProgressBar } from "./top-progress-bar";
+import { useSidebarShortcuts } from "./sidebar/use-sidebar-shortcuts";
 
 // Dynamically import TerminalManager to avoid SSR issues with xterm
 const TerminalManager = dynamic(
@@ -32,6 +35,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const { sidebarCollapsed } = useLayout();
   const { settings } = usePersonalization();
   const pathname = usePathname();
+  // Global keyboard shortcuts (Cmd/Ctrl+B toggle, Cmd/Ctrl+K palette)
+  useSidebarShortcuts();
   const isAuthPage = pathname.startsWith("/auth");
   const isLandingPage = pathname === "/";
   const [mounted, setMounted] = React.useState(false);
@@ -63,11 +68,13 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="relative flex min-h-[100dvh]">
+      {/* Thin top bar for route-navigation feedback (instant; the whale covers data fetch) */}
+      <TopProgressBar />
       {/* Hide sidebar/header on full-page terminal/console views */}
       {!isFullPageTerminalOrConsole && <Sidebar />}
       <div
         className={cn(
-          "flex flex-1 flex-col transition-all duration-300",
+          "flex flex-1 flex-col transition-[margin] duration-200 ease-out motion-reduce:transition-none",
           // Prevent content from affecting sidebar positioning
           "overflow-x-hidden",
           // On full-page views, no margin. Otherwise apply sidebar margins
@@ -113,11 +120,15 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         <>
           {/* Terminal Manager - renders floating terminal windows */}
           <TerminalManager />
-          
+
           {/* Console Manager - renders floating console windows (SPICE for VMs) */}
           <ConsoleManager />
         </>
       )}
+
+      {/* Command palette (Cmd/Ctrl+K) - mounted globally so it works even on
+          full-page terminal/console views where the sidebar is hidden */}
+      <CommandPalette />
     </div>
   );
 }

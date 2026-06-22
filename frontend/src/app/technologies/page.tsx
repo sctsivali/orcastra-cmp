@@ -4,7 +4,7 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, HardDrive, Server, ServerOff, Database, Network, Package, Info, Monitor } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { formatHypervisorType } from "@/lib/utils";
@@ -337,7 +337,7 @@ export default function TechnologiesPage() {
   if (isLoading) {
     return (
       <div className="container py-8">
-        <LoadingLottiePageEnhanced context="hardware" />
+        <LoadingLottiePage />
       </div>
     );
   }
