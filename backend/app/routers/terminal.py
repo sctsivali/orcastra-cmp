@@ -8,6 +8,7 @@ import json
 import logging
 from typing import Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends
+from pydantic import BaseModel, Field
 import websockets
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State as WebSocketState
@@ -16,7 +17,8 @@ from app.services.terminal_service import get_terminal_service
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.core.dependencies import require_tenant, AuthenticatedUser, get_ws_user
-from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
+from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws, verify_cluster_access
+from app.core.ws_ticket import create_ticket
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -25,6 +27,40 @@ router = APIRouter(
     prefix="/terminal",
     tags=["Terminal"],
 )
+
+
+class WsTicketRequest(BaseModel):
+    """Request body for minting a single-use WebSocket auth ticket."""
+    instance: str = Field(..., description="Instance name")
+    host: str = Field(..., description="Host/cluster name")
+    project: str = Field("default", description="LXD project name")
+    console_type: Optional[str] = Field(None, description="Console type for graphics (ex; 'vga')")
+
+
+@router.post(
+    "/ticket",
+    summary="Mint a single-use WebSocket ticket",
+    description=(
+        "Exchange the caller's bearer token for an opaque, short-lived, single-use "
+        "ticket bound to a specific instance. Used by both the terminal and console "
+        "WebSockets so the JWT never appears in the WebSocket URL."
+    ),
+    dependencies=[Depends(org_scope_dependency)],
+)
+async def create_ws_ticket(
+    payload: WsTicketRequest,
+    user: AuthenticatedUser = Depends(require_tenant()),
+):
+    """Mint a WebSocket auth ticket for the authenticated caller."""
+    verify_cluster_access(payload.host)
+    ticket, expires_in = create_ticket(
+        user,
+        instance=payload.instance,
+        host=payload.host,
+        project=payload.project,
+        console_type=payload.console_type,
+    )
+    return {"ticket": ticket, "expires_in": expires_in}
 
 
 @router.get(
@@ -499,7 +535,7 @@ async def terminal_websocket(
     """
     WebSocket endpoint for terminal connection.
     Acts as a proxy between browser and LXD instance exec.
-    Auth token is passed as ``token`` query parameter.
+    Auth is a single-use ``ticket`` query parameter (see POST /terminal/ticket).
     """
     # Validate auth when enabled (fail-closed, independent of auth backend).
     # NOTE: do NOT gate on authentik_issuer - that bypassed auth entirely in client-cert mode.

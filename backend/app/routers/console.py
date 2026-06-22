@@ -1134,7 +1134,7 @@ async def console_websocket(
     The client should use spice-html5 or similar SPICE client to render.
     
     IMPORTANT: spice-html5 requires 'binary' subprotocol to be accepted.
-    Auth token is passed as ``token`` query parameter.
+    Auth is a single-use ``ticket`` query parameter (see POST /terminal/ticket).
     """
     # Validate auth when enabled (fail-closed, independent of auth backend).
     # NOTE: do NOT gate on authentik_issuer - that bypassed auth entirely in client-cert mode.

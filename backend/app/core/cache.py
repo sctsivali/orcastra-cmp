@@ -314,6 +314,49 @@ class CacheManager:
         self.memory_cache.delete(cache_key)
         logger.debug(f"Deleted from cache: {cache_key}")
     
+    def set_ephemeral(self, namespace: str, key: str, value: str, ttl: int) -> bool:
+        """Store a single-use, short-lived string value.
+
+        Redis-authoritative when available (no per-worker memory mirror), so a value
+        consumed via get_and_delete on one worker cannot survive in another worker's
+        memory. Falls back to per-worker memory only when Redis is down (single-worker
+        correctness). Returns True on success.
+        """
+        cache_key = self._make_key(namespace, key)
+        if self.redis_client:
+            try:
+                self.redis_client.setex(cache_key, ttl, value)
+                return True
+            except Exception as e:
+                logger.warning(f"Redis setex error for {cache_key}: {e}")
+                return False
+        # No Redis: degrade to per-worker memory (single-worker deployments only).
+        self.memory_cache.set(cache_key, value, ttl)
+        return True
+
+    def get_and_delete(self, namespace: str, key: str) -> Optional[str]:
+        """Atomically read and consume a value (single-use).
+
+        Uses Redis GETDEL (atomic) when available so two concurrent redeems cannot both
+        succeed. Falls back to memory get+delete when Redis is down.
+        """
+        cache_key = self._make_key(namespace, key)
+        if self.redis_client:
+            try:
+                return self.redis_client.getdel(cache_key)
+            except Exception as e:
+                logger.warning(f"Redis getdel error for {cache_key}: {e}")
+                return None
+        cached = self.memory_cache.get(cache_key)
+        self.memory_cache.delete(cache_key)
+        if not cached:
+            return None
+        # LRUCache.get returns (value, expiry_ts) and does not check expiry itself.
+        value, expiry = cached
+        if time.time() > expiry:
+            return None
+        return value if isinstance(value, str) else None
+
     def delete_pattern(self, namespace: str, pattern: str = "*"):
         """Delete all keys matching pattern in namespace."""
         full_pattern = self._make_key(namespace, pattern)

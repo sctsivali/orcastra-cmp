@@ -472,25 +472,35 @@ async def get_ws_user(
     """
     WebSocket-compatible auth dependency.
 
-    Extracts token from the ``token`` query parameter
-    (WebSocket connections cannot use HTTP Authorization headers after upgrade).
-    Returns ``None`` when auth is disabled; validates JWT otherwise.
+    Authenticates via a single-use ``ticket`` query parameter (browsers cannot set
+    an Authorization header on a WebSocket handshake, and putting the raw JWT in the
+    URL leaks it into devtools/history/proxy logs). The ticket is bound to this
+    connection's instance/host/project and is consumed on redeem. App-layer
+    revocation is still enforced. Returns ``None`` when auth is disabled.
     Does NOT close the socket - callers decide how to handle ``None``.
     """
-    from starlette.websockets import WebSocket as _WS  # type check only
+    from app.core.ws_ticket import redeem_ticket
 
     if not settings.auth_enabled:
         return None
 
-    token = websocket.query_params.get("token")
-    if not token:
-        logger.warning("WebSocket connection rejected: no token in query params")
+    ticket = websocket.query_params.get("ticket")
+    if not ticket:
+        logger.warning("WebSocket connection rejected: no ticket in query params")
+        return None
+
+    instance = websocket.path_params.get("instance_name")
+    host = websocket.query_params.get("host")
+    project = websocket.query_params.get("project", "default")
+
+    user = redeem_ticket(ticket, instance=instance, host=host, project=project)
+    if user is None:
+        logger.warning("WebSocket connection rejected: invalid or expired ticket")
         return None
 
     try:
-        user = _validate_token(token, settings)
         _ensure_session_active(user, settings)
-        return user
     except HTTPException as exc:
-        logger.warning(f"WebSocket JWT validation failed: {exc.detail}")
+        logger.warning(f"WebSocket session inactive: {exc.detail}")
         return None
+    return user

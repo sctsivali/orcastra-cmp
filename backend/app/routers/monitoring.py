@@ -29,9 +29,10 @@ from app.services.lxd_service import (
 )
 from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
-from app.core.dependencies import require_tenant, get_ws_user
+from app.core.dependencies import require_tenant, require_admin, get_ws_user, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 from app.core.tenant_visibility import tenant_acl_active
+from app.core.ws_ticket import create_ticket, redeem_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -1093,6 +1094,20 @@ async def get_network_metrics(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post(
+    "/ws-ticket",
+    summary="Mint a single-use monitoring WebSocket ticket",
+    description="Admin-only. Exchange the bearer token for an opaque, short-lived "
+    "ticket so the JWT never appears in the monitoring WebSocket URL.",
+)
+async def create_monitoring_ws_ticket(
+    user: AuthenticatedUser = Depends(require_admin()),
+):
+    """Mint a monitoring WebSocket auth ticket for the authenticated admin."""
+    ticket, expires_in = create_ticket(user, scope="monitoring")
+    return {"ticket": ticket, "expires_in": expires_in}
+
+
 @ws_router.websocket("/ws")
 async def monitoring_websocket(ws: WebSocket):
     """
@@ -1101,28 +1116,28 @@ async def monitoring_websocket(ws: WebSocket):
     background metrics collector, eliminating the need for polling.
     The server sends JSON-serialized MonitoringDashboardResponse on each cycle.
 
-    Auth: token passed via ``?token=`` query param (browsers cannot set
-    Authorization headers on WebSocket upgrade requests).
+    Auth: single-use ``?ticket=`` query param (see POST /monitoring/ws-ticket);
+    browsers cannot set Authorization headers on WebSocket upgrade requests.
     """
     from app.core.config import get_settings
-    from app.core.auth import _validate_token, _ensure_session_active
+    from app.core.auth import _ensure_session_active
 
-    # Validate auth token from query param (fail-closed, mode-aware: Authentik or client-cert).
+    # Redeem the single-use ticket (fail-closed, mode-aware: Authentik or client-cert).
     settings = get_settings()
     if settings.auth_enabled:
-        token = ws.query_params.get("token")
-        if not token:
+        ticket = ws.query_params.get("ticket")
+        user = redeem_ticket(ticket, scope="monitoring")
+        if user is None:
             await ws.close(code=1008, reason="Authentication required")
             return
         try:
-            user = _validate_token(token, settings)
             _ensure_session_active(user, settings)
             from app.core.rbac import Role, get_highest_role, resolve_roles
             if get_highest_role(resolve_roles(user)) != Role.ADMIN:
                 await ws.close(code=1008, reason="Monitoring WebSocket is admin-only")
                 return
         except Exception:
-            await ws.close(code=1008, reason="Invalid or expired token")
+            await ws.close(code=1008, reason="Invalid or expired ticket")
             return
 
     from app.services.ws_broadcast import get_monitoring_broadcaster
