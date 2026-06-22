@@ -16,8 +16,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -386,9 +386,11 @@ export default function CertificatesPage() {
         </CardHeader>
         <CardContent className="p-0 md:p-6 md:pt-0">
           {certificates.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No certificates found. Register a cluster first.
-            </div>
+            <EmptyState
+              icon={KeyRound}
+              title="No certificates found"
+              description="Register a cluster first."
+            />
           ) : (
             <div className="overflow-x-auto">
             <Table>
@@ -406,7 +408,6 @@ export default function CertificatesPage() {
               <TableBody>
                 {sortItems(certificates).map((cert) => {
                   const config = statusConfig[cert.status] || statusConfig[CertificateStatus.UNKNOWN];
-                  const StatusIcon = config.icon;
 
                   return (
                     <TableRow key={cert.cluster_id}>
@@ -421,16 +422,10 @@ export default function CertificatesPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <Badge variant={config.variant} className="gap-1 w-fit">
-                            <StatusIcon className="h-3 w-3" />
-                            <span className="hidden sm:inline">{config.label}</span>
-                          </Badge>
+                        <div className="flex flex-col gap-1 text-sm">
+                          <span>{config.label}</span>
                           {cert.has_pending_renewal && (
-                            <Badge variant="outline" className="gap-1 text-blue-500 w-fit">
-                              <RefreshCw className="h-3 w-3" />
-                              <span className="hidden sm:inline">Pending</span>
-                            </Badge>
+                            <span className="text-muted-foreground">Pending renewal</span>
                           )}
                         </div>
                       </TableCell>

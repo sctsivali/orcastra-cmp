@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
@@ -276,17 +277,11 @@ export default function GroupsPage() {
         </CardHeader>
         <CardContent>
           {groups.length === 0 ? (
-            <div className="text-center py-12">
-              <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No groups found</h3>
-              <p className="text-muted-foreground mb-4">
-                Create your first group to manage permissions and identities
-              </p>
-              <Button onClick={() => setCreateDialogOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />
-                Create Group
-              </Button>
-            </div>
+            <EmptyState
+              icon={Users}
+              title="No groups found"
+              description="Create your first group to manage permissions and identities"
+            />
           ) : (
             <>
             <Table>
@@ -307,26 +302,24 @@ export default function GroupsPage() {
                     <TableCell className="max-w-xs truncate">
                       {group.description || <span className="text-muted-foreground italic">No description</span>}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{group.node || "N/A"}</Badge>
-                    </TableCell>
+                    <TableCell>{group.node || "N/A"}</TableCell>
                     <TableCell className="text-center">
-                      <Badge 
-                        variant="secondary" 
-                        className="cursor-pointer hover:bg-secondary/80 transition-colors"
+                      <button
+                        type="button"
+                        className="cursor-pointer text-foreground hover:underline focus:outline-none focus-visible:underline"
                         onClick={() => handleShowIdentities(group)}
                       >
                         {((group.identities?.tls?.length || 0) + (group.identities?.oidc?.length || 0))} members
-                      </Badge>
+                      </button>
                     </TableCell>
                     <TableCell className="text-center">
-                      <Badge 
-                        variant="outline"
-                        className="cursor-pointer hover:bg-accent transition-colors"
+                      <button
+                        type="button"
+                        className="cursor-pointer text-foreground hover:underline focus:outline-none focus-visible:underline"
                         onClick={() => handleShowPermissions(group)}
                       >
                         {group.permissions?.length || 0} permissions
-                      </Badge>
+                      </button>
                     </TableCell>
                     <TableCell className="text-right">
                       <DropdownMenu>

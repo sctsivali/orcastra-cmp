@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { formatInstanceType } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Play, Square, RotateCw, Trash2, Search, Filter, Terminal, Monitor } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -125,19 +126,6 @@ export default function InstancesPage() {
       });
     } finally {
       setActionLoading(null);
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case "running":
-        return "default";
-      case "stopped":
-        return "secondary";
-      case "frozen":
-        return "outline";
-      default:
-        return "destructive";
     }
   };
 
@@ -276,8 +264,8 @@ export default function InstancesPage() {
             <TableBody>
               {paginatedInstances.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                    No instances found
+                  <TableCell colSpan={8}>
+                    <EmptyState icon={Monitor} title="No instances found" />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -289,29 +277,17 @@ export default function InstancesPage() {
                   >
                     {instance.name}
                   </TableCell>
-                  <TableCell>
-                    <Badge variant={getStatusColor(instance.status)}>
-                      {instance.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{instance.type}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{instance.host}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{instance.project || "default"}</Badge>
-                  </TableCell>
+                  <TableCell>{instance.status}</TableCell>
+                  <TableCell>{formatInstanceType(instance.type)}</TableCell>
+                  <TableCell>{instance.host}</TableCell>
+                  <TableCell>{instance.project || "default"}</TableCell>
                   <TableCell>
                     {instance.ip_addresses.length > 0
                       ? instance.ip_addresses.slice(0, 2).join(", ")
                       : "N/A"}
                   </TableCell>
                   <TableCell>
-                    {instance.profiles.map((profile: string) => (
-                      <Badge key={profile} variant="outline" className="mr-1">
-                        {profile}
-                      </Badge>
-                    ))}
+                    {instance.profiles.length > 0 ? instance.profiles.join(", ") : "N/A"}
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">

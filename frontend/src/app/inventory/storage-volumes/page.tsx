@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { formatLabel } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -22,7 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, HardDrive } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 import { useStorageVolumes } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -209,23 +210,19 @@ export default function StorageVolumesPage() {
             <TableBody>
               {paginatedVolumes.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No storage volumes found
+                  <TableCell colSpan={6}>
+                    <EmptyState icon={HardDrive} title="No storage volumes found" />
                   </TableCell>
                 </TableRow>
               ) : (
                 paginatedVolumes.map((volume: any, idx: number) => (
                   <TableRow key={`${volume.node}-${volume.name}-${idx}`}>
                     <TableCell className="font-medium">{volume.name}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{volume.type}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{volume.content_type}</Badge>
-                    </TableCell>
+                    <TableCell>{formatLabel(volume.type)}</TableCell>
+                    <TableCell>{formatLabel(volume.content_type)}</TableCell>
                     {nodes.length > 0 && (
                       <TableCell>
-                        {volume.node && <Badge variant="secondary">{volume.node}</Badge>}
+                        {volume.node}
                       </TableCell>
                     )}
                     <TableCell className="text-center">

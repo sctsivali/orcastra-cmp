@@ -20,10 +20,17 @@ import {
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
 import { auditLogAPI, type AuditEntry } from "@/lib/api";
 import type { SortDirection } from "@/lib/sort";
-import { ShieldCheck, Search } from "lucide-react";
+import { ShieldCheck, Search, Download } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 
 const PAGE_SIZE = 50;
 
@@ -77,6 +84,34 @@ export default function AuditLogPage() {
       toast({ title: "Verify failed", description: e.message, variant: "destructive" }),
   });
 
+  const [isExporting, setIsExporting] = useState(false);
+  const handleExport = async (format: "csv" | "json") => {
+    setIsExporting(true);
+    try {
+      const { blob, filename } = await auditLogAPI.export(format, {
+        action: actionFilter || undefined,
+        actor: actorFilter || undefined,
+        start: startDate || undefined,
+        end: endDate || undefined,
+        sort_by: sortBy,
+        sort_dir: sortDir,
+      });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      toast({ title: "Export ready", description: filename });
+    } catch (e: any) {
+      toast({ title: "Export failed", description: e.message, variant: "destructive" });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const items: AuditEntry[] = data?.items || [];
   const total = data?.total || 0;
 
@@ -84,14 +119,26 @@ export default function AuditLogPage() {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Audit Log</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="text-3xl font-bold">Audit Log</h1>
+          <p className="text-muted-foreground mt-2">
             Tamper-evident audit trail stored in PostgreSQL.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <RefreshButton onClick={() => refetch()} isRefreshing={isFetching} />
-          <Button variant="outline" onClick={() => verifyMutation.mutate()} disabled={verifyMutation.isPending}>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" disabled={isExporting}>
+                <Download className="mr-2 h-4 w-4" />
+                {isExporting ? "Exporting..." : "Export"}
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => handleExport("csv")}>Export as CSV</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => handleExport("json")}>Export as JSON</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button onClick={() => verifyMutation.mutate()} disabled={verifyMutation.isPending}>
             <ShieldCheck className="mr-2 h-4 w-4" />
             {verifyMutation.isPending ? "Verifying..." : "Verify integrity"}
           </Button>
@@ -147,7 +194,7 @@ export default function AuditLogPage() {
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : items.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No audit events.</p>
+            <EmptyState icon={ShieldCheck} title="No audit events" />
           ) : (
             <>
               <Table>

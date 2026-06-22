@@ -501,7 +501,7 @@ export function SystemResourceUsagePanel() {
   }, [data?.network, refreshInterval]);
 
   const handleRefresh = useCallback(() => {
-    refetch();
+    return refetch();
   }, [refetch]);
 
   // Format time with colons (HH:MM:SS)

@@ -12,6 +12,8 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { CopyableId } from "@/components/ui/copyable-id";
+import { formatLabel } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -32,7 +34,8 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { useToast } from "@/hooks/use-toast";
 import { localIdentitiesAPI, type LocalIdentity } from "@/lib/api";
-import { UserPlus, Trash2, ShieldCheck, ShieldOff, Copy } from "lucide-react";
+import { UserPlus, Trash2, ShieldCheck, ShieldOff, Copy, Users } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 
 // Username/label shown in the table - never the FQDN cert CN (which looks like a domain).
 function identityName(id: LocalIdentity): string {
@@ -62,18 +65,6 @@ export default function LocalIdentitiesPage() {
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     IDENTITY_ACCESSORS, "name", "asc",
   );
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const toggleFingerprint = (fp: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.has(fp) ? next.delete(fp) : next.add(fp);
-      return next;
-    });
-  const copyFingerprint = (fp: string) => {
-    navigator.clipboard.writeText(fp);
-    toast({ title: "Fingerprint copied" });
-  };
-
   // Issue dialog state
   const [issueOpen, setIssueOpen] = useState(false);
   const [commonName, setCommonName] = useState("");
@@ -134,8 +125,8 @@ export default function LocalIdentitiesPage() {
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Local Identities</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="text-3xl font-bold">Local Identities</h1>
+          <p className="text-muted-foreground mt-2">
             Client-certificate users for this single-instance deployment.
           </p>
         </div>
@@ -230,7 +221,7 @@ export default function LocalIdentitiesPage() {
           {isLoading ? (
             <p className="text-sm text-muted-foreground">Loading...</p>
           ) : identities.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No identities yet. Issue one to get started.</p>
+            <EmptyState icon={Users} title="No identities yet" description="Issue one to get started." />
           ) : (
             <Table>
               <TableHeader>
@@ -260,23 +251,15 @@ export default function LocalIdentitiesPage() {
                         </SelectContent>
                       </Select>
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">{id.status}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{formatLabel(id.status)}</TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1.5">
-                        <code
-                          className="text-xs text-muted-foreground cursor-pointer break-all"
-                          title="Click to show full fingerprint"
-                          onClick={() => toggleFingerprint(id.fingerprint)}
-                        >
-                          {expanded.has(id.fingerprint) ? id.fingerprint : `${id.fingerprint.slice(0, 16)}...`}
-                        </code>
-                        <Button
-                          variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Copy fingerprint"
-                          onClick={() => copyFingerprint(id.fingerprint)}
-                        >
-                          <Copy className="h-3 w-3" />
-                        </Button>
-                      </div>
+                      <CopyableId
+                        value={id.fingerprint}
+                        head={16}
+                        tail={0}
+                        label="Fingerprint"
+                        className="text-muted-foreground"
+                      />
                     </TableCell>
                     <TableCell
                       className="text-sm text-muted-foreground"

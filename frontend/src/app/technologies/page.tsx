@@ -4,7 +4,6 @@ import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, HardDrive, Server, ServerOff, Database, Network, Package, Info, Monitor } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
@@ -465,9 +464,9 @@ export default function TechnologiesPage() {
                         <div>
                           <CardTitle className="text-lg">{software.name}</CardTitle>
                           {software.version && (
-                            <Badge variant="secondary" className="mt-1 text-xs font-mono">
+                            <p className="mt-1 text-xs font-mono text-muted-foreground">
                               {software.version}
-                            </Badge>
+                            </p>
                           )}
                         </div>
                       </div>
@@ -478,7 +477,7 @@ export default function TechnologiesPage() {
                       <p className="text-xs font-medium text-muted-foreground uppercase mb-1">
                         Category
                       </p>
-                      <Badge variant="outline" className="font-normal">{software.category}</Badge>
+                      <p className="text-sm">{software.category}</p>
                     </div>
                     <div>
                       <p className="text-xs font-medium text-muted-foreground uppercase mb-1">
@@ -493,64 +492,6 @@ export default function TechnologiesPage() {
               );
             })}
           </div>
-
-          {/* Additional Software Info */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Technology Advantages</CardTitle>
-              <CardDescription>
-                Why we chose these technologies for Orcastra
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
-                  <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">Open Source & Community-Driven</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      All core technologies are open-source, ensuring transparency, security, and active community support.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
-                  <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">Enterprise-Grade Reliability</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Battle-tested in production environments, these tools power some of the world's largest infrastructures.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
-                  <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">Modern Architecture</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Built with modern cloud-native principles for scalability, flexibility, and performance.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex gap-3 p-4 rounded-lg bg-muted/40 border border-border">
-                  <div className="mt-0.5">
-                    <div className="h-2.5 w-2.5 rounded-full bg-foreground/60" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">Security First</p>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Hardware-level isolation, encrypted storage, and secure networking built into every layer.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
           </>
           )}
         </TabsContent>

@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { CopyableId } from "@/components/ui/copyable-id";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -37,7 +37,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Search, Trash2, MoreVertical } from "lucide-react";
+import { Search, Trash2, MoreVertical, Users } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 import { useIdentities, useDeleteIdentity } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -224,13 +225,13 @@ export default function IdentitiesPage() {
         </CardHeader>
         <CardContent>
           {identities.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No identities found
-            </div>
+            <EmptyState icon={Users} title="No identities found" />
           ) : filteredIdentities.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No identities match your search criteria
-            </div>
+            <EmptyState
+              icon={Search}
+              title="No matching identities"
+              description="No identities match your search criteria."
+            />
           ) : (
             <>
               <Table>
@@ -247,32 +248,20 @@ export default function IdentitiesPage() {
                 <TableBody>
                   {paginatedIdentities.map((identity: any, index: number) => (
                     <TableRow key={identity.node + "-" + identity.id + "-" + index}>
-                      <TableCell className="font-mono text-xs max-w-[200px] truncate" title={identity.id}>
-                        {identity.id.length > 30 
-                          ? identity.id.substring(0, 15) + "..." + identity.id.substring(identity.id.length - 10)
-                          : identity.id}
+                      <TableCell className="max-w-[260px]">
+                        <CopyableId value={identity.id} label="Identity ID" />
                       </TableCell>
                       <TableCell className="font-medium">
                         {identity.name || <span className="text-muted-foreground italic">N/A</span>}
                       </TableCell>
+                      <TableCell>{identity.type?.toUpperCase() || "—"}</TableCell>
+                      <TableCell>{identity.node || "N/A"}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{identity.type?.toUpperCase()}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary">{identity.node || "N/A"}</Badge>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {identity.groups && identity.groups.length > 0 ? (
-                            identity.groups.map((group: string) => (
-                              <Badge key={group} variant="secondary" className="text-xs">
-                                {group}
-                              </Badge>
-                            ))
-                          ) : (
-                            <span className="text-muted-foreground text-xs italic">No groups</span>
-                          )}
-                        </div>
+                        {identity.groups && identity.groups.length > 0 ? (
+                          identity.groups.join(", ")
+                        ) : (
+                          <span className="text-muted-foreground text-xs italic">No groups</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>

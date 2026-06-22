@@ -242,6 +242,7 @@ export function UserGroupsSettings() {
           isRefreshing={isRefreshingAll}
           label="Refresh user groups, policies, and sync status"
           onClick={handleRefreshAll}
+          feedback={false}
         />
       </div>
 

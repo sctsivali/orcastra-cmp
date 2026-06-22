@@ -3,7 +3,8 @@
 // Read version from package.json as fallback
 const packageJson = require('./package.json');
 
-// Prefer APP_VERSION from environment (set via Docker build args or .env), fallback to package.json
+// Single source of truth for the version is APP_VERSION in .env (mirrored into package.json by
+// `make version-sync`). Prefer the build-arg/env value, fall back to package.json.
 const appVersion = process.env.APP_VERSION || packageJson.version;
 
 const nextConfig = {

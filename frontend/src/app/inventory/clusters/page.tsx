@@ -27,6 +27,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -424,7 +425,7 @@ EOF`}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Registered Clusters</h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-muted-foreground mt-2">
             Manage hypervisor clusters
           </p>
         </div>
@@ -471,20 +472,11 @@ EOF`}
         </CardHeader>
         <CardContent>
           {clusters.length === 0 ? (
-            <div className="text-center py-12">
-              <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No Clusters Registered</h3>
-              <p className="text-muted-foreground mb-4">
-                Get started by registering your first hypervisor cluster
-              </p>
-              <Button
-                onClick={() => router.push("/register-node")}
-                className="gap-2"
-              >
-                <Plus className="h-4 w-4" />
-                Register First Cluster
-              </Button>
-            </div>
+            <EmptyState
+              icon={Server}
+              title="No clusters registered"
+              description="Get started by registering your first hypervisor cluster"
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -499,7 +491,6 @@ EOF`}
               </TableHeader>
               <TableBody>
                 {sortItems(clusters).map((cluster: any) => {
-                  const StatusIcon = statusConfig[cluster.status as ClusterStatus]?.icon || AlertTriangle;
                   return (
                     <TableRow key={cluster.cluster_id}>
                       <TableCell className="font-medium">
@@ -525,7 +516,7 @@ EOF`}
                         </a>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{formatHypervisorType(cluster.cluster_type)}</Badge>
+                        {formatHypervisorType(cluster.cluster_type)}
                       </TableCell>
                       <TableCell>
                         {cluster.zone ? (
@@ -535,10 +526,7 @@ EOF`}
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={statusConfig[cluster.status as ClusterStatus]?.variant || "secondary"}>
-                          <StatusIcon className="h-3 w-3 mr-1" />
-                          {statusConfig[cluster.status as ClusterStatus]?.label || "Unknown"}
-                        </Badge>
+                        {statusConfig[cluster.status as ClusterStatus]?.label || "Unknown"}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">

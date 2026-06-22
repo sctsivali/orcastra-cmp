@@ -157,17 +157,40 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
   }, [instanceName]);
 
   // Connect WebSocket
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     // Prevent connection if component is unmounted or already connecting/connected
     if (!isMountedRef.current) return;
     if (isConnectingRef.current) return;
-    if (wsRef.current?.readyState === WebSocket.OPEN || 
+    if (wsRef.current?.readyState === WebSocket.OPEN ||
         wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     isConnectingRef.current = true;
-    const wsUrl = getTerminalWsUrl(instanceName, host, project);
     updateConnectionStatus(consoleId, "connecting");
-    
+
+    // Mint a single-use ticket via the authenticated API. On failure (ex; a
+    // not-yet-hydrated session token in a freshly opened tab) fall back to the
+    // existing backoff reconnect - the ticket POST refreshes the session so the
+    // retry succeeds.
+    let wsUrl: string;
+    try {
+      wsUrl = await getTerminalWsUrl(instanceName, host, project);
+    } catch {
+      isConnectingRef.current = false;
+      if (!isMountedRef.current) return;
+      if (reconnectAttempts.current < maxReconnectAttempts) {
+        reconnectAttempts.current++;
+        const delay = Math.min(2000 * Math.pow(2, reconnectAttempts.current - 1), 30000);
+        reconnectTimeoutRef.current = setTimeout(connect, delay);
+      }
+      return;
+    }
+
+    // Guard against unmount during the async ticket fetch
+    if (!isMountedRef.current) {
+      isConnectingRef.current = false;
+      return;
+    }
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

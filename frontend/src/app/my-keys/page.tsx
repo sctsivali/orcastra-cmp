@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -49,9 +49,6 @@ import {
   Trash2,
   Search,
   Calendar,
-  Shield,
-  Server,
-  FolderTree,
   AlertCircle,
   CheckCircle,
   ChevronLeft,
@@ -342,15 +339,13 @@ export default function MyKeysPage() {
         </CardHeader>
         <CardContent>
           {keys.length === 0 ? (
-            <div className="text-center py-12 text-muted-foreground">
-              <Key className="h-12 w-12 mx-auto mb-4 opacity-50" />
-              <p className="text-lg font-medium">No keys found</p>
-              <p className="text-sm mt-2">
-                {searchQuery
-                  ? "Try adjusting your search criteria"
-                  : "Generate your first key to get started"}
-              </p>
-            </div>
+            <EmptyState
+              icon={Key}
+              title="No keys found"
+              description={searchQuery
+                ? "Try adjusting your search criteria"
+                : "Generate your first key to get started"}
+            />
           ) : (
             <div className="overflow-x-auto">
               <Table>
@@ -370,33 +365,9 @@ export default function MyKeysPage() {
                   {sortedKeys.map((key: KeyInfo) => (
                     <TableRow key={key.id}>
                       <TableCell className="font-medium">{key.name}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="gap-1">
-                          <Server className="h-3 w-3" />
-                          {key.node}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant="secondary" className="gap-1">
-                          <FolderTree className="h-3 w-3" />
-                          {key.project}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            key.auth_level === "admin"
-                              ? "default"
-                              : "outline"
-                          }
-                          className="gap-1"
-                        >
-                          <Shield className="h-3 w-3" />
-                          {key.auth_level === "admin"
-                            ? "Admin"
-                            : "Standard"}
-                        </Badge>
-                      </TableCell>
+                      <TableCell>{key.node}</TableCell>
+                      <TableCell>{key.project}</TableCell>
+                      <TableCell>{key.auth_level === "admin" ? "Admin" : "Standard"}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(key.created_at).toLocaleDateString('en-GB')}
                       </TableCell>
@@ -405,19 +376,7 @@ export default function MyKeysPage() {
                           ? new Date(key.expires_at).toLocaleDateString('en-GB')
                           : "Never"}
                       </TableCell>
-                      <TableCell>
-                        {key.is_expired ? (
-                          <Badge variant="destructive" className="gap-1">
-                            <AlertCircle className="h-3 w-3" />
-                            Expired
-                          </Badge>
-                        ) : (
-                          <Badge variant="default" className="gap-1 bg-green-600">
-                            <CheckCircle className="h-3 w-3" />
-                            Active
-                          </Badge>
-                        )}
-                      </TableCell>
+                      <TableCell>{key.is_expired ? "Expired" : "Active"}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           <Button

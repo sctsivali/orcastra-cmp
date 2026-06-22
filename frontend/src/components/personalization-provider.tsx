@@ -39,6 +39,9 @@ const API_RETRY_DELAY_MS = 500;
 
 // Org preference polling interval (ms) for cross-session sync
 const ORG_PREF_POLL_INTERVAL_MS = 45_000;
+// Pause polling this long after an auth failure so a token-refresh window does
+// not flood the console with repeated 401s.
+const ORG_PREF_AUTH_COOLDOWN_MS = 120_000;
 
 // Cookie name for personalization hint (visual CSS values for FOUC prevention)
 const PERSONALIZATION_COOKIE = "orcastra-personalization";
@@ -630,6 +633,8 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
 
   // Track the last-known org preferences version to avoid unnecessary full fetches
   const orgPrefsVersionRef = React.useRef<string | null>(null);
+  // Epoch (ms) until which polling is paused after an auth failure.
+  const orgPrefsAuthCooldownUntilRef = React.useRef<number>(0);
 
   /**
    * Lightweight version check: fetch only updated_at from backend.
@@ -638,9 +643,14 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
   const checkOrgPrefsVersion = React.useCallback(async (
     accessToken?: string,
   ): Promise<boolean> => {
+    // No token yet (initial hydration or mid-refresh) - skip; the request would
+    // just 401 and clutter the console without doing anything useful.
+    if (!accessToken) return false;
     try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      };
 
       const response = await fetch(`${API_BASE}/api/v1/organizations/my-preferences/version`, {
         method: "GET",
@@ -648,6 +658,12 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
         credentials: "include",
         cache: "no-store",
       });
+
+      if (response.status === 401 || response.status === 403) {
+        // Auth window (expired/rotating token) - back off so we stop hammering.
+        orgPrefsAuthCooldownUntilRef.current = Date.now() + ORG_PREF_AUTH_COOLDOWN_MS;
+        return false;
+      }
 
       if (!response.ok) return false;
 
@@ -690,6 +706,7 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     if (!shouldPollOrgPrefs) return;
 
     const intervalId = setInterval(async () => {
+      if (Date.now() < orgPrefsAuthCooldownUntilRef.current) return; // backing off after auth failure
       const token = (session as any)?.accessToken;
       const changed = await checkOrgPrefsVersion(token);
       if (changed) {

@@ -23,6 +23,10 @@ const ConsoleManager = dynamic(
 
 // Version embedded at build time from APP_VERSION env or package.json via next.config.js
 const APP_VERSION = process.env.NEXT_PUBLIC_APP_VERSION || "dev";
+// Edition label is derived from the build-time auth mode (baked via Dockerfile ARG, so it is
+// not affected by the runtime placeholder swap). Tagged onto the version - not the app name,
+// which users can override via branding - so the edition is always visible for support.
+const IS_MINI = process.env.NEXT_PUBLIC_AUTH_MODE === "client-cert";
 
 export function MainLayout({ children }: { children: React.ReactNode }) {
   const { sidebarCollapsed } = useLayout();
@@ -90,7 +94,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
                   <p className="text-center sm:text-left">{appName} Dashboard</p>
                   {!isLandingPage && (
                     <span className="text-xs opacity-70">
-                      v{APP_VERSION}
+                      v{APP_VERSION}{IS_MINI ? " - Mini" : ""}
                     </span>
                   )}
                 </div>

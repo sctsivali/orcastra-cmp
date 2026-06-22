@@ -5,11 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
 import { formatHypervisorType } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import { 
-  Server, 
-  CheckCircle, 
-  XCircle, 
-  Database,
+import {
+  Server,
   RefreshCw,
   Shield,
   Globe
@@ -17,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table,
@@ -173,21 +170,17 @@ function ClusterMembersContent() {
         </CardHeader>
         <CardContent>
           {!isClustered ? (
-            <div className="text-center py-12">
-              <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">Not a Clustered Node</h3>
-              <p className="text-muted-foreground mb-4">
-                This node is not part of a hypervisor cluster
-              </p>
-            </div>
+            <EmptyState
+              icon={Server}
+              title="Not a clustered node"
+              description="This node is not part of a hypervisor cluster"
+            />
           ) : members.length === 0 ? (
-            <div className="text-center py-12">
-              <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No Members Found</h3>
-              <p className="text-muted-foreground">
-                Could not retrieve cluster member information
-              </p>
-            </div>
+            <EmptyState
+              icon={Server}
+              title="No members found"
+              description="Could not retrieve cluster member information"
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -219,37 +212,14 @@ function ClusterMembersContent() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="flex gap-1 flex-wrap">
-                        {member.roles && member.roles.length > 0 ? (
-                          member.roles.map((role: any) => (
-                            <Badge 
-                              key={role} 
-                              variant={role === "database-leader" ? "default" : "secondary"}
-                              className="gap-1"
-                            >
-                              {role === "database-leader" || role === "database" ? (
-                                <Database className="h-3 w-3" />
-                              ) : null}
-                              {role}
-                            </Badge>
-                          ))
-                        ) : (
-                          <span className="text-sm text-muted-foreground">—</span>
-                        )}
-                      </div>
+                      {member.roles && member.roles.length > 0 ? (
+                        <span className="text-sm">{member.roles.join(", ")}</span>
+                      ) : (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <Badge 
-                        variant={member.status === "Online" ? "default" : "destructive"}
-                        className="gap-1"
-                      >
-                        {member.status === "Online" ? (
-                          <CheckCircle className="h-3 w-3" />
-                        ) : (
-                          <XCircle className="h-3 w-3" />
-                        )}
-                        {member.status}
-                      </Badge>
+                      <span className="text-sm">{member.status}</span>
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">

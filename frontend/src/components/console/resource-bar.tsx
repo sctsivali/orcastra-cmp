@@ -165,6 +165,9 @@ export function ConsoleResourceBar({
   // Session stats from backend polling
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Once the direct session lookup returns 404 the session is gone for good -
+  // stop polling so we don't 404-flood the backend every 5s.
+  const pollStoppedRef = useRef(false);
 
   // Toggle expanded state
   const toggleExpanded = useCallback(() => {
@@ -220,7 +223,19 @@ export function ConsoleResourceBar({
       return;
     }
 
+    // Reset the halt flag for this connection/session.
+    pollStoppedRef.current = false;
+
+    const stopPolling = () => {
+      pollStoppedRef.current = true;
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+
     const fetchStats = async () => {
+      if (pollStoppedRef.current) return;
       try {
         const { getAccessToken } = await import("@/lib/api");
         const token = getAccessToken();
@@ -235,7 +250,12 @@ export function ConsoleResourceBar({
           );
           if (response.ok) {
             setSessionStats(await response.json());
+          } else if (response.status === 404) {
+            // important: session no longer exists - halt polling instead of
+            // 404-flooding the backend every 5s.
+            stopPolling();
           }
+          // Other transient errors are ignored silently (no console spam).
         } else {
           // Fallback: look up active session by instance name + host (SPICE/graphics mode)
           const params = new URLSearchParams({
@@ -267,7 +287,10 @@ export function ConsoleResourceBar({
     pollIntervalRef.current = setInterval(fetchStats, 5000);
 
     return () => {
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
     };
   }, [sessionId, connectionStatus, instanceName, host]);
 

@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { formatLabel } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -23,7 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, Database } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 import { useStoragePools } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -231,8 +232,8 @@ export default function StoragePoolsPage() {
             <TableBody>
               {paginatedPools.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    No storage pools found
+                  <TableCell colSpan={7}>
+                    <EmptyState icon={Database} title="No storage pools found" />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -243,12 +244,10 @@ export default function StoragePoolsPage() {
                   return (
                     <TableRow key={`${poolKey}-${idx}`}>
                       <TableCell className="font-medium">{pool.name}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{pool.driver}</Badge>
-                      </TableCell>
+                      <TableCell>{formatLabel(pool.driver)}</TableCell>
                       {nodes.length > 0 && (
                         <TableCell>
-                          {pool.node && <Badge variant="secondary">{pool.node}</Badge>}
+                          {pool.node}
                         </TableCell>
                       )}
                       <TableCell>
@@ -261,9 +260,7 @@ export default function StoragePoolsPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={pool.status === "Created" ? "default" : "secondary"}>
-                          {pool.status}
-                        </Badge>
+                        {pool.status}
                       </TableCell>
                       <TableCell>
                         <ClickableBadge

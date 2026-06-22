@@ -58,23 +58,6 @@ interface VMTableProps {
   isLoading?: boolean;
 }
 
-function getStatusBadgeVariant(
-  status: VMStatus
-): "success" | "error" | "warning" | "muted" {
-  switch (status) {
-    case "Running":
-      return "success";
-    case "Stopped":
-      return "muted";
-    case "Frozen":
-      return "warning";
-    case "Error":
-      return "error";
-    default:
-      return "muted";
-  }
-}
-
 function StatusIndicator({ status }: { status: VMStatus }) {
   const isRunning = status === "Running";
   return (
@@ -85,7 +68,7 @@ function StatusIndicator({ status }: { status: VMStatus }) {
           isRunning ? "bg-emerald-500 animate-pulse" : "bg-zinc-400"
         )}
       />
-      <Badge variant={getStatusBadgeVariant(status)}>{status}</Badge>
+      <span className="text-sm">{status}</span>
     </div>
   );
 }
@@ -561,9 +544,7 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="font-mono text-xs">
-                          {vm.host}
-                        </Badge>
+                        <span className="font-mono text-xs">{vm.host}</span>
                       </TableCell>
                       <TableCell className="text-right">
                         <VMActionButtons vm={vm} />

@@ -34,7 +34,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { AlertTriangle, X, Info, Filter, Flame, ShieldAlert, HelpCircle, Server, FolderOpen, Shield, KeyRound, Wifi, WifiOff } from "lucide-react";
+import { AlertTriangle, X, Filter, ShieldAlert, HelpCircle, Server, FolderOpen, Shield, KeyRound, Wifi, WifiOff } from "lucide-react";
 import { useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import {
@@ -44,7 +44,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatLabel } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { SEVERITY_RANK } from "@/lib/sort";
@@ -205,25 +206,12 @@ function WarningsContent() {
     }
   };
   
-  const getSeverityIcon = (severity: string) => {
-    switch (severity.toLowerCase()) {
-      case "high":
-      case "critical":
-        return <Flame className="h-4 w-4" />;
-      case "medium":
-      case "warning":
-        return <AlertTriangle className="h-4 w-4" />;
-      default:
-        return <Info className="h-4 w-4" />;
-    }
-  };
-
   if (isLoading || isLoadingSystem) {
     return <LoadingLottiePage />;
   }
   
   const handleRefreshAll = () => {
-    void Promise.all([refetch(), refetchSystem()]);
+    return Promise.all([refetch(), refetchSystem()]);
   };
   const isRefreshingWarnings = isRefetching || isRefetchingSystem;
 
@@ -381,11 +369,10 @@ function WarningsContent() {
         </CardHeader>
         <CardContent className="p-0 md:p-6 md:pt-0">
           {warnings.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              {severityFilter !== "all" 
-                ? `No ${severityFilter} warnings found` 
-                : "No warnings found"}
-            </div>
+            <EmptyState
+              icon={AlertTriangle}
+              title={severityFilter !== "all" ? `No ${severityFilter} warnings found` : "No warnings found"}
+            />
           ) : (
             <div className="overflow-x-auto">
             <Table>
@@ -427,23 +414,18 @@ function WarningsContent() {
                     className="cursor-pointer hover:bg-accent/50 transition-colors"
                     onClick={() => handleShowWarningDetail(warning)}
                   >
-                    <TableCell>
-                      <Badge variant="outline">{warning.type}</Badge>
-                    </TableCell>
+                    <TableCell>{formatLabel(warning.type)}</TableCell>
                     <TableCell className="max-w-md truncate">
                       {warning.last_message}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={getSeverityColor(warning.severity)} className="flex items-center gap-1 w-fit">
-                        {getSeverityIcon(warning.severity)}
-                        {warning.severity}
-                      </Badge>
+                      {formatLabel(warning.severity)}
                     </TableCell>
                     <TableCell>
                       <span className="font-medium">{warning.location || warning.source_node || "N/A"}</span>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{warning.count.toLocaleString()}</Badge>
+                      {warning.count.toLocaleString()}
                     </TableCell>
                     <TableCell className="text-xs md:text-sm whitespace-nowrap">
                       {formatDateTime(warning.last_seen_at)}
@@ -471,11 +453,11 @@ function WarningsContent() {
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
               {certWarnings.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No certificate issues found</p>
-                  <p className="text-sm mt-1">All certificates are healthy</p>
-                </div>
+                <EmptyState
+                  icon={Shield}
+                  title="No certificate issues found"
+                  description="All certificates are healthy"
+                />
               ) : (
                 <div className="overflow-x-auto">
                 <Table>
@@ -503,18 +485,10 @@ function WarningsContent() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={isExpired ? "destructive" : "secondary"}>
-                            {statusLabel}
-                          </Badge>
+                          {statusLabel}
                         </TableCell>
                         <TableCell>
-                          <Badge 
-                            variant={warning.severity === "critical" ? "destructive" : "default"}
-                            className="flex items-center gap-1 w-fit"
-                          >
-                            {warning.severity === "critical" && <Flame className="h-3 w-3" />}
-                            {warning.severity}
-                          </Badge>
+                          {formatLabel(warning.severity)}
                         </TableCell>
                         <TableCell>
                           <span className={warning.days_until_expiry <= 3 ? "text-red-600 font-bold" : warning.days_until_expiry <= 7 ? "text-amber-600 font-medium" : ""}>
@@ -554,11 +528,11 @@ function WarningsContent() {
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
               {nodeWarnings.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>All nodes are online</p>
-                  <p className="text-sm mt-1">No connectivity issues detected</p>
-                </div>
+                <EmptyState
+                  icon={Wifi}
+                  title="All nodes are online"
+                  description="No connectivity issues detected"
+                />
               ) : (
                 <div className="overflow-x-auto">
                 <Table>
@@ -586,10 +560,7 @@ function WarningsContent() {
                           </code>
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
-                          <Badge variant="destructive" className="flex items-center gap-1 w-fit">
-                            <Flame className="h-3 w-3" />
-                            {warning.severity || "critical"}
-                          </Badge>
+                          {formatLabel(warning.severity || "critical")}
                         </TableCell>
                         <TableCell className="max-w-xs text-xs md:text-sm">
                           <TooltipProvider>

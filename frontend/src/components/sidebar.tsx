@@ -871,7 +871,7 @@ export function Sidebar({ className }: SidebarProps) {
                       <span className={cn(
                         "ml-2 flex-1 text-left",
                         isCollapsed && !sidebarOpen && "md:hidden"
-                      )}>Identities</span>
+                      )}>Local Identities</span>
                     </SidebarLink>
                   </Button>
                   <Button

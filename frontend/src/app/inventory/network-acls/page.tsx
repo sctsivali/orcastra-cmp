@@ -3,7 +3,6 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -23,7 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, Shield } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworkACLs } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -184,8 +184,8 @@ export default function NetworkACLsPage() {
             <TableBody>
               {paginatedACLs.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    No network ACLs found
+                  <TableCell colSpan={7}>
+                    <EmptyState icon={Shield} title="No network ACLs found" />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -197,14 +197,14 @@ export default function NetworkACLsPage() {
                     </TableCell>
                     {nodes.length > 0 && (
                       <TableCell>
-                        {acl.node && <Badge variant="secondary">{acl.node}</Badge>}
+                        {acl.node}
                       </TableCell>
                     )}
                     <TableCell>
-                      <Badge variant="outline">{acl.ingress?.length || 0} rules</Badge>
+                      {(acl.ingress?.length || 0) + " rules"}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{acl.egress?.length || 0} rules</Badge>
+                      {(acl.egress?.length || 0) + " rules"}
                     </TableCell>
                     <TableCell>
                       <ClickableBadge

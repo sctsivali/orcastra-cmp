@@ -22,6 +22,9 @@ interface TerminalInstanceProps {
   onReady?: () => void;
   onError?: (error: string) => void;
   onClose?: () => void;
+  // Fired when the session id arrives - lets a host that does not use the terminal store
+  // (ex; the full-page view) feed the resource bar.
+  onSessionId?: (sessionId: string) => void;
 }
 
 // Expose search and focus methods to parent
@@ -41,6 +44,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
   onReady,
   onError,
   onClose,
+  onSessionId,
 }, ref) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -50,6 +54,8 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttempts = useRef(0);
   const maxReconnectAttempts = 10; // Increased for better resilience
+  // Set on unmount/explicit close so an in-flight (re)connect does not race a teardown.
+  const manualCloseRef = useRef(false);
 
   const { updateTerminalStatus, setTerminalSessionId } = useTerminalStore();
 
@@ -145,13 +151,47 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     return term;
   }, [instanceName]);
 
+  // Reconnect with exponential backoff + jitter (jitter avoids thundering-herd
+  // reconnects when many terminals drop at once).
+  const scheduleReconnect = useCallback((notice: string) => {
+    if (manualCloseRef.current || reconnectAttempts.current >= maxReconnectAttempts) {
+      if (reconnectAttempts.current >= maxReconnectAttempts) {
+        xtermRef.current?.writeln("\x1b[1;31m✗ Max reconnection attempts reached. Click to retry.\x1b[0m");
+        updateTerminalStatus(terminalId, "error", "Connection failed after multiple attempts");
+      }
+      return;
+    }
+    reconnectAttempts.current++;
+    const base = Math.min(2000 * reconnectAttempts.current, 10000);
+    const delay = base + Math.floor(Math.random() * 500);
+    xtermRef.current?.writeln(
+      `\x1b[1;33m⚠ ${notice} (attempt ${reconnectAttempts.current}/${maxReconnectAttempts}, ${(delay / 1000).toFixed(1)}s)\x1b[0m`
+    );
+    updateTerminalStatus(terminalId, "connecting");
+    reconnectTimeoutRef.current = setTimeout(() => { connect(); }, delay);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [terminalId, updateTerminalStatus]);
+
   // Connect WebSocket
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const wsUrl = getTerminalWsUrl(instanceName, host, project);
-
     updateTerminalStatus(terminalId, "connecting");
+
+    // Mint a fresh single-use ticket per (re)connect. This keeps the JWT out of
+    // the URL and transparently refreshes an expired session token before we
+    // open the socket - so a long-lived or freshly-opened tab connects cleanly.
+    let wsUrl: string;
+    try {
+      wsUrl = await getTerminalWsUrl(instanceName, host, project);
+    } catch {
+      scheduleReconnect("Authenticating, retrying");
+      return;
+    }
+
+    // Component unmounted while awaiting the ticket - abort.
+    if (manualCloseRef.current) return;
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -172,6 +212,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
         switch (msg.type) {
           case "session":
             setTerminalSessionId(terminalId, msg.session_id);
+            onSessionId?.(msg.session_id);
             xtermRef.current?.writeln(`\x1b[1;32m✓ Session established: ${msg.session_id.slice(0, 8)}...\x1b[0m`);
             break;
 
@@ -235,26 +276,13 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     };
 
     ws.onclose = (event) => {
-      // Reconnect for abnormal closures (not user-initiated)
-      // code 1000 = normal closure, 1001 = going away
-      if (event.code !== 1000 && event.code !== 1001 && reconnectAttempts.current < maxReconnectAttempts) {
-        reconnectAttempts.current++;
-        // Start with 2s delay, then increase: 2s, 4s, 6s, 8s... max 10s
-        const delay = Math.min(2000 * reconnectAttempts.current, 10000);
-        xtermRef.current?.writeln(
-          `\x1b[1;33m⚠ Reconnecting in ${(delay / 1000).toFixed(1)}s... (attempt ${reconnectAttempts.current}/${maxReconnectAttempts})\x1b[0m`
-        );
-        updateTerminalStatus(terminalId, "connecting");
-
-        reconnectTimeoutRef.current = setTimeout(() => {
-          connect();
-        }, delay);
-      } else if (reconnectAttempts.current >= maxReconnectAttempts) {
-        xtermRef.current?.writeln("\x1b[1;31m✗ Max reconnection attempts reached. Click to retry.\x1b[0m");
-        updateTerminalStatus(terminalId, "error", "Connection failed after multiple attempts");
-      }
+      // code 1000 = normal closure (ex; shell exited), 1001 = going away: do not
+      // reconnect. Any other close (1006 dropped, 1008 auth/ticket rejected, etc.)
+      // is treated as recoverable - a fresh ticket is minted on the next attempt.
+      if (manualCloseRef.current || event.code === 1000 || event.code === 1001) return;
+      scheduleReconnect("Reconnecting");
     };
-  }, [terminalId, instanceName, host, project, updateTerminalStatus, setTerminalSessionId, onReady, onError, onClose]);
+  }, [terminalId, instanceName, host, project, updateTerminalStatus, setTerminalSessionId, onReady, onError, onClose, onSessionId, scheduleReconnect]);
 
   // Handle container resize
   const handleResize = useCallback(() => {
@@ -336,6 +364,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
     window.addEventListener("focus", handleWindowFocus);
 
     return () => {
+      manualCloseRef.current = true;
       window.removeEventListener("resize", handleResize);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", handleWindowFocus);

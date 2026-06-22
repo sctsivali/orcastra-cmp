@@ -1340,6 +1340,39 @@ export const auditLogAPI = {
 
   verify: async (): Promise<{ valid: boolean; checked: number; broken_at_id: number | null }> =>
     fetchAPI("/audit-log/verify"),
+
+  // Streamed download honoring the active filters; returns a Blob + the server filename.
+  export: async (
+    format: "csv" | "json",
+    params: {
+      action?: string;
+      actor?: string;
+      result?: string;
+      start?: string;
+      end?: string;
+      sort_by?: string;
+      sort_dir?: string;
+    } = {},
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const qs = new URLSearchParams({ format });
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
+    });
+    const url = `${API_BASE_URL}${API_PREFIX}/audit-log/export?${qs.toString()}`;
+    const response = await fetch(url, {
+      headers: {
+        ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
+      },
+    });
+    if (!response.ok) {
+      throw new Error("Failed to export audit log");
+    }
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : `audit-log.${format}`;
+    const blob = await response.blob();
+    return { blob, filename };
+  },
 };
 
 // Monitoring API
@@ -1372,6 +1405,32 @@ export const monitoringAPI = {
 
   getNetworkMetrics: async (): Promise<MonitoringNetworkMetrics> => {
     return fetchAPI<MonitoringNetworkMetrics>("/monitoring/network");
+  },
+};
+
+// Single-use WebSocket auth tickets.
+// The bearer token is exchanged for an opaque, short-lived ticket so it never
+// appears in a WebSocket URL (devtools / history / proxy logs). See ws-url.ts.
+export interface WsTicketResponse {
+  ticket: string;
+  expires_in: number;
+}
+
+export const wsTicketAPI = {
+  createInstanceTicket: async (params: {
+    instance: string;
+    host: string;
+    project: string;
+    console_type?: string;
+  }): Promise<WsTicketResponse> => {
+    return fetchAPI<WsTicketResponse>("/terminal/ticket", {
+      method: "POST",
+      body: JSON.stringify(params),
+    });
+  },
+
+  createMonitoringTicket: async (): Promise<WsTicketResponse> => {
+    return fetchAPI<WsTicketResponse>("/monitoring/ws-ticket", { method: "POST" });
   },
 };
 

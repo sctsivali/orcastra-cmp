@@ -67,12 +67,11 @@ export function UsedByProjects({ usedBy, resourceName }: UsedByProjectsProps) {
   return (
     <>
       <button
+        type="button"
         onClick={() => setIsOpen(true)}
-        className="inline-flex items-center gap-1 hover:underline focus:outline-none"
+        className="cursor-pointer text-foreground hover:underline focus:outline-none focus-visible:underline"
       >
-        <Badge variant="secondary">
-          {`${uniqueProjects || usedBy.length} project${(uniqueProjects || usedBy.length) !== 1 ? 's' : ''}`}
-        </Badge>
+        {`${uniqueProjects || usedBy.length} project${(uniqueProjects || usedBy.length) !== 1 ? 's' : ''}`}
       </button>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>

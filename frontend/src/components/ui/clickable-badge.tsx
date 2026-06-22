@@ -74,7 +74,7 @@ export function ClickableBadge({
   const [open, setOpen] = useState(false);
 
   if (count === 0) {
-    return <Badge variant="outline" className="flex items-center justify-center gap-1">0 {label}</Badge>;
+    return <span className="text-muted-foreground">0 {label}</span>;
   }
 
   // Check if items are device objects (have name, type, config properties)
@@ -85,13 +85,13 @@ export function ClickableBadge({
 
   return (
     <>
-      <Badge
-        variant="secondary"
-        className="cursor-pointer hover:bg-secondary/80 transition-colors flex items-center justify-center gap-1"
+      <button
+        type="button"
+        className="cursor-pointer text-foreground hover:underline focus:outline-none focus-visible:underline"
         onClick={() => setOpen(true)}
       >
         {count} {label}
-      </Badge>
+      </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">

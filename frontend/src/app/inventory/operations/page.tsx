@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { CopyableId } from "@/components/ui/copyable-id";
 import {
   Table,
   TableBody,
@@ -36,7 +36,8 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatLabel } from "@/lib/utils";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
@@ -95,20 +96,6 @@ export default function OperationsPage() {
   const sortedOperations = useMemo(() => sortItems(operations), [operations, sortItems]);
 
   if (!isPartner) return null;
-
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case "success":
-      case "completed":
-        return "default";
-      case "running":
-        return "secondary";
-      case "pending":
-        return "outline";
-      default:
-        return "destructive";
-    }
-  };
 
   // Find the host for an operation (check metadata, node_name, or iterate nodes)
   const findOperationHost = (operation: any): string => {
@@ -311,9 +298,7 @@ export default function OperationsPage() {
         </CardHeader>
         <CardContent>
           {operations.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              No active operations
-            </div>
+            <EmptyState icon={Clock} title="No active operations" />
           ) : (
             <TooltipProvider>
               <Table>
@@ -338,8 +323,8 @@ export default function OperationsPage() {
                     
                     return (
                     <TableRow key={operation.id}>
-                      <TableCell className="font-mono text-xs">
-                        {operation.id.substring(0, 8)}...
+                      <TableCell>
+                        <CopyableId value={operation.id} head={8} tail={6} label="Operation ID" />
                       </TableCell>
                       <TableCell>
                         {instanceName ? (
@@ -350,18 +335,16 @@ export default function OperationsPage() {
                       </TableCell>
                       <TableCell>{operation.description || "N/A"}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{operation.node_name || "N/A"}</Badge>
+                        {operation.node_name || "N/A"}
                       </TableCell>
                       <TableCell>
                         <span className="text-sm">{operation.project || "default"}</span>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={getStatusColor(operation.status)}>
-                          {operation.status}
-                        </Badge>
+                        {operation.status}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{operation.class_name}</Badge>
+                        {formatLabel(operation.class_name)}
                       </TableCell>
                       <TableCell className="text-sm">
                         {formatDateTime(operation.created_at)}

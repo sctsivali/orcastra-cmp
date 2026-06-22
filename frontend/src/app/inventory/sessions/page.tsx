@@ -12,8 +12,8 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -32,7 +32,6 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Terminal,
-  Monitor,
   RefreshCw,
   Clock,
   Wifi,
@@ -44,8 +43,6 @@ import {
   Search,
   X,
   History,
-  LogIn,
-  LogOut,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getAccessToken } from "@/lib/api";
@@ -207,6 +204,7 @@ function ActiveSessionsTab() {
   const fetchSessions = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     setError(null);
+    let isError = false;
     try {
       const token = getAccessToken();
       const res = await fetch(`${API_URL}/api/v1/console/sessions/active`, {
@@ -217,9 +215,11 @@ function ActiveSessionsTab() {
       setLastRefresh(new Date());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch sessions");
+      isError = true;
     } finally {
       setLoading(false);
     }
+    return { isError };
   }, []);
 
   useEffect(() => { fetchSessions(true); }, [fetchSessions]);
@@ -315,16 +315,18 @@ function ActiveSessionsTab() {
         </CardHeader>
         <CardContent>
           {error ? (
-            <EmptyState icon={WifiOff} message={error}>
-              <Button variant="outline" size="sm" onClick={() => fetchSessions(true)}>Retry</Button>
-            </EmptyState>
+            <EmptyState
+              icon={WifiOff}
+              title={error}
+              action={<Button variant="outline" size="sm" onClick={() => fetchSessions(true)}>Retry</Button>}
+            />
           ) : loading && sessions.length === 0 ? (
-            <EmptyState icon={Loader2} message="Loading sessions..." iconClass="animate-spin" />
+            <EmptyState icon={Loader2} title="Loading sessions..." iconClassName="animate-spin" />
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={Terminal}
-              message={sessions.length === 0 ? "No active sessions" : "No matching sessions"}
-              sub={sessions.length === 0 ? "Sessions appear here when you connect to a console or terminal." : "Try adjusting your filter."}
+              title={sessions.length === 0 ? "No active sessions" : "No matching sessions"}
+              description={sessions.length === 0 ? "Sessions appear here when you connect to a console or terminal." : "Try adjusting your filter."}
             />
           ) : (
             <div className="rounded-md border overflow-hidden">
@@ -384,6 +386,7 @@ function SessionHistoryTab() {
   const fetchLogs = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     setError(null);
+    let isError = false;
     try {
       const token = getAccessToken();
       const params = new URLSearchParams({ limit: "500" });
@@ -394,9 +397,11 @@ function SessionHistoryTab() {
       setLogs(await res.json());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch session history");
+      isError = true;
     } finally {
       setLoading(false);
     }
+    return { isError };
   }, []);
 
   useEffect(() => { fetchLogs(true); }, [fetchLogs]);
@@ -495,16 +500,18 @@ function SessionHistoryTab() {
         </CardHeader>
         <CardContent>
           {error ? (
-            <EmptyState icon={WifiOff} message={error}>
-              <Button variant="outline" size="sm" onClick={() => fetchLogs(true)}>Retry</Button>
-            </EmptyState>
+            <EmptyState
+              icon={WifiOff}
+              title={error}
+              action={<Button variant="outline" size="sm" onClick={() => fetchLogs(true)}>Retry</Button>}
+            />
           ) : loading && logs.length === 0 ? (
-            <EmptyState icon={Loader2} message="Loading history..." iconClass="animate-spin" />
+            <EmptyState icon={Loader2} title="Loading history..." iconClassName="animate-spin" />
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={History}
-              message={logs.length === 0 ? "No session history" : "No matching entries"}
-              sub={logs.length === 0 ? "Your past sessions will appear here once you disconnect." : "Try adjusting your filter."}
+              title={logs.length === 0 ? "No session history" : "No matching entries"}
+              description={logs.length === 0 ? "Your past sessions will appear here once you disconnect." : "Try adjusting your filter."}
             />
           ) : (
             <>
@@ -548,7 +555,6 @@ function SessionHistoryTab() {
 
 function ActiveRow({ session }: { session: SessionData }) {
   const isGraphics = session.protocol === "spice-graphics";
-  const ProtocolIcon = isGraphics ? Monitor : Terminal;
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
   return (
@@ -560,10 +566,7 @@ function ActiveRow({ session }: { session: SessionData }) {
         </div>
       </TableCell>
       <TableCell>
-        <Badge variant="outline" className="gap-1 font-normal">
-          <ProtocolIcon className="h-3 w-3" />
-          {protocolLabel}
-        </Badge>
+        {protocolLabel}
       </TableCell>
       <TableCell>
         <Tooltip>
@@ -595,46 +598,20 @@ function ActiveRow({ session }: { session: SessionData }) {
         </div>
       </TableCell>
       <TableCell>
-        <Badge
-          variant="secondary"
-          className={cn(
-            "gap-1",
-            session.connection_status === "connected"
-              ? "bg-green-500/10 text-green-600 dark:text-green-400"
-              : session.connection_status === "connecting"
-              ? "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400"
-              : "bg-red-500/10 text-red-600 dark:text-red-400"
-          )}
-        >
-          <Wifi className="h-3 w-3" />
-          {session.connection_status}
-        </Badge>
+        {session.connection_status}
       </TableCell>
     </TableRow>
   );
 }
 
 function HistoryRow({ log }: { log: AuditLogEntry }) {
-  const isConnect = log.event_type === "connect";
   const isGraphics = log.protocol === "spice-graphics";
-  const ProtocolIcon = isGraphics ? Monitor : Terminal;
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
   return (
     <TableRow className="hover:bg-muted/50">
       <TableCell>
-        <Badge
-          variant="secondary"
-          className={cn(
-            "gap-1",
-            isConnect
-              ? "bg-green-500/10 text-green-600 dark:text-green-400"
-              : "bg-orange-500/10 text-orange-600 dark:text-orange-400"
-          )}
-        >
-          {isConnect ? <LogIn className="h-3 w-3" /> : <LogOut className="h-3 w-3" />}
-          {log.event_type}
-        </Badge>
+        {log.event_type}
       </TableCell>
       <TableCell>
         <div className="flex flex-col">
@@ -643,10 +620,7 @@ function HistoryRow({ log }: { log: AuditLogEntry }) {
         </div>
       </TableCell>
       <TableCell>
-        <Badge variant="outline" className="gap-1 font-normal">
-          <ProtocolIcon className="h-3 w-3" />
-          {protocolLabel}
-        </Badge>
+        {protocolLabel}
       </TableCell>
       <TableCell>
         <span className="font-mono text-sm">{formatDuration(log.duration_seconds)}</span>
@@ -708,25 +682,3 @@ function SearchInput({
   );
 }
 
-function EmptyState({
-  icon: Icon,
-  message,
-  sub,
-  iconClass,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  message: string;
-  sub?: string;
-  iconClass?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-      <Icon className={cn("h-10 w-10 mb-3 opacity-30", iconClass)} />
-      <p className="font-medium">{message}</p>
-      {sub && <p className="text-sm mt-1">{sub}</p>}
-      {children && <div className="mt-3">{children}</div>}
-    </div>
-  );
-}

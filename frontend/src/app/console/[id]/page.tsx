@@ -170,6 +170,7 @@ function ConsoleContent() {
   const searchAddonRef = useRef<SearchAddon | null>(null);
   const textWsRef = useRef<WebSocket | null>(null);
   const textInitializingRef = useRef(false); // Prevent double initialization
+  const textReconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Graphics console refs
   const graphicsRef = useRef<HTMLDivElement>(null);
@@ -456,17 +457,27 @@ function ConsoleContent() {
   }, [instanceName]);
 
   // Connect text console
-  const connectText = useCallback(() => {
+  const connectText = useCallback(async () => {
     if (!instanceName || !host) return;
     // Prevent reconnect if already connected or connecting
-    if (textWsRef.current?.readyState === WebSocket.OPEN || 
+    if (textWsRef.current?.readyState === WebSocket.OPEN ||
         textWsRef.current?.readyState === WebSocket.CONNECTING) {
       return;
     }
 
-    const wsUrl = getTerminalWsUrl(instanceName, host, project);
-
     setTextStatus("connecting");
+
+    // Mint a single-use ticket via the authenticated API. On failure (ex; a
+    // not-yet-hydrated session token in a freshly opened tab) retry shortly -
+    // the ticket POST refreshes the session so the next attempt succeeds.
+    let wsUrl: string;
+    try {
+      wsUrl = await getTerminalWsUrl(instanceName, host, project);
+    } catch {
+      textReconnectTimeoutRef.current = setTimeout(() => { connectText(); }, 2000);
+      return;
+    }
+
     const ws = new WebSocket(wsUrl);
     textWsRef.current = ws;
 
@@ -526,7 +537,7 @@ function ConsoleContent() {
     if (!spiceReady || !isVM) return;
     
     // Check for screen element with retry for mobile devices
-    const attemptConnect = (retryCount = 0) => {
+    const attemptConnect = async (retryCount = 0) => {
       const screen = document.getElementById(screenId);
       if (!screen) {
         if (retryCount < 10) {
@@ -553,7 +564,7 @@ function ConsoleContent() {
       isStabilizedRef.current = false;
       setGraphicsStatus("connecting");
       try {
-        const wsUrl = getGraphicsWsUrl(instanceName, host, project);
+        const wsUrl = await getGraphicsWsUrl(instanceName, host, project);
         const SpiceMainConn = (window as any).SpiceMainConn;
         if (!SpiceMainConn) throw new Error("SpiceMainConn not available");
 
@@ -614,6 +625,10 @@ function ConsoleContent() {
   // Reconnect
   const handleReconnect = useCallback(() => {
     if (activeTab === "text") {
+      if (textReconnectTimeoutRef.current) {
+        clearTimeout(textReconnectTimeoutRef.current);
+        textReconnectTimeoutRef.current = null;
+      }
       if (textWsRef.current) textWsRef.current.close();
       if (xtermRef.current) xtermRef.current.clear();
       connectText();
@@ -1343,6 +1358,10 @@ function ConsoleContent() {
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("beforeunload", handleBeforeUnload);
       clearInterval(heartbeat);
+      if (textReconnectTimeoutRef.current) {
+        clearTimeout(textReconnectTimeoutRef.current);
+        textReconnectTimeoutRef.current = null;
+      }
       if (textWsRef.current) textWsRef.current.close();
       if (xtermRef.current) xtermRef.current.dispose();
       if (spiceRef.current) {

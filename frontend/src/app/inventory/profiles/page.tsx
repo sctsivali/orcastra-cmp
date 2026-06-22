@@ -3,7 +3,6 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -23,7 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, Layers } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { ProfileInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useProfiles } from "@/hooks/use-lxd";
@@ -178,8 +178,8 @@ export default function ProfilesPage() {
             <TableBody>
               {paginatedProfiles.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No profiles found
+                  <TableCell colSpan={6}>
+                    <EmptyState icon={Layers} title="No profiles found" />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -189,9 +189,7 @@ export default function ProfilesPage() {
                     <TableCell className="max-w-xs truncate">
                       {profile.description || "N/A"}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{profile.node}</Badge>
-                    </TableCell>
+                    <TableCell>{profile.node}</TableCell>
                     <TableCell>
                       <ClickableBadge
                         count={Object.keys(profile.devices || {}).length}

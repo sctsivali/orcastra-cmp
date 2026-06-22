@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useSession } from "next-auth/react";
-import { getAccessToken } from "@/lib/api";
+import { getMonitoringWsUrl } from "@/lib/ws-url";
 import { Role, resolveRoles } from "@/types/rbac";
 import type { MonitoringDashboardResponse } from "@/types";
 
@@ -35,25 +35,17 @@ export function useMonitoringWebSocket(enabled: boolean = true) {
   const isAdmin = roles.includes(Role.ADMIN);
   const scopeKey = `${user?.id ?? user?.email ?? "anonymous"}:${[...groups].sort().join(",")}`;
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (!enabled || !isAdmin) return;
 
-    // Build WS URL from NEXT_PUBLIC_API_URL (direct backend connection for WebSocket)
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "";
-    // Append auth token as query param (browsers can't set Authorization headers on WS)
-    const token = getAccessToken();
-    const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+    // Mint a single-use monitoring ticket via the authenticated API. On failure
+    // (ex; a not-yet-hydrated session token) fall back to the existing backoff.
     let wsUrl: string;
-    if (apiUrl) {
-      const isSecure = apiUrl.startsWith("https://");
-      const protocol = isSecure ? "wss:" : "ws:";
-      const host = apiUrl.replace(/^https?:\/\//, "").replace(/\/+$/, "");
-      wsUrl = `${protocol}//${host}/api/v1/monitoring/ws${tokenParam}`;
-    } else {
-      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
-      const protocol = isHttps ? "wss:" : "ws:";
-      const hostname = typeof window !== "undefined" ? window.location.hostname : "localhost";
-      wsUrl = `${protocol}//${hostname}:4050/api/v1/monitoring/ws${tokenParam}`;
+    try {
+      wsUrl = await getMonitoringWsUrl();
+    } catch {
+      scheduleReconnect();
+      return;
     }
 
     try {

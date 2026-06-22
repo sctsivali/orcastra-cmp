@@ -3,7 +3,6 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
@@ -21,7 +20,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, Globe } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useIPAM } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -240,11 +240,8 @@ export default function IPAMPage() {
             <TableBody>
               {paginatedAllocations.length === 0 ? (
                 <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="text-center text-muted-foreground"
-                  >
-                    No IP allocations found
+                  <TableCell colSpan={7}>
+                    <EmptyState icon={Globe} title="No IP allocations found" />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -254,9 +251,7 @@ export default function IPAMPage() {
                       {alloc.address}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={alloc.type === "instance" ? "default" : "secondary"}>
-                        {alloc.type}
-                      </Badge>
+                      {alloc.type}
                     </TableCell>
                     <TableCell className="font-medium">
                       {alloc.used_by}
@@ -268,15 +263,9 @@ export default function IPAMPage() {
                         <span className="text-muted-foreground text-xs">N/A</span>
                       )}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{alloc.network}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{alloc.node}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{alloc.project || 'default'}</Badge>
-                    </TableCell>
+                    <TableCell>{alloc.network}</TableCell>
+                    <TableCell>{alloc.node}</TableCell>
+                    <TableCell>{alloc.project || 'default'}</TableCell>
                   </TableRow>
                 ))
               )}

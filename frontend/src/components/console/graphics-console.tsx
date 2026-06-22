@@ -522,7 +522,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
     }, []);
 
     // Connect to graphics console
-    const connect = useCallback(() => {
+    const connect = useCallback(async () => {
       const screen = document.getElementById(screenId);
       if (!scriptsReady || !screen) {
         console.warn('[GraphicsConsole] Not ready - scriptsReady:', scriptsReady, 'screen:', !!screen);
@@ -562,7 +562,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       setErrorMessage('');
 
       try {
-        const wsUrl = getGraphicsWsUrl(instanceName, host, project);
+        const wsUrl = await getGraphicsWsUrl(instanceName, host, project);
         const SpiceMainConn = (window as any).SpiceMainConn;
 
         if (!SpiceMainConn) {

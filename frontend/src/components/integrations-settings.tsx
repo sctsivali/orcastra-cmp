@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { IntegrationClusterAccessList } from "@/components/integration-cluster-access-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -524,21 +525,12 @@ export function IntegrationsSettings() {
       {/* API Keys List */}
       {apiKeys.length === 0 ? (
         <Card>
-          <CardContent className="py-12">
-            <div className="text-center space-y-4">
-              <Key className="h-12 w-12 mx-auto text-muted-foreground" />
-              <div>
-                <h3 className="text-lg font-medium">No API Keys</h3>
-                <p className="text-muted-foreground">
-                  Create an API key to allow external applications to connect.
-                </p>
-              </div>
-              <CreateAPIKeyDialog
-                clusters={clusters}
-                onSubmit={(data) => createMutation.mutate(data)}
-                isSubmitting={createMutation.isPending}
-              />
-            </div>
+          <CardContent>
+            <EmptyState
+              icon={Key}
+              title="No API Keys"
+              description="Create an API key to allow external applications to connect."
+            />
           </CardContent>
         </Card>
       ) : (

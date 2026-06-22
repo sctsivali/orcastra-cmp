@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { formatLabel } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -22,7 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, Network } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworks } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -216,8 +217,8 @@ export default function NetworksPage() {
             <TableBody>
               {paginatedNetworks.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground">
-                    No networks found
+                  <TableCell colSpan={9}>
+                    <EmptyState icon={Network} title="No networks found" />
                   </TableCell>
                 </TableRow>
               ) : (
@@ -230,12 +231,10 @@ export default function NetworksPage() {
                   return (
                     <TableRow key={`${network.node}-${network.name}-${idx}`}>
                       <TableCell className="font-medium">{network.name}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{network.type}</Badge>
-                      </TableCell>
+                      <TableCell>{formatLabel(network.type)}</TableCell>
                       {nodes.length > 0 && (
                         <TableCell>
-                          {network.node && <Badge variant="secondary">{network.node}</Badge>}
+                          {network.node}
                         </TableCell>
                       )}
                       <TableCell>
@@ -245,16 +244,10 @@ export default function NetworksPage() {
                         <code className="text-xs">{ipv6}</code>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={network.status === "Created" ? "default" : "secondary"}>
-                          {network.status || "N/A"}
-                        </Badge>
+                        {network.status || "N/A"}
                       </TableCell>
                       <TableCell>
-                        {network.managed ? (
-                          <Badge variant="default">Yes</Badge>
-                        ) : (
-                          <Badge variant="outline">No</Badge>
-                        )}
+                        {network.managed ? "Yes" : "No"}
                       </TableCell>
                       <TableCell className="text-center">
                         <ClickableBadge

@@ -479,8 +479,8 @@ export function PersonalizationSettings() {
       {/* Header with Preview and Reset */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h3 className="text-lg font-semibold">Personalization</h3>
-          <p className="text-sm text-muted-foreground">
+          <h2 className="text-2xl font-bold">Personalization</h2>
+          <p className="text-sm text-muted-foreground mt-1">
             Customize the look and feel of your dashboard
           </p>
         </div>

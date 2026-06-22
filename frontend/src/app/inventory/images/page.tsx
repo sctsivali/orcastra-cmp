@@ -3,7 +3,8 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import { formatInstanceType } from "@/lib/utils";
+import { CopyableId } from "@/components/ui/copyable-id";
 import { Input } from "@/components/ui/input";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
@@ -21,7 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, Image as ImageIcon } from "lucide-react";
+import { EmptyState } from "@/components/ui/empty-state";
 import { useToast } from "@/hooks/use-toast";
 import { useImages } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -242,62 +244,43 @@ export default function ImagesPage() {
             <TableBody>
               {paginatedImages.length === 0 ? (
                 <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="text-center text-muted-foreground"
-                  >
-                    No images found
+                  <TableCell colSpan={7}>
+                    <EmptyState icon={ImageIcon} title="No images found" />
                   </TableCell>
                 </TableRow>
               ) : (
                 paginatedImages.map((image: any, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
-                    <TableCell className="font-mono text-xs">
-                      {image.fingerprint.substring(0, 12)}...
+                    <TableCell>
+                      <CopyableId value={image.fingerprint} head={12} tail={8} label="Fingerprint" />
                     </TableCell>
                     <TableCell>
                       {image.aliases && image.aliases.length > 0 && image.aliases[0].name ? (
-                        <Badge variant="outline">{image.aliases[0].name}</Badge>
+                        image.aliases[0].name
                       ) : (
                         <span className="text-muted-foreground text-xs">
                           N/A
                         </span>
                       )}
                     </TableCell>
-                    <TableCell>
-                      <Badge variant="secondary">{image.architecture}</Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{image.type}</Badge>
-                    </TableCell>
+                    <TableCell>{image.architecture}</TableCell>
+                    <TableCell>{formatInstanceType(image.type)}</TableCell>
                     <TableCell className="text-xs">
                       {formatSize(image.size)}
                     </TableCell>
                     {nodes.length > 0 && (
                       <TableCell>
-                        {image.node && (
-                          <Badge variant="secondary">{image.node}</Badge>
-                        )}
+                        {image.node}
                       </TableCell>
                     )}
                     <TableCell>
-                      <div className="flex gap-1">
-                        {image.public && (
-                          <Badge variant="default" className="text-xs">
-                            Public
-                          </Badge>
-                        )}
-                        {image.cached && (
-                          <Badge variant="outline" className="text-xs">
-                            Cached
-                          </Badge>
-                        )}
-                        {image.auto_update && (
-                          <Badge variant="outline" className="text-xs">
-                            Auto-update
-                          </Badge>
-                        )}
-                      </div>
+                      {[
+                        image.public && "Public",
+                        image.cached && "Cached",
+                        image.auto_update && "Auto-update",
+                      ]
+                        .filter(Boolean)
+                        .join(", ")}
                     </TableCell>
                   </TableRow>
                 ))
