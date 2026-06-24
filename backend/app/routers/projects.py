@@ -25,6 +25,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
@@ -266,6 +267,7 @@ async def create_project(
             }
         )
         
+        schedule_orcahub_event("project.created", request.host, request.name, request.name, resource_type="PROJECT")
         return ProjectCreateResponse(
             success=True,
             message=f"Project '{request.name}' created successfully on {request.host}",
@@ -471,6 +473,7 @@ async def delete_project(
             result="success",
         )
         
+        schedule_orcahub_event("project.deleted", host, project_name, project_name, resource_type="PROJECT")
         return {
             "success": True,
             "message": f"Project '{project_name}' deleted successfully from {host}"
