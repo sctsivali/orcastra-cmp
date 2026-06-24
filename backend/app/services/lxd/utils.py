@@ -198,8 +198,42 @@ class InstanceWrapper:
         self.description = data.get('description', '')
         self.type = data.get('type', 'container')
         self.config = data.get('config', {})
+        self.devices = data.get('devices', {})
+        # expanded_* reflect effective values after profile inheritance - used to
+        # report whether a live config change actually took effect.
+        self.expanded_config = data.get('expanded_config', {})
+        self.expanded_devices = data.get('expanded_devices', {})
         self.profiles = data.get('profiles', [])
-    
+
+    def update(self, config: dict, devices: Optional[dict] = None, wait: bool = True) -> None:
+        """Apply a config (and optional devices) change via a read-modify-write PUT.
+
+        PUT is used instead of PATCH so keys can also be removed, matching the
+        project update semantics. Only LXD's writable instance fields are sent
+        (not read-only fields like expanded_config/status), preserving the rest
+        of the instance. On a running instance LXD applies what it can live and
+        raises if a key cannot change while running.
+        """
+        body = {
+            "architecture": self._data.get("architecture", ""),
+            "config": config,
+            "devices": devices if devices is not None else self._data.get("devices", {}),
+            "profiles": self._data.get("profiles", []),
+            "description": self._data.get("description", ""),
+        }
+        if self._data.get("ephemeral") is not None:
+            body["ephemeral"] = self._data["ephemeral"]
+        # keep local state in sync with what we sent
+        self._data["config"] = config
+        if devices is not None:
+            self._data["devices"] = devices
+        response = self._client.api.instances[self.name].put(
+            json=body,
+            params={'project': self._project},
+        )
+        if wait:
+            wait_for_lxd_operation(self._client, response)
+
     def start(self, wait=True):
         """Start the instance."""
         response = self._client.api.instances[self.name].state.put(
@@ -239,6 +273,10 @@ class InstanceWrapper:
         self._data = response.json()['metadata']
         self.status = self._data.get('status', 'Unknown')
         self.status_code = self._data.get('status_code', 0)
+        self.config = self._data.get('config', {})
+        self.devices = self._data.get('devices', {})
+        self.expanded_config = self._data.get('expanded_config', {})
+        self.expanded_devices = self._data.get('expanded_devices', {})
     
     def state(self):
         """Get instance state including metrics."""

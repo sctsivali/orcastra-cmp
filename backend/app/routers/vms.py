@@ -17,6 +17,8 @@ from app.models.schemas import (
     VMStatus,
     ErrorResponse,
     InstanceMetrics,
+    InstanceResourceUpdateRequest,
+    InstanceResourceUpdateResponse,
 )
 from app.services.lxd_service import (
     LXDService,
@@ -465,6 +467,61 @@ async def delete_vm(
         
     except Exception as e:
         raise _vm_action_http_error(e, "vm.delete", vm_name, host)
+
+
+@router.patch(
+    "/{vm_name}/resources",
+    response_model=InstanceResourceUpdateResponse,
+    summary="Update VM resources",
+    description="Update CPU/memory limits live where supported; reports if a restart is required.",
+    responses={
+        200: {"description": "Resources updated"},
+        400: {"model": ErrorResponse, "description": "Invalid request"},
+        404: {"model": ErrorResponse, "description": "VM not found"},
+    },
+)
+async def update_vm_resources(
+    vm_name: str,
+    request: InstanceResourceUpdateRequest,
+    lxd_service: LXDService = Depends(get_lxd_service),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """Update a VM's CPU/memory limits, applied live where the platform allows it."""
+    verify_cluster_access(request.host)
+    try:
+        result = await lxd_service.update_instance_resources(
+            name=vm_name,
+            host=request.host,
+            cpu_limit=request.cpu_limit,
+            memory_limit=request.memory_limit,
+            project=request.project,
+        )
+        get_cache_manager().invalidate_instance_cache()
+
+        activity_logger.log_activity(
+            action="vm.update",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="success",
+            details={
+                "cpu_limit": request.cpu_limit,
+                "memory_limit": request.memory_limit,
+                "restart_required": result.get("restart_required"),
+            },
+        )
+
+        return InstanceResourceUpdateResponse(
+            success=True,
+            message=result.get("message", "Resources updated"),
+            vm=result.get("vm"),
+            restart_required=result.get("restart_required", False),
+            applied_live=result.get("applied_live", False),
+        )
+
+    except Exception as e:
+        raise _vm_action_http_error(e, "vm.update", vm_name, request.host)
 
 
 @router.get(

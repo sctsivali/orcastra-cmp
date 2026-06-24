@@ -9,6 +9,8 @@ import {
   VMCreateResponse,
   VMActionRequest,
   VMActionResponse,
+  InstanceResourceUpdateRequest,
+  InstanceResourceUpdateResponse,
   ImageListResponse,
   NodesStatusResponse,
   NodeResources,
@@ -380,6 +382,19 @@ export const vmAPI = {
   ): Promise<InstanceMetrics> => {
     return fetchAPI<InstanceMetrics>(
       `/vms/${encodeURIComponent(host)}/${encodeURIComponent(instanceName)}/metrics?project=${encodeURIComponent(project)}`
+    );
+  },
+
+  updateResources: async (
+    name: string,
+    request: InstanceResourceUpdateRequest
+  ): Promise<InstanceResourceUpdateResponse> => {
+    return fetchAPI<InstanceResourceUpdateResponse>(
+      `/vms/${encodeURIComponent(name)}/resources`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(request),
+      }
     );
   },
 };

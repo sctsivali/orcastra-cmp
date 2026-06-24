@@ -161,6 +161,44 @@ class VMActionResponse(BaseModel):
     new_status: Optional[VMStatus] = None
 
 
+class InstanceResourceUpdateRequest(BaseModel):
+    """Request to update an instance's resource limits live.
+
+    Values are LXD config strings. None leaves a field untouched; "0" or "" clears
+    the instance-level override so the value falls back to the profile/unlimited.
+    """
+    host: str = Field(..., description="LXD host where the instance resides")
+    project: Optional[str] = Field(None, description="LXD project where the instance resides")
+    cpu_limit: Optional[str] = Field(
+        None,
+        description="CPU limit (limits.cpu): core count ('4'), pinned set ('0-3' or '0,2'), or '0'/'' to clear",
+    )
+    memory_limit: Optional[str] = Field(
+        None,
+        description="Memory limit (limits.memory): size ('2GiB', '512MiB') or '0'/'' to clear",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {"host": "node1", "cpu_limit": "4", "memory_limit": "4GiB"}
+        }
+
+
+class InstanceResourceUpdateResponse(BaseModel):
+    """Response after an instance resource update."""
+    success: bool
+    message: str
+    vm: Optional[VMInfo] = None
+    restart_required: bool = Field(
+        False,
+        description="True when the change is saved but needs a restart to take effect",
+    )
+    applied_live: bool = Field(
+        False,
+        description="True when the change took effect immediately without a restart",
+    )
+
+
 class ImageInfo(BaseModel):
     """LXD image information."""
     fingerprint: str = Field(..., description="Image fingerprint")

@@ -115,6 +115,25 @@ export interface VMActionResponse {
   new_status: VMStatus | null;
 }
 
+// Instance Resource Update Request
+// Values are LXD config strings. null/undefined leaves a field untouched;
+// "0" or "" clears the instance-level override.
+export interface InstanceResourceUpdateRequest {
+  host: string;
+  project?: string;
+  cpu_limit?: string;
+  memory_limit?: string;
+}
+
+// Instance Resource Update Response
+export interface InstanceResourceUpdateResponse {
+  success: boolean;
+  message: string;
+  vm: VMInfo | null;
+  restart_required: boolean;
+  applied_live: boolean;
+}
+
 // Image Information
 export interface ImageInfo {
   fingerprint: string;

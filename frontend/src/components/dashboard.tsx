@@ -2,13 +2,15 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2, X } from "lucide-react";
+import { FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LoadingLottieMediumEnhanced, LoadingLottiePageEnhanced } from "@/components/loading-lottie";
+import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
+import { Spinner } from "@/components/ui/spinner";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
 import { StatsOverview } from "@/components/stats-overview";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
+import { EditInstanceResourcesDialog } from "@/components/instance/edit-instance-resources-dialog";
 import { TagManager, TagFilter } from "@/components/tag-manager";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -100,6 +102,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
   const updateInstanceTags = useUpdateInstanceTags();
   const [isDeleting, setIsDeleting] = React.useState(false);
   const [showMonitoring, setShowMonitoring] = React.useState(false);
+  const [editResourcesOpen, setEditResourcesOpen] = React.useState(false);
   const { isPartner } = usePermissions();
   const { hasPermission } = useTenantAccess();
 
@@ -328,7 +331,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {startVM.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Spinner size="sm" />
                   ) : (
                     <Play className="h-3.5 w-3.5" />
                   )}
@@ -348,7 +351,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {stopVM.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Spinner size="sm" />
                   ) : (
                     <Square className="h-3.5 w-3.5" />
                   )}
@@ -368,7 +371,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {restartVM.isPending ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <Spinner size="sm" />
                   ) : (
                     <RotateCw className="h-3.5 w-3.5" />
                   )}
@@ -437,7 +440,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       disabled={isPending || isDeleting || isReadOnly}
                     >
                       {isDeleting ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <Spinner size="sm" />
                       ) : (
                         <Trash2 className="h-3.5 w-3.5" />
                       )}
@@ -465,16 +468,44 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
               </AlertDialogContent>
             </AlertDialog>
             )}
+
+            {/* More actions - Partner+ only */}
+            {isPartner && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7">
+                    <MoreVertical className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    className="cursor-pointer"
+                    disabled={isReadOnly}
+                    onSelect={() => setEditResourcesOpen(true)}
+                  >
+                    <Settings className="mr-2 h-4 w-4" />
+                    Edit Resources
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
           </div>
         </TooltipProvider>
       </div>
-      
+
       {/* Monitoring Modal */}
       <InstanceMonitoringModal
         instance={vm}
         isOpen={showMonitoring}
         onClose={() => setShowMonitoring(false)}
         project="default"
+      />
+
+      {/* Edit Resources Dialog */}
+      <EditInstanceResourcesDialog
+        vm={vm}
+        open={editResourcesOpen}
+        onOpenChange={setEditResourcesOpen}
       />
     </div>
   );
@@ -779,7 +810,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
                   >
                     {isDeleting ? (
                       <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        <Spinner size="md" className="mr-2" />
                         Deleting...
                       </>
                     ) : (
@@ -1251,7 +1282,7 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {projectsLoading ? (
           <div className="col-span-full flex justify-center py-8">
-            <LoadingLottieMediumEnhanced showProgress={false} />
+            <Spinner size="md" className="text-muted-foreground" />
           </div>
         ) : (
           <>

@@ -299,10 +299,23 @@ class LXDService:
     ) -> VMInfo:
         """Create a new VM."""
         return await self.instance_manager.create_vm(
-            name, host, image, instance_type, profiles, config, 
+            name, host, image, instance_type, profiles, config,
             cloud_init, devices, start_on_create
         )
-    
+
+    async def update_instance_resources(
+        self,
+        name: str,
+        host: str,
+        cpu_limit: Optional[str] = None,
+        memory_limit: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update an instance's CPU/memory limits, live where supported."""
+        return await self.instance_manager.update_instance_resources(
+            name, host, cpu_limit, memory_limit, project
+        )
+
     # Image operations
     async def list_images(self, host: str) -> List[ImageInfo]:
         """List available images on a host."""

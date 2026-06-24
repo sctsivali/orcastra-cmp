@@ -1077,13 +1077,38 @@ export function useRestartInstance() {
 
 export function useDeleteInstance() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
       api.vms.delete(name, host, force, project),
     onSuccess: (_data, variables) => {
       removeInstanceFromCaches(queryClient, variables.name, variables.host, variables.project);
       refreshInstanceQueries(queryClient);
+    },
+  });
+}
+
+export function useUpdateInstanceResources() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      name,
+      host,
+      project,
+      cpu_limit,
+      memory_limit,
+    }: {
+      name: string;
+      host: string;
+      project?: string;
+      cpu_limit?: string;
+      memory_limit?: string;
+    }) => api.vms.updateResources(name, { host, project, cpu_limit, memory_limit }),
+    onSuccess: () => {
+      refreshInstanceQueries(queryClient);
+      // limits feed the metrics view too, so refetch those
+      void queryClient.invalidateQueries({ queryKey: ["instanceMetrics"] });
     },
   });
 }

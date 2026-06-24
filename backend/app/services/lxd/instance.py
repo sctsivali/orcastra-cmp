@@ -5,6 +5,7 @@ Handles create, start, stop, restart, delete, and list operations for instances.
 
 import logging
 import asyncio
+import re
 from typing import List, Tuple, Optional, Dict, Any
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,39 @@ logger = logging.getLogger(__name__)
 # Thread pool for parallel instance state fetching
 # Enterprise setting: 50 workers for high concurrency
 _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="instance_state_")
+
+# limits.cpu: a core count ("4") or a pinned cpuset ("0-3", "0,2", "1-2,4").
+_CPU_LIMIT_RE = re.compile(r'^\d+(-\d+)?(,\d+(-\d+)?)*$')
+# limits.memory: a size with optional unit, or a percentage.
+_MEMORY_LIMIT_RE = re.compile(
+    r'^\d+(\.\d+)?\s*(B|kB|KB|MB|GB|TB|KiB|MiB|GiB|TiB)?$|^\d+%$',
+    re.IGNORECASE,
+)
+# Substrings in an LXD error that mean a key cannot change while the instance runs.
+_RUNNING_CONSTRAINT_HINTS = (
+    "running",
+    "must be stopped",
+    "cannot be changed",
+    "cannot update",
+    "stopped instance",
+)
+
+
+def validate_resource_limits(cpu_limit: Optional[str], memory_limit: Optional[str]) -> None:
+    """Validate CPU/memory limit strings before sending them to LXD.
+
+    None leaves a field untouched; "" or "0" clears the override. Raises
+    LXDOperationError (mapped to HTTP 400) on a malformed value.
+    """
+    if cpu_limit not in (None, "", "0") and not _CPU_LIMIT_RE.match(cpu_limit.strip()):
+        raise LXDOperationError(
+            f"Invalid CPU limit '{cpu_limit}'. Use a core count (e.g. '4') "
+            f"or a pinned set (e.g. '0-3')."
+        )
+    if memory_limit not in (None, "", "0") and not _MEMORY_LIMIT_RE.match(memory_limit.strip()):
+        raise LXDOperationError(
+            f"Invalid memory limit '{memory_limit}'. Use a size like '2GiB' or '512MiB'."
+        )
 
 # Failed-node skip is delegated to the shared circuit breaker
 # (app.services.lxd.health) so every connection path skips the same dead cluster.
@@ -562,6 +596,123 @@ class InstanceManager:
 
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to restart VM: {str(e)}")
+
+    @audit_operation(
+        "lxd.instance.update", "instance",
+        extract_details=lambda args, kwargs, result: {
+            "cpu_limit": kwargs.get("cpu_limit"),
+            "memory_limit": kwargs.get("memory_limit"),
+            "restart_required": result.get("restart_required") if isinstance(result, dict) else None,
+        },
+    )
+    async def update_instance_resources(
+        self,
+        name: str,
+        host: str,
+        cpu_limit: Optional[str] = None,
+        memory_limit: Optional[str] = None,
+        project: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Update an instance's CPU/memory limits, live where the platform allows it."""
+        validate_resource_limits(cpu_limit, memory_limit)
+        return await asyncio.to_thread(
+            self._update_instance_resources_blocking,
+            name, host, cpu_limit, memory_limit, project,
+        )
+
+    def _update_instance_resources_blocking(
+        self,
+        name: str,
+        host: str,
+        cpu_limit: Optional[str],
+        memory_limit: Optional[str],
+        project: Optional[str],
+    ) -> Dict[str, Any]:
+        try:
+            client = self._get_client_with_reconnect(host)
+            if client is None:
+                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+            endpoint = self._get_node_endpoint(host)
+
+            instance, project_name = find_instance_in_projects(client, name, project)
+            if instance is None:
+                raise LXDOperationError(f"Instance {name} not found on {host}")
+
+            was_running = instance.status == "Running"
+            is_vm = instance.type == "virtual-machine"
+
+            # Build the new config: set our keys, or drop them when clearing.
+            new_config = dict(instance.config)
+            changed = False
+            for key, value in (("limits.cpu", cpu_limit), ("limits.memory", memory_limit)):
+                if value is None:
+                    continue
+                value = value.strip()
+                if value in ("", "0"):
+                    if new_config.pop(key, None) is not None:
+                        changed = True
+                elif new_config.get(key) != value:
+                    new_config[key] = value
+                    changed = True
+
+            if not changed:
+                return {
+                    "vm": self._resource_vm_info(instance, host, endpoint, project_name),
+                    "restart_required": False,
+                    "applied_live": True,
+                    "message": "No changes to apply.",
+                }
+
+            try:
+                instance.update(new_config)
+            except LXDAPIException as exc:
+                msg = str(exc)
+                # Key cannot change while running: report it, never auto-restart.
+                if any(hint in msg.lower() for hint in _RUNNING_CONSTRAINT_HINTS):
+                    return {
+                        "vm": self._resource_vm_info(instance, host, endpoint, project_name),
+                        "restart_required": True,
+                        "applied_live": False,
+                        "message": "This change requires a restart to take effect.",
+                    }
+                raise LXDOperationError(f"Failed to update instance resources: {msg}")
+
+            instance.sync()
+            vm_info = self._resource_vm_info(instance, host, endpoint, project_name)
+
+            if not was_running:
+                return {
+                    "vm": vm_info,
+                    "restart_required": False,
+                    "applied_live": False,
+                    "message": "Resources updated. They apply on the next start.",
+                }
+            if is_vm:
+                # note: LXD VMs do not hot-resize memory; report restart-required
+                # honestly instead of claiming a live change that did not happen.
+                return {
+                    "vm": vm_info,
+                    "restart_required": True,
+                    "applied_live": False,
+                    "message": "Resources saved. Restart the VM to apply them.",
+                }
+            return {
+                "vm": vm_info,
+                "restart_required": False,
+                "applied_live": True,
+                "message": "Resources updated live.",
+            }
+
+        except LXDAPIException as e:
+            raise LXDOperationError(f"Failed to update instance resources: {str(e)}")
+
+    def _resource_vm_info(self, instance, host: str, endpoint: str, project_name: str) -> VMInfo:
+        """Build a VMInfo and stamp the project, matching the lifecycle methods."""
+        vm_info = self._instance_to_vm_info(instance, host, endpoint)
+        if vm_info.config is None:
+            vm_info.config = {}
+        vm_info.config['project'] = project_name
+        return vm_info
 
     @audit_operation("lxd.instance.delete", "instance")
     async def delete_vm(
