@@ -40,6 +40,7 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { useInitialSearchParams } from "@/hooks/use-initial-search-params";
 
 export default function InstancesPage() {
   const { data, isLoading, refetch, isRefetching } = useInstances();
@@ -54,6 +55,7 @@ export default function InstancesPage() {
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterProject, setFilterProject] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterTag, setFilterTag] = useState<string>(""); // deep-link only (from /search tag click)
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
@@ -61,6 +63,14 @@ export default function InstancesPage() {
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
   const { hasPermission } = useTenantAccess();
+
+  // deep-link prefill from global search (ex; /inventory/instances?q=nginx&host=lxd-1&tag=loc_jakarta)
+  useInitialSearchParams({
+    q: setSearchQuery,
+    host: setFilterNode,
+    project: setFilterProject,
+    tag: setFilterTag,
+  });
 
   const sortAccessors = useMemo(
     () => ({
@@ -151,10 +161,11 @@ export default function InstancesPage() {
       const matchesNode = filterNode === "all" || instance.host === filterNode;
       const matchesProject = filterProject === "all" || (instance.project || "default") === filterProject;
       const matchesStatus = filterStatus === "all" || instance.status.toLowerCase() === filterStatus.toLowerCase();
+      const matchesTag = !filterTag || (instance.tags || []).includes(filterTag);
 
-      return matchesSearch && matchesNode && matchesProject && matchesStatus;
+      return matchesSearch && matchesNode && matchesProject && matchesStatus && matchesTag;
     });
-  }, [instances, searchQuery, filterNode, filterProject, filterStatus]);
+  }, [instances, searchQuery, filterNode, filterProject, filterStatus, filterTag]);
 
   const sortedInstances = useMemo(() => sortItems(filteredInstances), [filteredInstances, sortItems]);
 

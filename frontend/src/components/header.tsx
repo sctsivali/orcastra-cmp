@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { FolderKanban, Plus, ChevronDown, Menu } from "lucide-react";
+import { FolderKanban, Plus, ChevronDown, Menu, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,12 +11,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useLayout } from "./layout-provider";
 import { UserNav } from "./user-nav";
+import { GlobalSearchBox } from "@/components/search/global-search-box";
 import { usePermissions } from "@/hooks/use-permissions";
 
 export function Header() {
   const pathname = usePathname();
   const router = useRouter();
-  const { sidebarOpen, setSidebarOpen } = useLayout();
+  const { sidebarOpen, setSidebarOpen, setCommandPaletteOpen } = useLayout();
   const { isPartner } = usePermissions();
 
   // Hide dropdown on create or register routes
@@ -26,7 +27,7 @@ export function Header() {
     <>
       <header className="sticky top-0 z-40 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="container flex h-14 md:h-16 items-center justify-between px-4 md:px-6">
-          <div className="flex items-center gap-2 md:gap-6">
+          <div className="flex flex-1 items-center gap-2 md:gap-6">
             {/* Mobile Menu Button */}
             <Button
               variant="ghost"
@@ -38,7 +39,10 @@ export function Header() {
               <Menu className="h-5 w-5" />
             </Button>
 
-
+            {/* Global search (desktop): opens the command palette */}
+            <div className="hidden w-full max-w-sm sm:block">
+              <GlobalSearchBox />
+            </div>
           </div>
 
           {/* Actions - Desktop only */}
@@ -77,8 +81,16 @@ export function Header() {
             <UserNav />
           </div>
 
-          {/* Mobile User Nav */}
-          <div className="sm:hidden">
+          {/* Mobile actions: search opens the command palette */}
+          <div className="flex items-center gap-1 sm:hidden">
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Search"
+              onClick={() => setCommandPaletteOpen(true)}
+            >
+              <Search className="h-5 w-5" />
+            </Button>
             <UserNav />
           </div>
         </div>

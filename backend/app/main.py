@@ -471,7 +471,11 @@ Ensure your client certificates are properly configured.
     app.include_router(projects_router, prefix=settings.api_prefix)
     app.include_router(tags_router, prefix=settings.api_prefix)
     app.include_router(system_router, prefix=settings.api_prefix)
-    
+
+    # Global cross-resource search
+    from app.routers.search import router as search_router
+    app.include_router(search_router, prefix=settings.api_prefix)
+
     # LXD Feature Routers
     app.include_router(instances_router, prefix=settings.api_prefix)
     app.include_router(profiles_router, prefix=settings.api_prefix)

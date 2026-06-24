@@ -48,6 +48,7 @@ import {
   PolicyAssignment,
   AssignmentCreateRequest,
   MyAccessResponse,
+  SearchResponse,
 } from "@/types";
 
 const API_PREFIX = "/api/v1";
@@ -1743,5 +1744,16 @@ export const api = {
 
     // tenant self-view
     myAccess: () => fetchAPI<MyAccessResponse>("/tenant-access/my-access"),
+  },
+
+  // Global cross-resource search (RBAC-scoped server-side; see backend routers/search.py)
+  search: {
+    global: (query: string, opts?: { types?: string[]; limit?: number }) => {
+      const params = new URLSearchParams();
+      params.set("q", query);
+      if (opts?.types?.length) params.set("types", opts.types.join(","));
+      if (opts?.limit) params.set("limit", String(opts.limit));
+      return fetchAPI<SearchResponse>(`/search?${params.toString()}`);
+    },
   },
 };

@@ -29,6 +29,7 @@ import { useNetworks } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { useInitialSearchParams } from "@/hooks/use-initial-search-params";
 
 interface NetworkInfo {
   name: string;
@@ -48,6 +49,7 @@ export default function NetworksPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
+  useInitialSearchParams({ q: setSearchQuery }); // deep-link prefill from global search
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const { toast } = useToast();

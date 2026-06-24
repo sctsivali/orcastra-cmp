@@ -30,6 +30,7 @@ import { useStoragePools } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { useInitialSearchParams } from "@/hooks/use-initial-search-params";
 
 interface PoolInfo {
   name: string;
@@ -60,6 +61,7 @@ export default function StoragePoolsPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterDriver, setFilterDriver] = useState<string>("all");
+  useInitialSearchParams({ q: setSearchQuery }); // deep-link prefill from global search
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const { toast } = useToast();
