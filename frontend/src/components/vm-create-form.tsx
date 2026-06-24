@@ -7,7 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { Server, ArrowLeft, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { LoadingLottieSmall } from "@/components/loading-lottie";
+import { Spinner } from "@/components/ui/spinner";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -352,7 +352,7 @@ export function VMCreateForm() {
             >
               {createVM.isPending ? (
                 <>
-                  <LoadingLottieSmall className="mr-2" />
+                  <Spinner size="sm" className="mr-2" />
                   Creating...
                 </>
               ) : (

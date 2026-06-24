@@ -33,12 +33,12 @@ import {
   ChevronUp,
   RefreshCw,
   MapPin,
-  Loader2,
   Activity,
   Box,
   Filter,
   Building2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { useRegionsOverview } from "@/hooks/use-lxd";
 import { RegionSummary, ExtendedHardwareInfo, ClusterStatus } from "@/types/api";
@@ -58,7 +58,7 @@ const RegionsMap = dynamic<RegionsMapProps>(
     ssr: false,
     loading: () => (
       <div className="h-[400px] bg-muted/30 rounded-lg flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <Spinner className="h-8 w-8 text-muted-foreground" />
       </div>
     ),
   }

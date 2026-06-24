@@ -30,7 +30,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { X, Clock, Loader2, XCircle, Unplug } from "lucide-react";
+import { X, Clock, XCircle, Unplug } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { useOperations } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
@@ -281,7 +282,7 @@ export default function OperationsPage() {
             >
               {(cancellingId === confirmDialog.operationId || killingId === confirmDialog.operationId) ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <Spinner className="h-4 w-4 mr-2" />
                   {confirmDialog.isKillSession ? "Killing..." : "Cancelling..."}
                 </>
               ) : (
@@ -361,7 +362,7 @@ export default function OperationsPage() {
                                 disabled={cancellingId !== null || killingId !== null}
                               >
                                 {cancellingId === operation.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <Spinner className="h-4 w-4" />
                                 ) : (
                                   <XCircle className="h-4 w-4" />
                                 )}
@@ -380,7 +381,7 @@ export default function OperationsPage() {
                                 disabled={cancellingId !== null || killingId !== null}
                               >
                                 {killingId === operation.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <Spinner className="h-4 w-4" />
                                 ) : (
                                   <Unplug className="h-4 w-4" />
                                 )}

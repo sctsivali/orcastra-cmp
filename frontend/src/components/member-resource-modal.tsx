@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { LoadingLottieMedium } from "./loading-lottie";
+import { Spinner } from "./ui/spinner";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +12,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, Sparkles } from "lucide-react";
+import { Cpu, MemoryStick, HardDrive, Layers, Server, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VMInfo, GPUCardInfo } from "@/types/api";
 
@@ -136,7 +136,7 @@ export function MemberResourceModal({
 
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
-            <LoadingLottieMedium />
+            <Spinner size="lg" className="text-muted-foreground" />
           </div>
         ) : resources ? (
           <div className="space-y-6">
@@ -492,7 +492,7 @@ export function MemberResourceModal({
 
           {loadingInstances ? (
             <div className="flex items-center justify-center py-12">
-              <Activity className="h-8 w-8 animate-spin text-muted-foreground" />
+              <Spinner size="xl" className="text-muted-foreground" />
             </div>
           ) : instances.length > 0 ? (
             <div className="space-y-3">

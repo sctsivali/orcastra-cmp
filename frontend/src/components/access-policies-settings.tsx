@@ -25,10 +25,11 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  AlertCircle, Loader2, Plus, Trash2, Shield,
+  AlertCircle, Plus, Trash2, Shield,
   ShieldCheck, Eye, Terminal, Camera, Upload, Power,
   Building2, ChevronDown, ChevronRight, Edit, Copy,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { api, integrationsAPI } from "@/lib/api";
 import { useClusters } from "@/hooks/use-lxd";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -463,7 +464,7 @@ function PolicyEditorDialog({
             Cancel
           </Button>
           <Button onClick={handleSubmit} disabled={!canSubmit || isPending}>
-            {isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
+            {isPending && <Spinner size="md" className="mr-1.5" />}
             {isEdit ? "Save Changes" : "Create Policy"}
           </Button>
         </DialogFooter>
@@ -588,7 +589,7 @@ function AssignPolicyDialog({
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button onClick={handleSubmit} disabled={!canSubmit || isPending}>
-            {isPending && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
+            {isPending && <Spinner size="md" className="mr-1.5" />}
             Assign
           </Button>
         </DialogFooter>
@@ -866,7 +867,7 @@ export function AccessPoliciesSettings() {
           <CardContent>
             {policiesLoading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <Spinner size="lg" className="text-muted-foreground" />
                 <span className="ml-2 text-muted-foreground">Loading policies...</span>
               </div>
             ) : policiesError ? (
@@ -997,7 +998,7 @@ export function AccessPoliciesSettings() {
                                     disabled={deleteMutation.isPending}
                                   >
                                     {deleteMutation.isPending && (
-                                      <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                                      <Spinner size="md" className="mr-1.5" />
                                     )}
                                     Delete
                                   </Button>
@@ -1047,7 +1048,7 @@ export function AccessPoliciesSettings() {
           <CardContent>
             {assignmentsLoading ? (
               <div className="flex items-center justify-center py-12">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <Spinner size="lg" className="text-muted-foreground" />
                 <span className="ml-2 text-muted-foreground">Loading assignments...</span>
               </div>
             ) : assignmentsError ? (
@@ -1164,7 +1165,7 @@ export function AccessPoliciesSettings() {
                                   disabled={revokeAssignMutation.isPending}
                                 >
                                   {revokeAssignMutation.isPending && (
-                                    <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                                    <Spinner size="md" className="mr-1.5" />
                                   )}
                                   Revoke
                                 </Button>

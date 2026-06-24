@@ -22,8 +22,8 @@ import {
   Terminal,
   Shield,
   MapPin,
-  Loader2
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -400,7 +400,7 @@ EOF`}
                 >
                   {checkingAuth === regenerateModal.cluster?.cluster_id ? (
                     <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      <Spinner className="h-4 w-4 mr-2" />
                       Checking...
                     </>
                   ) : (

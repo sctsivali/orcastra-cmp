@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { ArrowLeft, Info, Loader2 } from "lucide-react";
+import { ArrowLeft, Info } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -311,7 +312,7 @@ export function ProjectCreateForm() {
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Resource Limits</h3>
                   {loadingResources && (
-                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    <Spinner size="md" className="text-muted-foreground" />
                   )}
                 </div>
 
@@ -501,7 +502,7 @@ export function ProjectCreateForm() {
             >
               {createProject.isPending ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <Spinner size="md" className="mr-2" />
                   Creating...
                 </>
               ) : (

@@ -19,7 +19,8 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { LogOut, User, Shield, Loader2 } from "lucide-react";
+import { LogOut, User, Shield } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 
 // Authentik end_session endpoint for federated logout
 // Uses environment variable to avoid hardcoded URLs
@@ -33,7 +34,7 @@ export function UserNav() {
   if (status === "loading") {
     return (
       <Button variant="ghost" size="sm" disabled>
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Spinner size="md" />
       </Button>
     );
   }
@@ -79,7 +80,7 @@ export function UserNav() {
           disabled={isSigningOut}
         >
           {isSigningOut ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <Spinner size="md" />
           ) : (
             <Avatar className="h-9 w-9">
               <AvatarImage src={user.image || undefined} alt={user.name || ""} />
@@ -135,7 +136,7 @@ export function UserNav() {
           disabled={isSigningOut}
         >
           {isSigningOut ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <Spinner size="md" className="mr-2" />
           ) : (
             <LogOut className="mr-2 h-4 w-4" />
           )}

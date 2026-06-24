@@ -10,8 +10,8 @@
  *
  * Module state is mutated only inside effects (client-side), so server renders
  * just read the initial 0 - SSR-safe. Scope is intentionally limited to the
- * full-page loaders; LoadingOverlay / LoadingLottieMediumEnhanced keep their own
- * independent progress (useSimulatedProgress) to avoid cross-talk.
+ * full-page loaders; LoadingOverlay keeps its own independent progress
+ * (useSimulatedProgress) to avoid cross-talk.
  */
 
 import * as React from "react";

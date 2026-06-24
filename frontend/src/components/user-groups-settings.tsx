@@ -46,7 +46,6 @@ import {
 } from "@/components/ui/tooltip";
 import {
   AlertCircle,
-  Loader2,
   Plus,
   Trash2,
   Users,
@@ -55,6 +54,7 @@ import {
   Wifi,
   ShieldCheck,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { api, integrationsAPI } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 import { PolicyManagementSection } from "@/components/policy-management-section";
@@ -414,7 +414,7 @@ export function UserGroupsSettings() {
                       disabled={!email.trim() || !isValidEmail(email.trim()) || (orgRequired && !orgId) || assignMutation.isPending}
                     >
                       {assignMutation.isPending && (
-                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                        <Spinner size="md" className="mr-1.5" />
                       )}
                       Assign
                     </Button>
@@ -427,7 +427,7 @@ export function UserGroupsSettings() {
         <CardContent>
           {usersLoading ? (
             <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <Spinner size="lg" className="text-muted-foreground" />
               <span className="ml-2 text-muted-foreground">Loading users...</span>
             </div>
           ) : usersError ? (
@@ -559,7 +559,7 @@ export function UserGroupsSettings() {
                                 disabled={deleteMutation.isPending}
                               >
                                 {deleteMutation.isPending && (
-                                  <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                                  <Spinner size="md" className="mr-1.5" />
                                 )}
                                 Remove
                               </Button>

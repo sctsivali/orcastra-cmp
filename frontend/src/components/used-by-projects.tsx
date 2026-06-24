@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { Badge } from "./ui/badge";
-import { LoadingLottieSmall } from "./loading-lottie";
+import { Spinner } from "./ui/spinner";
 import {
   Dialog,
   DialogContent,
@@ -86,7 +86,7 @@ export function UsedByProjects({ usedBy, resourceName }: UsedByProjectsProps) {
           <div className="space-y-4 mt-4">
             {isLoading ? (
               <div className="flex justify-center py-4">
-                <LoadingLottieSmall />
+                <Spinner size="md" className="text-muted-foreground" />
               </div>
             ) : projectUsages.length === 0 ? (
               <div className="text-center text-muted-foreground py-4">

@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { X, Plus, Tag as TagIcon, ChevronDown, Loader2, Search } from "lucide-react";
+import { X, Plus, Tag as TagIcon, ChevronDown, Search } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -190,7 +191,7 @@ export function TagManager({
   if (isLoading) {
     return (
       <div className={cn("flex items-center gap-2", className)}>
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <Spinner size="md" className="text-muted-foreground" />
         <span className="text-xs text-muted-foreground">Loading tags...</span>
       </div>
     );

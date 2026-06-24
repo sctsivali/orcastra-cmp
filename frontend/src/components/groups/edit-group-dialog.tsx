@@ -36,7 +36,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Plus, X, Trash2, Loader2, Check, ChevronsUpDown, Search } from "lucide-react";
+import { Plus, X, Trash2, Check, ChevronsUpDown, Search } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { 
@@ -779,7 +780,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                     </Label>
                     {isLoadingResources() && (
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <Spinner className="h-3 w-3" />
                         <span>Loading...</span>
                       </div>
                     )}
@@ -822,7 +823,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                       <div className="border rounded-lg max-h-40 overflow-y-auto bg-background">
                         {isLoadingResources() ? (
                           <div className="p-4 text-center text-xs text-muted-foreground">
-                            <Loader2 className="h-4 w-4 animate-spin mx-auto mb-1" />
+                            <Spinner className="h-4 w-4 mx-auto mb-1" />
                             Loading {newPermission.entity_type}s...
                           </div>
                         ) : getAvailableResources().length === 0 ? (
@@ -1057,7 +1058,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
               
               {loadingIdentities ? (
                 <div className="flex items-center justify-center py-6">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <Spinner className="h-6 w-6 text-muted-foreground" />
                   <span className="ml-2 text-sm text-muted-foreground">Loading identities...</span>
                 </div>
               ) : (
@@ -1199,7 +1200,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                   >
                     {addIdentityMutation.isPending ? (
                       <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        <Spinner className="h-4 w-4 mr-2" />
                         Adding...
                       </>
                     ) : (

@@ -22,7 +22,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Loader2, LogIn, ShieldCheck, AlertCircle } from "lucide-react";
+import { LogIn, ShieldCheck, AlertCircle } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 
 // Auth backend selection (mini vs full).
 const AUTH_MODE = process.env.NEXT_PUBLIC_AUTH_MODE || "authentik";
@@ -107,7 +108,7 @@ function SignInContent() {
           {/* Loading State */}
           {isLoading && !error && (
             <div className="flex flex-col items-center gap-4 py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <Spinner className="h-8 w-8 text-primary" />
               <p className="text-sm text-muted-foreground">
                 Redirecting to sign in...
               </p>
@@ -124,7 +125,7 @@ function SignInContent() {
             >
               {isLoading ? (
                 <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                  <Spinner className="mr-2 h-5 w-5" />
                   Redirecting...
                 </>
               ) : (
@@ -153,7 +154,7 @@ export default function SignInPage() {
     <Suspense
       fallback={
         <div className="min-h-screen flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <Spinner className="h-8 w-8 text-primary" />
         </div>
       }
     >

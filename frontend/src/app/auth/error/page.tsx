@@ -16,7 +16,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { AlertTriangle, ArrowLeft, RefreshCw, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, RefreshCw } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import Link from "next/link";
 
 // Error details mapping
@@ -123,7 +124,7 @@ export default function AuthErrorPage() {
     <Suspense
       fallback={
         <div className="min-h-screen flex items-center justify-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <Spinner className="h-8 w-8 text-primary" />
         </div>
       }
     >

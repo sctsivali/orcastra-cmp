@@ -9,8 +9,8 @@ import {
   Server,
   Container,
   Terminal,
-  Loader2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { useTerminal } from "@/hooks/use-terminal";
 import {
   Table,
@@ -276,7 +276,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isRunning || isLoading || isFrozen}
             >
               {startMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Spinner className="h-4 w-4" />
               ) : (
                 <Play className="h-4 w-4" />
               )}
@@ -295,7 +295,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isStopped || isLoading}
             >
               {stopMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Spinner className="h-4 w-4" />
               ) : (
                 <Square className="h-4 w-4" />
               )}
@@ -314,7 +314,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
               disabled={isStopped || isLoading || isFrozen}
             >
               {restartMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Spinner className="h-4 w-4" />
               ) : (
                 <RotateCw className="h-4 w-4" />
               )}
@@ -336,7 +336,7 @@ function VMActionButtons({ vm }: { vm: VMInfo }) {
                   disabled={isLoading}
                 >
                   {deleteMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <Spinner className="h-4 w-4" />
                   ) : (
                     <Trash2 className="h-4 w-4" />
                   )}

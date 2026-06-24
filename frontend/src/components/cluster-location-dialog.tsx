@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { Search, Check, Loader2, Globe } from "lucide-react";
+import { Search, Check, Globe } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -198,7 +199,7 @@ export function ClusterLocationDialog({
           >
             {updateLocation.isPending ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Spinner size="md" className="mr-2" />
                 Saving...
               </>
             ) : (

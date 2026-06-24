@@ -1,86 +1,16 @@
 "use client";
 
-import * as React from "react";
 import dynamic from "next/dynamic";
 import loadingAnimation from "../../public/loading-lotttie-orca.json";
-import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
-import {
-  useSimulatedProgress,
-  LOADING_MESSAGES,
-  DYNAMIC_MESSAGES,
-} from "@/hooks/use-loading-progress";
+import { useSimulatedProgress, LOADING_MESSAGES } from "@/hooks/use-loading-progress";
 import { useSharedRouteProgress } from "@/hooks/use-route-loading-progress";
 
 // Lazy-load Lottie renderer to reduce initial JS bundle (~80KB savings)
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
 
-interface LoadingLottieProps {
-  /**
-   * Size of the animation container in pixels
-   * @default 80
-   */
-  size?: number;
-  /**
-   * Additional CSS classes for the container
-   */
-  className?: string;
-  /**
-   * Whether to show centered on screen
-   * @default false
-   */
-  centered?: boolean;
-}
-
-/**
- * Reusable Lottie loading animation component
- * Uses the custom Orca loading animation from public/loading-lotttie-orca.json
- */
-export function LoadingLottie({ 
-  size = 80, 
-  className,
-  centered = false 
-}: LoadingLottieProps) {
-  const animation = (
-    <div
-      className={cn(className)}
-      style={{
-        width: size,
-        height: size,
-      }}
-    >
-      <Lottie
-        animationData={loadingAnimation}
-        loop={true}
-        autoplay={true}
-      />
-    </div>
-  );
-
-  if (centered) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        {animation}
-      </div>
-    );
-  }
-
-  return animation;
-}
-
-/**
- * Small inline loading animation (for buttons, inline elements)
- */
-export function LoadingLottieSmall({ className }: { className?: string }) {
-  return <LoadingLottie size={20} className={className} />;
-}
-
-/**
- * Medium loading animation (for cards, sections)
- */
-export function LoadingLottieMedium({ className }: { className?: string }) {
-  return <LoadingLottie size={40} className={className} />;
-}
+// important: the orca Lottie is reserved for page/route navigation only. Inline and modal
+// loaders (buttons, dialogs, cells) use the lightweight <Spinner> (components/ui/spinner.tsx).
 
 interface LoadingLottiePageEnhancedProps {
   /**
@@ -199,121 +129,6 @@ export function LoadingLottiePage({ title }: { title?: string }) {
   );
 }
 
-interface LoadingLottieMediumEnhancedProps {
-  /**
-   * Additional CSS classes
-   */
-  className?: string;
-  /**
-   * Custom status message
-   */
-  statusMessage?: string;
-  /**
-   * Custom progress value (0-100)
-   */
-  progress?: number;
-  /**
-   * Whether to show progress bar
-   * @default true
-   */
-  showProgress?: boolean;
-}
-
-// Helper to get random message from array
-function getRandomFromArray<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-
-/**
- * Enhanced medium loading component with optional progress
- * Suitable for cards and sections - with dynamic rotating messages
- */
-export function LoadingLottieMediumEnhanced({
-  className,
-  statusMessage,
-  progress,
-  showProgress = true,
-}: LoadingLottieMediumEnhancedProps) {
-  const [simulatedProgress, setSimulatedProgress] = React.useState(0);
-  const [message, setMessage] = React.useState(() => 
-    getRandomFromArray(DYNAMIC_MESSAGES.fetching)
-  );
-  const [currentPhase, setCurrentPhase] = React.useState<keyof typeof DYNAMIC_MESSAGES>("fetching");
-  const messageRotationRef = React.useRef<number | null>(null);
-  
-  // Get phase based on progress
-  const getPhase = React.useCallback((prog: number): keyof typeof DYNAMIC_MESSAGES => {
-    if (prog < 30) return "fetching";
-    if (prog < 60) return "processing";
-    if (prog < 90) return "rendering";
-    return "almostDone";
-  }, []);
-  
-  // Rotate messages every 2.5 seconds
-  React.useEffect(() => {
-    if (progress !== undefined) return;
-    
-    const rotateMessage = () => {
-      setMessage(getRandomFromArray(DYNAMIC_MESSAGES[currentPhase]));
-    };
-    
-    messageRotationRef.current = window.setInterval(rotateMessage, 2500);
-    
-    return () => {
-      if (messageRotationRef.current) {
-        clearInterval(messageRotationRef.current);
-      }
-    };
-  }, [currentPhase, progress]);
-  
-  // Simulate progress if not provided
-  React.useEffect(() => {
-    if (progress !== undefined) return;
-    
-    const startTime = Date.now();
-    let lastPhase: keyof typeof DYNAMIC_MESSAGES = "fetching";
-    
-    const animate = () => {
-      const elapsed = Date.now() - startTime;
-      const newProgress = Math.min(95, (1 - Math.exp(-elapsed / 1600)) * 100);
-      setSimulatedProgress(newProgress);
-      
-      // Check if phase changed
-      const newPhase = getPhase(newProgress);
-      if (newPhase !== lastPhase) {
-        lastPhase = newPhase;
-        setCurrentPhase(newPhase);
-        setMessage(getRandomFromArray(DYNAMIC_MESSAGES[newPhase]));
-      }
-      
-      if (newProgress < 95) {
-        requestAnimationFrame(animate);
-      }
-    };
-    
-    const frame = requestAnimationFrame(animate);
-    return () => cancelAnimationFrame(frame);
-  }, [progress, getPhase]);
-  
-  const displayProgress = progress ?? simulatedProgress;
-  const displayMessage = statusMessage ?? message;
-  
-  return (
-    <div className={cn("flex flex-col items-center gap-2 py-4", className)}>
-      <LoadingLottie size={40} />
-      
-      {showProgress && (
-        <div className="w-36 space-y-1.5">
-          <Progress value={displayProgress} className="h-1.5" animated />
-          <p className="text-xs text-center text-muted-foreground truncate transition-opacity duration-500">
-            {displayMessage}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 interface LoadingOverlayProps {
   /**
    * Whether the overlay is visible
@@ -334,8 +149,8 @@ interface LoadingOverlayProps {
 }
 
 /**
- * Full-screen loading overlay with progress
- * Useful for blocking operations like form submissions
+ * Full-screen loading overlay with progress.
+ * Useful for blocking operations like form submissions.
  */
 export function LoadingOverlay({
   isVisible,
@@ -344,7 +159,7 @@ export function LoadingOverlay({
   title,
 }: LoadingOverlayProps) {
   if (!isVisible) return null;
-  
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm">
       <LoadingLottiePageEnhanced

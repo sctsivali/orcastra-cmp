@@ -28,7 +28,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus, X, Loader2, Info } from "lucide-react";
+import { Plus, X, Info } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { useToast } from "@/hooks/use-toast";
 import { 
   useCreateGroup, 
@@ -449,7 +450,7 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
                     </Label>
                     {isLoadingResources() && (
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                        <Spinner className="h-3 w-3" />
                         <span>Loading...</span>
                       </div>
                     )}
@@ -480,7 +481,7 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
                     <div className="border rounded-lg max-h-64 overflow-y-auto bg-background">
                       {isLoadingResources() ? (
                         <div className="p-6 text-center text-sm text-muted-foreground">
-                          <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
+                          <Spinner className="h-6 w-6 mx-auto mb-2" />
                           Loading {newPermission.entity_type}s from {formData.node}...
                         </div>
                       ) : getAvailableResources().length === 0 ? (
@@ -576,7 +577,7 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
             </Button>
             <Button type="submit" disabled={createGroupMutation.isPending}>
               {createGroupMutation.isPending && (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Spinner className="h-4 w-4 mr-2" />
               )}
               {createGroupMutation.isPending ? "Creating..." : "Create Group"}
             </Button>

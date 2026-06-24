@@ -24,9 +24,10 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  Loader2, Plus, Trash2, ChevronDown,
+  Plus, Trash2, ChevronDown,
   ChevronRight, Edit, X, Check,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
 import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
@@ -229,7 +230,7 @@ function RuleEditor({
                   <SelectItem value="*">* (All Projects)</SelectItem>
                   {projectsLoading ? (
                     <div className="flex items-center justify-center py-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      <Spinner size="sm" className="text-muted-foreground" />
                       <span className="ml-1.5 text-xs text-muted-foreground">Loading projects...</span>
                     </div>
                   ) : (
@@ -254,7 +255,7 @@ function RuleEditor({
                   <SelectItem value="*">* (All Instances)</SelectItem>
                   {instancesLoading ? (
                     <div className="flex items-center justify-center py-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      <Spinner size="sm" className="text-muted-foreground" />
                       <span className="ml-1.5 text-xs text-muted-foreground">Loading instances...</span>
                     </div>
                   ) : (
@@ -467,7 +468,7 @@ function InlinePolicyEditor({
         <DialogFooter className="shrink-0 pt-3 border-t">
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit || isPending}>
-            {isPending && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+            {isPending && <Spinner size="sm" className="mr-1" />}
             {isEdit ? "Save Changes" : "Create Policy"}
           </Button>
         </DialogFooter>
@@ -721,7 +722,7 @@ export function TenantAccessDialog({
           <DialogBody className="px-6 py-4 space-y-6">
               {isLoading ? (
                 <div className="flex items-center justify-center py-16">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                  <Spinner size="lg" className="text-muted-foreground" />
                   <span className="ml-2 text-muted-foreground text-sm">Loading access data...</span>
                 </div>
               ) : (
@@ -846,7 +847,7 @@ export function TenantAccessDialog({
                                 disabled={assignMutation.isPending}
                               >
                                 {assignMutation.isPending ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  <Spinner size="xs" />
                                 ) : (
                                   <Plus className="h-3 w-3" />
                                 )}
@@ -978,7 +979,7 @@ function AssignedPolicyCard({
                 onClick={onRevoke}
                 disabled={isRevoking}
               >
-                {isRevoking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                {isRevoking ? <Spinner size="xs" /> : <Check className="h-3 w-3" />}
               </Button>
               <Button
                 variant="ghost"

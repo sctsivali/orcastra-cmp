@@ -42,7 +42,15 @@ function joinParts(...parts: (string | null | undefined)[]): string | null {
   return v || null;
 }
 
-export function ServerHardware({ node }: { node: string }) {
+// hideSerials drops asset identifiers (serial numbers, system UUID) - used on the broadly
+// visible Technologies page where those add no value and are sensitive.
+export function ServerHardware({
+  node,
+  hideSerials = false,
+}: {
+  node: string;
+  hideSerials?: boolean;
+}) {
   const { data, isLoading, isError } = useServerResources(node);
   const hw = (data as any)?.hardware;
 
@@ -81,8 +89,8 @@ export function ServerHardware({ node }: { node: string }) {
               <OptRow label="Version" value={system.version} />
               <OptRow label="Type" value={system.type} />
               <OptRow label="SKU" value={system.sku} />
-              <OptRow label="Serial" value={system.serial} />
-              <OptRow label="UUID" value={system.uuid} />
+              {!hideSerials && <OptRow label="Serial" value={system.serial} />}
+              {!hideSerials && <OptRow label="UUID" value={system.uuid} />}
             </div>
             <div>
               {fw && (
@@ -96,13 +104,13 @@ export function ServerHardware({ node }: { node: string }) {
                 <>
                   <OptRow label="Motherboard" value={joinParts(mb.vendor, mb.product)} />
                   <OptRow label="Motherboard version" value={mb.version} />
-                  <OptRow label="Motherboard serial" value={mb.serial} />
+                  {!hideSerials && <OptRow label="Motherboard serial" value={mb.serial} />}
                 </>
               )}
               {chassis && (
                 <>
                   <OptRow label="Chassis" value={joinParts(chassis.vendor, chassis.type)} />
-                  <OptRow label="Chassis serial" value={chassis.serial} />
+                  {!hideSerials && <OptRow label="Chassis serial" value={chassis.serial} />}
                 </>
               )}
             </div>
@@ -194,7 +202,7 @@ export function ServerHardware({ node }: { node: string }) {
                   <TableHead>Model</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Size</TableHead>
-                  <TableHead>Serial</TableHead>
+                  {!hideSerials && <TableHead>Serial</TableHead>}
                   <TableHead>Firmware</TableHead>
                 </TableRow>
               </TableHeader>
@@ -205,7 +213,9 @@ export function ServerHardware({ node }: { node: string }) {
                     <TableCell>{d.model || "—"}</TableCell>
                     <TableCell>{d.type || "—"}</TableCell>
                     <TableCell>{d.size ? formatBytes(d.size) : "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">{d.serial || "—"}</TableCell>
+                    {!hideSerials && (
+                      <TableCell className="font-mono text-xs">{d.serial || "—"}</TableCell>
+                    )}
                     <TableCell>{d.firmware_version || "—"}</TableCell>
                   </TableRow>
                 ))}

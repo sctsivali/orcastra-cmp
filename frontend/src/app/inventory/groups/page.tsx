@@ -45,8 +45,8 @@ import {
   Trash2, 
   MoreVertical,
   Search,
-  Loader2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useGroups, useDeleteGroup, useIdentities } from "@/hooks/use-lxd";
@@ -551,7 +551,7 @@ export default function GroupsPage() {
             >
               {isDeleting ? (
                 <>
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  <Spinner className="h-4 w-4 mr-2" />
                   Deleting...
                 </>
               ) : (

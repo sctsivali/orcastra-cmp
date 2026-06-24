@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { X, Activity, Cpu, HardDrive, Network, Clock } from "lucide-react";
-import { LoadingLottieMedium } from "./loading-lottie";
+import { Spinner } from "./ui/spinner";
 import { useInstanceMetrics } from "@/hooks";
 import { VMInfo } from "@/types";
 import { Button } from "./ui/button";
@@ -122,7 +122,7 @@ export function InstanceMonitoringModal({
 
           {isLoading ? (
             <div className="flex justify-center py-8">
-              <LoadingLottieMedium />
+              <Spinner size="lg" className="text-muted-foreground" />
             </div>
           ) : instance.status !== "Running" ? (
             <div className="text-center py-8 text-muted-foreground">
