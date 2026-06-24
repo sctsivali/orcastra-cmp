@@ -21,7 +21,7 @@ from urllib.parse import unquote
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.x509.oid import NameOID
-from fastapi import Request
+from starlette.requests import HTTPConnection
 
 from app.core.config import Settings
 from app.services.pkcs12_util import cert_fingerprint_sha256
@@ -57,7 +57,7 @@ def _parse_cidrs(cidr_text: str):
     return nets
 
 
-def proxy_trusted(request: Request, settings: Settings) -> bool:
+def proxy_trusted(request: HTTPConnection, settings: Settings) -> bool:
     """True only when the request demonstrably came through the auth reverse proxy.
 
     Primary control: a shared secret header the proxy injects (constant-time compared).
@@ -88,11 +88,16 @@ def proxy_trusted(request: Request, settings: Settings) -> bool:
     return True
 
 
-def extract_client_cert(request: Request, settings: Settings) -> Optional[ClientCertIdentity]:
+def extract_client_cert(request: HTTPConnection, settings: Settings) -> Optional[ClientCertIdentity]:
     """Return the verified client identity from proxy headers, or None.
 
-    None means: not behind the trusted proxy, no client cert presented, verify != SUCCESS,
-    or an unparseable cert. Callers must treat None as unauthenticated (fail closed).
+    Accepts any Starlette ``HTTPConnection`` (an HTTP ``Request`` or a ``WebSocket``), so the same
+    fingerprint extraction backs both the bearer login/binding path and the WebSocket handshake.
+
+    None means: not behind the trusted proxy, no client cert presented, or an unparseable cert.
+    Under ``optional_no_ca`` the proxy reports ``verify=NONE`` even when a cert IS presented, so
+    ``X-SSL-Client-Verify`` is deliberately NOT used as a gate - trust is by fingerprint (see below).
+    Callers must treat None as unauthenticated (fail closed).
     """
     if not proxy_trusted(request, settings):
         return None

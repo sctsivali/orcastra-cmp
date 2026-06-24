@@ -19,6 +19,11 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:4050";
 
+// Auth backend: "client-cert" (mini) re-binds every proxied request to the presenting cert.
+const AUTH_MODE =
+  process.env.AUTH_MODE || process.env.NEXT_PUBLIC_AUTH_MODE || "authentik";
+const AUTH_PROXY_SECRET = process.env.AUTH_PROXY_SECRET || "";
+
 const FORWARD_CLIENT_IP_HEADERS = process.env.FORWARD_CLIENT_IP_HEADERS !== "false";
 const TRUSTED_CLIENT_IP_HEADERS = (
   process.env.TRUSTED_CLIENT_IP_HEADERS || "cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-forwarded-for,x-real-ip"
@@ -125,12 +130,26 @@ function buildForwardHeaders(req: NextRequest): Headers {
   headers.delete("x-orcastra-client-ip");
   headers.delete("x-orcastra-client-ip-source");
 
-  // SECURITY: never let a browser inject client-cert auth headers through the generic
-  // proxy. The only legitimate carrier of these is the NextAuth cert-login flow, which
-  // calls the backend directly (server-side) with the proxy secret.
+  // SECURITY: client-cert auth headers must never be browser-injectable. nginx OVERWRITES
+  // X-SSL-Client-* on every request from the real TLS layer (mini.conf), so the values seen
+  // here are authoritative; the browser cannot forge them. Capture nginx's values, then strip
+  // everything the browser may have set. In client-cert mode, re-attach the verified cert plus
+  // the server-only proxy secret so the backend can re-bind the session to the cert presented on
+  // THIS request (closes the "switch to an unregistered cert and keep working" gap). The proxy
+  // only transports - the backend (proxy_trusted + fingerprint match) decides, so a forged header
+  // can at worst cause a deny, never impersonation. In authentik mode nothing is forwarded.
+  const nginxClientCert = req.headers.get("x-ssl-client-cert");
+  const nginxClientVerify = req.headers.get("x-ssl-client-verify");
+
   headers.delete("x-auth-proxy-secret");
   for (const name of Array.from(headers.keys())) {
     if (name.toLowerCase().startsWith("x-ssl-client-")) headers.delete(name);
+  }
+
+  if (AUTH_MODE === "client-cert" && AUTH_PROXY_SECRET && nginxClientCert) {
+    headers.set("x-ssl-client-cert", nginxClientCert);
+    if (nginxClientVerify) headers.set("x-ssl-client-verify", nginxClientVerify);
+    headers.set("x-auth-proxy-secret", AUTH_PROXY_SECRET);
   }
 
   if (FORWARD_CLIENT_IP_HEADERS) {

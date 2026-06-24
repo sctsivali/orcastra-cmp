@@ -1120,7 +1120,7 @@ async def monitoring_websocket(ws: WebSocket):
     browsers cannot set Authorization headers on WebSocket upgrade requests.
     """
     from app.core.config import get_settings
-    from app.core.auth import _ensure_session_active
+    from app.core.auth import _ensure_session_active, _ensure_cert_binding
 
     # Redeem the single-use ticket (fail-closed, mode-aware: Authentik or client-cert).
     settings = get_settings()
@@ -1132,6 +1132,8 @@ async def monitoring_websocket(ws: WebSocket):
             return
         try:
             _ensure_session_active(user, settings)
+            # client-cert mode: re-bind to the cert presented on this WS handshake
+            _ensure_cert_binding(ws, user, settings)
             from app.core.rbac import Role, get_highest_role, resolve_roles
             if get_highest_role(resolve_roles(user)) != Role.ADMIN:
                 await ws.close(code=1008, reason="Monitoring WebSocket is admin-only")

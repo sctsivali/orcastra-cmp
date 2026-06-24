@@ -6,8 +6,10 @@ the provider's public keys and verifying JWT signatures locally.
 """
 
 import asyncio
+import hmac
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
@@ -401,6 +403,50 @@ def _ensure_session_active(user: AuthenticatedUser, settings: Settings) -> None:
         logger.warning(f"Revocation cache check failed (relying on token TTL): {e}")
 
 
+def _ensure_cert_binding(connection, user: AuthenticatedUser, settings: Settings) -> None:
+    """Bind a client-cert session to the certificate presented on THIS request.
+
+    The minted bearer embeds the cert fingerprint as ``sub`` (see ``mint_local_jwt``), but that
+    binding was never enforced after login: a token minted for cert A kept working once the browser
+    switched to a different/unenrolled cert, until the token expired. This re-checks, on every
+    request, that the current TLS client cert (forwarded by the trusted proxy) is present, parseable,
+    not expired, and its fingerprint matches the token ``sub``. Fails closed - any missing, mismatched,
+    or expired cert raises 401. No-op outside client-cert mode. Accepts a ``Request`` or ``WebSocket``
+    (both are Starlette ``HTTPConnection``).
+    """
+    if settings.auth_mode != "client-cert":
+        return
+    # local import keeps this module import-light and avoids any import cycle
+    from app.services.client_cert_auth import extract_client_cert
+
+    sub = user.user_id or ""
+    identity = extract_client_cert(connection, settings)
+    if identity is None:
+        logger.warning("cert-binding: no trusted client cert on request for sub=%s", sub[:16])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Client certificate required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not hmac.compare_digest(identity.fingerprint, sub):
+        logger.warning(
+            "cert-binding: fingerprint mismatch (token sub=%s, presented=%s)",
+            sub[:16], identity.fingerprint[:16],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Client certificate does not match this session; re-authenticate",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if identity.not_after and identity.not_after < datetime.now(timezone.utc):
+        logger.warning("cert-binding: presented cert expired for sub=%s", sub[:16])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Client certificate has expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(oauth2_scheme),
@@ -426,6 +472,7 @@ async def get_current_user(
 
     user = _validate_token(credentials.credentials, settings)
     _ensure_session_active(user, settings)
+    _ensure_cert_binding(request, user, settings)
 
     # attach user to request state for access by middleware/logging
     # user_role is populated later by RBAC dependency (_populate_request_state)
@@ -457,6 +504,7 @@ async def get_optional_user(
     try:
         user = _validate_token(credentials.credentials, settings)
         _ensure_session_active(user, settings)
+        _ensure_cert_binding(request, user, settings)
         request.state.user_id = user.user_id
         request.state.user_email = user.email
         request.state.user_groups = user.groups
@@ -465,19 +513,22 @@ async def get_optional_user(
         return None
 
 
-async def get_ws_user(
+async def _resolve_ws_user(
     websocket: "WebSocket",
-    settings: Settings = Depends(get_settings),
+    settings: Settings,
+    *,
+    consume: bool,
 ) -> Optional[AuthenticatedUser]:
     """
-    WebSocket-compatible auth dependency.
+    Shared WebSocket auth body.
 
-    Authenticates via a single-use ``ticket`` query parameter (browsers cannot set
-    an Authorization header on a WebSocket handshake, and putting the raw JWT in the
-    URL leaks it into devtools/history/proxy logs). The ticket is bound to this
-    connection's instance/host/project and is consumed on redeem. App-layer
-    revocation is still enforced. Returns ``None`` when auth is disabled.
-    Does NOT close the socket - callers decide how to handle ``None``.
+    Authenticates via a ``ticket`` query parameter (browsers cannot set an Authorization
+    header on a WebSocket handshake, and putting the raw JWT in the URL leaks it into
+    devtools/history/proxy logs). The ticket is bound to this connection's
+    instance/host/project. ``consume`` selects single-use (terminal/monitoring) versus
+    multi-use within TTL (graphics console - SPICE opens one WebSocket per channel, all
+    reusing the same ticket). App-layer revocation is still enforced. Returns ``None``
+    when auth is disabled. Does NOT close the socket - callers decide how to handle ``None``.
     """
     from app.core.ws_ticket import redeem_ticket
 
@@ -493,14 +544,43 @@ async def get_ws_user(
     host = websocket.query_params.get("host")
     project = websocket.query_params.get("project", "default")
 
-    user = redeem_ticket(ticket, instance=instance, host=host, project=project)
+    user = redeem_ticket(
+        ticket, instance=instance, host=host, project=project, consume=consume
+    )
     if user is None:
         logger.warning("WebSocket connection rejected: invalid or expired ticket")
         return None
 
     try:
         _ensure_session_active(user, settings)
+        # important: bind the cert at the WS handshake too. Ticket minting already runs through
+        # get_current_user (cert-bound), but a ticket minted just before a cert swap would still
+        # open channels within its TTL - re-check the cert here to close that window.
+        _ensure_cert_binding(websocket, user, settings)
     except HTTPException as exc:
-        logger.warning(f"WebSocket session inactive: {exc.detail}")
+        logger.warning(f"WebSocket auth rejected: {exc.detail}")
         return None
     return user
+
+
+async def get_ws_user(
+    websocket: "WebSocket",
+    settings: Settings = Depends(get_settings),
+) -> Optional[AuthenticatedUser]:
+    """Single-use WebSocket auth dependency (terminal, monitoring)."""
+    return await _resolve_ws_user(websocket, settings, consume=True)
+
+
+async def get_ws_user_console(
+    websocket: "WebSocket",
+    settings: Settings = Depends(get_settings),
+) -> Optional[AuthenticatedUser]:
+    """WebSocket auth for the graphics console.
+
+    # important: the SPICE HTML5 client opens a separate WebSocket per channel
+    # (main/display/inputs/cursor), all carrying the same ticket. A single-use ticket
+    # would let only the first (main) channel in and 403 the rest - the display channel
+    # is rejected, so the console shows "Connected" but a black screen. Redeem multi-use
+    # within the ticket's short TTL so every channel of one SPICE session authenticates.
+    """
+    return await _resolve_ws_user(websocket, settings, consume=False)

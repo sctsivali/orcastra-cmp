@@ -218,8 +218,9 @@ async def update_identity(
     cache = get_rbac_cache()
     if status_changed and row.status == "active":
         cache.clear_identity_revocation(fingerprint)
-    elif role_changed or (status_changed and row.status == "revoked"):
-        # Force existing sessions to re-authenticate with the new role/state.
+    elif role_changed or (status_changed and row.status != "active"):
+        # Force existing sessions to re-authenticate with the new role/state. Any non-active
+        # status (currently only "revoked") must kill live tokens, not just on fresh login.
         cache.revoke_identity_sessions(fingerprint)
 
     await activity_logger.log_security_event(

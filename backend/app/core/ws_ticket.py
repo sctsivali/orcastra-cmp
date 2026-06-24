@@ -73,18 +73,29 @@ def redeem_ticket(
     instance: Optional[str] = None,
     host: Optional[str] = None,
     project: str = "default",
+    consume: bool = True,
 ) -> Optional[AuthenticatedUser]:
-    """Validate and consume a ticket. Returns the bound user, or None if invalid.
+    """Validate a ticket and return the bound user, or None if invalid.
 
-    The ticket is deleted on lookup (single-use) regardless of the bind result, so a
-    target mismatch still burns the ticket. Returns None if the ticket is missing,
-    expired, malformed, or bound to a different scope/instance/host/project.
+    ``consume`` (default True) deletes the ticket on lookup so it cannot be replayed -
+    a target mismatch still burns it. Set ``consume=False`` for the graphics console:
+    the SPICE client opens one WebSocket per channel (main/display/inputs/cursor), all
+    reusing the same ticket, so it must survive multiple redeems within its short TTL.
+    Returns None if the ticket is missing, expired, malformed, or bound to a different
+    scope/instance/host/project.
     """
     if not ticket:
         return None
-    # Atomic single-use consume (Redis GETDEL when available) - two concurrent redeems
-    # cannot both win, and no stale per-worker memory copy can satisfy a later redeem.
-    raw = get_cache_manager().get_and_delete(_NAMESPACE, ticket)
+    if consume:
+        # Atomic single-use consume (Redis GETDEL when available) - two concurrent
+        # redeems cannot both win, and no stale per-worker memory copy can satisfy a
+        # later redeem. get_and_delete returns the raw JSON string.
+        raw = get_cache_manager().get_and_delete(_NAMESPACE, ticket)
+    else:
+        # Multi-use within TTL (graphics console). Non-consuming peek; cache.get returns
+        # the already-parsed dict, handled by the payload branch below. The ticket
+        # expires on its own TTL, bounding the replay window to that instance.
+        raw = get_cache_manager().get(_NAMESPACE, ticket)
     if raw is None:
         return None
     if isinstance(raw, (bytes, bytearray)):
