@@ -32,6 +32,7 @@ import {
   Activity,
   Loader2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { cn } from "@/lib/utils";
 import { InstanceMetrics } from "@/types";
 import { useSession } from "next-auth/react";
@@ -486,7 +487,7 @@ export function ConsoleResourceBar({
             <div className="space-y-2 bg-[#1a1b26] rounded-lg p-3">
               {metricsLoading ? (
                 <div className="flex items-center justify-center py-4 text-gray-500">
-                  <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                  <Spinner className="h-4 w-4 mr-2" />
                   Loading metrics...
                 </div>
               ) : !instanceMetrics ? (

@@ -7,6 +7,8 @@ import asyncio
 import json
 import logging
 import ssl
+import threading
+import time
 import websockets
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
@@ -19,6 +21,15 @@ from app.core.config import get_settings
 from app.services.lxd_ssl import create_lxd_ssl_context
 
 logger = logging.getLogger(__name__)
+
+
+class _TerminalBuildError(Exception):
+    """Known, user-facing failure while creating an exec session.
+
+    Carries a message safe to surface to the client (e.g. "Instance must be
+    running"); raised from the synchronous build path and mapped back to the
+    (None, message) result by create_exec_session.
+    """
 
 
 class ControlCode(IntEnum):
@@ -48,12 +59,21 @@ class TerminalService:
     Service for managing terminal connections to LXD instances.
     Handles LXD exec API integration with WebSocket forwarding.
     """
-    
+
+    # important: terminal connect runs the SSL fetch from worker threads (offloaded
+    # so it never blocks the event loop). An ssl.SSLContext is thread-safe and
+    # reusable, so cache one per host briefly to skip the Vault round-trip on the
+    # warm path. Mirrors console_service - the lock keeps the cache consistent under
+    # concurrent connects.
+    _SSL_CACHE_TTL = 60.0
+
     def __init__(self):
         self.settings = get_settings()
         self.active_sessions: Dict[str, TerminalSession] = {}
         self._lxd_service = None
         self._cert_manager = None
+        self._ssl_cache: Dict[str, Tuple[ssl.SSLContext, float]] = {}
+        self._ssl_lock = threading.Lock()
     
     @property
     def lxd_service(self):
@@ -104,131 +124,150 @@ class TerminalService:
         height: int = 40,
         shell: Optional[list] = None
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """
-        Create an exec session for interactive terminal access.
+        """Create an exec session for interactive terminal access.
+
+        The pylxd/Vault calls are synchronous and would block the event loop, so the
+        whole blocking body runs in a worker thread (matching console_service and the
+        LXD service layer). On a single uvicorn worker this is what keeps one terminal
+        connect from stalling every other request. asyncio.to_thread copies the
+        contextvars, so the org-scope cluster ACL is still enforced inside the thread.
         """
         try:
-            # Ensure connection to the host
-            if not self.lxd_service.ensure_connection(host):
-                return None, f"Cannot connect to host: {host}"
-            
-            # Get client
-            client = self.lxd_service.get_client_with_reconnect(host)
-            if not client:
-                return None, f"No connection to host: {host}"
-            
-            # Get instance
-            try:
-                # For non-default projects, use raw API to get instance
-                # pylxd's instances.get() doesn't support project parameter directly
-                if project and project != "default":
-                    # Use API directly with project parameter
-                    response = client.api.instances[instance_name].get(params={"project": project})
-                    instance_data = response.json().get("metadata", {})
-                    instance_status = instance_data.get("status", "Unknown")
-                    instance_type = instance_data.get("type", "container")
-                    
-                    # Check status
-                    if instance_status != "Running":
-                        return None, f"Instance must be running. Current status: {instance_status}"
-                else:
-                    instance = client.instances.get(instance_name)
-                    instance_status = instance.status
-                    instance_type = instance.type
-                    
-                    if instance_status != "Running":
-                        return None, f"Instance must be running. Current status: {instance_status}"
-            except Exception as e:
-                return None, f"Instance not found: {instance_name} - {str(e)}"
-            
-            # Determine shell command
-            if shell is None:
-                shell = self.get_shell_command(instance_type if project and project != "default" else instance.type)
-            
-            # Get cluster endpoint
-            cluster_info = self.cert_manager.get_cluster_info(host)
-            endpoint = cluster_info.get("metadata", {}).get("endpoint", "")
-            
-            # Parse endpoint for WebSocket URL
-            # Remove trailing slash to avoid double slashes in URL
-            ws_endpoint = endpoint.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
-            
-            # Create exec operation via LXD API
-            # Using raw API call for exec with WebSocket
-            exec_data = {
-                "command": shell,
-                "environment": {
-                    "TERM": "xterm-256color",
-                    "HOME": "/root",
-                    "USER": "root",
-                    "SHELL": shell[0],
-                    "LANG": "C.UTF-8",
-                },
-                "wait-for-websocket": True,
-                "interactive": True,
-                "width": width,
-                "height": height,
-                "record-output": False,  # Don't record, pure interactive
-            }
-            
-            # Execute via pylxd raw API (include project parameter for non-default projects)
-            if project and project != "default":
-                response = client.api.instances[instance_name].exec.post(
-                    json=exec_data,
-                    params={"project": project}
-                )
-            else:
-                response = client.api.instances[instance_name].exec.post(json=exec_data)
-            
-            # Get operation details
-            operation = response.json()
-            if operation.get("type") == "error":
-                error_msg = operation.get("error", "Unknown error")
-                return None, f"Exec failed: {error_msg}"
-            
-            # Extract WebSocket metadata
-            metadata = operation.get("metadata", {})
-            operation_id = metadata.get("id", "")
-            ws_metadata = metadata.get("metadata", {})
-            
-            # Get secrets for WebSocket connections
-            fds = ws_metadata.get("fds", {})
-            control_fd = fds.get("control", "")
-            stdio_fd = fds.get("0", "")  # stdin/stdout/stderr combined for interactive
-            
-            # Build WebSocket URLs
-            ws_base = f"{ws_endpoint}/1.0/operations/{operation_id}/websocket"
-            
-            session_info = {
-                "operation_id": operation_id,
-                "instance_name": instance_name,
-                "host": host,
-                "project": project,
-                "ws_url": f"{ws_base}?secret={stdio_fd}",
-                "control_url": f"{ws_base}?secret={control_fd}",
-                "endpoint": endpoint,
-                "shell": shell,
-            }
-            
-            logger.info(f"Created exec session for {instance_name}@{host}: {operation_id}")
+            session_info = await asyncio.to_thread(
+                self._build_exec_session,
+                instance_name, host, project, width, height, shell,
+            )
             return session_info, None
-            
+        except _TerminalBuildError as e:
+            # Known, user-facing failure (not running, not found, exec rejected).
+            return None, str(e)
         except Exception as e:
             logger.error(f"Error creating exec session: {e}")
             return None, str(e)
-    
+
+    def _build_exec_session(
+        self,
+        instance_name: str,
+        host: str,
+        project: str,
+        width: int,
+        height: int,
+        shell: Optional[list],
+    ) -> Dict[str, Any]:
+        """Synchronous body of create_exec_session - runs in a worker thread.
+
+        Raises _TerminalBuildError with a user-facing message on known failures.
+        """
+        if not self.lxd_service.ensure_connection(host):
+            raise _TerminalBuildError(f"Cannot connect to host: {host}")
+
+        client = self.lxd_service.get_client_with_reconnect(host)
+        if not client:
+            raise _TerminalBuildError(f"No connection to host: {host}")
+
+        # Resolve instance + type. pylxd's instances.get() can't pass a project, so
+        # non-default projects go through the raw API.
+        try:
+            if project and project != "default":
+                response = client.api.instances[instance_name].get(params={"project": project})
+                instance_data = response.json().get("metadata", {})
+                instance_status = instance_data.get("status", "Unknown")
+                instance_type = instance_data.get("type", "container")
+            else:
+                instance = client.instances.get(instance_name)
+                instance_status = instance.status
+                instance_type = instance.type
+        except Exception as e:
+            raise _TerminalBuildError(f"Instance not found: {instance_name} - {str(e)}")
+
+        if instance_status != "Running":
+            raise _TerminalBuildError(f"Instance must be running. Current status: {instance_status}")
+
+        # Determine shell command
+        if shell is None:
+            shell = self.get_shell_command(instance_type)
+
+        # Get cluster endpoint
+        cluster_info = self.cert_manager.get_cluster_info(host)
+        endpoint = cluster_info.get("metadata", {}).get("endpoint", "")
+        # Remove trailing slash to avoid double slashes in URL
+        ws_endpoint = endpoint.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+
+        # Create exec operation via LXD API (raw call for the interactive WebSocket).
+        exec_data = {
+            "command": shell,
+            "environment": {
+                "TERM": "xterm-256color",
+                "HOME": "/root",
+                "USER": "root",
+                "SHELL": shell[0],
+                "LANG": "C.UTF-8",
+            },
+            "wait-for-websocket": True,
+            "interactive": True,
+            "width": width,
+            "height": height,
+            "record-output": False,  # Don't record, pure interactive
+        }
+
+        if project and project != "default":
+            response = client.api.instances[instance_name].exec.post(
+                json=exec_data,
+                params={"project": project}
+            )
+        else:
+            response = client.api.instances[instance_name].exec.post(json=exec_data)
+
+        operation = response.json()
+        if operation.get("type") == "error":
+            error_msg = operation.get("error", "Unknown error")
+            raise _TerminalBuildError(f"Exec failed: {error_msg}")
+
+        metadata = operation.get("metadata", {})
+        operation_id = metadata.get("id", "")
+        ws_metadata = metadata.get("metadata", {})
+
+        # control = lifecycle signals; "0" = stdin/stdout/stderr combined for interactive.
+        fds = ws_metadata.get("fds", {})
+        control_fd = fds.get("control", "")
+        stdio_fd = fds.get("0", "")
+
+        ws_base = f"{ws_endpoint}/1.0/operations/{operation_id}/websocket"
+
+        session_info = {
+            "operation_id": operation_id,
+            "instance_name": instance_name,
+            "host": host,
+            "project": project,
+            "ws_url": f"{ws_base}?secret={stdio_fd}",
+            "control_url": f"{ws_base}?secret={control_fd}",
+            "endpoint": endpoint,
+            "shell": shell,
+        }
+
+        logger.info(f"Created exec session for {instance_name}@{host}: {operation_id}")
+        return session_info
+
     def get_ssl_context(self, host: str) -> ssl.SSLContext:
+        """SSL context for the upstream LXD WebSocket, cached per host.
+
+        The Vault cert fetch + context build is blocking, so callers offload this via
+        asyncio.to_thread; the 60s cache means the warm path skips Vault entirely.
+        The context is built outside the lock (a rare cold-cache double-fetch is
+        harmless - an ssl.SSLContext is reusable) so a slow Vault round-trip never
+        serializes other hosts' connects.
         """
-        Create SSL context for WebSocket connection to LXD.
-        Uses certificates from Vault.
-        
-        Note: Temp files are kept for the process lifetime to avoid SSL errors
-        during long-running connections.
-        """
-        # Get certificates from Vault
+        now = time.monotonic()
+        with self._ssl_lock:
+            cached = self._ssl_cache.get(host)
+            if cached and (now - cached[1]) < self._SSL_CACHE_TTL:
+                return cached[0]
+
         cert_data = self.cert_manager.get_cluster_certificate(host)
-        
-        return create_lxd_ssl_context(cert_data)
+        ctx = create_lxd_ssl_context(cert_data)
+        with self._ssl_lock:
+            self._ssl_cache[host] = (ctx, time.monotonic())
+        return ctx
     
     async def resize_terminal(
         self,

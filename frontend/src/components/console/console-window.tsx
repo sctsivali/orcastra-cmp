@@ -16,13 +16,13 @@ import {
   Minimize2,
   Monitor,
   Terminal,
-  Loader2,
   AlertCircle,
   Server,
   Grip,
   ExternalLink,
   AlertTriangle,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -41,6 +41,7 @@ import { API_URL, getAccessToken } from "@/lib/api";
 import { ConsoleTabs } from "./console-tabs";
 import { ConsoleToolbar } from "./console-toolbar";
 import { TextConsole, TextConsoleHandle } from "./text-console";
+import { DEFAULT_FONT_SIZE } from "@/lib/xterm-setup";
 import { GraphicsConsole, GraphicsConsoleHandle } from "./graphics-console";
 // import { BootPriorityPanel } from "./boot-priority-panel"; // Boot Order tab is hidden
 import { ISOManagerPanel } from "./iso-manager-panel";
@@ -338,6 +339,14 @@ export function ConsoleWindow({
     }
   }, [isFullPage, loading, error, sessionCheckComplete, focusConsole]);
 
+  // Text console zoom = font size change (crisp WebGL text, no CSS reflow/blur). The
+  // graphics console takes `zoom` as a prop and scales itself.
+  useEffect(() => {
+    if (consoleInstance?.activeTab === "text") {
+      textRef.current?.setFontSize(Math.round((DEFAULT_FONT_SIZE * zoom) / 100));
+    }
+  }, [zoom, consoleInstance?.activeTab]);
+
   if (!consoleInstance) {
     return null;
   }
@@ -422,7 +431,7 @@ export function ConsoleWindow({
             >
               {killingSession ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  <Spinner className="h-4 w-4 mr-2" />
                   Killing...
                 </>
               ) : (
@@ -579,7 +588,7 @@ export function ConsoleWindow({
       {loading && (
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-4">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <Spinner className="h-8 w-8 text-primary" />
             <p className="text-sm text-muted-foreground">Connecting to {consoleInstance.instanceName}...</p>
           </div>
         </div>
@@ -676,14 +685,9 @@ export function ConsoleWindow({
                   e.stopPropagation();
                 }}
               >
-                {/* Console display - zoom applies to both text and graphics */}
-                <div 
-                  className="absolute inset-0 overflow-auto"
-                  style={consoleInstance.activeTab === "text" && zoom !== 100 ? { 
-                    // Use CSS zoom for text console - works better than transform
-                    zoom: `${zoom}%`,
-                  } : undefined}
-                >
+                {/* Text zoom is applied via font size (see effect above); graphics
+                    scales itself from the `zoom` prop. */}
+                <div className="absolute inset-0 overflow-auto">
                 {consoleInstance.activeTab === "text" && (
                   <TextConsole
                     ref={textRef}
@@ -709,7 +713,7 @@ export function ConsoleWindow({
                   ) : (
                     <div className="flex-1 flex items-center justify-center bg-black">
                       <div className="flex flex-col items-center gap-4">
-                        <Loader2 className="h-8 w-8 animate-spin text-white/70" />
+                        <Spinner className="h-8 w-8 text-white/70" />
                         <p className="text-sm text-white/70">
                           {sessionConflict.show ? "Waiting for session conflict resolution..." : "Checking active sessions..."}
                         </p>

@@ -16,7 +16,6 @@ import {
   X,
   Maximize2,
   Server,
-  Loader2,
   AlertCircle,
   CheckCircle2,
   GripVertical,

@@ -197,27 +197,30 @@ const NativeKeyboardInput = memo(function NativeKeyboardInput({
     
     const currentText = editorRef.current.textContent || '';
     const prevText = lastTextRef.current;
-    
+
     isProcessingRef.current = true;
-    
-    if (currentText.length > prevText.length) {
-      // Text was added - send new characters
-      const newChars = currentText.slice(prevText.length);
-      for (const char of newChars) {
-        onKeyPressRef.current(char, undefined, true);
+    // important: try/finally so the guard always clears - otherwise a throw mid-loop
+    // (or an unmount) would wedge it true and silently drop all later input.
+    try {
+      if (currentText.length > prevText.length) {
+        // Text was added - send new characters
+        const newChars = currentText.slice(prevText.length);
+        for (const char of newChars) {
+          onKeyPressRef.current(char, undefined, true);
+        }
+      } else if (currentText.length < prevText.length) {
+        // Text was deleted - send backspaces for each deleted char
+        const deletedCount = prevText.length - currentText.length;
+        for (let i = 0; i < deletedCount; i++) {
+          onKeyPressRef.current('Backspace', undefined, true);
+        }
       }
-    } else if (currentText.length < prevText.length) {
-      // Text was deleted - send backspaces for each deleted char
-      const deletedCount = prevText.length - currentText.length;
-      for (let i = 0; i < deletedCount; i++) {
-        onKeyPressRef.current('Backspace', undefined, true);
-      }
+      // Note: if lengths are equal, it might be a replacement - handle if needed
+    } finally {
+      // Update tracked text (don't clear - we need to track for deletions)
+      lastTextRef.current = currentText;
+      isProcessingRef.current = false;
     }
-    // Note: if lengths are equal, it might be a replacement - handle if needed
-    
-    // Update tracked text (don't clear - we need to track for deletions)
-    lastTextRef.current = currentText;
-    isProcessingRef.current = false;
   }, []);
 
   // Handle special keys
@@ -338,10 +341,16 @@ export function OnScreenKeyboard({ onKeyPress, onClose, className }: OnScreenKey
     if (key === 'Meta') { setModifiers(m => ({ ...m, meta: !m.meta })); return; }
     if (key === 'CapsLock') { setModifiers(m => ({ ...m, capsLock: !m.capsLock })); return; }
 
+    // important: CapsLock only inverts case for letters - it must NOT add Shift to
+    // digits/symbols (CapsLock + "1" stays "1", not "!"). XOR(shift, capsLock) for
+    // letters mirrors the key-cap label logic below so display and output agree.
+    const isLetter = key.length === 1 && /[a-zA-Z]/.test(key);
+    const effectiveShift = isLetter ? (modifiers.shift !== modifiers.capsLock) : modifiers.shift;
+
     onKeyPress(key, {
       ctrl: modifiers.ctrl,
       alt: modifiers.alt,
-      shift: modifiers.shift || modifiers.capsLock,
+      shift: effectiveShift,
       meta: modifiers.meta,
     });
 

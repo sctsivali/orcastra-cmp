@@ -190,7 +190,7 @@ dev: ## Run all services in development mode (with logs)
 
 dev-backend: ## Run backend in development mode (local)
 	@echo "$(COLOR_GREEN)Starting backend in development mode...$(COLOR_RESET)"
-	@cd backend && uvicorn app.main:app --host 0.0.0.0 --port 4050 --reload
+	@cd backend && uvicorn app.main:app --host 0.0.0.0 --port 4050 --reload --ws-per-message-deflate false
 
 dev-frontend: ## Run frontend in development mode (local)
 	@echo "$(COLOR_GREEN)Starting frontend in development mode...$(COLOR_RESET)"

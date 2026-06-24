@@ -24,14 +24,14 @@ from typing import Optional, List
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends
 from pydantic import BaseModel, Field
 import websockets
-from websockets import State as WebSocketState
 from websockets.exceptions import ConnectionClosed
 
-from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user_console
 from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
 from app.services.console_service import get_console_service
 from app.services.activity_logger import get_activity_logger
-from app.services.session_tracker import get_session_tracker, SessionProtocol
+from app.services.session_tracker import get_session_tracker
+from app.services.spice_session import get_spice_session_manager, ConsoleSessionError
 from app.core.database import async_session_maker
 from app.models.db_models import SessionAuditLog
 
@@ -593,57 +593,69 @@ async def check_active_sessions(
     Useful for warning users before opening a new console.
     """
     from app.services.lxd_service import get_lxd_service
-    
+    from datetime import datetime, timezone
+
     lxd_service = get_lxd_service()
     active_sessions: List[ActiveConsoleSession] = []
-    
+    seen_ops: set = set()
+
+    # Authoritative source: live sessions tracked in-process. The tracker knows the
+    # instance/host of every session including SPICE graphics, which the LXD-operation
+    # heuristic below cannot match (a "Showing console" op carries no instance in its
+    # description and an empty resources.instances, so graphics sessions were invisible
+    # to the conflict check). Only CONNECTED/CONNECTING sessions are returned.
+    try:
+        for s in get_session_tracker().get_active_sessions(instance_name=instance_name, host=host):
+            op_id = s.session_id
+            seen_ops.add(op_id)
+            active_sessions.append(ActiveConsoleSession(
+                operation_id=op_id,
+                instance_name=s.instance_name,
+                description=f"{s.protocol.value} ({s.user_email or s.user_id})",
+                created_at=datetime.fromtimestamp(s.started_at, tz=timezone.utc).isoformat(),
+                may_cancel=True,
+            ))
+    except Exception as e:
+        logger.debug(f"Tracker active-session lookup failed: {e}")
+
+    # Supplementary: scan LXD operations for anything not tracked in-process (e.g.
+    # an orphan from a crash, or a session from before a restart).
     try:
         client = lxd_service.connection_manager.get_client(host)
-        if not client:
-            return ActiveConsoleCheckResponse(has_active_session=False, sessions=[])
-        
-        # Get running operations
-        response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
-        if response.status_code == 200:
-            operations_data = response.json().get('metadata', {})
-            running_ops = operations_data.get('running', [])
-            
-            for op in running_ops:
-                description = op.get('description', '')
-                op_class = op.get('class', '')
-                
-                # Check if this is a console operation for our instance
-                # Console operations typically have "Console" or "exec" in description
-                # and are of class "websocket" or "task"
-                is_console_op = (
-                    ('console' in description.lower() or 
-                     'exec' in description.lower() or
-                     'Executing command' in description) and
-                    instance_name in description
-                )
-                
-                # Also check resources for instance match
-                resources = op.get('resources', {})
-                instances = resources.get('instances', [])
-                instance_match = any(instance_name in inst for inst in instances)
-                
-                if is_console_op or (op_class == 'websocket' and instance_match):
-                    active_sessions.append(ActiveConsoleSession(
-                        operation_id=op.get('id', ''),
-                        instance_name=instance_name,
-                        description=description,
-                        created_at=op.get('created_at', ''),
-                        may_cancel=op.get('may_cancel', True),
-                    ))
-        
-        return ActiveConsoleCheckResponse(
-            has_active_session=len(active_sessions) > 0,
-            sessions=active_sessions
-        )
-        
+        if client:
+            response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
+            if response.status_code == 200:
+                running_ops = response.json().get('metadata', {}).get('running', [])
+                for op in running_ops:
+                    op_id = op.get('id', '')
+                    if op_id in seen_ops:
+                        continue
+                    description = op.get('description', '')
+                    op_class = op.get('class', '')
+                    is_console_op = (
+                        ('console' in description.lower() or
+                         'exec' in description.lower() or
+                         'Executing command' in description) and
+                        instance_name in description
+                    )
+                    resources = op.get('resources', {})
+                    instance_match = any(instance_name in inst for inst in resources.get('instances', []))
+                    if is_console_op or (op_class == 'websocket' and instance_match):
+                        seen_ops.add(op_id)
+                        active_sessions.append(ActiveConsoleSession(
+                            operation_id=op_id,
+                            instance_name=instance_name,
+                            description=description,
+                            created_at=op.get('created_at', ''),
+                            may_cancel=op.get('may_cancel', True),
+                        ))
     except Exception as e:
         logger.error(f"Error checking active sessions: {e}")
-        return ActiveConsoleCheckResponse(has_active_session=False, sessions=[])
+
+    return ActiveConsoleCheckResponse(
+        has_active_session=len(active_sessions) > 0,
+        sessions=active_sessions,
+    )
 
 
 @router.post(
@@ -664,43 +676,47 @@ async def kill_all_sessions(
     
     lxd_service = get_lxd_service()
     killed_count = 0
-    
+    to_cancel: set = set()
+
+    # Tracked sessions for this instance (authoritative; includes SPICE graphics,
+    # whose "Showing console" op the resources heuristic below cannot match).
+    try:
+        for s in get_session_tracker().get_active_sessions(instance_name=instance_name, host=host):
+            if s.session_id:
+                to_cancel.add(s.session_id)
+    except Exception as e:
+        logger.debug(f"Tracker lookup for kill-all failed: {e}")
+
     try:
         client = lxd_service.connection_manager.get_client(host)
         if not client:
             return ActionResponse(success=False, error=f"Cannot connect to host: {host}")
-        
-        # Get running operations
+
+        # Add LXD websocket operations whose resources match this instance.
         response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
         if response.status_code == 200:
-            operations_data = response.json().get('metadata', {})
-            running_ops = operations_data.get('running', [])
-            
+            running_ops = response.json().get('metadata', {}).get('running', [])
             for op in running_ops:
-                description = op.get('description', '')
-                op_class = op.get('class', '')
                 resources = op.get('resources', {})
-                instances = resources.get('instances', [])
-                
-                # Check if this is a console operation for our instance
-                instance_match = any(instance_name in inst for inst in instances)
-                is_console_op = op_class == 'websocket' and instance_match
-                
-                if is_console_op:
-                    op_id = op.get('id', '')
-                    try:
-                        # Try to delete/cancel the operation
-                        client.api.operations[op_id].delete()
-                        killed_count += 1
-                        logger.info(f"Killed console operation {op_id} for {instance_name}@{host}")
-                    except Exception as e:
-                        logger.warning(f"Failed to kill operation {op_id}: {e}")
-        
+                instance_match = any(instance_name in inst for inst in resources.get('instances', []))
+                if op.get('class') == 'websocket' and instance_match:
+                    to_cancel.add(op.get('id', ''))
+
+        for op_id in to_cancel:
+            if not op_id:
+                continue
+            try:
+                client.api.operations[op_id].delete()
+                killed_count += 1
+                logger.info(f"Killed console operation {op_id} for {instance_name}@{host}")
+            except Exception as e:
+                logger.warning(f"Failed to kill operation {op_id}: {e}")
+
         return ActionResponse(
-            success=True, 
-            message=f"Killed {killed_count} console session(s) for {instance_name}"
+            success=True,
+            message=f"Killed {killed_count} console session(s) for {instance_name}",
         )
-        
+
     except Exception as e:
         logger.error(f"Error killing all sessions: {e}")
         return ActionResponse(success=False, error=str(e))
@@ -787,6 +803,7 @@ class ConsoleProxy:
         user_id: str = "anonymous",
         user_email: str = "",
         user_role: str = "unknown",
+        session_key: str = "",
     ):
         self.browser_ws = browser_ws
         self.instance_name = instance_name
@@ -796,11 +813,14 @@ class ConsoleProxy:
         self.user_id = user_id
         self.user_email = user_email
         self.user_role = user_role
-        
-        self.lxd_data_ws = None  # Data socket for SPICE data
-        self.lxd_control_ws = None  # Control socket for lifecycle
+        # Shared-operation key: every channel of one SPICE console carries the same
+        # ticket, so all four map to one LXD console operation via the manager.
+        self.session_key = session_key
+        self._acquired = False
+
+        self.lxd_data_ws = None  # This channel's own data socket for SPICE data
         self._shutdown = asyncio.Event()
-        self._session = None  # SessionInfo from tracker
+        self._session = None  # shared SessionInfo from tracker (one per console)
     
     async def _send_error(self, message: str):
         """Send error message to browser as JSON before closing.
@@ -817,65 +837,44 @@ class ConsoleProxy:
             pass
     
     async def run(self):
-        """Main entry point - runs the console proxy."""
-        console_service = get_console_service()
-        tracker = get_session_tracker()
-        
+        """Main entry point - runs the console proxy for ONE SPICE channel.
+
+        All channels of a console share ONE LXD console operation (created once by
+        the SpiceSessionManager, keyed by the ticket). This channel opens only its
+        own data socket to that shared operation; the single control socket and the
+        operation lifecycle are owned by the manager.
+        """
+        manager = get_spice_session_manager()
+
         try:
-            # Create console session with LXD
-            # Default dimensions - resize happens via SPICE agent
-            session_info, error = await console_service.create_console_session(
-                instance_name=self.instance_name,
-                host=self.host,
-                project=self.project,
-                console_type=self.console_type,
-                width=1024,
-                height=768,
-            )
-            
-            if error:
-                logger.error(f"Console session error: {error}")
-                await self._send_error(error)
-                return
-            
-            # Register session for tracking
-            session_id = session_info.get("operation_id", f"console-{self.instance_name}-{id(self)}")
-            self._session = tracker.register(
-                session_id=session_id,
-                instance_name=self.instance_name,
-                host=self.host,
-                project=self.project,
-                protocol=SessionProtocol.GRAPHICS,
-                user_id=self.user_id,
-                user_email=self.user_email,
-                user_role=self.user_role,
-            )
-            
-            ssl_context = console_service.get_ssl_context(self.host)
-            
-            # LXD VGA console requires BOTH control and data sockets
-            # Control socket must be connected for the operation to work
+            # Acquire (or create-once) the shared operation for this console.
             try:
-                # 1. Connect to CONTROL socket first (required by LXD)
-                control_url = session_info.get("control_url", "")
-                if control_url:
-                    self.lxd_control_ws = await asyncio.wait_for(
-                        websockets.connect(
-                            control_url,
-                            ssl=ssl_context,
-                            close_timeout=10,
-                            ping_interval=None,
-                            ping_timeout=None,
-                        ),
-                        timeout=10.0
-                    )
-                    logger.info(f"Connected to LXD control socket: {self.instance_name}")
-                
-                # 2. Connect to DATA socket (this triggers SPICE socket creation)
+                session = await manager.acquire(
+                    self.session_key,
+                    instance_name=self.instance_name,
+                    host=self.host,
+                    project=self.project,
+                    console_type=self.console_type,
+                    user_id=self.user_id,
+                    user_email=self.user_email,
+                    user_role=self.user_role,
+                )
+            except ConsoleSessionError as e:
+                logger.error(f"Console session error: {e}")
+                await self._send_error(str(e))
+                return
+
+            self._acquired = True
+            # Share the one tracker entry: every channel adds its bytes here.
+            self._session = session.tracked
+
+            # Connect ONLY this channel's data socket to the shared operation
+            # (LXD allows multiple connections to one operation's data-fd secret).
+            try:
                 self.lxd_data_ws = await asyncio.wait_for(
                     websockets.connect(
-                        session_info["ws_url"],
-                        ssl=ssl_context,
+                        session.data_url,
+                        ssl=session.ssl_context,
                         close_timeout=10,
                         ping_interval=None,  # LXD doesn't support ping
                         ping_timeout=None,
@@ -885,14 +884,10 @@ class ConsoleProxy:
                     timeout=15.0
                 )
                 logger.info(f"Connected to LXD data socket: {self.instance_name}")
-                
-                # Mark session as connected after both sockets are ready
-                if self._session:
-                    self._session.mark_connected()
-                
+
                 # Note: SPICE doesn't send initial data - it waits for client handshake
                 # We immediately start the proxy to avoid any timeout issues
-                
+
             except asyncio.TimeoutError:
                 error_msg = f"Timeout connecting to LXD console for {self.instance_name}"
                 logger.error(error_msg)
@@ -903,10 +898,10 @@ class ConsoleProxy:
                 logger.error(error_msg)
                 await self._send_error(error_msg)
                 return
-            
+
             # Run bidirectional proxy - pure binary, no JSON
             await self._run_proxy()
-            
+
         except WebSocketDisconnect:
             logger.info(f"Console WebSocket disconnected: {self.instance_name}")
         except Exception as e:
@@ -915,148 +910,96 @@ class ConsoleProxy:
             await self._cleanup()
     
     async def _run_proxy(self):
-        """Run bidirectional binary data forwarding."""
-        
-        async def browser_to_lxd():
-            """Forward browser input to LXD data socket."""
-            first_message = True
+        """Run bidirectional binary forwarding with proper cancellation.
+
+        Each direction is a plain awaiting loop with no per-frame timeout poll.
+        Shutdown is driven by cancelling the sibling tasks as soon as any one
+        finishes (FIRST_COMPLETED), so a client disconnect or an LXD close tears
+        the session down immediately instead of after a 0.5s poll, and we avoid
+        allocating a TimerHandle per frame on the hot path. Mirrors the terminal
+        proxy (terminal.py:_run_tasks).
+        """
+        tasks = [
+            asyncio.create_task(self._forward_browser_to_lxd(), name="browser_to_lxd"),
+            asyncio.create_task(self._forward_lxd_to_browser(), name="lxd_to_browser"),
+            asyncio.create_task(self._revocation_watchdog(), name="revocation_watchdog"),
+        ]
+        try:
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                try:
+                    task.result()
+                except Exception as e:
+                    if not isinstance(e, (asyncio.CancelledError, WebSocketDisconnect, ConnectionClosed)):
+                        logger.error(f"Console task {task.get_name()} failed: {e}")
+        finally:
+            self._shutdown.set()
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
             try:
-                while not self._shutdown.is_set():
-                    try:
-                        # Receive any type of message from browser
-                        message = await asyncio.wait_for(
-                            self.browser_ws.receive(),
-                            timeout=0.5
-                        )
-                        
-                        if message["type"] == "websocket.disconnect":
-                            self._shutdown.set()
-                            break
-                        
-                        # Log first message from browser (SPICE handshake)
-                        if first_message:
-                            first_message = False
-                            if "bytes" in message and message["bytes"]:
-                                logger.debug(f"Browser SPICE handshake ({len(message['bytes'])} bytes)")
-                        
-                        # Forward bytes to LXD data socket
-                        has_bytes = "bytes" in message and message["bytes"]
-                        is_open = self.lxd_data_ws and self.lxd_data_ws.state == WebSocketState.OPEN
-                        
-                        if has_bytes:
-                            if is_open:
-                                try:
-                                    await asyncio.wait_for(
-                                        self.lxd_data_ws.send(message["bytes"]),
-                                        timeout=5.0
-                                    )
-                                    # Track upload bytes
-                                    if self._session:
-                                        self._session.add_upload_bytes(len(message["bytes"]))
-                                except asyncio.TimeoutError:
-                                    logger.error(f"TIMEOUT sending to LXD data socket")
-                                    self._shutdown.set()
-                                    break
-                                except Exception as send_err:
-                                    logger.error(f"Failed to forward to LXD: {type(send_err).__name__}: {send_err}")
-                                    self._shutdown.set()
-                                    break
-                            else:
-                                logger.warning(f"LXD data socket not open (state={self.lxd_data_ws.state if self.lxd_data_ws else 'None'})")
-                        elif "text" in message and message["text"]:
-                            # Convert text to bytes if needed
-                            if self.lxd_data_ws and self.lxd_data_ws.state == WebSocketState.OPEN:
-                                encoded = message["text"].encode('utf-8')
-                                await self.lxd_data_ws.send(encoded)
-                                # Track upload bytes
-                                if self._session:
-                                    self._session.add_upload_bytes(len(encoded))
-                                logger.info(f"FORWARDED {len(message['text'])} text chars to LXD data socket")
-                                
-                    except asyncio.TimeoutError:
-                        continue
-                    except Exception as e:
-                        if "disconnect" not in str(e).lower():
-                            logger.debug(f"Browser to LXD: {e}")
-                        self._shutdown.set()
-                        break
-            except Exception as e:
-                logger.debug(f"Browser to LXD loop error: {e}")
-                self._shutdown.set()
-        
-        async def lxd_to_browser():
-            """Forward LXD data socket output to browser."""
-            first_message = True
-            try:
-                while not self._shutdown.is_set():
-                    try:
-                        data = await asyncio.wait_for(
-                            self.lxd_data_ws.recv(),
-                            timeout=0.5
-                        )
-                        
-                        # Log first SPICE response
-                        if first_message:
-                            first_message = False
-                            if isinstance(data, bytes):
-                                logger.debug(f"LXD SPICE response ({len(data)} bytes)")
-                        
-                        # Send as binary to browser + track download bytes
-                        if isinstance(data, bytes):
-                            await self.browser_ws.send_bytes(data)
-                            if self._session:
-                                self._session.add_download_bytes(len(data))
-                        else:
-                            encoded = data.encode('utf-8')
-                            await self.browser_ws.send_bytes(encoded)
-                            if self._session:
-                                self._session.add_download_bytes(len(encoded))
-                            
-                    except asyncio.TimeoutError:
-                        continue
-                    except ConnectionClosed:
-                        logger.info(f"LXD connection closed: {self.instance_name}")
-                        self._shutdown.set()
-                        break
-                    except Exception as e:
-                        logger.debug(f"LXD to browser: {e}")
-                        self._shutdown.set()
-                        break
-            except Exception as e:
-                logger.debug(f"LXD to browser loop error: {e}")
-                self._shutdown.set()
-        
-        async def consume_control():
-            """Consume control socket messages (keeps connection alive)."""
-            try:
-                while not self._shutdown.is_set():
-                    if self.lxd_control_ws:
-                        try:
-                            await asyncio.wait_for(
-                                self.lxd_control_ws.recv(),
-                                timeout=0.5
-                            )
-                        except asyncio.TimeoutError:
-                            continue
-                        except ConnectionClosed:
-                            logger.info(f"Control socket closed: {self.instance_name}")
-                            self._shutdown.set()
-                            break
-                        except Exception:
-                            pass
-                    else:
-                        await asyncio.sleep(0.5)
-            except Exception:
-                pass
-        
-        # Run all tasks concurrently
-        await asyncio.gather(
-            browser_to_lxd(),
-            lxd_to_browser(),
-            consume_control(),
-            self._revocation_watchdog(),
-            return_exceptions=True
-        )
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Console task cancellation timed out for %s", self.instance_name)
+
+    async def _forward_browser_to_lxd(self):
+        """Forward browser input to the LXD data socket as opaque SPICE binary.
+
+        High-frequency path: no decode, no JSON, no per-frame timer. SPICE is
+        pure binary; the text branch is a defensive fallback only. A closed LXD
+        socket surfaces as ConnectionClosed and tears the session down.
+        """
+        try:
+            while True:
+                message = await self.browser_ws.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                data = message.get("bytes")
+                if data:
+                    await self.lxd_data_ws.send(data)
+                    if self._session:
+                        self._session.add_upload_bytes(len(data))
+                elif message.get("text"):
+                    encoded = message["text"].encode("utf-8")
+                    await self.lxd_data_ws.send(encoded)
+                    if self._session:
+                        self._session.add_upload_bytes(len(encoded))
+        except (WebSocketDisconnect, ConnectionClosed):
+            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(f"Console browser->LXD ended: {e}")
+        finally:
+            self._shutdown.set()
+
+    async def _forward_lxd_to_browser(self):
+        """Forward LXD data socket output to the browser as opaque SPICE binary.
+
+        Iterates the websockets connection directly (idiomatic, no per-recv
+        timeout). A slow browser applies natural backpressure through
+        ``send_bytes``; SPICE has its own flow control, so we never drop frames.
+        """
+        try:
+            async for message in self.lxd_data_ws:
+                if isinstance(message, (bytes, bytearray)):
+                    payload = message
+                else:
+                    payload = message.encode("utf-8")
+                await self.browser_ws.send_bytes(payload)
+                if self._session:
+                    self._session.add_download_bytes(len(payload))
+        except (ConnectionClosed, WebSocketDisconnect):
+            pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.debug(f"Console LXD->browser ended: {e}")
+        finally:
+            self._shutdown.set()
 
     async def _revocation_watchdog(self):
         """Re-check identity revocation for the life of the session so a revoked or
@@ -1097,24 +1040,24 @@ class ConsoleProxy:
                 pass
 
     async def _cleanup(self):
-        """Clean up connections."""
+        """Clean up this channel's data socket and release the shared operation.
+
+        The tracker entry and the control socket belong to the shared operation,
+        so they are torn down by the manager when the LAST channel releases - not
+        here per channel.
+        """
         self._shutdown.set()
-        
-        # Unregister session from tracker
-        if self._session:
-            tracker = get_session_tracker()
-            tracker.unregister(self._session.session_id)
-        
+
         if self.lxd_data_ws:
             try:
                 await self.lxd_data_ws.close()
             except:
                 pass
-        
-        if self.lxd_control_ws:
+
+        if self._acquired:
             try:
-                await self.lxd_control_ws.close()
-            except:
+                await get_spice_session_manager().release(self.session_key)
+            except Exception:
                 pass
 
 
@@ -1125,7 +1068,9 @@ async def console_websocket(
     host: str = Query(..., description="Target host node"),
     project: str = Query("default", description="LXD project name"),
     console_type: str = Query("vga", description="Console type: vga or console"),
-    user: Optional[AuthenticatedUser] = Depends(get_ws_user),
+    # important: multi-use ticket - SPICE opens one WebSocket per channel, all sharing
+    # the same ticket; a single-use redeem would 403 every channel after the first.
+    user: Optional[AuthenticatedUser] = Depends(get_ws_user_console),
 ):
     """
     WebSocket endpoint for graphics console.
@@ -1190,7 +1135,13 @@ async def console_websocket(
     else:
         user_role = "unknown"
     logger.info(f"Console WebSocket connected: {instance_name}@{host} user={user_id}")
-    
+
+    # Shared-operation key: all four SPICE channels of one console carry the same
+    # ticket, so they collapse to ONE LXD console operation. Fall back to a stable
+    # per-user/instance key when auth (and thus the ticket) is disabled.
+    ticket = websocket.query_params.get("ticket")
+    session_key = ticket or f"{instance_name}|{host}|{real_project}|{user_id}"
+
     proxy = ConsoleProxy(
         browser_ws=websocket,
         instance_name=instance_name,
@@ -1200,6 +1151,7 @@ async def console_websocket(
         user_id=user_id,
         user_email=user_email,
         user_role=user_role,
+        session_key=session_key,
     )
     
     await proxy.run()

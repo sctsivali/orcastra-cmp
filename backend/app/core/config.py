@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     api_title: str = "Orcastra Dashboard API"
     api_prefix: str = "/api/v1"
     debug: bool = Field(default=False, alias="DEBUG")
+
+    # Console orphan reaper: cancel "Showing console" LXD operations left running by
+    # an abnormal teardown (crash/restart). Single-worker (mini) only - see
+    # SpiceSessionManager.reap_orphans. Disable if running multiple backend workers.
+    console_reap_orphans: bool = Field(default=True, alias="CONSOLE_REAP_ORPHANS")
+    console_reap_interval_s: int = Field(default=300, alias="CONSOLE_REAP_INTERVAL_S")
+    console_orphan_max_age_s: int = Field(default=600, alias="CONSOLE_ORPHAN_MAX_AGE_S")
     
     # CORS Settings
     cors_origins: str = Field(

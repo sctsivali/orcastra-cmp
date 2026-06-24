@@ -72,7 +72,9 @@ backup-files/
 *.md
 docs/
 infrastructure/
-scripts/
+scripts/*
+# Keep the SPICE bundle builder - the prebuild step runs it during the image build.
+!scripts/build-spice-bundle.mjs
 .venv/
 .github/
 

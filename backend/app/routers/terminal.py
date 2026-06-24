@@ -124,11 +124,19 @@ async def create_terminal_session(
 class TerminalProxy:
     """
     Manages bidirectional WebSocket proxy between browser and LXD.
-    
+
     Architecture:
     Browser <--WS--> FastAPI <--WS--> LXD (data + control)
     """
-    
+
+    # Output flow-control watermarks (bytes). The browser ACKs output once xterm has
+    # parsed it; this proxy pauses reading from LXD when outstanding (sent-but-unacked)
+    # bytes cross HIGH_WATER, and resumes once ACKs drain it below LOW_WATER. Bounds the
+    # browser's in-memory write buffer under a flood (cat bigfile / yes) without touching
+    # interactive latency - watermarks are generous, so normal output never throttles.
+    HIGH_WATER = 2 * 1024 * 1024
+    LOW_WATER = 512 * 1024
+
     def __init__(
         self,
         browser_ws: WebSocket,
@@ -152,7 +160,24 @@ class TerminalProxy:
         self._shutdown = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
         self._session = None  # SessionInfo from tracker
+
+        # Output flow control: outstanding (sent-but-unacked) byte count, plus a gate
+        # the LXD->browser forwarder waits on when that count is above HIGH_WATER.
+        # Starts open so normal output flows without ever blocking.
+        self._unacked = 0
+        self._resume = asyncio.Event()
+        self._resume.set()
     
+    def _trigger_shutdown(self):
+        """Signal shutdown and release the flow-control gate.
+
+        Releasing _resume is what guarantees a paused LXD->browser forwarder (waiting
+        for ACKs that will never come once the client is gone) wakes up, sees the
+        shutdown flag, and exits cleanly instead of hanging until task cancellation.
+        """
+        self._shutdown.set()
+        self._resume.set()
+
     async def run(self):
         """Main entry point - runs the terminal proxy."""
         terminal_service = get_terminal_service()
@@ -205,8 +230,9 @@ class TerminalProxy:
                 "host": self.host,
             })
             
-            # Connect to LXD WebSockets
-            ssl_context = terminal_service.get_ssl_context(self.host)
+            # Connect to LXD WebSockets. get_ssl_context does a (cached) Vault fetch +
+            # context build, both blocking - offload so it never stalls the event loop.
+            ssl_context = await asyncio.to_thread(terminal_service.get_ssl_context, self.host)
             
             try:
                 # Connect both WebSockets concurrently
@@ -283,7 +309,7 @@ class TerminalProxy:
                         
         finally:
             # Cancel all remaining tasks
-            self._shutdown.set()
+            self._trigger_shutdown()
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -326,7 +352,7 @@ class TerminalProxy:
                         "Terminal session revoked mid-stream: user=%s instance=%s",
                         self.user_id, self.instance_name,
                     )
-                    self._shutdown.set()
+                    self._trigger_shutdown()
                     try:
                         await self.browser_ws.close(code=1008, reason="Session revoked")
                     except Exception:
@@ -349,23 +375,28 @@ class TerminalProxy:
                     continue
                 
                 if data["type"] == "websocket.disconnect":
-                    self._shutdown.set()
+                    self._trigger_shutdown()
                     break
                 
                 if "text" in data:
                     await self._handle_browser_message(data["text"])
                 elif "bytes" in data:
-                    # Binary data - forward directly
-                    if self.data_ws and self.data_ws.state == WebSocketState.OPEN:
-                        await self.data_ws.send(data["bytes"])
+                    # Binary frame = raw terminal input (keystrokes/paste). Forward straight
+                    # to the LXD data socket - no decode, no JSON. This is the high-frequency
+                    # path; control messages (resize/ping) still arrive as text JSON above.
+                    raw = data["bytes"]
+                    if raw and self.data_ws and self.data_ws.state == WebSocketState.OPEN:
+                        await self.data_ws.send(raw)
+                        if self._session:
+                            self._session.add_upload_bytes(len(raw))
                         
         except WebSocketDisconnect:
-            self._shutdown.set()
+            self._trigger_shutdown()
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.error(f"Error forwarding browser->LXD: {e}")
-            self._shutdown.set()
+            self._trigger_shutdown()
             raise
     
     async def _handle_browser_message(self, text: str):
@@ -389,7 +420,7 @@ class TerminalProxy:
                         self._session.add_upload_bytes(len(encoded))
                 except Exception as e:
                     logger.warning(f"Failed to send input to LXD: {e}")
-                    self._shutdown.set()
+                    self._trigger_shutdown()
                 
         elif msg_type == "resize":
             # Window resize - send to control WebSocket
@@ -408,56 +439,68 @@ class TerminalProxy:
                 except Exception as e:
                     logger.warning(f"Resize failed: {e}")
                     
+        elif msg_type == "ack":
+            # Output flow control: the browser reports bytes it has finished parsing
+            # into xterm. Lower the outstanding count and reopen the gate once we are
+            # back under the low-water mark so the forwarder resumes pushing output.
+            acked = int(msg.get("bytes", 0) or 0)
+            if acked > 0:
+                self._unacked = max(0, self._unacked - acked)
+                if self._unacked < self.LOW_WATER:
+                    self._resume.set()
+
         elif msg_type == "ping":
             # Browser ping - respond immediately
             await self.browser_ws.send_json({"type": "pong"})
-            
+
         elif msg_type == "pong":
             # Browser responded to our keepalive ping
             pass
     
     async def _forward_lxd_to_browser(self):
-        """Forward output from LXD to browser."""
+        """Forward raw PTY output from LXD to the browser as binary frames.
+
+        # important: forward bytes verbatim (no per-frame decode). xterm.js keeps a
+        # streaming UTF-8 decoder, so it correctly stitches a multibyte codepoint that
+        # LXD split across two frames. Decoding here with errors='replace' would corrupt
+        # that codepoint to U+FFFD before the client ever saw it. Binary framing also
+        # drops the json.dumps/JSON.parse tax on the hot path. Shutdown is handled by
+        # _run_tasks() cancelling this task, so no per-recv timeout poll is needed.
+        """
         try:
-            while not self._shutdown.is_set():
-                try:
-                    # Use recv with timeout instead of async for
-                    # This prevents blocking and allows shutdown checks
-                    message = await asyncio.wait_for(
-                        self.data_ws.recv(),
-                        timeout=1.0  # Check shutdown every second
-                    )
-                except asyncio.TimeoutError:
-                    # No data - that's fine, just continue checking
-                    continue
-                
+            async for message in self.data_ws:
+                if isinstance(message, bytes):
+                    payload = message
+                else:
+                    # LXD's exec data socket is binary; this is a defensive fallback.
+                    payload = message.encode("utf-8")
+
+                # Flow control: if the browser is behind (outstanding output above the
+                # high-water mark), wait for its ACKs to drain us below the low-water
+                # mark before pushing more. This is the only thing that bounds the
+                # browser's xterm write buffer - TCP backpressure bounds this socket but
+                # not the unbounded in-process buffer downstream of it. The gate is also
+                # released on shutdown, so a paused forwarder never hangs past teardown.
+                if self._unacked >= self.HIGH_WATER and not self._shutdown.is_set():
+                    self._resume.clear()
+                    if self._unacked >= self.HIGH_WATER:
+                        await self._resume.wait()
                 if self._shutdown.is_set():
                     break
-                
-                # Forward immediately - no buffering
-                if isinstance(message, bytes):
-                    text = message.decode('utf-8', errors='replace')
-                    byte_count = len(message)
-                else:
-                    text = message
-                    byte_count = len(message.encode('utf-8', errors='replace'))
-                
-                # Track download bytes
+
                 if self._session:
-                    self._session.add_download_bytes(byte_count)
-                
+                    self._session.add_download_bytes(len(payload))
+
                 try:
-                    await self.browser_ws.send_json({
-                        "type": "output",
-                        "data": text
-                    })
+                    await self.browser_ws.send_bytes(payload)
+                    self._unacked += len(payload)
                 except Exception as e:
                     logger.warning(f"Error sending to browser: {e}")
-                    self._shutdown.set()
+                    self._trigger_shutdown()
                     break
-                    
+
             logger.info(f"LXD data WebSocket ended: {self.instance_name}")
-            
+
         except ConnectionClosed as e:
             logger.info(f"LXD connection closed: {self.instance_name} - {e.code}")
         except asyncio.CancelledError:
@@ -466,7 +509,7 @@ class TerminalProxy:
             logger.error(f"Error forwarding LXD->browser: {e}")
             raise
         finally:
-            self._shutdown.set()
+            self._trigger_shutdown()
             try:
                 await self.browser_ws.send_json({"type": "closed"})
             except Exception:
@@ -494,7 +537,7 @@ class TerminalProxy:
             logger.error(f"Control WebSocket error: {e}")
             raise
         finally:
-            self._shutdown.set()
+            self._trigger_shutdown()
     
     async def _send_error(self, message: str):
         """Send error message to browser and close."""
@@ -506,7 +549,7 @@ class TerminalProxy:
     
     async def _cleanup(self):
         """Clean up all WebSocket connections."""
-        self._shutdown.set()
+        self._trigger_shutdown()
         
         # Unregister session from tracker
         if self._session:

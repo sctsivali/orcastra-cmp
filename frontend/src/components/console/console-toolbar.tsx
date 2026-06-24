@@ -12,7 +12,6 @@ import {
   Play,
   Square,
   RotateCcw,
-  Loader2,
   Keyboard,
   ClipboardList,
   ZoomIn,
@@ -21,6 +20,7 @@ import {
   ChevronDown,
   MousePointer2,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -282,7 +282,7 @@ export function ConsoleToolbar({
                 onTouchEnd={(e) => { e.preventDefault(); if (!isRunning && !isTransitioning && loading === null) handleOperation('start'); }}
               >
                 {loading === 'start' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                 ) : (
                   <Play className="h-4 w-4 text-green-500" />
                 )}
@@ -303,7 +303,7 @@ export function ConsoleToolbar({
                 onTouchEnd={(e) => { e.preventDefault(); if (!isStopped && !isTransitioning && loading === null) handleOperation('stop'); }}
               >
                 {loading === 'stop' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                 ) : (
                   <Square className="h-4 w-4 text-red-500" />
                 )}
@@ -324,7 +324,7 @@ export function ConsoleToolbar({
                 onTouchEnd={(e) => { e.preventDefault(); if (isRunning && !isTransitioning && loading === null) handleOperation('restart'); }}
               >
                 {loading === 'restart' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                 ) : (
                   <RotateCcw className="h-4 w-4 text-blue-500" />
                 )}
@@ -457,7 +457,7 @@ export function ConsoleToolbar({
                     disabled={spamming}
                   >
                     {spamming ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <Spinner className="h-4 w-4" />
                     ) : (
                       <Rocket className="h-4 w-4" />
                     )}

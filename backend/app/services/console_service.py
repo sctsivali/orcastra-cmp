@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import ssl
+import time
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 from enum import Enum
@@ -21,6 +22,15 @@ from app.core.config import get_settings
 from app.services.lxd_ssl import create_lxd_ssl_context
 
 logger = logging.getLogger(__name__)
+
+
+class _ConsoleBuildError(Exception):
+    """Known, user-facing failure while creating a console session.
+
+    Carries a message safe to surface to the client (e.g. "Instance must be
+    running"); raised from the synchronous build path and mapped back to the
+    (None, message) result by create_console_session.
+    """
 
 
 class GraphicsType(str, Enum):
@@ -142,10 +152,18 @@ class ConsoleService:
     Handles VGA/graphics consoles, startup order, and ISO management.
     """
     
+    # important: a SPICE session opens 4 channels (main/display/inputs/cursor)
+    # near-simultaneously, each calling get_ssl_context. Re-fetching the Vault
+    # cert + rebuilding the context 4x in a burst is what made some channels fail
+    # to connect (the display channel dropping -> "Display output is not active").
+    # An ssl.SSLContext is thread-safe and reusable, so cache one per host briefly.
+    _SSL_CACHE_TTL = 60.0
+
     def __init__(self):
         self.settings = get_settings()
         self._lxd_service = None
         self._cert_manager = None
+        self._ssl_cache: Dict[str, Tuple[ssl.SSLContext, float]] = {}
     
     @property
     def lxd_service(self):
@@ -169,10 +187,21 @@ class ConsoleService:
         return self._cert_manager
     
     def get_ssl_context(self, host: str) -> ssl.SSLContext:
-        """Create SSL context for WebSocket connection to LXD."""
+        """SSL context for the upstream LXD WebSocket, cached per host.
+
+        All channels of one SPICE session reuse a single context, so the Vault
+        cert is fetched at most once per _SSL_CACHE_TTL instead of once per
+        channel - removing the connect-time burst that dropped channels.
+        """
+        cached = self._ssl_cache.get(host)
+        now = time.monotonic()
+        if cached and (now - cached[1]) < self._SSL_CACHE_TTL:
+            return cached[0]
+
         cert_data = self.cert_manager.get_cluster_certificate(host)
-        
-        return create_lxd_ssl_context(cert_data)
+        ctx = create_lxd_ssl_context(cert_data)
+        self._ssl_cache[host] = (ctx, now)
+        return ctx
     
     async def get_instance_capabilities(
         self,
@@ -267,99 +296,127 @@ class ConsoleService:
         width: int = 1024,
         height: int = 768,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        """
-        Create a graphics console session for a VM.
-        Uses LXD's console API with type=vga.
+        """Create a graphics console session for a VM (LXD console API, type=vga).
+
+        The pylxd/Vault calls are synchronous and would block the event loop, so
+        the whole blocking body runs in a worker thread (matching the offload
+        pattern used across the LXD service layer). This matters most with a single
+        uvicorn worker, where one blocking call would stall every other request.
         """
         try:
-            if not self.lxd_service.ensure_connection(host):
-                return None, f"Cannot connect to host: {host}"
-            
-            client = self.lxd_service.get_client_with_reconnect(host)
-            if not client:
-                return None, f"No connection to host: {host}"
-            
-            # Verify instance exists and is a VM
-            try:
-                if project and project != "default":
-                    response = client.api.instances[instance_name].get(
-                        params={"project": project}
-                    )
-                    instance_data = response.json().get("metadata", {})
-                    instance_type = instance_data.get("type", "container")
-                    instance_status = instance_data.get("status", "Unknown")
-                else:
-                    instance = client.instances.get(instance_name)
-                    instance_type = instance.type
-                    instance_status = instance.status
-            except Exception as e:
-                return None, f"Instance not found: {instance_name}"
-            
-            if instance_type != "virtual-machine":
-                return None, f"Graphics console only available for VMs, got: {instance_type}"
-            
-            if instance_status != "Running":
-                return None, f"Instance must be running. Current status: {instance_status}"
-            
-            # Get cluster endpoint
-            cluster_info = self.cert_manager.get_cluster_info(host)
-            endpoint = cluster_info.get("metadata", {}).get("endpoint", "")
-            # Remove trailing slash to avoid double slashes in URL
-            ws_endpoint = endpoint.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
-            
-            # Create console operation via LXD API
-            # type=vga for VGA console (graphics)
-            # Note: LXD-UI uses width=0, height=0 - let LXD/QEMU use defaults
-            console_data = {
-                "type": console_type,  # "vga" for graphics, "console" for serial
-                "width": 0,  # Let LXD/QEMU use default
-                "height": 0,  # Let LXD/QEMU use default
-            }
-            
-            if project and project != "default":
-                response = client.api.instances[instance_name].console.post(
-                    json=console_data,
-                    params={"project": project}
-                )
-            else:
-                response = client.api.instances[instance_name].console.post(
-                    json=console_data
-                )
-            
-            operation = response.json()
-            if operation.get("type") == "error":
-                error_msg = operation.get("error", "Unknown error")
-                return None, f"Console failed: {error_msg}"
-            
-            metadata = operation.get("metadata", {})
-            operation_id = metadata.get("id", "")
-            ws_metadata = metadata.get("metadata", {})
-            
-            fds = ws_metadata.get("fds", {})
-            control_fd = fds.get("control", "")
-            data_fd = fds.get("0", "")
-            
-            ws_base = f"{ws_endpoint}/1.0/operations/{operation_id}/websocket"
-            
-            session_info = {
-                "operation_id": operation_id,
-                "instance_name": instance_name,
-                "host": host,
-                "project": project,
-                "console_type": console_type,
-                "ws_url": f"{ws_base}?secret={data_fd}",
-                "control_url": f"{ws_base}?secret={control_fd}",
-                "endpoint": endpoint,
-                "width": width,
-                "height": height,
-            }
-            
-            logger.info(f"Created console session for {instance_name}@{host}: {operation_id}")
+            session_info = await asyncio.to_thread(
+                self._build_console_session,
+                instance_name, host, project, console_type, width, height,
+            )
             return session_info, None
-            
+        except _ConsoleBuildError as e:
+            # Known, user-facing failure (not running, not a VM, etc.)
+            return None, str(e)
         except Exception as e:
             logger.error(f"Error creating console session: {e}")
             return None, str(e)
+
+    def _build_console_session(
+        self,
+        instance_name: str,
+        host: str,
+        project: str,
+        console_type: str,
+        width: int,
+        height: int,
+    ) -> Dict[str, Any]:
+        """Synchronous body of create_console_session - runs in a worker thread.
+
+        Raises _ConsoleBuildError with a user-facing message on known failures.
+        """
+        if not self.lxd_service.ensure_connection(host):
+            raise _ConsoleBuildError(f"Cannot connect to host: {host}")
+
+        client = self.lxd_service.get_client_with_reconnect(host)
+        if not client:
+            raise _ConsoleBuildError(f"No connection to host: {host}")
+
+        # Verify instance exists and is a VM
+        try:
+            if project and project != "default":
+                response = client.api.instances[instance_name].get(
+                    params={"project": project}
+                )
+                instance_data = response.json().get("metadata", {})
+                instance_type = instance_data.get("type", "container")
+                instance_status = instance_data.get("status", "Unknown")
+            else:
+                instance = client.instances.get(instance_name)
+                instance_type = instance.type
+                instance_status = instance.status
+        except Exception:
+            raise _ConsoleBuildError(f"Instance not found: {instance_name}")
+
+        if instance_type != "virtual-machine":
+            raise _ConsoleBuildError(
+                f"Graphics console only available for VMs, got: {instance_type}"
+            )
+
+        if instance_status != "Running":
+            raise _ConsoleBuildError(
+                f"Instance must be running. Current status: {instance_status}"
+            )
+
+        # Get cluster endpoint
+        cluster_info = self.cert_manager.get_cluster_info(host)
+        endpoint = cluster_info.get("metadata", {}).get("endpoint", "")
+        # Remove trailing slash to avoid double slashes in URL
+        ws_endpoint = endpoint.replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+
+        # Create console operation via LXD API.
+        # type=vga for VGA console (graphics). LXD-UI uses width=0, height=0 -
+        # let LXD/QEMU pick defaults.
+        console_data = {
+            "type": console_type,
+            "width": 0,
+            "height": 0,
+        }
+
+        if project and project != "default":
+            response = client.api.instances[instance_name].console.post(
+                json=console_data,
+                params={"project": project}
+            )
+        else:
+            response = client.api.instances[instance_name].console.post(
+                json=console_data
+            )
+
+        operation = response.json()
+        if operation.get("type") == "error":
+            error_msg = operation.get("error", "Unknown error")
+            raise _ConsoleBuildError(f"Console failed: {error_msg}")
+
+        metadata = operation.get("metadata", {})
+        operation_id = metadata.get("id", "")
+        ws_metadata = metadata.get("metadata", {})
+
+        fds = ws_metadata.get("fds", {})
+        control_fd = fds.get("control", "")
+        data_fd = fds.get("0", "")
+
+        ws_base = f"{ws_endpoint}/1.0/operations/{operation_id}/websocket"
+
+        session_info = {
+            "operation_id": operation_id,
+            "instance_name": instance_name,
+            "host": host,
+            "project": project,
+            "console_type": console_type,
+            "ws_url": f"{ws_base}?secret={data_fd}",
+            "control_url": f"{ws_base}?secret={control_fd}",
+            "endpoint": endpoint,
+            "width": width,
+            "height": height,
+        }
+
+        logger.info(f"Created console session for {instance_name}@{host}: {operation_id}")
+        return session_info
     
     async def get_startup_order(
         self,

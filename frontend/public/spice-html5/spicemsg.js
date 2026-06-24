@@ -520,6 +520,97 @@ VDAgentAnnounceCapabilities.prototype =
     }
 }
 
+/* ---- Agent clipboard messages (added for host<->guest clipboard) ----
+   Non-selection wire format (we do not announce VD_AGENT_CAP_CLIPBOARD_SELECTION):
+     GRAB    : uint32 type[]            (list of offered data types)
+     REQUEST : uint32 type              (requested data type)
+     CLIPBOARD: uint32 type + raw bytes (the data)
+     RELEASE : empty                                                          */
+
+function VDAgentClipboardGrab(types)
+{
+    if (Array.isArray(types)) this.types = types;
+    else if (types) this.from_buffer(types);
+    else this.types = [];
+}
+
+VDAgentClipboardGrab.prototype =
+{
+    to_buffer: function(a, at)
+    {
+        at = at || 0;
+        var dv = new SpiceDataView(a);
+        for (var i = 0; i < this.types.length; i++) { dv.setUint32(at, this.types[i], true); at += 4; }
+        return at;
+    },
+    from_buffer: function(a, at)
+    {
+        at = at || 0;
+        var dv = new SpiceDataView(a);
+        this.types = [];
+        while (at + 4 <= a.byteLength) { this.types.push(dv.getUint32(at, true)); at += 4; }
+        return at;
+    },
+    buffer_size: function() { return 4 * this.types.length; }
+}
+
+function VDAgentClipboardRequest(type)
+{
+    if (typeof type === "number") this.type = type;
+    else if (type) this.from_buffer(type);
+    else this.type = 0;
+}
+
+VDAgentClipboardRequest.prototype =
+{
+    to_buffer: function(a, at)
+    {
+        at = at || 0;
+        var dv = new SpiceDataView(a);
+        dv.setUint32(at, this.type, true); at += 4;
+        return at;
+    },
+    from_buffer: function(a, at)
+    {
+        at = at || 0;
+        var dv = new SpiceDataView(a);
+        this.type = dv.getUint32(at, true); at += 4;
+        return at;
+    },
+    buffer_size: function() { return 4; }
+}
+
+function VDAgentClipboard(type, bytes)
+{
+    if (typeof type === "number") { this.type = type; this.bytes = bytes || new Uint8Array(0); }
+    else if (type) this.from_buffer(type);
+    else { this.type = 0; this.bytes = new Uint8Array(0); }
+}
+
+VDAgentClipboard.prototype =
+{
+    to_buffer: function(a, at)
+    {
+        at = at || 0;
+        var dv = new SpiceDataView(a);
+        dv.setUint32(at, this.type, true); at += 4;
+        var u8 = new Uint8Array(a);
+        for (var i = 0; i < this.bytes.length; i++) u8[at + i] = this.bytes[i];
+        at += this.bytes.length;
+        return at;
+    },
+    from_buffer: function(a, at)
+    {
+        at = at || 0;
+        var dv = new SpiceDataView(a);
+        this.type = dv.getUint32(at, true); at += 4;
+        this.bytes = new Uint8Array(a.slice(at));
+        at += this.bytes.byteLength;
+        return at;
+    },
+    buffer_size: function() { return 4 + this.bytes.length; }
+}
+
 function VDAgentMonitorsConfig(flags, width, height, depth, x, y)
 {
     this.num_mon = 1;
@@ -1054,7 +1145,9 @@ function SpiceMsgcMouseRelease(sc, e)
     if (e)
     {
         this.button = e.button + 1;
-        this.buttons_state = 0;
+        // Clear only the button being released; keep any other button still held
+        // (this previously zeroed the whole mask, dropping chorded buttons).
+        this.buttons_state = (sc.buttons_state || 0) & ~(1 << e.button);
         sc.buttons_state = this.buttons_state;
     }
     else

@@ -238,6 +238,24 @@ async def lifespan(app: FastAPI):
         logger.info("Session tracker cleanup loop started")
     except Exception as tracker_err:
         logger.warning(f"Could not start session tracker: {tracker_err}")
+
+    # Start console orphan reaper (cancels "Showing console" ops left by a crash/
+    # restart). Single-worker mini only; gated by config so it can be disabled.
+    try:
+        if settings.console_reap_orphans:
+            from app.services.spice_session import run_console_reaper_loop
+            asyncio.create_task(
+                run_console_reaper_loop(
+                    interval_s=settings.console_reap_interval_s,
+                    max_age_s=settings.console_orphan_max_age_s,
+                )
+            )
+            logger.info(
+                "Console orphan reaper started (every %ss, age>%ss)",
+                settings.console_reap_interval_s, settings.console_orphan_max_age_s,
+            )
+    except Exception as reaper_err:
+        logger.warning(f"Could not start console orphan reaper: {reaper_err}")
     
     # Initialize default tag categories
     try:
@@ -597,4 +615,7 @@ if __name__ == "__main__":
         port=4050,
         reload=settings.debug,
         log_level="info",
+        # SPICE/terminal binary is already compressed (QUIC/LZ); permessage-deflate
+        # only burns CPU on both ends and adds per-frame latency. Disable it.
+        ws_per_message_deflate=False,
     )

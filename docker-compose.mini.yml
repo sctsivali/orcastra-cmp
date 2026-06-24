@@ -75,6 +75,13 @@ services:
     image: ${CONTAINER_PREFIX:-orcastra-mini}-backend:${APP_VERSION:-1.0.0-RC1}
     container_name: ${CONTAINER_PREFIX:-orcastra-mini}-backend
     restart: always
+    # mini is single-instance: run ONE uvicorn worker so the in-process SPICE
+    # session manager can collapse a console's four channels onto ONE LXD console
+    # operation (matching the native LXD-UI). With multiple workers the channels
+    # land on different processes and each creates its own operation. The console
+    # hot path is async I/O and heavy LXD calls are offloaded to threadpools, so a
+    # single worker scales fine for a compact deployment.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4050", "--workers", "${BACKEND_WORKERS:-1}", "--ws-per-message-deflate", "false"]
     # SECURITY: no host port. The backend is reachable only on the Docker network
     # (via the frontend). Exposing it would let anyone forge X-SSL-* cert headers.
     env_file:

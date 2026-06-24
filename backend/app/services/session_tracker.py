@@ -23,8 +23,7 @@ Considerations:
 import time
 import asyncio
 import logging
-from collections import deque
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
 from app.services.session_audit import fire_and_forget_connect, fire_and_forget_disconnect
@@ -46,13 +45,6 @@ class SessionStatus(str, Enum):
 
 
 @dataclass
-class BandwidthSample:
-    """Single bandwidth measurement sample."""
-    timestamp: float
-    bytes_count: int
-
-
-@dataclass
 class SessionInfo:
     """Tracks a single console/terminal session."""
     session_id: str
@@ -67,16 +59,29 @@ class SessionInfo:
     started_at: float = field(default_factory=time.time)
     ended_at: Optional[float] = None
 
-    # cumulative byte counters (updated atomically from proxy)
+    # cumulative byte counters (updated from the proxy hot path)
     bytes_downloaded: int = 0  # LXD -> browser (user downloads/receives)
     bytes_uploaded: int = 0    # browser -> LXD (user uploads/sends)
 
-    # rate tracking: sliding-window samples for smooth rate calc (deque for O(1) popleft)
-    _dl_samples: deque = field(default_factory=deque)
-    _ul_samples: deque = field(default_factory=deque)
+    # number of 1-second buckets in the sliding rate window
+    RATE_WINDOW: int = 10
 
-    # rate window in seconds
-    RATE_WINDOW: float = 10.0
+    # important: per-second ring buffers, NOT a growing deque. Each bucket stores
+    # the wall-second it represents (`*_secs`) alongside its byte count (`*_counts`),
+    # so the hot path is O(1) with no allocation and no prune loop: hash the second
+    # to an index, reset the bucket if it now holds an older second, then add. Rate
+    # is summed lazily on read from buckets still inside the window. Fixed memory.
+    _dl_counts: List[int] = field(default_factory=list, repr=False)
+    _ul_counts: List[int] = field(default_factory=list, repr=False)
+    _dl_secs: List[int] = field(default_factory=list, repr=False)
+    _ul_secs: List[int] = field(default_factory=list, repr=False)
+    _start_mono: float = field(default_factory=time.monotonic, repr=False)
+
+    def __post_init__(self) -> None:
+        self._dl_counts = [0] * self.RATE_WINDOW
+        self._ul_counts = [0] * self.RATE_WINDOW
+        self._dl_secs = [-1] * self.RATE_WINDOW
+        self._ul_secs = [-1] * self.RATE_WINDOW
 
     def mark_connected(self) -> None:
         """Mark session as actively connected."""
@@ -88,48 +93,54 @@ class SessionInfo:
         self.ended_at = time.time()
 
     def add_download_bytes(self, count: int) -> None:
-        """Record bytes flowing from LXD to browser."""
+        """Record bytes flowing from LXD to browser. O(1), called per frame."""
         self.bytes_downloaded += count
-        now = time.time()
-        self._dl_samples.append(BandwidthSample(now, count))
-        self._prune_samples(self._dl_samples, now)
+        sec = int(time.monotonic())
+        idx = sec % self.RATE_WINDOW
+        if self._dl_secs[idx] != sec:  # bucket holds an older second -> recycle it
+            self._dl_secs[idx] = sec
+            self._dl_counts[idx] = 0
+        self._dl_counts[idx] += count
 
     def add_upload_bytes(self, count: int) -> None:
-        """Record bytes flowing from browser to LXD."""
+        """Record bytes flowing from browser to LXD. O(1), called per frame."""
         self.bytes_uploaded += count
-        now = time.time()
-        self._ul_samples.append(BandwidthSample(now, count))
-        self._prune_samples(self._ul_samples, now)
-
-    def _prune_samples(self, samples: deque, now: float) -> None:
-        """Remove samples older than the rate window."""
-        cutoff = now - self.RATE_WINDOW
-        while samples and samples[0].timestamp < cutoff:
-            samples.popleft()  # O(1) instead of O(n) list.pop(0)
+        sec = int(time.monotonic())
+        idx = sec % self.RATE_WINDOW
+        if self._ul_secs[idx] != sec:  # bucket holds an older second -> recycle it
+            self._ul_secs[idx] = sec
+            self._ul_counts[idx] = 0
+        self._ul_counts[idx] += count
 
     @property
     def download_rate_bps(self) -> float:
         """Current download rate in bytes/second (sliding window avg)."""
-        return self._calc_rate(self._dl_samples)
+        return self._calc_rate(self._dl_counts, self._dl_secs)
 
     @property
     def upload_rate_bps(self) -> float:
         """Current upload rate in bytes/second (sliding window avg)."""
-        return self._calc_rate(self._ul_samples)
+        return self._calc_rate(self._ul_counts, self._ul_secs)
 
-    def _calc_rate(self, samples: deque) -> float:
-        """Calculate rate from sliding window samples."""
-        if not samples:
+    def _calc_rate(self, counts: List[int], secs: List[int]) -> float:
+        """Bytes/second over the sliding window, summed lazily on read.
+
+        Sums only buckets whose second still falls inside the window; buckets
+        left over from earlier seconds are simply ignored (and recycled on the
+        next write). The divisor ramps from 1s up to RATE_WINDOW so a young
+        session reports a sensible rate, matching the previous behaviour.
+        """
+        now_sec = int(time.monotonic())
+        cutoff = now_sec - self.RATE_WINDOW + 1
+        total = 0
+        for i in range(self.RATE_WINDOW):
+            if secs[i] >= cutoff:
+                total += counts[i]
+        if total == 0:
             return 0.0
-        now = time.time()
-        self._prune_samples(samples, now)
-        if not samples:
-            return 0.0
-        window = now - samples[0].timestamp
-        if window <= 0:
-            return 0.0
-        total = sum(s.bytes_count for s in samples)
-        return total / max(window, 0.1)  # avoid division by zero
+        elapsed = now_sec - int(self._start_mono)
+        window = min(self.RATE_WINDOW, max(1, elapsed))
+        return total / window
 
     @property
     def duration_seconds(self) -> float:
@@ -190,17 +201,24 @@ class SessionTracker:
     ) -> SessionInfo:
         """Register a new session and start tracking."""
         # close any existing session for the same instance+user+host
-        # (prevents stale sessions from piling up on reconnect)
-        for sid, s in list(self._sessions.items()):
-            if (s.instance_name == instance_name
-                    and s.host == host
-                    and s.user_email == user_email
-                    and s.status != SessionStatus.DISCONNECTED):
-                logger.info(
-                    f"Closing stale session {sid[:12]}... "
-                    f"(replaced by new connection for {instance_name}@{host})"
-                )
-                s.mark_disconnected()
+        # (prevents stale sessions from piling up on reconnect).
+        # important: a SPICE graphics session opens 4 channels (main/display/inputs/
+        # cursor) near-simultaneously, each registering its own session for the same
+        # instance+host+user. Running this sweep for graphics would make each new
+        # channel mark its own siblings disconnected (corrupting the active-session
+        # count and emitting spurious disconnect audit rows). Graphics cleanup is
+        # handled by unregister() on socket close + the TTL sweep instead.
+        if protocol != SessionProtocol.GRAPHICS:
+            for sid, s in list(self._sessions.items()):
+                if (s.instance_name == instance_name
+                        and s.host == host
+                        and s.user_email == user_email
+                        and s.status != SessionStatus.DISCONNECTED):
+                    logger.info(
+                        f"Closing stale session {sid[:12]}... "
+                        f"(replaced by new connection for {instance_name}@{host})"
+                    )
+                    s.mark_disconnected()
 
         session = SessionInfo(
             session_id=session_id,

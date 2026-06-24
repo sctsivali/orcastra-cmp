@@ -17,7 +17,6 @@ import {
   ArrowLeft,
   Search,
   RefreshCw,
-  Loader2,
   CheckCircle2,
   AlertCircle,
   X,
@@ -28,6 +27,7 @@ import {
   ChevronUp,
   ChevronDown,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -62,7 +62,7 @@ function TerminalLoading() {
   return (
     <div className="flex items-center justify-center h-screen bg-[#1a1b26]">
       <div className="flex flex-col items-center gap-4">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
+        <Spinner className="h-8 w-8 text-blue-400" />
         <span className="text-gray-400">Loading terminal...</span>
       </div>
     </div>
@@ -266,7 +266,7 @@ function TerminalContent() {
       case "connecting":
         return (
           <Badge variant="secondary" className="gap-1 bg-yellow-500/20 text-yellow-400">
-            <Loader2 className="h-3 w-3 animate-spin" />
+            <Spinner className="h-3 w-3" />
             Connecting
           </Badge>
         );
@@ -331,7 +331,7 @@ function TerminalContent() {
                       onClick={() => requestOperation("start")}
                       disabled={isOperationDisabled}
                     >
-                      {operationLoading === "start" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                      {operationLoading === "start" ? <Spinner className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent>Start Instance</TooltipContent>
@@ -348,7 +348,7 @@ function TerminalContent() {
                         onClick={() => requestOperation("restart")}
                         disabled={isOperationDisabled}
                       >
-                        {operationLoading === "restart" ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        {operationLoading === "restart" ? <Spinner className="h-4 w-4" /> : <RotateCcw className="h-4 w-4" />}
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>Restart Instance</TooltipContent>
@@ -362,7 +362,7 @@ function TerminalContent() {
                         onClick={() => requestOperation("stop")}
                         disabled={isOperationDisabled}
                       >
-                        {operationLoading === "stop" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+                        {operationLoading === "stop" ? <Spinner className="h-4 w-4" /> : <Square className="h-4 w-4" />}
                       </Button>
                     </TooltipTrigger>
                     <TooltipContent>Stop Instance</TooltipContent>

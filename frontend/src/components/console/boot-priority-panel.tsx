@@ -11,7 +11,6 @@ import {
   GripVertical,
   Server,
   Box,
-  Loader2,
   Save,
   RotateCcw,
   Clock,
@@ -19,6 +18,7 @@ import {
   PowerOff,
   AlertCircle,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -197,7 +197,7 @@ export function BootPriorityPanel({
   if (loading) {
     return (
       <div className={cn("flex items-center justify-center h-full", className)}>
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <Spinner className="h-6 w-6 text-muted-foreground" />
       </div>
     );
   }
@@ -241,7 +241,7 @@ export function BootPriorityPanel({
             disabled={!hasChanges || saving}
           >
             {saving ? (
-              <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              <Spinner className="h-4 w-4 mr-1" />
             ) : (
               <Save className="h-4 w-4 mr-1" />
             )}

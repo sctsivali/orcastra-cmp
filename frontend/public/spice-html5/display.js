@@ -26,14 +26,32 @@
 **           and then use drawImage to put it onto the target,
 **           as drawImage does alpha.
 **--------------------------------------------------------------------------*/
+// perf: one reusable offscreen canvas instead of document.createElement per draw.
+// Window dragging emits many alpha images/sec; allocating a canvas + GC per draw
+// stalls the main thread. JS is single-threaded so reuse is reentrancy-safe.
+// Grow-only (never shrink) to avoid clearing churn; we always blit only the
+// d.width x d.height region via the 9-arg drawImage so stale area is ignored.
+var _alphaHelperCanvas = null;
+var _alphaHelperCtx = null;
+function _getAlphaHelperCtx(w, h)
+{
+    if (!_alphaHelperCanvas)
+    {
+        _alphaHelperCanvas = document.createElement("canvas");
+        _alphaHelperCtx = _alphaHelperCanvas.getContext("2d");
+    }
+    if (_alphaHelperCanvas.width < w)
+        _alphaHelperCanvas.width = w;
+    if (_alphaHelperCanvas.height < h)
+        _alphaHelperCanvas.height = h;
+    return _alphaHelperCtx;
+}
+
 function putImageDataWithAlpha(context, d, x, y)
 {
-    var c = document.createElement("canvas");
-    var t = c.getContext("2d");
-    c.setAttribute('width', d.width);
-    c.setAttribute('height', d.height);
+    var t = _getAlphaHelperCtx(d.width, d.height);
     t.putImageData(d, 0, 0);
-    context.drawImage(c, x, y, d.width, d.height);
+    context.drawImage(_alphaHelperCanvas, 0, 0, d.width, d.height, x, y, d.width, d.height);
 }
 
 /*----------------------------------------------------------------------------
@@ -45,9 +63,12 @@ function putImageDataWithAlpha(context, d, x, y)
 **--------------------------------------------------------------------------*/
 function stripAlpha(d)
 {
-    var i;
-    for (i = 0; i < (d.width * d.height * 4); i += 4)
-        d.data[i + 3] = 255;
+    // perf: set the alpha byte of every pixel via a 32-bit view (one write per
+    // pixel instead of per-byte indexing). Canvas ImageData is little-endian in
+    // every browser, so the alpha byte is the high byte of each uint32.
+    var u32 = new Uint32Array(d.data.buffer, d.data.byteOffset, d.width * d.height);
+    for (var i = 0; i < u32.length; i++)
+        u32[i] |= 0xFF000000;
 }
 
 /*----------------------------------------------------------------------------
@@ -437,18 +458,26 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
         if (height > (copy_bits.base.box.bottom - copy_bits.base.box.top))
             height = copy_bits.base.box.bottom - copy_bits.base.box.top;
 
-        var source_img = source_context.getImageData(
-                copy_bits.src_pos.x, copy_bits.src_pos.y, width, height);
-        //source_context.putImageData(source_img, copy_bits.base.box.left, copy_bits.base.box.top);
-        putImageDataWithAlpha(source_context, source_img, copy_bits.base.box.left, copy_bits.base.box.top);
+        // perf: copy the region canvas->canvas directly. The old path did a
+        // synchronous getImageData (GPU readback that stalls the pipeline) plus a
+        // temp-canvas alpha blit. For an opaque framebuffer, a source-over draw
+        // is equivalent and skips the readback. drawImage reads the whole source
+        // region first, so overlapping src/dst (scrolling) is handled correctly.
+        // COPY_BITS is the dominant op while dragging windows.
+        if (width > 0 && height > 0)
+            source_context.drawImage(source_canvas,
+                copy_bits.src_pos.x, copy_bits.src_pos.y, width, height,
+                copy_bits.base.box.left, copy_bits.base.box.top, width, height);
 
-        if (DUMP_DRAWS && this.parent.dump_id)
+        if (DUMP_DRAWS && this.parent.dump_id && width > 0 && height > 0)
         {
             var debug_canvas = document.createElement("canvas");
             debug_canvas.setAttribute('width', width);
             debug_canvas.setAttribute('height', height);
             debug_canvas.setAttribute('id', "copybits" + copy_bits.base.surface_id + "." + this.surfaces[copy_bits.base.surface_id].draw_count);
-            debug_canvas.getContext("2d").putImageData(source_img, 0, 0);
+            debug_canvas.getContext("2d").drawImage(source_canvas,
+                copy_bits.base.box.left, copy_bits.base.box.top, width, height,
+                0, 0, width, height);
             document.getElementById(this.parent.dump_id).appendChild(debug_canvas);
         }
 
@@ -497,7 +526,12 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
         canvas.setAttribute('height', m.surface.height);
         canvas.setAttribute('id', "spice_surface_" + m.surface.surface_id);
         canvas.setAttribute('tabindex', m.surface.surface_id);
-        canvas.context = canvas.getContext("2d");
+        // perf: opaque (xRGB) surfaces skip alpha compositing entirely; desynchronized
+        // lets the browser present without blocking on vsync (lower draw latency).
+        canvas.context = canvas.getContext("2d", {
+            alpha: (m.surface.format == SPICE_SURFACE_FMT_32_ARGB),
+            desynchronized: true,
+        });
 
         if (DUMP_CANVASES && this.parent.dump_id)
             document.getElementById(this.parent.dump_id).appendChild(canvas);
@@ -532,6 +566,9 @@ SpiceDisplayConn.prototype.process_channel_message = function(msg)
     if (msg.type == SPICE_MSG_DISPLAY_STREAM_CREATE)
     {
         var m = new SpiceMsgDisplayStreamCreate(msg.data);
+        // diagnostic: lets the app confirm server-side video streaming is engaging
+        if (typeof window !== "undefined")
+            window.__spiceStreamCreates = (window.__spiceStreamCreates || 0) + 1;
         STREAM_DEBUG > 0 && console.log(this.type + ": MsgStreamCreate id" + m.id + "; type " + m.codec_type +
                                         "; width " + m.stream_width + "; height " + m.stream_height +
                                         "; left " + m.dest.left + "; top " + m.dest.top

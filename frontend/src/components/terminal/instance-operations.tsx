@@ -11,9 +11,9 @@ import {
   Play,
   Square,
   RotateCcw,
-  Loader2,
   AlertTriangle,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -225,7 +225,7 @@ export function InstanceOperations({
                 disabled={isDisabled}
               >
                 {loading === 'start' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                 ) : (
                   <Play className="h-4 w-4" />
                 )}
@@ -251,7 +251,7 @@ export function InstanceOperations({
                 disabled={isDisabled}
               >
                 {loading === 'restart' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                 ) : (
                   <RotateCcw className="h-4 w-4" />
                 )}
@@ -277,7 +277,7 @@ export function InstanceOperations({
                 disabled={isDisabled}
               >
                 {loading === 'stop' ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <Spinner className="h-4 w-4" />
                 ) : (
                   <Square className="h-4 w-4" />
                 )}
@@ -292,7 +292,7 @@ export function InstanceOperations({
           <Tooltip>
             <TooltipTrigger asChild>
               <div className="h-8 w-8 min-h-[32px] min-w-[32px] flex items-center justify-center">
-                <Loader2 className="h-4 w-4 animate-spin text-yellow-400" />
+                <Spinner className="h-4 w-4 text-yellow-400" />
               </div>
             </TooltipTrigger>
             <TooltipContent>{instanceStatus}...</TooltipContent>

@@ -13,9 +13,9 @@ import {
   X,
   CheckCircle2,
   AlertCircle,
-  Loader2,
   FolderUp,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -345,7 +345,7 @@ export function FileUploadDialog({
               >
                 {/* Status icon */}
                 {entry.status === "uploading" && (
-                  <Loader2 className="h-4 w-4 text-blue-400 animate-spin shrink-0" />
+                  <Spinner className="h-4 w-4 text-blue-400 shrink-0" />
                 )}
                 {entry.status === "success" && (
                   <CheckCircle2 className="h-4 w-4 text-green-400 shrink-0" />
@@ -405,7 +405,7 @@ export function FileUploadDialog({
           >
             {isUploading ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Spinner className="h-4 w-4 mr-2" />
                 Uploading...
               </>
             ) : (

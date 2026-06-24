@@ -228,6 +228,47 @@ SpiceMainConn.prototype.process_channel_message = function(msg)
             this.handle_file_xfer_status(new VDAgentFileXferStatusMessage(agent_data.data));
             return true;
         }
+        else if (agent_data.type == VD_AGENT_CLIPBOARD_GRAB)
+        {
+            // Guest copied something. Ask it for the UTF-8 text.
+            var grab = new VDAgentClipboardGrab(agent_data.data);
+            if (grab.types.indexOf(VD_AGENT_CLIPBOARD_UTF8_TEXT) >= 0)
+                this.send_agent_message(VD_AGENT_CLIPBOARD_REQUEST,
+                                        new VDAgentClipboardRequest(VD_AGENT_CLIPBOARD_UTF8_TEXT));
+            return true;
+        }
+        else if (agent_data.type == VD_AGENT_CLIPBOARD)
+        {
+            // Guest delivered clipboard data -> hand it to the browser layer.
+            var clip = new VDAgentClipboard(agent_data.data);
+            if (clip.type == VD_AGENT_CLIPBOARD_UTF8_TEXT &&
+                typeof this.clipboard_on_guest_data === "function")
+            {
+                try {
+                    this.clipboard_on_guest_data(new TextDecoder("utf-8").decode(clip.bytes));
+                } catch (e) {}
+            }
+            return true;
+        }
+        else if (agent_data.type == VD_AGENT_CLIPBOARD_REQUEST)
+        {
+            // Guest wants the host/browser clipboard (its Ctrl+V). Serve UTF-8.
+            new VDAgentClipboardRequest(agent_data.data);
+            var self = this;
+            if (typeof this.clipboard_get_host_data === "function")
+            {
+                Promise.resolve(this.clipboard_get_host_data()).then(function(text) {
+                    var bytes = new TextEncoder().encode(text == null ? "" : String(text));
+                    self.send_agent_message(VD_AGENT_CLIPBOARD,
+                                            new VDAgentClipboard(VD_AGENT_CLIPBOARD_UTF8_TEXT, bytes));
+                }).catch(function() {});
+            }
+            return true;
+        }
+        else if (agent_data.type == VD_AGENT_CLIPBOARD_RELEASE)
+        {
+            return true;
+        }
 
         return false;
     }
@@ -344,10 +385,23 @@ SpiceMainConn.prototype.send_agent_message = function(type, message)
 
 SpiceMainConn.prototype.announce_agent_capabilities = function(request)
 {
+    // Advertise clipboard support (UTF-8 text, on-demand) in addition to the
+    // base caps. We deliberately omit CLIPBOARD_SELECTION to keep the simple
+    // non-selection wire format.
     var caps = new VDAgentAnnounceCapabilities(request, (1 << VD_AGENT_CAP_MOUSE_STATE) |
                                                         (1 << VD_AGENT_CAP_MONITORS_CONFIG) |
-                                                        (1 << VD_AGENT_CAP_REPLY));
+                                                        (1 << VD_AGENT_CAP_REPLY) |
+                                                        (1 << VD_AGENT_CAP_CLIPBOARD) |
+                                                        (1 << VD_AGENT_CAP_CLIPBOARD_BY_DEMAND));
     this.send_agent_message(VD_AGENT_ANNOUNCE_CAPABILITIES, caps);
+}
+
+// Announce to the guest that the host/browser holds clipboard data (UTF-8 text),
+// so a subsequent Ctrl+V in the guest pulls it via VD_AGENT_CLIPBOARD_REQUEST.
+SpiceMainConn.prototype.clipboard_grab = function()
+{
+    this.send_agent_message(VD_AGENT_CLIPBOARD_GRAB,
+                            new VDAgentClipboardGrab([VD_AGENT_CLIPBOARD_UTF8_TEXT]));
 }
 
 SpiceMainConn.prototype.resize_window = function(flags, width, height, depth, x, y)

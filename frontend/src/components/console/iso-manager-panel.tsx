@@ -9,7 +9,6 @@ import * as React from "react";
 import { useState, useEffect, useCallback } from "react";
 import {
   Disc,
-  Loader2,
   CircleSlash,
   Download,
   RefreshCw,
@@ -18,6 +17,7 @@ import {
   Check,
   ChevronDown,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
@@ -261,7 +261,7 @@ export function ISOManagerPanel({
   if (loading) {
     return (
       <div className={cn("flex items-center justify-center h-full", className)}>
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        <Spinner className="h-6 w-6 text-muted-foreground" />
       </div>
     );
   }
@@ -302,7 +302,7 @@ export function ISOManagerPanel({
               disabled={ejecting}
             >
               {ejecting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Spinner className="h-4 w-4" />
               ) : (
                 <>
                   <CircleSlash className="h-4 w-4 mr-1" />
@@ -414,7 +414,7 @@ export function ISOManagerPanel({
             disabled={attaching}
           >
             {attaching ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <Spinner className="h-4 w-4 mr-2" />
             ) : (
               <Download className="h-4 w-4 mr-2" />
             )}

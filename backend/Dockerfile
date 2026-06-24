@@ -56,4 +56,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Run the application
 # Multiple workers for concurrency; use --workers=1 for debugging
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4050", "--workers", "4"]
+# --ws-per-message-deflate false: SPICE/terminal binary is already compressed, so
+# WebSocket compression only wastes CPU and adds latency on the hot path.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "4050", "--workers", "4", "--ws-per-message-deflate", "false"]

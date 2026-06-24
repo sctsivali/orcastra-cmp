@@ -1,19 +1,48 @@
 /**
- * Graphics Console - SPICE client wrapper for VGA console access.
- * Provides graphics console access to VMs via SPICE protocol.
- * 
- * LXD/Incus uses QEMU with SPICE for VM graphics console.
- * This component uses spice-html5 to render the SPICE stream in browser.
+ * Graphics Console - single SPICE client engine for VM VGA consoles.
+ *
+ * Used by both the windowed console (console-window.tsx) and the full-page
+ * route (app/console/[id]/page.tsx). All SPICE specifics live in lib/spice:
+ * the loader (single bundle), the key tables, the input helpers and the agent
+ * clipboard. This component owns only the React lifecycle, the canvas wiring
+ * and the imperative handle.
  */
 
 "use client";
 
 import * as React from "react";
-import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useCallback,
+  forwardRef,
+  useImperativeHandle,
+  useState,
+} from "react";
 import { useConsoleStore } from "@/lib/console-store";
-import { Loader2, AlertCircle, Monitor, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { AlertCircle, Monitor, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { getGraphicsWsUrl } from "@/lib/ws-url";
+import { loadSpiceScripts } from "@/lib/spice/spice-loader";
+import {
+  sendScanKey,
+  sendKeys as sendKeysToConn,
+  sendKeyWithModifiers as sendKeyWithModifiersToConn,
+  sendCtrlAltDel as sendCtrlAltDelToConn,
+  pasteViaKeystrokes,
+  type KeyModifiers,
+  type AbortFlag,
+} from "@/lib/spice/spice-input";
+import { enableAgentClipboard } from "@/lib/spice/spice-clipboard";
+
+export type GraphicsStatus =
+  | "loading"
+  | "connecting"
+  | "connected"
+  | "error"
+  | "disconnected";
 
 interface GraphicsConsoleProps {
   consoleId: string;
@@ -22,10 +51,11 @@ interface GraphicsConsoleProps {
   project: string;
   width?: number;
   height?: number;
-  zoom?: number; // Zoom percentage (100 = 100%)
+  zoom?: number; // percentage, 100 = 100%
   onReady?: () => void;
   onError?: (error: string) => void;
   onClose?: () => void;
+  onStatusChange?: (status: GraphicsStatus) => void;
   className?: string;
 }
 
@@ -33,7 +63,7 @@ export interface GraphicsConsoleHandle {
   focus: () => void;
   sendCtrlAltDel: () => void;
   sendKeys: (keys: string) => void;
-  sendKeyWithModifiers: (key: string, modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }) => void;
+  sendKeyWithModifiers: (key: string, modifiers?: KeyModifiers) => void;
   sendKeyCode: (keyCode: number) => boolean;
   pasteText: (text: string) => Promise<void>;
   getSpiceConnection: () => any;
@@ -42,121 +72,12 @@ export interface GraphicsConsoleHandle {
   disconnect: () => void;
 }
 
-// SPICE connection instance type
 interface SpiceConnection {
   stop: () => void;
   sendCtrlAltDel?: () => void;
 }
 
-// WebSocket URL builder - uses NEXT_PUBLIC_API_URL so connections
-// work through reverse proxies / tunnels (not just localhost:4050)
-import { getGraphicsWsUrl } from "@/lib/ws-url";
-
-// Correct script loading order for spice-html5
-// Based on spice-html5-rails.js manifest
-// IMPORTANT: main.js must be loaded AFTER all channel implementations
-const SPICE_SCRIPTS = [
-  // Core dependencies first
-  'enums.js',
-  'atKeynames.js',
-  'utils.js',
-  'png.js',
-  'lz.js',
-  'quic.js',
-  'bitmap.js',
-  // SPICE data handling
-  'spicearraybuffer.js',
-  'spicedataview.js',
-  'spicetype.js',
-  'spicemsg.js',
-  'wire.js',
-  'spiceconn.js',
-  // Channel implementations (must be before main.js)
-  'display.js',
-  'inputs.js',
-  'cursor.js',
-  'simulatecursor.js',
-  'playback.js',
-  'port.js',
-  // Third party crypto
-  'thirdparty/jsbn.js',
-  'thirdparty/rsa.js',
-  'thirdparty/prng4.js',
-  'thirdparty/rng.js',
-  'thirdparty/sha1.js',
-  // Authentication
-  'ticket.js',
-  // Main connection (uses all channel classes above)
-  'main.js',
-  // Additional features
-  'filexfer.js',
-  'resize.js',
-  'webm.js',
-];
-
-// Track if SPICE is loading or loaded
-let spiceLoadingPromise: Promise<void> | null = null;
-let spiceLoaded = false;
-
-// Load all SPICE scripts
-async function loadSpiceScripts(): Promise<void> {
-  if (spiceLoaded) return;
-  
-  if (spiceLoadingPromise) {
-    return spiceLoadingPromise;
-  }
-  
-  spiceLoadingPromise = (async () => {
-    const basePath = '/spice-html5';
-    
-    // Load scripts sequentially in correct order
-    for (const script of SPICE_SCRIPTS) {
-      await new Promise<void>((resolve) => {
-        // Check if already loaded
-        const existingScript = document.querySelector(`script[src*="${script}"]`);
-        if (existingScript) {
-          resolve();
-          return;
-        }
-        
-        const el = document.createElement('script');
-        el.src = `${basePath}/${script}`;
-        el.async = false; // Important: maintain order
-        
-        el.onload = () => {
-          resolve();
-        };
-        
-        el.onerror = () => {
-          console.warn(`[SPICE] Failed to load: ${script}`);
-          resolve(); // Continue loading other scripts
-        };
-        
-        document.head.appendChild(el);
-      });
-    }
-    
-    // Load CSS
-    if (!document.querySelector('link[href*="spice.css"]')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = `${basePath}/spice.css`;
-      document.head.appendChild(link);
-    }
-    
-    // Wait a bit for scripts to initialize
-    await new Promise(r => setTimeout(r, 200));
-    
-    // Verify SpiceMainConn is available
-    if (typeof (window as any).SpiceMainConn === 'undefined') {
-      throw new Error('SpiceMainConn not available after loading scripts');
-    }
-    
-    spiceLoaded = true;
-  })();
-  
-  return spiceLoadingPromise;
-}
+const MAX_CONNECTION_ATTEMPTS = 3;
 
 export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsoleProps>(
   function GraphicsConsole(
@@ -165,866 +86,446 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       instanceName,
       host,
       project,
-      width = 1024,
-      height = 768,
       zoom = 100,
       onReady,
       onError,
       onClose,
+      onStatusChange,
       className,
     },
-    ref
+    ref,
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
     const screenRef = useRef<HTMLDivElement>(null);
     const spiceConnectionRef = useRef<SpiceConnection | null>(null);
-    const [status, setStatus] = useState<'loading' | 'connecting' | 'connected' | 'error' | 'disconnected'>('loading');
-    const [errorMessage, setErrorMessage] = useState<string>('');
+    const pasteAbortRef = useRef<AbortFlag | null>(null);
+    const guestResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const [status, setStatusState] = useState<GraphicsStatus>("loading");
+    const [errorMessage, setErrorMessage] = useState("");
     const [scriptsReady, setScriptsReady] = useState(false);
     const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-    
-    // Connection attempt tracking
+
     const connectionAttemptRef = useRef(0);
     const isConnectingRef = useRef(false);
-    // Track if connection is stabilized (after 500ms delay post-connect)
-    const isStabilizedRef = useRef(false);
-    const MAX_CONNECTION_ATTEMPTS = 3;
+    // Holds the latest connect() so the error-retry can call it without a
+    // circular useCallback dependency.
+    const connectRef = useRef<() => void>(() => {});
 
     const { updateConnectionStatus } = useConsoleStore();
 
-    // Generate unique screen ID
     const screenId = `spice-screen-${consoleId}`;
-    
-    // Calculate scale factor for zoom
     const scale = zoom / 100;
 
-    // Track canvas size changes for proper scaling container sizing
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      const updateCanvasSize = () => {
-        const canvas = screen.querySelector('canvas') as HTMLCanvasElement;
-        if (canvas) {
-          // Get the native canvas dimensions (not CSS dimensions)
-          const nativeWidth = canvas.width;
-          const nativeHeight = canvas.height;
-          if (nativeWidth > 0 && nativeHeight > 0) {
-            setCanvasSize({ width: nativeWidth, height: nativeHeight });
-          }
-        }
-      };
-      
-      // Initial check
-      updateCanvasSize();
-      
-      // Use MutationObserver to detect when canvas is added or resized
-      const observer = new MutationObserver(() => {
-        updateCanvasSize();
-      });
-      
-      observer.observe(screen, { childList: true, subtree: true, attributes: true });
-      
-      // Also check periodically for size changes (canvas might be resized by SPICE)
-      const interval = setInterval(updateCanvasSize, 1000);
-      
-      return () => {
-        observer.disconnect();
-        clearInterval(interval);
-      };
-    }, [status, screenId]);
+    // Single funnel for status so the store, the optional parent callback and
+    // local state never drift.
+    const applyStatus = useCallback(
+      (next: GraphicsStatus, message?: string) => {
+        setStatusState(next);
+        // The store has no "loading" state; map it to the nearest equivalent.
+        updateConnectionStatus(consoleId, next === "loading" ? "connecting" : next, message);
+        onStatusChange?.(next);
+      },
+      [consoleId, updateConnectionStatus, onStatusChange],
+    );
 
-    // Apply zoom by scaling canvas CSS dimensions (preserves mouse coordinate accuracy)
-    useEffect(() => {
-      if (status !== 'connected' || canvasSize.width === 0) return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      const canvas = screen.querySelector('canvas') as HTMLCanvasElement;
-      if (!canvas) return;
-      
-      // Set CSS dimensions to scaled size - browser handles mouse coord transformation
-      canvas.style.width = `${canvasSize.width * scale}px`;
-      canvas.style.height = `${canvasSize.height * scale}px`;
-    }, [status, screenId, scale, canvasSize]);
+    const getConn = useCallback(() => spiceConnectionRef.current as any, []);
 
-    // DISABLED: Touch-to-mouse translation - replaced by OnScreenCursor feature
-    // The OnScreenCursor provides better control for mobile users with explicit click modes
-    /*
-    // Touch event support for mobile - SPICE only listens for mouse events
-    // We need to translate touch events to mouse events for mobile drag to work inside the console
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      // Canvas might not be available immediately after connection
-      // Use MutationObserver to detect when canvas is added
-      let canvas: HTMLCanvasElement | null = screen.querySelector('canvas');
-      let cleanupFn: (() => void) | null = null;
-      
-      const setupTouchHandlers = (canvasEl: HTMLCanvasElement) => {
-        // Track if we're currently in a touch sequence
-        let isTouching = false;
-        let lastTouchX = 0;
-        let lastTouchY = 0;
-      
-        const handleTouchStart = (e: TouchEvent) => {
-          if (e.touches.length !== 1) return; // Only handle single touch
-          e.preventDefault(); // Prevent scrolling/zooming
-          e.stopPropagation(); // Prevent parent handlers
-          isTouching = true;
-        
-          const touch = e.touches[0];
-          lastTouchX = touch.clientX;
-          lastTouchY = touch.clientY;
-          
-          // Dispatch mouse event at touch position
-          const mouseEvent = new MouseEvent('mousedown', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            button: 0,
-            buttons: 1,
-          });
-          canvasEl.dispatchEvent(mouseEvent);
-        };
-      
-        const handleTouchMove = (e: TouchEvent) => {
-          if (!isTouching || e.touches.length !== 1) return;
-          e.preventDefault();
-          e.stopPropagation();
-        
-          const touch = e.touches[0];
-          lastTouchX = touch.clientX;
-          lastTouchY = touch.clientY;
-          
-          const mouseEvent = new MouseEvent('mousemove', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: touch.clientX,
-            clientY: touch.clientY,
-            button: 0,
-            buttons: 1,
-          });
-          canvasEl.dispatchEvent(mouseEvent);
-        };
-      
-        const handleTouchEnd = (e: TouchEvent) => {
-          if (!isTouching) return;
-          e.preventDefault();
-          e.stopPropagation();
-          isTouching = false;
-        
-          // Use last known position for end event
-          const mouseEvent = new MouseEvent('mouseup', {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: lastTouchX,
-            clientY: lastTouchY,
-            button: 0,
-            buttons: 0,
-          });
-          canvasEl.dispatchEvent(mouseEvent);
-        };
-      
-        // Add touch listeners with passive: false to allow preventDefault
-        canvasEl.addEventListener('touchstart', handleTouchStart, { passive: false, capture: true });
-        canvasEl.addEventListener('touchmove', handleTouchMove, { passive: false, capture: true });
-        canvasEl.addEventListener('touchend', handleTouchEnd, { passive: false, capture: true });
-        canvasEl.addEventListener('touchcancel', handleTouchEnd, { passive: false, capture: true });
-        
-        return () => {
-          canvasEl.removeEventListener('touchstart', handleTouchStart, { capture: true });
-          canvasEl.removeEventListener('touchmove', handleTouchMove, { capture: true });
-          canvasEl.removeEventListener('touchend', handleTouchEnd, { capture: true });
-          canvasEl.removeEventListener('touchcancel', handleTouchEnd, { capture: true });
-        };
-      };
-      
-      if (canvas) {
-        cleanupFn = setupTouchHandlers(canvas);
-      } else {
-        // Wait for canvas to be added
-        const observer = new MutationObserver(() => {
-          const newCanvas = screen.querySelector('canvas') as HTMLCanvasElement;
-          if (newCanvas && !canvas) {
-            canvas = newCanvas;
-            cleanupFn = setupTouchHandlers(newCanvas);
-            observer.disconnect();
-          }
-        });
-        observer.observe(screen, { childList: true, subtree: true });
-        
-        return () => {
-          observer.disconnect();
-          cleanupFn?.();
-        };
-      }
-      
-      return () => {
-        cleanupFn?.();
-      };
-    }, [status, screenId]);
-    */
-
-    // Block keyboard events on canvas during stabilization period
-    // This intercepts events BEFORE SPICE's native handlers to prevent backtick spam
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      const screen = document.getElementById(screenId);
-      if (!screen) return;
-      
-      const canvas = screen.querySelector('canvas') as HTMLCanvasElement;
-      if (!canvas) return;
-      
-      // Block ALL keyboard events until stabilized
-      const blockKeyboard = (e: KeyboardEvent) => {
-        if (!isStabilizedRef.current) {
-          e.preventDefault();
-          e.stopPropagation();
-          e.stopImmediatePropagation();
-          return false;
-        }
-      };
-      
-      // Capture phase to intercept before SPICE handlers
-      canvas.addEventListener('keydown', blockKeyboard, { capture: true });
-      canvas.addEventListener('keyup', blockKeyboard, { capture: true });
-      canvas.addEventListener('keypress', blockKeyboard, { capture: true });
-      
-      return () => {
-        canvas.removeEventListener('keydown', blockKeyboard, { capture: true });
-        canvas.removeEventListener('keyup', blockKeyboard, { capture: true });
-        canvas.removeEventListener('keypress', blockKeyboard, { capture: true });
-      };
-    }, [status, screenId]);
-
-    // Window-level keyboard listener - captures keys even without focus on console
-    // IMPORTANT: Only handles keys when console canvas is NOT focused
-    // When canvas is focused, SPICE's native handlers process keyboard events
-    // This prevents double key registration (especially noticeable in BIOS)
-    useEffect(() => {
-      if (status !== 'connected') return;
-      
-      // Add stabilization delay after connection to prevent spurious key events
-      // This fixes backtick spam on console open
-      let stabilized = false;
-      const stabilizeTimer = setTimeout(() => {
-        stabilized = true;
-      }, 500);
-      
-      const handleWindowKeyDown = (e: KeyboardEvent) => {
-        // Don't process until connection is stabilized
-        if (!stabilized) return;
-        
-        // Get fresh reference to SPICE connection
+    // Tell the guest agent to enable a display sized to the console viewport. This
+    // sends VD_AGENT_MONITORS_CONFIG (via spice-html5 resize_window), which is what
+    // virt-viewer and LXD-UI do on agent connect: it ENABLES/wakes an idle display
+    // (clears the guest's "Display output is not active") and fits the desktop to
+    // the viewport. Debounced so a burst of resizes sends one config. The guest
+    // queues it until the agent has tokens, so calling it early is safe.
+    const requestGuestResize = useCallback(() => {
+      if (guestResizeTimerRef.current) clearTimeout(guestResizeTimerRef.current);
+      guestResizeTimerRef.current = setTimeout(() => {
         const sc = spiceConnectionRef.current as any;
-        if (!sc || !sc.inputs || sc.inputs.state !== 'ready') return;
-        
-        // Skip if user is typing in an input field
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-          return;
+        const box = containerRef.current;
+        if (!sc || !box || typeof sc.resize_window !== "function") return;
+        // Fit the guest desktop to the available console area so it never overflows
+        // the viewport. The old 640x480 floor forced a phone (≈390px wide) to render a
+        // 640px-wide desktop it had to pan; clamp only to a small usable VGA floor and
+        // never request larger than the box. Zoom buttons cover detail on small screens.
+        let w = Math.max(320, Math.floor(box.clientWidth));
+        let h = Math.max(240, Math.floor(box.clientHeight));
+        // Xorg requires width/height to be a multiple of 8 (see resize.js).
+        if (w % 8) w += 8 - (w % 8);
+        if (h % 8) h += 8 - (h % 8);
+        try {
+          sc.resize_window(0, w, h, 32, 0, 0);
+        } catch {
+          /* ignore - agent may not be ready; a later trigger retries */
         }
-        
-        // CRITICAL: Check if the SPICE screen or its canvas is the target
-        // If so, SPICE's native handlers will process it - don't double-send
-        const screen = document.getElementById(screenId);
-        if (screen && (target === screen || screen.contains(target))) {
-          // Canvas/screen is focused, SPICE handles it natively
-          // Only prevent backtick spam
-          if (e.repeat && (e.key === '`' || e.key === '~')) {
-            e.preventDefault();
-          }
-          return;
-        }
-        
-        // Prevent backtick key repeat spam
-        if (e.repeat && (e.key === '`' || e.key === '~')) {
-          e.preventDefault();
-          return;
-        }
-        
-        // Console is not focused, so SPICE won't receive this event
-        // Send it via SPICE's handler manually
-        const win = window as any;
-        if (win.handle_keydown) {
-          win.handle_keydown.call({ sc }, e);
-        }
-      };
-      
-      const handleWindowKeyUp = (e: KeyboardEvent) => {
-        // Don't process until connection is stabilized
-        if (!stabilized) return;
-        
-        const sc = spiceConnectionRef.current as any;
-        if (!sc || !sc.inputs || sc.inputs.state !== 'ready') return;
-        
-        const target = e.target as HTMLElement;
-        if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
-          return;
-        }
-        
-        // CRITICAL: Skip if SPICE screen is the target - native handlers will process
-        const screen = document.getElementById(screenId);
-        if (screen && (target === screen || screen.contains(target))) {
-          return;
-        }
-        
-        const win = window as any;
-        if (win.handle_keyup) {
-          win.handle_keyup.call({ sc }, e);
-        }
-      };
-      
-      // Capture phase to get keys before other handlers
-      window.addEventListener('keydown', handleWindowKeyDown, true);
-      window.addEventListener('keyup', handleWindowKeyUp, true);
-      
-      return () => {
-        clearTimeout(stabilizeTimer);
-        window.removeEventListener('keydown', handleWindowKeyDown, true);
-        window.removeEventListener('keyup', handleWindowKeyUp, true);
-      };
-    }, [status, screenId]);
+      }, 200);
+    }, []);
 
-    // Load SPICE scripts on mount
+    // Load the SPICE client bundle once.
     useEffect(() => {
       let mounted = true;
-      
       loadSpiceScripts()
         .then(() => {
-          if (mounted) {
-            setScriptsReady(true);
-          }
+          if (mounted) setScriptsReady(true);
         })
         .catch((err) => {
-          if (mounted) {
-            console.error('[GraphicsConsole] Failed to load SPICE:', err);
-            setStatus('error');
-            setErrorMessage('Failed to load SPICE client');
-          }
+          if (!mounted) return;
+          console.error("[GraphicsConsole] Failed to load SPICE:", err);
+          setErrorMessage("Failed to load SPICE client");
+          applyStatus("error", "Failed to load SPICE client");
         });
-      
       return () => {
         mounted = false;
       };
-    }, []);
+    }, [applyStatus]);
 
-    // Connect to graphics console
     const connect = useCallback(async () => {
       const screen = document.getElementById(screenId);
-      if (!scriptsReady || !screen) {
-        console.warn('[GraphicsConsole] Not ready - scriptsReady:', scriptsReady, 'screen:', !!screen);
-        return;
-      }
-      
-      // Prevent multiple simultaneous connection attempts
-      if (isConnectingRef.current) {
-        console.warn('[GraphicsConsole] Already connecting, skipping');
-        return;
-      }
-      
-      // Check connection attempt limit
+      if (!scriptsReady || !screen) return;
+      if (isConnectingRef.current) return;
+
       if (connectionAttemptRef.current >= MAX_CONNECTION_ATTEMPTS) {
-        console.error('[GraphicsConsole] Max connection attempts reached');
-        setStatus('error');
-        setErrorMessage(`Connection failed after ${MAX_CONNECTION_ATTEMPTS} attempts. Click Reconnect to try again.`);
-        updateConnectionStatus(consoleId, 'error', 'Max connection attempts reached');
+        const msg = `Connection failed after ${MAX_CONNECTION_ATTEMPTS} attempts. Click Reconnect to try again.`;
+        setErrorMessage(msg);
+        applyStatus("error", msg);
         return;
       }
-      
+
       connectionAttemptRef.current += 1;
       isConnectingRef.current = true;
 
-      // Disconnect any existing connection
       if (spiceConnectionRef.current) {
         try {
           spiceConnectionRef.current.stop();
-        } catch (e) {
-          // Ignore
+        } catch {
+          /* ignore */
         }
         spiceConnectionRef.current = null;
       }
 
-      setStatus('connecting');
-      updateConnectionStatus(consoleId, 'connecting');
-      setErrorMessage('');
+      applyStatus("connecting");
+      setErrorMessage("");
 
       try {
         const wsUrl = await getGraphicsWsUrl(instanceName, host, project);
         const SpiceMainConn = (window as any).SpiceMainConn;
-
         if (!SpiceMainConn) {
           isConnectingRef.current = false;
-          throw new Error('SpiceMainConn not available');
+          throw new Error("SpiceMainConn not available");
         }
 
-        // Reset stabilization flag - will be set after 500ms delay
-        isStabilizedRef.current = false;
-
-        // Create SPICE connection
-        // LXD console doesn't require password (auth is done via LXD)
         const sc = new SpiceMainConn({
           uri: wsUrl,
           screen_id: screenId,
-          password: '',  // LXD handles auth
+          password: "",
           onerror: (e: Error | string) => {
             isConnectingRef.current = false;
-            isStabilizedRef.current = false;
-            let msg = typeof e === 'string' ? e : e?.message || 'Connection error';
-            
-            // Translate SPICE error messages to user-friendly messages
-            if (msg.includes('Unexpected protocol mismatch')) {
-              msg = 'Console connection failed. The VM may not be running or graphics console is unavailable.';
-            } else if (msg.includes('Connection refused')) {
-              msg = 'Cannot connect to console server. Please check if the backend is running.';
-            } else if (msg.includes('Bad password')) {
-              msg = 'Authentication failed for console session.';
-            } else if (msg.includes('Permission denied')) {
-              msg = 'Console session expired or access denied. Please reconnect.';
+            let msg = typeof e === "string" ? e : e?.message || "Connection error";
+            if (msg.includes("Unexpected protocol mismatch")) {
+              msg = "Console connection failed. The VM may not be running or graphics console is unavailable.";
+            } else if (msg.includes("Connection refused")) {
+              msg = "Cannot connect to console server. Please check if the backend is running.";
+            } else if (msg.includes("Bad password")) {
+              msg = "Authentication failed for console session.";
+            } else if (msg.includes("Permission denied")) {
+              msg = "Console session expired or access denied. Please reconnect.";
             }
-            
-            console.error('[GraphicsConsole] SPICE error:', msg);
-            setStatus('error');
+            console.error("[GraphicsConsole] SPICE error:", msg);
+            // Bounded auto-retry: a SPICE session opens 4 channels and one can
+            // fail transiently (leaving the display channel missing -> "Display
+            // output is not active"). Retry the whole connect a few times before
+            // surfacing the error, instead of leaving the user to click Reconnect.
+            // connectionAttemptRef is incremented per connect() and reset on
+            // success, so this is strictly bounded and cannot storm.
+            if (connectionAttemptRef.current < MAX_CONNECTION_ATTEMPTS) {
+              applyStatus("connecting");
+              setTimeout(() => connectRef.current(), 400 * connectionAttemptRef.current);
+              return;
+            }
             setErrorMessage(msg);
-            updateConnectionStatus(consoleId, 'error', msg);
+            applyStatus("error", msg);
             onError?.(msg);
           },
           onsuccess: () => {
             isConnectingRef.current = false;
-            connectionAttemptRef.current = 0; // Reset on success
-            setStatus('connected');
-            updateConnectionStatus(consoleId, 'connected');
-            
-            // Set stabilization flag after 500ms to prevent backtick spam on first input
-            setTimeout(() => {
-              isStabilizedRef.current = true;
-            }, 500);
-            
+            connectionAttemptRef.current = 0;
+            applyStatus("connected");
             onReady?.();
           },
           onagent: () => {
-            // SPICE agent connected
+            // Guest agent connected: agent clipboard becomes usable, AND this is
+            // the moment to enable/wake the guest display via a monitors-config.
+            // Without this the guest can stay parked on "Display output is not
+            // active" until a manual Reconnect (the old mouse-nudge was unreliable).
+            requestGuestResize();
           },
         });
 
         spiceConnectionRef.current = sc;
-
       } catch (error) {
         isConnectingRef.current = false;
-        const msg = error instanceof Error ? error.message : 'Failed to connect';
-        console.error('[GraphicsConsole] Connection error:', error);
-        setStatus('error');
+        const msg = error instanceof Error ? error.message : "Failed to connect";
+        console.error("[GraphicsConsole] Connection error:", error);
         setErrorMessage(msg);
-        updateConnectionStatus(consoleId, 'error', msg);
+        applyStatus("error", msg);
         onError?.(msg);
       }
-    }, [consoleId, instanceName, host, project, scriptsReady, screenId, updateConnectionStatus, onReady, onError]);
+    }, [instanceName, host, project, scriptsReady, screenId, applyStatus, onReady, onError, requestGuestResize]);
+    connectRef.current = connect;
 
-    // Disconnect
     const disconnect = useCallback(() => {
       isConnectingRef.current = false;
-      isStabilizedRef.current = false; // Reset stabilization on disconnect
+      if (pasteAbortRef.current) pasteAbortRef.current.aborted = true;
       if (spiceConnectionRef.current) {
         try {
           spiceConnectionRef.current.stop();
-        } catch (e) {
-          // Ignore
+        } catch {
+          /* ignore */
         }
         spiceConnectionRef.current = null;
       }
-      setStatus('disconnected');
-      updateConnectionStatus(consoleId, 'disconnected');
-    }, [consoleId, updateConnectionStatus]);
+      applyStatus("disconnected");
+      onClose?.();
+    }, [applyStatus, onClose]);
 
-    // Reconnect - resets attempt counter for manual reconnect
     const reconnect = useCallback(() => {
-      connectionAttemptRef.current = 0; // Reset counter on manual reconnect
-      disconnect();
-      setTimeout(() => connect(), 200);
-    }, [connect, disconnect]);
-
-    // Helper to send key via SPICE input channel using scancodes
-    // This directly sends to the SPICE connection, bypassing DOM events
-    const sendSpiceKey = useCallback((keyCode: number, press: boolean = true, release: boolean = true) => {
-      const sc = spiceConnectionRef.current as any;
-      if (!sc || !sc.inputs || sc.inputs.state !== 'ready') return false;
-      
-      // Don't send keys until connection is stabilized (prevents backtick spam on open)
-      if (!isStabilizedRef.current) {
-        return false;
+      connectionAttemptRef.current = 0;
+      isConnectingRef.current = false;
+      if (spiceConnectionRef.current) {
+        try {
+          spiceConnectionRef.current.stop();
+        } catch {
+          /* ignore */
+        }
+        spiceConnectionRef.current = null;
       }
-      
-      const win = window as any;
-      if (!win.keycode_to_start_scan || !win.SpiceMsgcKeyDown || !win.SpiceMiniData) {
-        console.warn('[GraphicsConsole] SPICE functions not available');
-        return false;
-      }
-      
-      try {
-        if (press) {
-          const keyDown = new win.SpiceMsgcKeyDown();
-          keyDown.code = win.keycode_to_start_scan(keyCode);
-          const msgDown = new win.SpiceMiniData();
-          msgDown.build_msg(win.SPICE_MSGC_INPUTS_KEY_DOWN, keyDown);
-          sc.inputs.send_msg(msgDown);
-        }
-        
-        if (release) {
-          const keyUp = new win.SpiceMsgcKeyUp();
-          keyUp.code = win.keycode_to_end_scan(keyCode);
-          const msgUp = new win.SpiceMiniData();
-          msgUp.build_msg(win.SPICE_MSGC_INPUTS_KEY_UP, keyUp);
-          sc.inputs.send_msg(msgUp);
-        }
-        
-        return true;
-      } catch (e) {
-        console.error('[GraphicsConsole] Failed to send key:', e);
-        return false;
-      }
-    }, []);
+      setStatusState("loading");
+      setTimeout(() => connect(), 150);
+    }, [connect]);
 
-    // Expose methods via ref
-    useImperativeHandle(ref, () => ({
-      focus: () => {
-        const screen = document.getElementById(screenId);
-        screen?.focus();
-        const canvas = screen?.querySelector('canvas');
-        if (canvas) (canvas as HTMLCanvasElement).focus();
-      },
-      sendCtrlAltDel: () => {
-        const sc = spiceConnectionRef.current;
-        if (typeof (window as any).sendCtrlAltDel === 'function') {
-          (window as any).sendCtrlAltDel(sc);
-        }
-      },
-      sendKeys: (keys: string) => {
-        // For Ctrl+Alt+Del, use the special function
-        if (keys.toLowerCase() === 'ctrl+alt+del') {
-          const sc = spiceConnectionRef.current;
-          if (typeof (window as any).sendCtrlAltDel === 'function') {
-            (window as any).sendCtrlAltDel(sc);
-          }
-          return;
-        }
-        
-        // Complete map of key names to JavaScript keyCodes for SPICE scancode mapping
-        // This includes special keys, function keys, and character keyCodes
-        const keyCodeMap: Record<string, number> = {
-          // Special keys
-          'Escape': 27, 'Esc': 27,
-          'Enter': 13, 'Tab': 9, 'Backspace': 8, 'Space': 32, ' ': 32,
-          'Delete': 46, 'Del': 46, 'Insert': 45, 'Ins': 45,
-          'Home': 36, 'End': 35, 'PageUp': 33, 'PageDown': 34,
-          'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
-          'Shift': 16, 'Control': 17, 'Ctrl': 17, 'Alt': 18, 'Meta': 91,
-          'CapsLock': 20, 'NumLock': 144, 'ScrollLock': 145,
-          'PrintScreen': 44, 'Pause': 19,
-          // Function keys
-          'F1': 112, 'F2': 113, 'F3': 114, 'F4': 115,
-          'F5': 116, 'F6': 117, 'F7': 118, 'F8': 119,
-          'F9': 120, 'F10': 121, 'F11': 122, 'F12': 123,
-          // Punctuation and symbols (using DOM keyCodes that SPICE understands)
-          ';': 186, ':': 186, // semicolon (needs shift for colon)
-          '=': 187, '+': 187, // equals (needs shift for plus)
-          ',': 188, '<': 188, // comma (needs shift for less-than)
-          '-': 189, '_': 189, // minus (needs shift for underscore)
-          '.': 190, '>': 190, // period (needs shift for greater-than)
-          '/': 191, '?': 191, // slash (needs shift for question)
-          '`': 192, '~': 192, // backtick (needs shift for tilde)
-          '[': 219, '{': 219, // left bracket (needs shift for brace)
-          '\\': 220, '|': 220, // backslash (needs shift for pipe)
-          ']': 221, '}': 221, // right bracket (needs shift for brace)
-          "'": 222, '"': 222, // quote (needs shift for double-quote)
-        };
-        
-        // Characters that need shift to be typed
-        const shiftChars = new Set(['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '{', '}', '|', ':', '"', '<', '>', '?', '~']);
-        
-        // Number keys with shift for symbols
-        const numShiftMap: Record<string, number> = {
-          '!': 49, '@': 50, '#': 51, '$': 52, '%': 53, 
-          '^': 54, '&': 55, '*': 56, '(': 57, ')': 48,
-        };
-        
-        // If it's a named key, send via SPICE channel
-        if (keyCodeMap[keys]) {
-          sendSpiceKey(keyCodeMap[keys]);
-          return;
-        }
-        
-        // For regular characters, send each one
-        for (const char of keys) {
-          let keyCode: number;
-          let needsShift = false;
-          
-          // Check if it's a shift+number symbol
-          if (numShiftMap[char]) {
-            keyCode = numShiftMap[char];
-            needsShift = true;
-          }
-          // Check if it's in keyCodeMap (punctuation)
-          else if (keyCodeMap[char]) {
-            keyCode = keyCodeMap[char];
-            needsShift = shiftChars.has(char);
-          }
-          // Letter keys
-          else if (/[a-zA-Z]/.test(char)) {
-            keyCode = char.toUpperCase().charCodeAt(0);
-            needsShift = char === char.toUpperCase() && char !== char.toLowerCase();
-          }
-          // Number keys
-          else if (/[0-9]/.test(char)) {
-            keyCode = char.charCodeAt(0);
-          }
-          // Fallback
-          else {
-            keyCode = char.toUpperCase().charCodeAt(0);
-          }
-          
-          // Send with shift if needed
-          if (needsShift) {
-            sendSpiceKey(16, true, false); // Shift down
-          }
-          sendSpiceKey(keyCode);
-          if (needsShift) {
-            sendSpiceKey(16, false, true); // Shift up
-          }
-        }
-      },
-      // Send a key with explicit modifiers (Ctrl, Alt, Shift, Meta)
-      sendKeyWithModifiers: (key: string, modifiers?: { ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }) => {
-        // Map key names to JavaScript keyCodes
-        const keyCodeMap: Record<string, number> = {
-          // Special keys
-          'Escape': 27, 'Esc': 27,
-          'Enter': 13, 'Tab': 9, 'Backspace': 8, 'Space': 32, ' ': 32,
-          'Delete': 46, 'Del': 46, 'Insert': 45, 'Ins': 45,
-          'Home': 36, 'End': 35, 'PageUp': 33, 'PageDown': 34,
-          'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39,
-          'Shift': 16, 'Control': 17, 'Ctrl': 17, 'Alt': 18, 'Meta': 91,
-          'CapsLock': 20, 'NumLock': 144, 'ScrollLock': 145,
-          'PrintScreen': 44, 'Pause': 19,
-          // Function keys
-          'F1': 112, 'F2': 113, 'F3': 114, 'F4': 115,
-          'F5': 116, 'F6': 117, 'F7': 118, 'F8': 119,
-          'F9': 120, 'F10': 121, 'F11': 122, 'F12': 123,
-          // Punctuation
-          ';': 186, ':': 186, '=': 187, '+': 187, ',': 188, '<': 188,
-          '-': 189, '_': 189, '.': 190, '>': 190, '/': 191, '?': 191,
-          '`': 192, '~': 192, '[': 219, '{': 219, '\\': 220, '|': 220,
-          ']': 221, '}': 221, "'": 222, '"': 222,
-        };
-        
-        // Symbols that require shift on US keyboard layout
-        const shiftSymbols = new Set(['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '_', '+', '{', '}', '|', ':', '"', '<', '>', '?', '~']);
-        
-        // Number key shift map
-        const numShiftMap: Record<string, number> = {
-          '!': 49, '@': 50, '#': 51, '$': 52, '%': 53,
-          '^': 54, '&': 55, '*': 56, '(': 57, ')': 48,
-        };
-        
-        // Determine keyCode and if shift is needed for this character
-        let keyCode: number;
-        let needsShift = modifiers?.shift || false;
-        
-        if (numShiftMap[key]) {
-          keyCode = numShiftMap[key];
-          needsShift = true;
-        } else if (keyCodeMap[key]) {
-          keyCode = keyCodeMap[key];
-          // Check if this symbol needs shift
-          if (shiftSymbols.has(key)) needsShift = true;
-        } else if (/[a-zA-Z]/.test(key) && key.length === 1) {
-          keyCode = key.toUpperCase().charCodeAt(0);
-          // Check if uppercase letter (needs shift)
-          if (key === key.toUpperCase() && key !== key.toLowerCase()) needsShift = true;
-        } else if (/[0-9]/.test(key)) {
-          keyCode = key.charCodeAt(0);
-        } else {
-          keyCode = key.toUpperCase().charCodeAt(0);
-        }
-        
-        // Press modifier keys
-        if (needsShift) sendSpiceKey(16, true, false);  // Shift down
-        if (modifiers?.ctrl) sendSpiceKey(17, true, false);   // Ctrl down
-        if (modifiers?.alt) sendSpiceKey(18, true, false);    // Alt down
-        if (modifiers?.meta) sendSpiceKey(91, true, false);   // Meta/Win down
-        
-        // Send the key
-        sendSpiceKey(keyCode);
-        
-        // Release modifier keys (reverse order)
-        if (modifiers?.meta) sendSpiceKey(91, false, true);   // Meta/Win up
-        if (modifiers?.alt) sendSpiceKey(18, false, true);    // Alt up
-        if (modifiers?.ctrl) sendSpiceKey(17, false, true);   // Ctrl up
-        if (needsShift) sendSpiceKey(16, false, true);  // Shift up
-      },
-      // Send a single key by JavaScript keyCode (for BIOS spam, etc.)
-      sendKeyCode: (keyCode: number) => {
-        return sendSpiceKey(keyCode);
-      },
-      pasteText: async (text: string) => {
-        // Complete keyCode mapping for all printable ASCII characters
-        const charToKeyCode: Record<string, { keyCode: number; shift: boolean }> = {
-          // Numbers (no shift)
-          '0': { keyCode: 48, shift: false }, '1': { keyCode: 49, shift: false },
-          '2': { keyCode: 50, shift: false }, '3': { keyCode: 51, shift: false },
-          '4': { keyCode: 52, shift: false }, '5': { keyCode: 53, shift: false },
-          '6': { keyCode: 54, shift: false }, '7': { keyCode: 55, shift: false },
-          '8': { keyCode: 56, shift: false }, '9': { keyCode: 57, shift: false },
-          // Shifted number row symbols
-          ')': { keyCode: 48, shift: true }, '!': { keyCode: 49, shift: true },
-          '@': { keyCode: 50, shift: true }, '#': { keyCode: 51, shift: true },
-          '$': { keyCode: 52, shift: true }, '%': { keyCode: 53, shift: true },
-          '^': { keyCode: 54, shift: true }, '&': { keyCode: 55, shift: true },
-          '*': { keyCode: 56, shift: true }, '(': { keyCode: 57, shift: true },
-          // Punctuation keys
-          ';': { keyCode: 186, shift: false }, ':': { keyCode: 186, shift: true },
-          '=': { keyCode: 187, shift: false }, '+': { keyCode: 187, shift: true },
-          ',': { keyCode: 188, shift: false }, '<': { keyCode: 188, shift: true },
-          '-': { keyCode: 189, shift: false }, '_': { keyCode: 189, shift: true },
-          '.': { keyCode: 190, shift: false }, '>': { keyCode: 190, shift: true },
-          '/': { keyCode: 191, shift: false }, '?': { keyCode: 191, shift: true },
-          '`': { keyCode: 192, shift: false }, '~': { keyCode: 192, shift: true },
-          '[': { keyCode: 219, shift: false }, '{': { keyCode: 219, shift: true },
-          '\\': { keyCode: 220, shift: false }, '|': { keyCode: 220, shift: true },
-          ']': { keyCode: 221, shift: false }, '}': { keyCode: 221, shift: true },
-          "'": { keyCode: 222, shift: false }, '"': { keyCode: 222, shift: true },
-          // Whitespace
-          ' ': { keyCode: 32, shift: false },
-          '\t': { keyCode: 9, shift: false },
-          '\n': { keyCode: 13, shift: false },
-          '\r': { keyCode: 13, shift: false },
-        };
-        
-        // Generate letter mappings (a-z, A-Z)
-        for (let i = 0; i < 26; i++) {
-          const lower = String.fromCharCode(97 + i); // a-z
-          const upper = String.fromCharCode(65 + i); // A-Z
-          const keyCode = 65 + i; // A=65, B=66, etc.
-          charToKeyCode[lower] = { keyCode, shift: false };
-          charToKeyCode[upper] = { keyCode, shift: true };
-        }
-        
-        // Paste text by sending keys via SPICE input channel
-        for (let i = 0; i < text.length; i++) {
-          const char = text[i];
-          const mapping = charToKeyCode[char];
-          
-          if (mapping) {
-            if (mapping.shift) {
-              sendSpiceKey(16, true, false); // Shift down
-            }
-            sendSpiceKey(mapping.keyCode);
-            if (mapping.shift) {
-              sendSpiceKey(16, false, true); // Shift up
-            }
-          } else {
-            // For unmapped characters, try using charCode directly
-            // This may not work for all characters but is a fallback
-            console.warn(`[pasteText] No mapping for character: '${char}' (code: ${char.charCodeAt(0)})`);
-          }
-          
-          // Small delay between characters for reliability
-          if (i < text.length - 1) {
-            await new Promise(r => setTimeout(r, 15));
-          }
-        }
-      },
-      // Get the spice connection reference for direct access
-      getSpiceConnection: () => spiceConnectionRef.current,
-      screenshot: () => {
-        const screen = document.getElementById(screenId);
-        const canvas = screen?.querySelector('canvas');
-        if (canvas) {
-          try {
-            return canvas.toDataURL('image/png');
-          } catch {
-            return null;
-          }
-        }
-        return null;
-      },
-      reconnect,
-      disconnect,
-    }), [screenId, reconnect, disconnect]);
-
-    // Connect when scripts are ready - with robust DOM check for mobile
+    // Connect once scripts are ready. rAF ensures the screen div is painted
+    // (mobile can lag the first paint); a bounded retry covers that.
     useEffect(() => {
-      if (!scriptsReady || status !== 'loading') return;
-      
-      // Check for screen element with retry for mobile devices
-      // On mobile, the DOM might not be ready immediately due to different rendering timing
-      let connectAttempted = false;
-      let retryCount = 0;
-      const maxRetries = 10; // Maximum 10 retries (1 second total)
-      
-      const attemptConnect = () => {
-        if (connectAttempted || status !== 'loading') return;
-        
-        const screenEl = document.getElementById(screenId);
-        if (screenEl) {
-          connectAttempted = true;
-          // Use requestAnimationFrame to ensure DOM is painted
+      if (!scriptsReady || status !== "loading") return;
+      let cancelled = false;
+      let tries = 0;
+      const attempt = () => {
+        if (cancelled || status !== "loading") return;
+        if (document.getElementById(screenId)) {
           requestAnimationFrame(() => {
-            if (status === 'loading') {
-              connect();
-            }
+            if (!cancelled) connect();
           });
-        } else if (retryCount < maxRetries) {
-          retryCount++;
-          // Retry with exponential backoff (100ms, 100ms, 100ms... up to 1 second)
-          setTimeout(attemptConnect, 100);
-        } else {
-          console.error('[GraphicsConsole] Screen element not found after retries');
+        } else if (tries < 10) {
+          tries += 1;
+          setTimeout(attempt, 100);
         }
       };
-      
-      // Start connection attempt
-      attemptConnect();
-      
+      attempt();
       return () => {
-        connectAttempted = true; // Prevent connection after unmount
+        cancelled = true;
       };
     }, [scriptsReady, status, connect, screenId]);
 
-    // Cleanup on unmount
+    // Canvas lifecycle: track native size (no polling), keep the SPICE canvas
+    // from auto-repeat spam, and re-wire if SPICE swaps the canvas element.
+    useEffect(() => {
+      if (status !== "connected") return;
+      const screen = document.getElementById(screenId);
+      if (!screen) return;
+
+      let canvas: HTMLCanvasElement | null = null;
+      let attrObserver: MutationObserver | null = null;
+
+      const readSize = () => {
+        if (!canvas) return;
+        const w = canvas.width;
+        const h = canvas.height;
+        if (w > 0 && h > 0) {
+          setCanvasSize((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+        }
+      };
+
+      // Enable/wake the guest display and keep it fitted to the viewport. The agent
+      // monitors-config sent on connect (onagent -> requestGuestResize) is the
+      // deterministic wake; this ResizeObserver re-sends it (debounced) when the
+      // console viewport changes, so the desktop tracks the window like LXD-UI. Fire
+      // once now in case the agent connected before this effect mounted.
+      requestGuestResize();
+      const sizeObserver = new ResizeObserver(() => requestGuestResize());
+      if (containerRef.current) sizeObserver.observe(containerRef.current);
+
+      // important: spice-html5's native handle_keydown forwards EVERY keydown,
+      // including browser auto-repeat (e.repeat). A held key on connect then
+      // floods the guest (the "backtick spam"). Drop repeat keydowns before the
+      // native handler sees them; the guest OS does its own key repeat.
+      const dropRepeat = (e: KeyboardEvent) => {
+        if (e.repeat) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      };
+
+      const wire = (el: HTMLCanvasElement) => {
+        canvas = el;
+        el.addEventListener("keydown", dropRepeat, { capture: true });
+        // SPICE sets canvas.width/height (backing store) on resolution change.
+        attrObserver?.disconnect();
+        attrObserver = new MutationObserver(readSize);
+        attrObserver.observe(el, { attributes: true, attributeFilter: ["width", "height"] });
+        readSize();
+      };
+
+      const existing = screen.querySelector("canvas") as HTMLCanvasElement | null;
+      if (existing) wire(existing);
+
+      // Detect (re)creation/replacement of the canvas element.
+      const childObserver = new MutationObserver(() => {
+        const next = screen.querySelector("canvas") as HTMLCanvasElement | null;
+        if (next && next !== canvas) {
+          if (canvas) canvas.removeEventListener("keydown", dropRepeat, { capture: true } as any);
+          wire(next);
+        }
+      });
+      childObserver.observe(screen, { childList: true, subtree: true });
+
+      // No blank-canvas auto-reconnect here: a "blank" canvas during connect or an
+      // idle guest is normal, and reconnecting on it stormed. The wake above clears
+      // an idle display; a genuine channel failure is recovered by the bounded
+      // retry in connect()'s onerror.
+
+      return () => {
+        sizeObserver.disconnect();
+        childObserver.disconnect();
+        attrObserver?.disconnect();
+        if (guestResizeTimerRef.current) clearTimeout(guestResizeTimerRef.current);
+        if (canvas) canvas.removeEventListener("keydown", dropRepeat, { capture: true } as any);
+      };
+    }, [status, screenId, requestGuestResize]);
+
+    // Apply zoom by scaling the canvas CSS box (keeps mouse-coordinate accuracy;
+    // the vendored spicemsg.js converts via getBoundingClientRect).
+    useEffect(() => {
+      if (status !== "connected" || canvasSize.width === 0) return;
+      const screen = document.getElementById(screenId);
+      const canvas = screen?.querySelector("canvas") as HTMLCanvasElement | null;
+      if (!canvas) return;
+      canvas.style.width = `${canvasSize.width * scale}px`;
+      canvas.style.height = `${canvasSize.height * scale}px`;
+    }, [status, screenId, scale, canvasSize]);
+
+    // Window-level forwarder so typing works when focus is on a toolbar button
+    // rather than the canvas. Skips repeats (guest handles repeat) and never
+    // double-sends when the canvas itself is focused (native handler owns that).
+    useEffect(() => {
+      if (status !== "connected") return;
+
+      const forward = (handlerName: "handle_keydown" | "handle_keyup") => (e: KeyboardEvent) => {
+        if (handlerName === "handle_keydown" && e.repeat) return;
+        const sc = spiceConnectionRef.current as any;
+        if (!sc || !sc.inputs || sc.inputs.state !== "ready") return;
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) {
+          return;
+        }
+        const screen = document.getElementById(screenId);
+        if (screen && (target === screen || screen.contains(target))) return; // canvas focused -> native handles it
+        const win = window as any;
+        if (win[handlerName]) win[handlerName].call({ sc }, e);
+      };
+
+      // Release held modifiers when the window loses focus. The browser delivers no
+      // keyup for a modifier released while unfocused (alt-tab, switching apps), so
+      // the guest would think Ctrl/Alt/Shift/Meta is still down and mangle the next
+      // keystrokes. Sending an unconditional keyup is harmless if the key wasn't held.
+      const releaseModifiers = () => {
+        const sc = spiceConnectionRef.current as any;
+        if (!sc || !sc.inputs || sc.inputs.state !== "ready") return;
+        for (const code of [16, 17, 18, 91]) sendScanKey(sc, code, false, true);
+      };
+
+      const onKeyDown = forward("handle_keydown");
+      const onKeyUp = forward("handle_keyup");
+      window.addEventListener("keydown", onKeyDown, true);
+      window.addEventListener("keyup", onKeyUp, true);
+      window.addEventListener("blur", releaseModifiers);
+      return () => {
+        window.removeEventListener("keydown", onKeyDown, true);
+        window.removeEventListener("keyup", onKeyUp, true);
+        window.removeEventListener("blur", releaseModifiers);
+      };
+    }, [status, screenId]);
+
+    useImperativeHandle(
+      ref,
+      () => ({
+        focus: () => {
+          const screen = document.getElementById(screenId);
+          screen?.focus();
+          const canvas = screen?.querySelector("canvas");
+          if (canvas) (canvas as HTMLCanvasElement).focus();
+        },
+        sendCtrlAltDel: () => sendCtrlAltDelToConn(getConn()),
+        sendKeys: (keys: string) => sendKeysToConn(getConn(), keys),
+        sendKeyWithModifiers: (key: string, modifiers?: KeyModifiers) =>
+          sendKeyWithModifiersToConn(getConn(), key, modifiers),
+        sendKeyCode: (keyCode: number) => sendScanKey(getConn(), keyCode),
+        pasteText: async (text: string) => {
+          // "Insert" types the text where the cursor is (works in BIOS, login
+          // prompts, anything - no Ctrl+V needed). Native copy/paste via the
+          // guest agent runs separately (see enableAgentClipboard) for the
+          // Ctrl+C / Ctrl+V experience when spice-vdagent is present.
+          const sc = getConn();
+          if (!sc || !text) return;
+          if (pasteAbortRef.current) pasteAbortRef.current.aborted = true;
+          const abort: AbortFlag = { aborted: false };
+          pasteAbortRef.current = abort;
+          await pasteViaKeystrokes(sc, text, abort);
+        },
+        getSpiceConnection: () => spiceConnectionRef.current,
+        screenshot: () => {
+          const screen = document.getElementById(screenId);
+          const canvas = screen?.querySelector("canvas");
+          if (!canvas) return null;
+          try {
+            return (canvas as HTMLCanvasElement).toDataURL("image/png");
+          } catch {
+            return null;
+          }
+        },
+        reconnect,
+        disconnect,
+      }),
+      [screenId, getConn, reconnect, disconnect],
+    );
+
+    // Native bidirectional clipboard via the guest agent (when spice-vdagent is
+    // running): guest Ctrl+C lands in the browser clipboard, and the browser
+    // clipboard is served to the guest on Ctrl+V. No-op without the agent.
+    useEffect(() => {
+      if (status !== "connected") return;
+      return enableAgentClipboard(() => spiceConnectionRef.current);
+    }, [status]);
+
     useEffect(() => {
       return () => {
         disconnect();
       };
-    }, [disconnect]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
 
-    // Overlay component for status display
     const StatusOverlay = () => {
-      if (status === 'loading') {
+      if (status === "loading") {
         return (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
-            <Loader2 className="h-8 w-8 animate-spin text-white/70" />
+            <Spinner className="h-8 w-8 text-white/70" />
             <p className="text-sm text-white/70">Loading SPICE client...</p>
           </div>
         );
       }
-
-      if (status === 'error') {
+      if (status === "error") {
         return (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
             <AlertCircle className="h-8 w-8 text-red-400" />
-            <p className="text-sm text-white/70">{errorMessage || 'Connection failed'}</p>
+            <p className="text-sm text-white/70">{errorMessage || "Connection failed"}</p>
             <Button variant="outline" size="sm" onClick={reconnect} className="text-white border-white/30 hover:bg-white/10">
               <RefreshCw className="h-4 w-4 mr-2" />
               Reconnect
@@ -1032,8 +533,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
           </div>
         );
       }
-
-      if (status === 'connecting') {
+      if (status === "connecting") {
         return (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
             <div className="relative">
@@ -1045,8 +545,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
           </div>
         );
       }
-
-      if (status === 'disconnected') {
+      if (status === "disconnected") {
         return (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
             <div className="relative">
@@ -1061,76 +560,42 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
           </div>
         );
       }
-
-      return null; // Connected - no overlay
+      return null;
     };
 
-    // Always render screen div, overlay status on top
-    // Mouse coordinates are calculated using getBoundingClientRect in modified spicemsg.js
     return (
       <div
         ref={containerRef}
         className={cn("w-full h-full bg-black relative", className)}
-        style={{
-          overflow: 'auto', // Allow scrolling if canvas is larger than container
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'flex-start',
-        }}
-        onClick={(e) => {
-          // Focus the screen on click for keyboard input
+        style={{ overflow: "auto", display: "flex", alignItems: "flex-start", justifyContent: "flex-start" }}
+        onClick={() => {
           const screen = document.getElementById(screenId);
           if (screen) {
             screen.focus();
-            const canvas = screen.querySelector('canvas');
-            if (canvas) {
-              (canvas as HTMLCanvasElement).focus();
-            }
+            const canvas = screen.querySelector("canvas");
+            if (canvas) (canvas as HTMLCanvasElement).focus();
           }
         }}
       >
-        {/* Status overlay - positioned absolutely over everything */}
         <StatusOverlay />
-        
-        {/* SPICE screen container - canvas rendered by spice-html5 */}
+
         <div
           ref={screenRef}
           id={screenId}
           className="spice-screen"
-          style={{
-            position: 'relative',
-            visibility: status === 'connected' ? 'visible' : 'hidden',
-            outline: 'none',
-            touchAction: 'none', // Disable browser touch gestures, let SPICE handle
-          }}
+          style={{ position: "relative", visibility: status === "connected" ? "visible" : "hidden", outline: "none", touchAction: "none" }}
           tabIndex={0}
-          onMouseDown={(e) => {
-            // Stop propagation to prevent draggable from capturing mouse events
-            e.stopPropagation();
-          }}
-          onTouchStart={(e) => {
-            // Stop propagation to prevent draggable from capturing touch events
-            // This fixes mobile drag issue - allows dragging inside console (file manager, etc.)
-            e.stopPropagation();
-          }}
-          onTouchMove={(e) => {
-            // Allow touch move inside console without moving the window
-            e.stopPropagation();
-          }}
-          onPointerDown={(e) => {
-            // Stop pointer events from propagating to draggable
-            e.stopPropagation();
-          }}
+          onMouseDown={(e) => e.stopPropagation()}
+          onTouchStart={(e) => e.stopPropagation()}
+          onTouchMove={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
-            const canvas = e.currentTarget.querySelector('canvas');
-            if (canvas) {
-              (canvas as HTMLCanvasElement).focus();
-            }
+            const canvas = e.currentTarget.querySelector("canvas");
+            if (canvas) (canvas as HTMLCanvasElement).focus();
           }}
         />
-        
-        {/* SPICE canvas styling */}
+
         <style jsx global>{`
           .spice-screen {
             pointer-events: auto;
@@ -1147,7 +612,7 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
         `}</style>
       </div>
     );
-  }
+  },
 );
 
 export default GraphicsConsole;

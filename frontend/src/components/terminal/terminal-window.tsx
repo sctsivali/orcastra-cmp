@@ -20,7 +20,6 @@ import {
   LayoutGrid,
   Terminal as TerminalIcon,
   Server,
-  Loader2,
   AlertCircle,
   CheckCircle2,
   ChevronUp,
@@ -29,6 +28,7 @@ import {
   PinOff,
   Upload,
 } from "lucide-react";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -54,7 +54,7 @@ interface TerminalWindowProps {
 function StatusIndicator({ status }: { status: TerminalInstanceType["status"] }) {
   switch (status) {
     case "connecting":
-      return <Loader2 className="h-3 w-3 animate-spin text-yellow-400" />;
+      return <Spinner className="h-3 w-3 text-yellow-400" />;
     case "connected":
       return <CheckCircle2 className="h-3 w-3 text-green-400" />;
     case "error":
