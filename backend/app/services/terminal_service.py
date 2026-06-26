@@ -83,8 +83,11 @@ class TerminalService:
         For containers, use smart shell detection that works on any distro.
         """
         if instance_type == "virtual-machine":
-            # VMs typically have a proper login environment
-            return ["/bin/bash", "--login"]
+            # /bin/sh is guaranteed on all distros; try bash (login) for nicer UX
+            # and fall back to sh. Hardcoding bash broke minimal VM images (e.g.
+            # Alpine) that ship no bash -> exec exits instantly -> the terminal
+            # disconnect/reconnect loop.
+            return ["/bin/sh", "-c", "if command -v bash >/dev/null 2>&1; then exec bash --login; else exec sh; fi"]
         else:
             # important: /bin/sh is guaranteed on all Linux distros (Alpine, BusyBox, Ubuntu, etc.)
             # This tries bash first for better UX (tab completion, history), falls back to sh.

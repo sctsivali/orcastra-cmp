@@ -37,6 +37,9 @@ class InstanceManager:
         self.connection_manager = connection_manager
         self.resource_manager = resource_manager
         self.cert_manager = cert_manager
+        # Strong refs to fire-and-forget background tasks (e.g. auto-start after
+        # create) so the event loop doesn't garbage-collect them mid-flight.
+        self._bg_tasks: set = set()
     
     def _get_client_with_reconnect(self, node_name: str):
         """Get LXD client with automatic reconnection if stale.
@@ -640,3 +643,152 @@ class InstanceManager:
             
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
+
+    @audit_operation(
+        "lxd.instance.create", "instance",
+        extract_details=lambda args, kwargs, result: {
+            "image": kwargs.get("image"),
+            "instance_type": kwargs.get("instance_type", "virtual-machine"),
+            "profiles": kwargs.get("profiles"),
+        }
+    )
+    async def create_instance(
+        self,
+        name: str,
+        host: str,
+        image: str,
+        instance_type: str = "virtual-machine",
+        profiles: Optional[List[str]] = None,
+        config: Optional[Dict[str, str]] = None,
+        cloud_init: Optional[str] = None,
+        devices: Optional[Dict[str, Dict[str, str]]] = None,
+        start_on_create: bool = True,
+        project: str = "default",
+        image_server: Optional[str] = None,
+        image_protocol: Optional[str] = None,
+    ) -> Optional[str]:
+        """Start creating a new instance (non-blocking).
+
+        The create is issued as a background LXD operation and this returns the
+        operation id immediately — the (potentially slow) image pull happens
+        server-side, so the HTTP request never waits on it. The instance appears
+        via the polling instance list. If image_server is set, the image is
+        pulled from that remote simplestreams server by alias; otherwise it is
+        resolved locally (by fingerprint or alias). When start_on_create is set,
+        a background task waits for the create to finish and then starts it.
+
+        This backs the dashboard's `POST /instances` flow. create_vm() is kept
+        separate and unchanged for Orcahub's `POST /vms`.
+        """
+        try:
+            client = self._get_client_with_reconnect(host)
+            if client is None:
+                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+
+            project = project or "default"
+            # Dedicated client with a long read timeout: the create POST itself
+            # returns fast, but the background start step waits on operations that
+            # can take a while when a remote image is being pulled.
+            # pylxd's constructor does blocking network I/O (validates the
+            # endpoint), so build it off the event loop like the create POST.
+            create_client = await asyncio.to_thread(
+                self.connection_manager.get_project_client,
+                host, project, (5, 1800),
+            )
+            if create_client is None:
+                if project != "default":
+                    raise LXDOperationError(f"Could not open project '{project}' on {host}")
+                create_client = client  # fall back to pooled (default project)
+
+            # Build instance configuration
+            instance_config = config or {}
+            if cloud_init:
+                instance_config["user.user-data"] = cloud_init
+
+            # Determine source configuration
+            source = {"type": "image"}
+            if image_server:
+                # Pull from a remote simplestreams server by alias.
+                source["mode"] = "pull"
+                source["server"] = image_server
+                source["protocol"] = image_protocol or "simplestreams"
+                source["alias"] = image
+            elif len(image) == 64:  # Local fingerprint
+                source["fingerprint"] = image
+            else:  # Local alias
+                source["alias"] = image
+
+            instance_def = {
+                "name": name,
+                "source": source,
+                "type": instance_type,
+                "profiles": profiles or ["default"],
+                "config": instance_config,
+            }
+            if devices:
+                instance_def["devices"] = devices
+
+            # Non-blocking create: POST kicks off a background LXD operation and
+            # returns immediately. Synchronous validation errors (bad name, bad
+            # pool, unknown image, etc.) still surface here as LXDAPIException.
+            response = await asyncio.to_thread(
+                lambda: create_client.api.instances.post(json=instance_def)
+            )
+            operation_id = None
+            try:
+                op_url = response.json().get("operation")
+                if op_url:
+                    operation_id = op_url.rstrip("/").rsplit("/", 1)[-1]
+            except Exception:
+                pass
+
+            logger.info(
+                f"Started creation of {instance_type} {name} on {host} "
+                f"(project={project}, operation={operation_id})"
+            )
+
+            # "Create & Start": wait for the create operation in the background,
+            # then start the instance — without blocking this request.
+            if start_on_create:
+                task = asyncio.create_task(
+                    self._finalize_and_start(create_client, name, operation_id, host, project)
+                )
+                # Keep a strong ref until done so the loop can't GC it mid-run.
+                self._bg_tasks.add(task)
+                task.add_done_callback(self._bg_tasks.discard)
+
+            return operation_id
+
+        except LXDAPIException as e:
+            raise LXDOperationError(f"Failed to create VM: {str(e)}")
+
+    async def _finalize_and_start(self, client, name: str, operation_id: Optional[str],
+                                  host: str, project: str) -> None:
+        """Background: wait for the create operation to finish, then start the
+        instance (the 'Create & Start' flow). Runs off the request path; failures
+        are logged rather than surfaced to the caller."""
+        try:
+            if operation_id:
+                await asyncio.to_thread(client.operations.wait_for_operation, operation_id)
+            instance = await asyncio.to_thread(client.instances.get, name)
+            await asyncio.to_thread(lambda: instance.start(wait=True))
+            logger.info(f"Auto-started {name} on {host} (project={project})")
+        except Exception as e:
+            logger.error(
+                f"Auto-start failed for {name} on {host} (project={project}): {e}"
+            )
+            # The create already logged success; without this, a failed auto-start
+            # is invisible to the dashboard. Record it on the activity trail.
+            try:
+                from app.services.activity_logger import get_activity_logger
+                get_activity_logger().log_activity(
+                    action="instance.autostart",
+                    target_type="instance",
+                    target_id=name,
+                    target_host=host,
+                    result="failure",
+                    error_message=str(e),
+                    details={"project": project},
+                )
+            except Exception:
+                pass

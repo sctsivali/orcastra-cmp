@@ -200,6 +200,15 @@ async def lifespan(app: FastAPI):
     except Exception as retention_err:
         logger.warning(f"Could not start metrics retention loop: {retention_err}")
 
+    # Pre-warm the remote image catalog (Custom + Ubuntu, ~17 MB) in the
+    # background so the first "Select base image" dialog open is instant.
+    try:
+        from app.routers.images import prewarm_remote_images_cache
+        asyncio.create_task(asyncio.to_thread(prewarm_remote_images_cache))
+        logger.info("Remote image catalog pre-warm scheduled")
+    except Exception as prewarm_err:
+        logger.warning(f"Could not schedule remote image catalog pre-warm: {prewarm_err}")
+
     # Recover custom-image imports stranded at 'importing' by a worker restart/crash (the import is a
     # detached in-process task; without this a rebuild leaves them stuck until OrcaHub's 30-min deadline).
     try:
@@ -282,6 +291,14 @@ async def lifespan(app: FastAPI):
         from app.services.session_tracker import get_session_tracker
         get_session_tracker().stop_cleanup()
         logger.info("Session tracker cleanup stopped")
+    except Exception:
+        pass
+
+    # Tear down the LXD events hub (per-node upstream WebSockets + tasks)
+    try:
+        from app.services.lxd.events_hub import get_events_hub
+        await get_events_hub().shutdown()
+        logger.info("LXD events hub stopped")
     except Exception:
         pass
 
@@ -443,7 +460,11 @@ Ensure your client certificates are properly configured.
     
     # Terminal Router (WebSocket terminal access)
     app.include_router(terminal_router, prefix=settings.api_prefix)
-    
+
+    # Events Router (WebSocket: realtime LXD operation/creation progress)
+    from app.routers.events import router as events_router
+    app.include_router(events_router, prefix=settings.api_prefix)
+
     # Console Router (VGA/Graphics console access)
     from app.routers.console import router as console_router
     app.include_router(console_router, prefix=settings.api_prefix)

@@ -82,6 +82,25 @@ export function getTerminalWsUrl(
 }
 
 /**
+ * Build WebSocket URL for the **operation events** stream of a node.
+ *
+ * Streams LXD operation events (incl. image-pull `download_progress`) used to
+ * show realtime instance-creation progress.
+ *
+ * @param host          Target host node
+ * @param includeToken  Append Bearer token as query param (default: true)
+ */
+export function getEventsWsUrl(host: string, includeToken = true): string {
+  const { protocol, host: wsHost } = getWsBase();
+  const tokenParam = includeToken ? getTokenParam() : "";
+  return (
+    `${protocol}//${wsHost}/api/v1/events/ws` +
+    `?host=${encodeURIComponent(host)}` +
+    tokenParam
+  );
+}
+
+/**
  * Build WebSocket URL for **graphics console** (SPICE).
  *
  * @param instanceName  LXD instance name

@@ -239,6 +239,17 @@ export function useImagesByHost(host: string) {
   });
 }
 
+export function useRemoteImages() {
+  return useQuery({
+    queryKey: ["remoteImages", "all"],
+    queryFn: () => imageAPI.listRemote(),
+    // Remote catalog changes ~daily and the backend caches it for 1h.
+    staleTime: 1000 * 60 * 30,
+    gcTime: 1000 * 60 * 60,
+    refetchOnWindowFocus: false,
+  });
+}
+
 // Nodes Hooks
 export function useNodesStatus() {
   return useQuery({
@@ -306,6 +317,15 @@ export function useNodeResources(nodeName: string) {
     queryFn: () => nodeAPI.resources(nodeName),
     enabled: !!nodeName,
     ...STATIC_DATA_CONFIG,
+  });
+}
+
+export function useNodeGpus(nodeName: string) {
+  return useQuery({
+    queryKey: ["nodeGpus", nodeName],
+    queryFn: () => nodeAPI.gpus(nodeName),
+    enabled: !!nodeName,
+    ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
@@ -1020,12 +1040,18 @@ export function useDeleteProfile() {
 }
 
 // Instances Hooks (alternative to VMs for LXD terminology)
-export function useInstances(host?: string) {
+export function useInstances(host?: string, opts?: { realtime?: boolean }) {
   return useQuery({
     queryKey: ["instances", host],
     queryFn: () => api.instances.list(host),
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
+    // Default: poll so newly-created instances and status transitions show
+    // without a manual refresh. When `realtime` is set (instances page), polling
+    // is disabled and the list is kept current via the LXD events stream
+    // (see useInstanceStream) — the query just provides the initial snapshot.
+    refetchInterval: opts?.realtime ? false : 10000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -1035,6 +1061,17 @@ export function useInstance(name: string, host: string) {
     queryFn: () => api.instances.get(name, host),
     enabled: !!name && !!host,
     ...DYNAMIC_DATA_CONFIG,
+  });
+}
+
+export function useCreateInstance() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (data: VMCreateRequest) => api.instances.create(data),
+    onSuccess: () => {
+      refreshInstanceQueries(queryClient);
+    },
   });
 }
 

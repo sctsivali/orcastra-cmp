@@ -10,8 +10,10 @@ import {
   VMActionRequest,
   VMActionResponse,
   ImageListResponse,
+  RemoteImageListResponse,
   NodesStatusResponse,
   NodeResources,
+  GpuCardListResponse,
   ProjectListResponse,
   ProjectCreateRequest,
   ProjectCreateResponse,
@@ -392,6 +394,12 @@ export const imageAPI = {
   listByHost: async (host: string): Promise<ImageListResponse> => {
     return fetchAPI<ImageListResponse>(`/images/${host}`);
   },
+
+  listRemote: async (): Promise<RemoteImageListResponse> => {
+    // The aggregated catalog can take ~30s on a cold cache (Ubuntu remote is
+    // ~17 MB); allow a longer timeout than the 45s default.
+    return fetchAPI<RemoteImageListResponse>("/images/remote", {}, 120000);
+  },
 };
 
 // Node Operations
@@ -406,6 +414,12 @@ export const nodeAPI = {
 
   resources: async (nodeName: string): Promise<NodeResources> => {
     return fetchAPI<NodeResources>(`/nodes/${nodeName}/resources`);
+  },
+
+  gpus: async (nodeName: string): Promise<GpuCardListResponse> => {
+    return fetchAPI<GpuCardListResponse>(
+      `/nodes/${encodeURIComponent(nodeName)}/gpus`,
+    );
   },
 
   updateDisplayName: async (
@@ -785,6 +799,13 @@ const systemAPI = {
 
 // Instance Operations (similar to VMs but more comprehensive)
 export const instanceAPI = {
+  create: async (data: VMCreateRequest): Promise<VMCreateResponse> => {
+    return fetchAPI<VMCreateResponse>("/instances", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
   list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number): Promise<VMListResponse> => {
     const params = new URLSearchParams();
     if (host) params.append("host", host);

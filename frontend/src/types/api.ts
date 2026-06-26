@@ -82,12 +82,52 @@ export interface VMCreateRequest {
   name: string;
   host: string;
   image: string;
+  image_server?: string;
+  image_protocol?: string;
+  project?: string;
   instance_type?: "virtual-machine" | "container";
   profiles?: string[];
   config?: Record<string, string>;
   cloud_init?: string;
   devices?: Record<string, Record<string, string>>;
   start_on_create?: boolean;
+}
+
+// A physical GPU on a node (from the LXD resources API)
+export interface GpuCardInfo {
+  vendor: string;
+  vendor_id: string;
+  product: string;
+  product_id: string;
+  driver: string;
+  driver_version: string;
+  pci_address: string;
+  id: number | null;
+}
+
+export interface GpuCardListResponse {
+  host: string;
+  gpus: GpuCardInfo[];
+  total: number;
+}
+
+// A browsable image from a remote (simplestreams) catalog — one row per
+// distribution/release/variant/architecture/type.
+export interface RemoteImageInfo {
+  distribution: string;
+  release: string;
+  variant: string;
+  architecture: string;
+  type: string; // "container" | "virtual-machine"
+  alias: string;
+  source: string; // e.g. "Custom", "Ubuntu"
+  server: string;
+  fingerprint: string;
+}
+
+export interface RemoteImageListResponse {
+  images: RemoteImageInfo[];
+  total: number;
 }
 
 // VM Create Response

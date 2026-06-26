@@ -5,7 +5,7 @@ Handles resource usage tracking, node resources, and instance metrics.
 
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 import time
 import pylxd
@@ -322,6 +322,28 @@ class ResourceManager:
             logger.debug(f"Could not get resources for {instance.name}: {e}")
             return None
     
+    def get_node_gpus(self, client: pylxd.Client, node_name: str) -> List[Dict[str, Any]]:
+        """List the physical GPUs on a node (from the LXD resources API)."""
+        try:
+            cards = ((client.resources.get("gpu", {}) or {}).get("cards", []) or [])
+            gpus = []
+            for c in cards:
+                drm = c.get("drm") or {}
+                gpus.append({
+                    "vendor": c.get("vendor", ""),
+                    "vendor_id": c.get("vendor_id", ""),
+                    "product": c.get("product", ""),
+                    "product_id": c.get("product_id", ""),
+                    "driver": c.get("driver", ""),
+                    "driver_version": c.get("driver_version", ""),
+                    "pci_address": c.get("pci_address", ""),
+                    "id": drm.get("id"),
+                })
+            return gpus
+        except Exception as e:
+            logger.error(f"Error listing GPUs for {node_name}: {e}")
+            raise LXDOperationError(f"Failed to list GPUs: {str(e)}")
+
     def get_node_resources(self, client: pylxd.Client, node_name: str) -> Dict[str, Any]:
         """Get available (unused) resources for a specific node."""
         try:
