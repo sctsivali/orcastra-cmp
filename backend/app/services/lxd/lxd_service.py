@@ -230,6 +230,11 @@ class LXDService:
         """Get available resources for a specific node."""
         client = self.connection_manager.get_client(node_name)
         return self.resource_manager.get_node_resources(client, node_name)
+
+    def get_node_gpus(self, node_name: str) -> List[Dict[str, Any]]:
+        """List the physical GPUs on a specific node."""
+        client = self.connection_manager.get_client(node_name)
+        return self.resource_manager.get_node_gpus(client, node_name)
     
     # Instance/VM operations
     async def list_all_vms(self) -> Tuple[List[VMInfo], List[str]]:
@@ -297,12 +302,37 @@ class LXDService:
         devices: Optional[Dict[str, Dict[str, str]]] = None,
         start_on_create: bool = True,
     ) -> VMInfo:
-        """Create a new VM."""
+        """Create a new VM (blocking). Stable contract for `POST /vms` (Orcahub)."""
         return await self.instance_manager.create_vm(
-            name, host, image, instance_type, profiles, config, 
+            name, host, image, instance_type, profiles, config,
             cloud_init, devices, start_on_create
         )
-    
+
+    async def create_instance(
+        self,
+        name: str,
+        host: str,
+        image: str,
+        instance_type: str = "virtual-machine",
+        profiles: Optional[List[str]] = None,
+        config: Optional[Dict[str, str]] = None,
+        cloud_init: Optional[str] = None,
+        devices: Optional[Dict[str, Dict[str, str]]] = None,
+        start_on_create: bool = True,
+        project: str = "default",
+        image_server: Optional[str] = None,
+        image_protocol: Optional[str] = None,
+    ) -> Optional[str]:
+        """Start creating a new instance (non-blocking); returns the operation id.
+
+        Backs the dashboard's `POST /instances`. See InstanceManager.create_instance.
+        """
+        return await self.instance_manager.create_instance(
+            name, host, image, instance_type, profiles, config,
+            cloud_init, devices, start_on_create, project,
+            image_server, image_protocol
+        )
+
     # Image operations
     async def list_images(self, host: str) -> List[ImageInfo]:
         """List available images on a host."""

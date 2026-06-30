@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -21,7 +21,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Play, Square, RotateCw, Trash2, Search, Filter, Terminal, Monitor } from "lucide-react";
+import { Play, Square, RotateCw, Trash2, Search, Filter, Terminal, Monitor, Loader2 } from "lucide-react";
+import { useInstanceStream } from "@/hooks/use-instance-stream";
+import { removePendingCreate } from "@/lib/pending-creates";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -33,17 +35,55 @@ import {
 } from "@/hooks/use-lxd";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
+import { useRouter } from "next/navigation";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
+import { usePermissions } from "@/hooks/use-permissions";
+import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { Plus } from "lucide-react";
+
+// How long a "Creating…" placeholder must live before a same-named instance in
+// the list is trusted as its resolution (guards against stale-cache races).
+// Exceeds one instance-list poll cycle (10s) so the list has refreshed first.
+const PENDING_GRACE_MS = 12000;
 
 export default function InstancesPage() {
-  const { data, isLoading, refetch, isRefetching } = useInstances();
+  // Realtime mode: fetch the snapshot once, then keep the list current from the
+  // LXD events stream (no polling). useInstanceStream patches this query's cache.
+  const { data, isLoading, refetch, isRefetching } = useInstances(undefined, {
+    realtime: true,
+  });
   const instances = (data as any)?.vms || [];
-  
+
+  // Hosts to stream from: those that currently have instances (pending-create
+  // hosts are added inside the hook). One LXD events WS per host keeps the list
+  // live — creates show a "Creating… <progress>" placeholder, and lifecycle
+  // events upsert/remove rows directly so status changes appear without a poll.
+  const instanceHosts = Array.from(
+    new Set(instances.map((i: any) => i.host as string)),
+  ) as string[];
+  const pendingCreates = useInstanceStream(instanceHosts);
+
+  // A placeholder is "resolved" once a matching instance is in the list and has
+  // lived past a short grace window (the stream normally removes it first; this
+  // is a fallback). The grace avoids a stale-cache race nuking it instantly.
+  const isResolved = (p: { host: string; name: string; createdAt: number }) =>
+    Date.now() - p.createdAt > PENDING_GRACE_MS &&
+    instances.some((i: any) => i.host === p.host && i.name === p.name);
+  useEffect(() => {
+    for (const p of pendingCreates) {
+      if (isResolved(p)) removePendingCreate(p.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instances, pendingCreates]);
+  // Hide placeholders that already resolved to a real row (avoids a duplicate).
+  const visiblePendingCreates = pendingCreates.filter((p) => !isResolved(p));
+
+
   const startInstance = useStartInstance();
   const stopInstance = useStopInstance();
   const restartInstance = useRestartInstance();
@@ -57,9 +97,12 @@ export default function InstancesPage() {
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
+  const router = useRouter();
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
   const { hasPermission } = useTenantAccess();
+  const { hasRole } = usePermissions();
+  const canCreateInstance = hasRole(Role.PARTNER);
 
   const sortAccessors = useMemo(
     () => ({
@@ -207,6 +250,18 @@ export default function InstancesPage() {
           <div className="flex flex-col gap-4">
             <div className="flex items-center justify-between">
               <CardTitle>All Instances ({filteredInstances.length} of {instances.length})</CardTitle>
+              {/* Only Partner+ can create; the create page enforces this and would
+                  bounce a Tenant straight back, so don't show a dead-end button. */}
+              {canCreateInstance && (
+                <Button
+                  onClick={() => router.push("/inventory/instances/create")}
+                  disabled={isReadOnly}
+                  title={isReadOnly ? "Action disabled in read-only mode" : "Create a new instance"}
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  New Instance
+                </Button>
+              )}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
               <div className="lg:col-span-2">
@@ -274,12 +329,47 @@ export default function InstancesPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {paginatedInstances.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                    No instances found
+              {visiblePendingCreates.map((p) => (
+                <TableRow key={`pending-${p.id}`} className="bg-muted/30">
+                  <TableCell className="font-medium">{p.name}</TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={p.status === "Error" ? "destructive" : "outline"}
+                      className="gap-1"
+                    >
+                      {p.status !== "Error" && (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      )}
+                      {p.status === "Error"
+                        ? "Failed"
+                        : p.progress
+                          ? `Creating… ${p.progress}`
+                          : "Creating…"}
+                    </Badge>
+                    {p.error && (
+                      <span className="ml-2 text-xs text-destructive">{p.error}</span>
+                    )}
                   </TableCell>
+                  <TableCell>{p.type}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{p.host}</Badge>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="secondary">{p.project || "default"}</Badge>
+                  </TableCell>
+                  <TableCell className="text-muted-foreground">—</TableCell>
+                  <TableCell className="text-muted-foreground">—</TableCell>
+                  <TableCell />
                 </TableRow>
+              ))}
+              {paginatedInstances.length === 0 ? (
+                visiblePendingCreates.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                      No instances found
+                    </TableCell>
+                  </TableRow>
+                ) : null
               ) : (
                 paginatedInstances.map((instance: any) => (
                 <TableRow key={`${instance.host}-${instance.name}`}>

@@ -310,7 +310,42 @@ class LXDConnectionManager:
         else:
             # Not in cache, try auto-reconnect if we have connection info
             return self._auto_reconnect(cluster_id)
-    
+
+    def get_project_client(self, cluster_id: str, project: str, timeout=(3, 8)) -> Optional[pylxd.Client]:
+        """
+        Build a short-lived pylxd client scoped to a specific LXD project,
+        reusing the cluster's cached endpoint + certificate files.
+
+        pylxd binds the project at the client level (Instance.create has no
+        per-call project arg), so creating an instance in a non-default project
+        needs a project-scoped client. The result is meant to be used once and
+        discarded; the pooled default-project client is left untouched.
+
+        Call get_client() first so the cached connection info + temp cert files
+        exist. Returns None if they don't.
+        """
+        info = self._connection_info.get(cluster_id)
+        paths = self._temp_cert_paths.get(cluster_id)
+        if not info or not paths:
+            logger.warning(
+                f"No cached connection info for {cluster_id}; cannot build project-scoped client"
+            )
+            return None
+        cert_path, key_path = paths
+        try:
+            return pylxd.Client(
+                endpoint=info["endpoint"],
+                cert=(cert_path, key_path),
+                verify=info.get("verify", False),
+                timeout=timeout,
+                project=project or "default",
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to build project-scoped client for {cluster_id}/{project}: {e}"
+            )
+            return None
+
     def _auto_reconnect(self, cluster_id: str) -> Optional[pylxd.Client]:
         """
         Attempt to automatically reconnect using stored connection info.

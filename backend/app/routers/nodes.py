@@ -14,6 +14,8 @@ from app.models.schemas import (
     NodeResources,
     NodeUpdateRequest,
     NodeUpdateResponse,
+    GpuCardInfo,
+    GpuCardListResponse,
 )
 from app.services.lxd_service import (
     LXDService,
@@ -214,6 +216,31 @@ async def get_node_resources(
     try:
         resources = lxd_service.get_node_resources(node_name)
         return NodeResources(**resources)
+    except LXDOperationError as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get(
+    "/{node_name}/gpus",
+    response_model=GpuCardListResponse,
+    summary="Get node GPUs",
+    description="List the physical GPUs available on a specific node (for GPU passthrough).",
+)
+async def get_node_gpus(
+    node_name: str,
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    """List the physical GPUs on a specific node."""
+    verify_cluster_access(node_name)
+    try:
+        # get_node_gpus makes blocking LXD calls; keep them off the event loop.
+        gpus = await asyncio.to_thread(lxd_service.get_node_gpus, node_name)
+        return GpuCardListResponse(
+            host=node_name,
+            gpus=[GpuCardInfo(**g) for g in gpus],
+            total=len(gpus),
+        )
     except LXDOperationError as e:
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=str(e))

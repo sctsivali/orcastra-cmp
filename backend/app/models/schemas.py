@@ -4,7 +4,7 @@ Defines request/response schemas for VMs and operations.
 """
 
 from pydantic import BaseModel, Field, computed_field, field_validator
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Literal
 from enum import Enum
 from datetime import datetime
 import re
@@ -97,8 +97,21 @@ class VMCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=63, description="VM hostname")
     host: str = Field(..., description="Target LXD host (node1 or node2)")
     image: str = Field(..., description="Image alias or fingerprint")
+    image_server: Optional[str] = Field(
+        None,
+        description="Remote image server URL to pull from (e.g. https://images.lxd.canonical.com). "
+                    "When set, `image` is treated as a remote alias and pulled. Omit for local images."
+    )
+    image_protocol: Optional[Literal["simplestreams", "lxd"]] = Field(
+        None,
+        description="Remote image protocol when image_server is set (default: simplestreams)"
+    )
+    project: str = Field(
+        default="default",
+        description="LXD project to create the instance in"
+    )
     instance_type: str = Field(
-        default="virtual-machine", 
+        default="virtual-machine",
         description="Instance type: virtual-machine or container"
     )
     profiles: List[str] = Field(
@@ -177,6 +190,47 @@ class ImageListResponse(BaseModel):
     """Response for listing images."""
     host: str
     images: List[ImageInfo]
+    total: int
+
+
+class GpuCardInfo(BaseModel):
+    """A physical GPU on a node (from the LXD resources API)."""
+    vendor: str = ""
+    vendor_id: str = ""
+    product: str = ""
+    product_id: str = ""
+    driver: str = ""
+    driver_version: str = ""
+    pci_address: str = ""
+    id: Optional[int] = None  # DRM card id
+
+
+class GpuCardListResponse(BaseModel):
+    """Response for listing a node's GPUs."""
+    host: str
+    gpus: List[GpuCardInfo]
+    total: int
+
+
+class RemoteImageInfo(BaseModel):
+    """A browsable image from a remote (simplestreams) image server.
+
+    One row per (distribution, release, variant, architecture, type).
+    """
+    distribution: str = ""
+    release: str = ""
+    variant: str = "default"
+    architecture: str = ""
+    type: str = ""  # container | virtual-machine
+    alias: str = Field("", description="Alias to pull by (e.g. ubuntu/24.04)")
+    source: str = ""  # e.g. Custom, Ubuntu
+    server: str = ""  # remote server URL to pull from
+    fingerprint: str = ""  # LXD image fingerprint (for cached detection)
+
+
+class RemoteImageListResponse(BaseModel):
+    """Response for listing remote (simplestreams) images across remotes."""
+    images: List[RemoteImageInfo]
     total: int
 
 

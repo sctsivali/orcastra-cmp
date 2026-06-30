@@ -5,6 +5,7 @@ Provides endpoints for managing LXD instances (containers and VMs).
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional, List
+from urllib.parse import urlparse
 import logging
 
 from app.models.schemas import (
@@ -37,6 +38,33 @@ router = APIRouter(
     tags=["Instances"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
+
+
+def _validate_image_server(image_server: Optional[str]) -> None:
+    """Guard against SSRF on instance creation.
+
+    `image_server` is handed straight to the LXD daemon, which then fetches the
+    image from that URL. Since `POST /instances` only requires Partner, an
+    unvalidated value lets a Partner point the daemon at internal/metadata
+    endpoints. Restrict it to the same public simplestreams catalogs the image
+    picker uses (the `/images/remote` allowlist), over https only.
+    """
+    if not image_server:
+        return
+    from app.routers.images import REMOTE_IMAGE_SERVERS
+
+    allowed_hosts = {
+        urlparse(s["server"]).hostname for s in REMOTE_IMAGE_SERVERS
+    }
+    parsed = urlparse(image_server)
+    if parsed.scheme != "https" or parsed.hostname not in allowed_hosts:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Invalid image_server. Allowed remote image servers: "
+                + ", ".join(sorted(h for h in allowed_hosts if h))
+            ),
+        )
 
 
 @router.get(
@@ -132,9 +160,16 @@ async def get_instance(
         # enforce tenant ACL on individual instance access
         verify_tenant_permission(host, vm.project or "default", vm.name, "view")
         return vm
+    except HTTPException:
+        # 404 (not found) / 403 (ACL) — don't let the generic handler mask these.
+        raise
     except LXDConnectionError as e:
         logger.error(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
+    except LXDOperationError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting instance {instance_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -154,8 +189,9 @@ async def create_instance(
 ):
     """Create a new instance."""
     verify_cluster_access(request.host)
+    _validate_image_server(request.image_server)
     try:
-        result = await lxd_service.create_vm(
+        result = await lxd_service.create_instance(
             name=request.name,
             host=request.host,
             image=request.image,
@@ -165,8 +201,11 @@ async def create_instance(
             cloud_init=request.cloud_init,
             devices=request.devices,
             start_on_create=request.start_on_create,
+            project=request.project,
+            image_server=request.image_server,
+            image_protocol=request.image_protocol,
         )
-        
+
         # Log activity: instance creation success
         activity_logger.log_activity(
             action="instance.create",
@@ -178,11 +217,19 @@ async def create_instance(
                 "image": request.image,
                 "instance_type": request.instance_type,
                 "profiles": request.profiles,
+                "project": request.project,
                 "start_on_create": request.start_on_create,
             }
         )
         
-        return result
+        # Non-blocking: create_vm returns the operation id; the instance pulls/
+        # creates in the background and appears via the polling instance list.
+        return VMCreateResponse(
+            success=True,
+            message=f"Creating instance '{request.name}' on {request.host}",
+            vm=None,
+            operation_id=result,
+        )
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
         
@@ -395,6 +442,7 @@ async def delete_instance(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
     project: Optional[str] = Query(None, description="LXD project name"),
+    force: bool = Query(False, description="Force delete a running instance"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -402,27 +450,52 @@ async def delete_instance(
     """Delete an instance."""
     verify_cluster_access(host)
     try:
-        await lxd_service.delete_vm(instance_name, host, project=project)
+        await lxd_service.delete_vm(instance_name, host, force=force, project=project)
         get_cache_manager().invalidate_instance_cache()
-        
+
         # Log activity: instance deletion success
         activity_logger.log_activity(
             action="instance.delete",
             target_type="instance",
             target_id=instance_name,
             target_host=host,
-            result="success"
+            result="success",
+            details={"force": force, "project": project},
         )
-        
+
         return VMActionResponse(
             success=True,
             message=f"Instance {instance_name} deleted successfully",
             vm_name=instance_name,
             action="delete",
         )
+    except LXDConnectionError as e:
+        logger.error(f"LXD connection error deleting {instance_name}: {e}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except LXDOperationError as e:
+        # Map daemon errors to meaningful codes instead of a blanket 500.
+        msg = str(e)
+        low = msg.lower()
+        if "not found" in low:
+            status = 404
+        elif "running" in low or "stop it" in low:
+            status = 409  # running instance, retry with force=true
+        elif "connect" in low or "not available" in low:
+            status = 503
+        else:
+            status = 400
+        activity_logger.log_activity(
+            action="instance.delete",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=host,
+            result="failure",
+            error_message=msg,
+        )
+        raise HTTPException(status_code=status, detail=msg)
     except Exception as e:
         logger.error(f"Error deleting instance {instance_name}: {e}")
-        
+
         # Log activity: instance deletion failure
         activity_logger.log_activity(
             action="instance.delete",
@@ -432,7 +505,7 @@ async def delete_instance(
             result="failure",
             error_message=str(e)
         )
-        
+
         raise HTTPException(status_code=500, detail=str(e))
 
 
