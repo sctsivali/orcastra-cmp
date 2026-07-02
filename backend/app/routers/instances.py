@@ -26,6 +26,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, verify_tenant_permission
+from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 
@@ -182,6 +183,7 @@ async def create_instance(
             }
         )
         
+        schedule_orcahub_event("instance.created", request.host, None, request.name, "Running" if request.start_on_create else "Stopped")
         return result
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
@@ -414,6 +416,7 @@ async def delete_instance(
             result="success"
         )
         
+        schedule_orcahub_event("instance.deleted", host, project, instance_name)
         return VMActionResponse(
             success=True,
             message=f"Instance {instance_name} deleted successfully",
