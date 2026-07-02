@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -274,30 +274,21 @@ async def _resolve_user_org_names(
     return list(result.scalars().all())
 
 
-async def get_user_allowed_clusters(
-    user: AuthenticatedUser,
+async def _ordered_org_ids_for_email(
+    user_email: str,
     db: AsyncSession,
-) -> Optional[set[str]]:
+) -> list[int]:
     """
-    Query the DB to determine which clusters a user may access.
+    Org IDs a user (by email) belongs to via membership or creation, with
+    partner/admin (owner) orgs first so callers can pick a deterministic primary.
+
+    Shared by ``get_user_org_ids`` and ``reconcile_personal_clusters`` so the
+    "which org owns this user's clusters" answer is computed in exactly one place.
     """
-    from app.core.rbac import resolve_roles, get_highest_role, Role
-    from app.models.db_models import (
-        Organization,
-        OrganizationMember,
-        OrganizationCluster,
-    )
+    from app.models.db_models import Organization, OrganizationMember
 
-    roles = resolve_roles(user)
-    highest = get_highest_role(roles)
-
-    if highest == Role.ADMIN:
-        return None  # admin sees everything
-
-    # partner / tenant: clusters from orgs they created or belong to
     stmt = (
-        select(OrganizationCluster.cluster_id)
-        .join(Organization, OrganizationCluster.organization_id == Organization.id)
+        select(Organization.id, OrganizationMember.role, Organization.created_by)
         .outerjoin(
             OrganizationMember,
             OrganizationMember.organization_id == Organization.id,
@@ -305,17 +296,191 @@ async def get_user_allowed_clusters(
         .where(
             Organization.is_active == True,
             or_(
-                OrganizationMember.user_email == user.email,
-                Organization.created_by == user.email,
+                OrganizationMember.user_email == user_email,
+                Organization.created_by == user_email,
             ),
+        )
+        .order_by(Organization.id)
+    )
+    result = await db.execute(stmt)
+
+    primary: list[int] = []
+    secondary: list[int] = []
+    seen: set[int] = set()
+    for org_id, role, created_by in result.all():
+        if org_id in seen:
+            continue
+        seen.add(org_id)
+        is_owner = (role in ("partner", "admin")) or (created_by == user_email)
+        (primary if is_owner else secondary).append(org_id)
+
+    return primary + secondary
+
+
+async def get_user_org_ids(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> list[int]:
+    """
+    Return the org IDs a user belongs to (via membership or creation), with
+    partner/admin (owner) orgs first so callers can pick a deterministic primary.
+
+    Uses the SAME membership predicate as ``get_user_allowed_clusters`` so cluster
+    binding at registration cannot drift from cluster visibility (the root cause of
+    orphaned clusters: a role-filtered binding query vs a role-agnostic scope query).
+    """
+    return await _ordered_org_ids_for_email(user.email, db)
+
+
+async def _query_owned_clusters(user_email: str, db: AsyncSession) -> set[str]:
+    """
+    Role-agnostic owned-cluster set for an email: clusters of orgs they created or
+    belong to, plus any cluster they personally registered (registered_by fallback,
+    incl. unbound NULL-org rows).
+
+    important: OUTER join + is_active INSIDE the and_ - a registrant's cluster may be
+    unbound (organization_id NULL), so an inner join / top-level is_active filter would
+    drop the very rows the registered_by branch is meant to surface.
+    """
+    from app.models.db_models import Organization, OrganizationMember, OrganizationCluster
+
+    stmt = (
+        select(OrganizationCluster.cluster_id)
+        .outerjoin(Organization, OrganizationCluster.organization_id == Organization.id)
+        .outerjoin(
+            OrganizationMember,
+            OrganizationMember.organization_id == Organization.id,
+        )
+        .where(
+            or_(
+                and_(
+                    Organization.is_active == True,
+                    or_(
+                        OrganizationMember.user_email == user_email,
+                        Organization.created_by == user_email,
+                    ),
+                ),
+                OrganizationCluster.registered_by == user_email,
+            )
         )
     )
     result = await db.execute(stmt)
-    cluster_ids = set(result.scalars().all())
+    return set(result.scalars().all())
+
+
+async def get_user_allowed_clusters(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> Optional[set[str]]:
+    """
+    Query the DB to determine which clusters a user may access.
+    Admin returns None (no filter / operational god-view).
+    """
+    from app.core.rbac import resolve_roles, get_highest_role, Role
+
+    roles = resolve_roles(user)
+    if get_highest_role(roles) == Role.ADMIN:
+        return None  # admin sees everything (operational visibility)
+
+    cluster_ids = await _query_owned_clusters(user.email, db)
     logger.debug(
         f"Org-scope for {user.email}: allowed_clusters={cluster_ids or '(none)'}"
     )
     return cluster_ids
+
+
+async def get_owned_clusters_ignoring_admin(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> set[str]:
+    """
+    The clusters a user actually OWNS (via org membership/creation or personal
+    registration), computed regardless of the admin role short-circuit.
+
+    Used by the break-glass gate: a pure admin owns nothing here (every tenant
+    cluster is out-of-scope and needs a grant), while an admin who is ALSO a partner
+    still owns their own org's clusters and must not be locked out of them.
+    """
+    return await _query_owned_clusters(user.email, db)
+
+
+async def resolve_cluster_org(
+    host: str,
+    db: AsyncSession,
+) -> tuple[Optional[int], Optional[str]]:
+    """
+    Map a cluster_id (the LXD ``host`` key) to its owning organization (id, slug).
+    Returns (None, None) for an unbound or unknown cluster. A bound row wins over the
+    unbound (NULL-org) ownership row that can also exist for the same cluster.
+    """
+    from app.models.db_models import Organization, OrganizationCluster
+
+    stmt = (
+        select(Organization.id, Organization.slug)
+        .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
+        .where(OrganizationCluster.cluster_id == host)
+        .order_by(Organization.id)
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return (None, None)
+    return (row[0], row[1])
+
+
+async def reconcile_personal_clusters(
+    db: AsyncSession,
+    user_email: str,
+) -> int:
+    """
+    Bind a user's still-unbound (organization_id NULL) clusters to their primary org.
+
+    Called once a partner becomes linked to an org (creates an API key, or their org
+    is synced from OrcaHub), so clusters they registered before that point stop being
+    "personal" and become visible to org-mates / eligible for tenant policies + webhooks.
+
+    Idempotent: filtered on ``organization_id IS NULL`` so a second run is a no-op, and
+    returns 0 when the user has no org or no unbound clusters. A row whose cluster is
+    already bound to the primary org is deleted (would violate uq_org_cluster), not
+    duplicated. The rebind is a plain UPDATE on a standalone row - never routed through
+    ``Organization.clusters`` so the delete-orphan cascade cannot fire.
+    """
+    from app.models.db_models import OrganizationCluster
+
+    org_ids = await _ordered_org_ids_for_email(user_email, db)
+    if not org_ids:
+        return 0
+    primary = org_ids[0]
+
+    bound = set((await db.execute(
+        select(OrganizationCluster.cluster_id).where(
+            OrganizationCluster.organization_id == primary
+        )
+    )).scalars().all())
+
+    rows = (await db.execute(
+        select(OrganizationCluster).where(
+            OrganizationCluster.organization_id.is_(None),
+            OrganizationCluster.registered_by == user_email,
+        )
+    )).scalars().all()
+    if not rows:
+        return 0
+
+    rebound = 0
+    for row in rows:
+        if row.cluster_id in bound:
+            await db.delete(row)  # already bound concretely - drop the duplicate unbound row
+        else:
+            row.organization_id = primary
+            bound.add(row.cluster_id)
+            rebound += 1
+    await db.commit()
+    if rebound:
+        logger.info(
+            f"Reconciled {rebound} unbound cluster(s) to org {primary} for {user_email}"
+        )
+    return rebound
 
 
 async def get_tenant_acl_rules(

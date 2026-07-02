@@ -292,6 +292,11 @@ class OrganizationService:
         Get list of cluster IDs the user can access.
         Admin: all, Partner: own orgs, Tenant: assigned orgs.
         Returns empty list for admin (meaning "all" - caller should skip filtering).
+
+        note: currently unused. It scopes by org membership only and does NOT honor
+        OrganizationCluster.registered_by, so it would miss a partner's own unbound
+        clusters. Do not wire it into a live scope path - use
+        app.core.org_scope.get_user_allowed_clusters instead.
         """
         if user_role == "admin":
             return []  # empty = no filter = all

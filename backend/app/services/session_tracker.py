@@ -63,6 +63,10 @@ class SessionInfo:
     user_id: str = "anonymous"
     user_email: str = ""
     user_role: str = "unknown"
+    # compliance/accountability context
+    target_organization_id: Optional[int] = None
+    target_org_slug: Optional[str] = None
+    break_glass_grant_id: Optional[int] = None
     status: SessionStatus = SessionStatus.CONNECTING
     started_at: float = field(default_factory=time.time)
     ended_at: Optional[float] = None
@@ -187,6 +191,9 @@ class SessionTracker:
         user_id: str = "anonymous",
         user_email: str = "",
         user_role: str = "unknown",
+        target_organization_id: Optional[int] = None,
+        target_org_slug: Optional[str] = None,
+        break_glass_grant_id: Optional[int] = None,
     ) -> SessionInfo:
         """Register a new session and start tracking."""
         # close any existing session for the same instance+user+host
@@ -211,6 +218,9 @@ class SessionTracker:
             user_id=user_id,
             user_email=user_email,
             user_role=user_role,
+            target_organization_id=target_organization_id,
+            target_org_slug=target_org_slug,
+            break_glass_grant_id=break_glass_grant_id,
         )
         self._sessions[session_id] = session
         logger.info(
@@ -227,6 +237,9 @@ class SessionTracker:
             user_id=user_id,
             user_email=user_email,
             user_role=user_role,
+            target_organization_id=target_organization_id,
+            target_org_slug=target_org_slug,
+            break_glass_grant_id=break_glass_grant_id,
         )
         return session
 
@@ -257,6 +270,9 @@ class SessionTracker:
                 duration_seconds=int(session.duration_seconds),
                 download_bytes=session.bytes_downloaded,
                 upload_bytes=session.bytes_uploaded,
+                target_organization_id=session.target_organization_id,
+                target_org_slug=session.target_org_slug,
+                break_glass_grant_id=session.break_glass_grant_id,
             )
 
     def get_active_sessions(

@@ -266,10 +266,8 @@ export default function ClustersPage() {
       });
       setDeleteConfirmModal({ open: false, cluster: null });
       setDeleteConfirmText("");
-      // Wait a bit for backend cache to clear, then force fresh fetch
-      await new Promise(resolve => setTimeout(resolve, 300));
-      // Force page reload to ensure fresh data from backend with bypassed cache
-      window.location.reload();
+      // useDeleteCluster.onSuccess invalidates ["clusters"] with refetchType:'all',
+      // which refetches this page's active query - no full-page reload needed.
     } catch (error: any) {
       toast({
         title: "Delete Failed",
@@ -652,6 +650,7 @@ EOF`}
           <div className="flex justify-end gap-3 mt-4">
             <Button
               variant="outline"
+              disabled={deleteCluster.isPending}
               onClick={() => {
                 setDeleteConfirmModal({ open: false, cluster: null });
                 setDeleteConfirmText("");
@@ -662,9 +661,19 @@ EOF`}
             <Button
               variant="destructive"
               onClick={handleDeleteConfirm}
-              disabled={deleteConfirmText !== `DELETE ${deleteConfirmModal.cluster?.cluster_id?.toUpperCase()}`}
+              disabled={
+                deleteCluster.isPending ||
+                deleteConfirmText !== `DELETE ${deleteConfirmModal.cluster?.cluster_id?.toUpperCase()}`
+              }
             >
-              Remove Cluster
+              {deleteCluster.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "Remove Cluster"
+              )}
             </Button>
           </div>
         </DialogContent>

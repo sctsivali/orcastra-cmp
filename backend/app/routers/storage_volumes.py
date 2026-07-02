@@ -14,6 +14,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.core.cache import get_cache_manager
@@ -236,6 +237,7 @@ async def create_storage_volume(
             details={"pool": request.pool, "type": request.type, "content_type": request.content_type}
         )
         
+        schedule_orcahub_event("volume.created", host, getattr(volume, "project", None), request.name, resource_type="VOLUME")
         return {
             "success": True,
             "message": f"Storage volume {request.name} created successfully",
@@ -337,6 +339,7 @@ async def delete_storage_volume(
             details={"pool": pool, "type": volume_type}
         )
         
+        schedule_orcahub_event("volume.deleted", host, getattr(volume, "project", None), volume_name, resource_type="VOLUME")
         return {
             "success": True,
             "message": f"Storage volume {volume_name} deleted successfully"

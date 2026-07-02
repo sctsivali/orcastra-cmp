@@ -16,6 +16,7 @@ import {
   limitSessionCount,
   STORAGE_KEYS,
 } from './storage-utils';
+import { useBreakGlassStore } from './break-glass-store';
 
 // Terminal window position and size
 export interface TerminalPosition {
@@ -76,7 +77,7 @@ interface TerminalState {
     instanceName: string;
     host: string;
     project?: string;
-  }) => TerminalInstance | null;
+  }) => Promise<TerminalInstance | null>;
   closeTerminal: (id: string) => void;
   closeAllTerminals: () => void;
   minimizeTerminal: (id: string) => void;
@@ -137,9 +138,9 @@ export const useTerminalStore = create<TerminalState>()(
       defaultSize: { width: 800, height: 500 },
       trayExpanded: true,
 
-      openTerminal: ({ instanceName, host, project = 'default' }) => {
+      openTerminal: async ({ instanceName, host, project = 'default' }) => {
         const state = get();
-        
+
         // Check if terminal already exists for this instance
         const existing = state.terminals.find(
           t => t.instanceName === instanceName && t.host === host
@@ -166,7 +167,12 @@ export const useTerminalStore = create<TerminalState>()(
           }
           return null;
         }
-        
+
+        // Break-glass pre-flight: an admin opening a tenant cluster they do not own must
+        // justify the access first. Owned/in-scope access resolves immediately.
+        const bgAllowed = await useBreakGlassStore.getState().request(host, instanceName);
+        if (!bgAllowed) return null;
+
         // Create new terminal
         const id = generateTerminalId();
         const position = getViewportCenteredPosition(state.terminals.length, state.defaultSize);

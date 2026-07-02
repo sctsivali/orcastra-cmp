@@ -46,9 +46,11 @@ import {
   History,
   LogIn,
   LogOut,
+  ShieldAlert,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getAccessToken } from "@/lib/api";
+import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -165,6 +167,10 @@ export default function SessionsPage() {
               <History className="h-3.5 w-3.5" />
               History
             </TabsTrigger>
+            <TabsTrigger value="break-glass" className="gap-1.5">
+              <ShieldAlert className="h-3.5 w-3.5" />
+              Break-glass
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="active" className="mt-4">
@@ -173,6 +179,10 @@ export default function SessionsPage() {
 
           <TabsContent value="history" className="mt-4">
             <SessionHistoryTab />
+          </TabsContent>
+
+          <TabsContent value="break-glass" className="mt-4">
+            <BreakGlassPanel />
           </TabsContent>
         </Tabs>
       </div>

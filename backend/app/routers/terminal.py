@@ -45,8 +45,18 @@ async def create_terminal_session(
     Create a terminal session for an instance.
     Returns WebSocket URLs for connecting to the terminal.
     """
+    # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
+    # active grant (raises 403 break_glass_required). In-scope self-service / dev unaffected.
+    from app.services.break_glass_service import enforce_sensitive_access
+    from app.core.org_scope import resolve_cluster_org
+    from app.core.database import async_session_maker
+    async with async_session_maker() as _bg_db:
+        _bg_grant = await enforce_sensitive_access(_rbac, host, _bg_db)
+        _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
+    _bg_grant_id = _bg_grant.id if _bg_grant else None
+
     terminal_service = get_terminal_service()
-    
+
     session_info, error = await terminal_service.create_exec_session(
         instance_name=instance,
         host=host,
@@ -54,7 +64,7 @@ async def create_terminal_session(
         width=width,
         height=height,
     )
-    
+
     if error:
         # Log activity: terminal session creation failure
         activity_logger.log_activity(
@@ -64,10 +74,12 @@ async def create_terminal_session(
             target_host=host,
             target_project=project,
             result="failure",
-            error_message=error
+            error_message=error,
+            target_organization_id=_target_org_id,
+            target_organization_slug=_target_org_slug,
         )
         raise HTTPException(status_code=400, detail=error)
-    
+
     # Log activity: terminal session creation success (HIGH SEVERITY - security audit)
     activity_logger.log_activity(
         action="terminal.session.create",
@@ -76,7 +88,9 @@ async def create_terminal_session(
         target_host=host,
         target_project=project,
         result="success",
-        details={"width": width, "height": height}
+        details={"width": width, "height": height, "break_glass_grant_id": _bg_grant_id},
+        target_organization_id=_target_org_id,
+        target_organization_slug=_target_org_slug,
     )
     
     return {
@@ -102,6 +116,9 @@ class TerminalProxy:
         user_id: str = "anonymous",
         user_email: str = "",
         user_role: str = "unknown",
+        target_organization_id: Optional[int] = None,
+        target_org_slug: Optional[str] = None,
+        break_glass_grant_id: Optional[int] = None,
     ):
         self.browser_ws = browser_ws
         self.instance_name = instance_name
@@ -110,7 +127,10 @@ class TerminalProxy:
         self.user_id = user_id
         self.user_email = user_email
         self.user_role = user_role
-        
+        self.target_organization_id = target_organization_id
+        self.target_org_slug = target_org_slug
+        self.break_glass_grant_id = break_glass_grant_id
+
         self.data_ws: Optional[websockets.WebSocketClientProtocol] = None
         self.control_ws: Optional[websockets.WebSocketClientProtocol] = None
         self._shutdown = asyncio.Event()
@@ -158,6 +178,9 @@ class TerminalProxy:
                 user_id=self.user_id,
                 user_email=self.user_email,
                 user_role=self.user_role,
+                target_organization_id=self.target_organization_id,
+                target_org_slug=self.target_org_slug,
+                break_glass_grant_id=self.break_glass_grant_id,
             )
             self._session.mark_connected()
             
@@ -472,10 +495,30 @@ async def terminal_websocket(
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
 
+    # Break-glass gate (defense in depth). An admin reaching a tenant cluster they do not
+    # own must hold an active grant; otherwise reject. Dev/no-user skips inside enforce.
+    _bg_grant_id: Optional[int] = None
+    _target_org_id: Optional[int] = None
+    _target_org_slug: Optional[str] = None
+    if user is not None:
+        from app.services.break_glass_service import enforce_sensitive_access
+        from app.core.org_scope import resolve_cluster_org
+        from app.core.database import async_session_maker
+        from fastapi import HTTPException as _HTTPException
+        async with async_session_maker() as _bg_db:
+            try:
+                _grant = await enforce_sensitive_access(user, host, _bg_db)
+            except _HTTPException:
+                await websocket.close(code=1008, reason="break_glass_required")
+                logger.warning(f"Terminal WS blocked (break_glass_required): {instance_name}@{host} user={user.email}")
+                return
+            _bg_grant_id = _grant.id if _grant else None
+            _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
+
     await websocket.accept()
     user_id = user.user_id if user else "anonymous"
     logger.info(f"Terminal WebSocket connected: {instance_name}@{host} user={user_id}")
-    
+
     # Extract user details for session tracking
     user_id = user.user_id if user else "anonymous"
     user_email = user.email if user else ""
@@ -486,7 +529,7 @@ async def terminal_websocket(
         user_role = get_highest_role(_roles).value
     else:
         user_role = "unknown"
-    
+
     proxy = TerminalProxy(
         browser_ws=websocket,
         instance_name=instance_name,
@@ -495,6 +538,9 @@ async def terminal_websocket(
         user_id=user_id,
         user_email=user_email,
         user_role=user_role,
+        target_organization_id=_target_org_id,
+        target_org_slug=_target_org_slug,
+        break_glass_grant_id=_bg_grant_id,
     )
     
     await proxy.run()

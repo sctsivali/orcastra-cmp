@@ -135,6 +135,8 @@ HIGH_SEVERITY_ACTIONS = {
     "network.delete",
     "terminal.session.create",
     "console.session.create",
+    "break_glass.grant.create",
+    "break_glass.grant.revoke",
     "user.ssh_key.create",
     "user.ssh_key.delete",
     "vault.cert.generate",
@@ -175,6 +177,8 @@ class ActivityLogger:
         duration_ms: Optional[float] = None,
         before_state: Optional[Dict[str, Any]] = None,
         after_state: Optional[Dict[str, Any]] = None,
+        target_organization_id: Optional[int] = None,
+        target_organization_slug: Optional[str] = None,
     ) -> str:
         """
         Log an activity/audit event.
@@ -216,6 +220,9 @@ class ActivityLogger:
                 "id": target_id,
                 "host": target_host,
                 "project": target_project,
+                # owning tenant org of the target resource (accountability: who was acted upon)
+                "organization_id": target_organization_id,
+                "organization_slug": target_organization_slug,
             },
             "result": result,
             "error_code": error_code,

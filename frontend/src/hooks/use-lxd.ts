@@ -1331,6 +1331,7 @@ export function useRegisterCluster() {
       queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
       queryClient.invalidateQueries({ queryKey: ["instances"] });
       queryClient.invalidateQueries({ queryKey: ["facilities"] });
+      queryClient.invalidateQueries({ queryKey: ["regions"] });
     },
   });
 }
@@ -1359,12 +1360,14 @@ export function useCheckClusterAuth() {
         queryClient.refetchQueries({ queryKey: queryKeys.vms, type: 'active' }),
         queryClient.refetchQueries({ queryKey: queryKeys.allProjects, type: 'active' }),
         queryClient.refetchQueries({ queryKey: ["instances"], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ["regions"], type: 'active' }),
         queryClient.refetchQueries({ queryKey: ["groups"], type: 'active' }),
         queryClient.refetchQueries({ queryKey: ["identities"], type: 'active' }),
       ]);
       // Also invalidate to ensure any inactive queries will refetch when they become active
       queryClient.invalidateQueries({ queryKey: ["clusters"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
+      queryClient.invalidateQueries({ queryKey: ["regions"] });
     },
   });
 }

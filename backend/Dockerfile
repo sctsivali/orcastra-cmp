@@ -38,8 +38,17 @@ RUN mkdir -p /app/config && chown appuser:appuser /app/config
 # Copy installed dependencies from builder and set ownership
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local
 
+# Copy Alembic migrations + config so the entrypoint can run `alembic upgrade head`
+# on start (DB schema stays in lockstep with the code on every deploy).
+COPY --chown=appuser:appuser alembic.ini ./
+COPY --chown=appuser:appuser alembic ./alembic
+
 # Copy application code (this layer changes frequently)
 COPY --chown=appuser:appuser app/ ./app/
+
+# Entrypoint runs migrations then execs the CMD
+COPY --chown=appuser:appuser docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
 # Switch to non-root user
 USER appuser
@@ -53,6 +62,9 @@ EXPOSE 4050
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')" || exit 1
+
+# Entrypoint applies migrations, then runs the CMD (the app server)
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Run the application
 # Multiple workers for concurrency; use --workers=1 for debugging

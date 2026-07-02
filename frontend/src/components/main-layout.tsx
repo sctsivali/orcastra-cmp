@@ -8,6 +8,7 @@ import { useLayout } from "./layout-provider";
 import { usePersonalization } from "./personalization-provider";
 import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
+import { BreakGlassModal } from "@/components/break-glass/break-glass-modal";
 
 // Dynamically import TerminalManager to avoid SSR issues with xterm
 const TerminalManager = dynamic(
@@ -114,6 +115,9 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           <ConsoleManager />
         </>
       )}
+
+      {/* Break-glass prompt - shown when an admin opens a console/terminal they must justify */}
+      <BreakGlassModal />
     </div>
   );
 }
