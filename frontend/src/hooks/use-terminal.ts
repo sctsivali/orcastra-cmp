@@ -28,10 +28,10 @@ export function useTerminal() {
 
   // Open terminal with toast notification
   const openTerminal = useCallback(
-    ({ instanceName, host, project = "default" }: OpenTerminalParams): TerminalInstance | null => {
+    async ({ instanceName, host, project = "default" }: OpenTerminalParams): Promise<TerminalInstance | null> => {
       // Check if instance is running (caller should validate this)
       const existing = getTerminalByInstance(instanceName, host);
-      
+
       if (existing) {
         // Focus existing terminal
         if (existing.minimized) {
@@ -46,25 +46,26 @@ export function useTerminal() {
         return existing;
       }
 
-      // Open new terminal
-      const newTerminal = storeOpenTerminal({ instanceName, host, project });
-      
+      // Open new terminal (may prompt for break-glass first; null = blocked, cancelled, or at limit)
+      const newTerminal = await storeOpenTerminal({ instanceName, host, project });
+
       if (newTerminal) {
         toast({
           title: "Terminal Opened",
           description: `Connecting to ${instanceName}@${host}...`,
         });
-      } else {
+      } else if (terminals.length >= useTerminalStore.getState().maxTerminals) {
         toast({
           title: "Cannot Open Terminal",
           description: "Maximum number of terminals reached. Close some terminals first.",
           variant: "destructive",
         });
       }
+      // else: break-glass prompt was cancelled - the modal already gave feedback.
 
       return newTerminal;
     },
-    [storeOpenTerminal, getTerminalByInstance, restoreTerminal, focusTerminal]
+    [storeOpenTerminal, getTerminalByInstance, restoreTerminal, focusTerminal, terminals.length]
   );
 
   // Close terminal with toast

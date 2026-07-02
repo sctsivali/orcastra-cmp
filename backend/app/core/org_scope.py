@@ -389,6 +389,45 @@ async def get_user_allowed_clusters(
     return cluster_ids
 
 
+async def get_owned_clusters_ignoring_admin(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> set[str]:
+    """
+    The clusters a user actually OWNS (via org membership/creation or personal
+    registration), computed regardless of the admin role short-circuit.
+
+    Used by the break-glass gate: a pure admin owns nothing here (every tenant
+    cluster is out-of-scope and needs a grant), while an admin who is ALSO a partner
+    still owns their own org's clusters and must not be locked out of them.
+    """
+    return await _query_owned_clusters(user.email, db)
+
+
+async def resolve_cluster_org(
+    host: str,
+    db: AsyncSession,
+) -> tuple[Optional[int], Optional[str]]:
+    """
+    Map a cluster_id (the LXD ``host`` key) to its owning organization (id, slug).
+    Returns (None, None) for an unbound or unknown cluster. A bound row wins over the
+    unbound (NULL-org) ownership row that can also exist for the same cluster.
+    """
+    from app.models.db_models import Organization, OrganizationCluster
+
+    stmt = (
+        select(Organization.id, Organization.slug)
+        .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
+        .where(OrganizationCluster.cluster_id == host)
+        .order_by(Organization.id)
+        .limit(1)
+    )
+    row = (await db.execute(stmt)).first()
+    if not row:
+        return (None, None)
+    return (row[0], row[1])
+
+
 async def reconcile_personal_clusters(
     db: AsyncSession,
     user_email: str,

@@ -1,0 +1,213 @@
+"""
+Break-glass grant lifecycle + sensitive-access enforcement.
+
+A platform admin keeps operational visibility of the fleet but cannot open a console
+or terminal into a tenant's VM without an explicit, justified, time-boxed grant. This
+module owns: creating/listing/revoking grants, the authoritative "is there a live grant"
+lookup, and the gate that console/terminal session creation calls.
+
+Single source of truth so the router and the enforcement gate share one liveness rule:
+a grant is live iff ``revoked_at IS NULL AND expires_at > now()`` (status is advisory).
+"""
+
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+from fastapi import HTTPException
+from sqlalchemy import select, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.auth import AuthenticatedUser
+from app.core.config import get_settings
+from app.core.org_scope import (
+    get_current_allowed_clusters,
+    get_owned_clusters_ignoring_admin,
+    resolve_cluster_org,
+)
+from app.models.db_models import BreakGlassGrant
+
+logger = logging.getLogger(__name__)
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def effective_status(grant: BreakGlassGrant) -> str:
+    """Display status without mutating the row: an active grant past expiry reads as expired."""
+    if grant.status == "active" and grant.revoked_at is None and grant.expires_at <= _now():
+        return "expired"
+    return grant.status
+
+
+async def get_active_grant(
+    db: AsyncSession, admin_email: str, cluster_id: str
+) -> Optional[BreakGlassGrant]:
+    """The live grant (if any) authorizing admin_email to reach cluster_id."""
+    stmt = (
+        select(BreakGlassGrant)
+        .where(
+            and_(
+                BreakGlassGrant.admin_email == admin_email,
+                BreakGlassGrant.cluster_id == cluster_id,
+                BreakGlassGrant.revoked_at.is_(None),
+                BreakGlassGrant.expires_at > _now(),
+            )
+        )
+        .order_by(BreakGlassGrant.expires_at.desc())
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def _effective_owned(user: AuthenticatedUser, db: AsyncSession) -> set[str]:
+    """
+    Clusters the actor OWNS (role-agnostic). Reuses the request-scoped allowed set for
+    partner/tenant (already resolved by org_scope_dependency / set_org_scope_for_ws); for
+    admin (context var is None) computes the real owned set so an admin-who-is-also-a-partner
+    is never locked out of their own org's clusters (the admin+partner trap).
+    """
+    allowed = get_current_allowed_clusters()
+    if allowed is not None:
+        return allowed
+    return await get_owned_clusters_ignoring_admin(user, db)
+
+
+async def inspect_access(
+    user: AuthenticatedUser, host: str, db: AsyncSession
+) -> dict:
+    """
+    Non-mutating pre-flight: does this actor need a break-glass grant to open
+    console/terminal on ``host``, and do they already hold one? Lets the UI prompt for
+    a grant before connecting instead of failing at the gate. No session is created.
+    """
+    org_id, org_slug = await resolve_cluster_org(host, db)
+    if not get_settings().auth_enabled:
+        return {"required": False, "has_active_grant": True,
+                "cluster_id": host, "target_organization_id": org_id, "target_organization_slug": org_slug}
+    owned = await _effective_owned(user, db)
+    if host in owned:
+        return {"required": False, "has_active_grant": True,
+                "cluster_id": host, "target_organization_id": org_id, "target_organization_slug": org_slug}
+    grant = await get_active_grant(db, user.email, host)
+    return {
+        "required": True,
+        "has_active_grant": grant is not None,
+        "cluster_id": host,
+        "target_organization_id": org_id,
+        "target_organization_slug": org_slug,
+        "grant_expires_at": grant.expires_at.isoformat() if grant else None,
+    }
+
+
+async def enforce_sensitive_access(
+    user: AuthenticatedUser, host: str, db: AsyncSession
+) -> Optional[BreakGlassGrant]:
+    """
+    Gate a sensitive (console/terminal) access on cluster ``host``.
+
+    Returns None when the actor owns the cluster (in-scope self-service: unchanged).
+    Returns the live grant when access is authorized under break-glass.
+    Raises HTTPException(403, break_glass_required) when out-of-scope without a grant.
+    Local dev (auth disabled) bypasses the gate.
+    """
+    if not get_settings().auth_enabled:
+        return None
+
+    owned = await _effective_owned(user, db)
+    if host in owned:
+        return None  # in-scope -> no grant needed
+
+    grant = await get_active_grant(db, user.email, host)
+    if grant is not None:
+        return grant
+
+    org_id, org_slug = await resolve_cluster_org(host, db)
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "break_glass_required",
+            "message": "Accessing this tenant resource requires an active break-glass grant.",
+            "cluster_id": host,
+            "target_organization_id": org_id,
+            "target_organization_slug": org_slug,
+            "request_url": "/api/v1/break-glass/grants",
+        },
+    )
+
+
+async def create_grant(
+    db: AsyncSession,
+    *,
+    admin_email: str,
+    cluster_id: str,
+    reason: str,
+    ticket_ref: Optional[str] = None,
+    duration_minutes: Optional[int] = None,
+) -> BreakGlassGrant:
+    """Create a time-boxed grant. Reason is mandatory; duration is clamped to [1, max]."""
+    settings = get_settings()
+    if not reason or not reason.strip():
+        raise HTTPException(status_code=400, detail="A justification (reason) is required.")
+
+    minutes = duration_minutes or settings.break_glass_default_minutes
+    minutes = max(1, min(int(minutes), settings.break_glass_max_minutes))
+
+    org_id, org_slug = await resolve_cluster_org(cluster_id, db)
+    now = _now()
+    grant = BreakGlassGrant(
+        admin_email=admin_email,
+        cluster_id=cluster_id,
+        target_organization_id=org_id,
+        target_org_slug=org_slug,
+        reason=reason.strip(),
+        ticket_ref=(ticket_ref.strip() if ticket_ref and ticket_ref.strip() else None),
+        status="active",
+        created_by=admin_email,
+        created_at=now,
+        expires_at=now + timedelta(minutes=minutes),
+    )
+    db.add(grant)
+    await db.commit()
+    await db.refresh(grant)
+    logger.info(
+        f"Break-glass grant {grant.id} created: {admin_email} -> cluster {cluster_id} "
+        f"(org {org_id}) for {minutes}m"
+    )
+    return grant
+
+
+async def revoke_grant(db: AsyncSession, grant_id: int, revoked_by: str) -> BreakGlassGrant:
+    """Revoke a grant. Idempotent. Effective immediately for the next access check."""
+    grant = await db.get(BreakGlassGrant, grant_id)
+    if grant is None:
+        raise HTTPException(status_code=404, detail="Break-glass grant not found.")
+    if grant.revoked_at is None:
+        grant.revoked_at = _now()
+        grant.revoked_by = revoked_by
+        grant.status = "revoked"
+        await db.commit()
+        await db.refresh(grant)
+    return grant
+
+
+async def list_grants(
+    db: AsyncSession,
+    *,
+    cluster_filter: Optional[set[str]],
+    mine_email: Optional[str] = None,
+    limit: int = 200,
+) -> list[BreakGlassGrant]:
+    """
+    List grants newest-first. ``cluster_filter`` None means no cluster restriction
+    (admin sees all); a set restricts to grants on those clusters (tenant accountability
+    view, fed the caller's get_user_allowed_clusters). ``mine_email`` narrows to one admin.
+    """
+    stmt = select(BreakGlassGrant).order_by(BreakGlassGrant.created_at.desc()).limit(limit)
+    if mine_email:
+        stmt = stmt.where(BreakGlassGrant.admin_email == mine_email)
+    if cluster_filter is not None:
+        # empty set -> match nothing (a sentinel keeps the IN clause valid)
+        stmt = stmt.where(BreakGlassGrant.cluster_id.in_(cluster_filter or {"__none__"}))
+    return list((await db.execute(stmt)).scalars().all())

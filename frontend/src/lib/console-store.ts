@@ -23,6 +23,7 @@ import {
   STORAGE_KEYS,
 } from './storage-utils';
 import { getAccessToken } from './api';
+import { useBreakGlassStore } from './break-glass-store';
 
 // Console window position and size
 export interface ConsolePosition {
@@ -143,7 +144,7 @@ interface ConsoleState {
     host: string;
     project?: string;
     fullPage?: boolean;
-  }) => ConsoleInstance | null;
+  }) => Promise<ConsoleInstance | null>;
   closeConsole: (id: string, cancelOperation?: boolean) => void;
   closeAllConsoles: () => void;
   minimizeConsole: (id: string) => void;
@@ -210,7 +211,7 @@ export const useConsoleStore = create<ConsoleState>()(
       defaultGraphicsSize: { width: 1024, height: 768 },
       
       // Open new console
-      openConsole: (params) => {
+      openConsole: async (params) => {
         const { instanceName, instanceType, host, project = 'default', fullPage = false } = params;
         const state = get();
         
@@ -240,7 +241,12 @@ export const useConsoleStore = create<ConsoleState>()(
           }
           return null;
         }
-        
+
+        // Break-glass pre-flight: an admin opening a tenant cluster they do not own must
+        // justify the access first. Owned/in-scope access resolves immediately.
+        const bgAllowed = await useBreakGlassStore.getState().request(host, instanceName);
+        if (!bgAllowed) return null;
+
         // Create new console instance
         const id = generateConsoleId();
         const position = getViewportCenteredPosition(state.consoles.length, state.defaultSize);

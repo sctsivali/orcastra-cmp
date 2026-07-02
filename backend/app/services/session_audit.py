@@ -52,6 +52,9 @@ async def log_session_connect(
     user_id: str,
     user_email: str,
     user_role: str,
+    target_organization_id: int | None = None,
+    target_org_slug: str | None = None,
+    break_glass_grant_id: int | None = None,
 ) -> None:
     """Log a session connect event to the audit table."""
     await _write_audit_with_retry({
@@ -64,6 +67,9 @@ async def log_session_connect(
         "user_id": user_id,
         "user_email": user_email,
         "user_role": user_role,
+        "target_organization_id": target_organization_id,
+        "target_org_slug": target_org_slug,
+        "break_glass_grant_id": break_glass_grant_id,
     })
     logger.debug("Audit: session %s connected (%s@%s)", session_id, user_email, instance_name)
 
@@ -80,6 +86,9 @@ async def log_session_disconnect(
     duration_seconds: int,
     download_bytes: int,
     upload_bytes: int,
+    target_organization_id: int | None = None,
+    target_org_slug: str | None = None,
+    break_glass_grant_id: int | None = None,
 ) -> None:
     """Log a session disconnect event with metrics to the audit table."""
     await _write_audit_with_retry({
@@ -95,6 +104,9 @@ async def log_session_disconnect(
         "duration_seconds": duration_seconds,
         "download_bytes": download_bytes,
         "upload_bytes": upload_bytes,
+        "target_organization_id": target_organization_id,
+        "target_org_slug": target_org_slug,
+        "break_glass_grant_id": break_glass_grant_id,
     })
     logger.debug(
         "Audit: session %s disconnected (%s, %ds, ↓%d ↑%d bytes)",

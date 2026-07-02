@@ -1401,6 +1401,45 @@ const regionsAPI = {
   },
 };
 
+// Break-Glass API (least-privilege admin access to tenant console/terminal)
+export interface BreakGlassCheck {
+  required: boolean;
+  has_active_grant: boolean;
+  cluster_id: string;
+  target_organization_id: number | null;
+  target_organization_slug: string | null;
+  grant_expires_at?: string | null;
+}
+export interface BreakGlassGrant {
+  id: number;
+  admin_email: string;
+  cluster_id: string;
+  target_organization_id: number | null;
+  target_org_slug: string | null;
+  reason: string;
+  ticket_ref: string | null;
+  status: string;
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+}
+const breakGlassAPI = {
+  check: async (clusterId: string): Promise<BreakGlassCheck> => {
+    return fetchAPI<BreakGlassCheck>(`/break-glass/check?cluster_id=${encodeURIComponent(clusterId)}`);
+  },
+  listGrants: async (mine = false): Promise<BreakGlassGrant[]> => {
+    return fetchAPI<BreakGlassGrant[]>(`/break-glass/grants${mine ? "?mine=true" : ""}`);
+  },
+  createGrant: async (body: { cluster_id: string; reason: string; ticket_ref?: string; duration_minutes?: number }): Promise<BreakGlassGrant> => {
+    return fetchAPI<BreakGlassGrant>("/break-glass/grants", { method: "POST", body: JSON.stringify(body) });
+  },
+  revokeGrant: async (id: number): Promise<BreakGlassGrant> => {
+    return fetchAPI<BreakGlassGrant>(`/break-glass/grants/${id}/revoke`, { method: "POST" });
+  },
+};
+
 // Consolidated API export
 export const api = {
   vms: vmAPI,
@@ -1429,6 +1468,7 @@ export const api = {
   certificates: certificateAPI,
   integrations: integrationsAPI,
   regions: regionsAPI,
+  breakGlass: breakGlassAPI,
   clusterMembers: {
     list: async (node: string) => {
       return fetchAPI<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`);

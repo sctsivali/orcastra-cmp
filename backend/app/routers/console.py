@@ -256,19 +256,35 @@ async def list_active_tracked_sessions(
 )
 async def query_session_audit_logs(
     instance_name: Optional[str] = Query(None, description="Filter by instance name"),
-    user_email: Optional[str] = Query(None, description="Filter by user email"),
     event_type: Optional[str] = Query(None, description="Filter by event type (connect/disconnect)"),
+    scope: str = Query("self", description="self = own sessions (default); org = all sessions on your organization's clusters (incl. admin break-glass)"),
     limit: int = Query(100, ge=1, le=1000, description="Max results to return"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
-    """Query session audit logs - scoped to the authenticated user's own sessions."""
+    """
+    Query session audit logs.
+
+    scope=self (default): the caller's own sessions only (data minimization).
+    scope=org: every session on clusters in the caller's organization scope, including
+    a platform admin's break-glass console/terminal access - the tenant-visible
+    accountability trail. Isolation is the caller's own get_user_allowed_clusters set,
+    so no other organization's sessions leak.
+    """
     from sqlalchemy import select, desc
+    from app.core.org_scope import get_user_allowed_clusters
 
     async with async_session_maker() as db:
         query = select(SessionAuditLog).order_by(desc(SessionAuditLog.created_at))
 
-        # always scope to own sessions (data minimization / GDPR)
-        query = query.where(SessionAuditLog.user_email == _rbac.email)
+        if scope == "org":
+            allowed = await get_user_allowed_clusters(_rbac, db)
+            if allowed is not None:
+                # restrict to the caller's own clusters (host == cluster_id); empty -> nothing
+                query = query.where(SessionAuditLog.host.in_(allowed or {"__none__"}))
+            # admin (allowed is None): no cluster filter
+        else:
+            # default: own sessions only (data minimization / GDPR)
+            query = query.where(SessionAuditLog.user_email == _rbac.email)
 
         if instance_name:
             query = query.where(SessionAuditLog.instance_name == instance_name)
@@ -294,6 +310,10 @@ async def query_session_audit_logs(
                 "duration_seconds": log.duration_seconds,
                 "download_bytes": log.download_bytes,
                 "upload_bytes": log.upload_bytes,
+                "target_organization_id": log.target_organization_id,
+                "target_org_slug": log.target_org_slug,
+                "break_glass_grant_id": log.break_glass_grant_id,
+                "is_break_glass": log.break_glass_grant_id is not None,
                 "created_at": log.created_at.isoformat() if log.created_at else None,
             }
             for log in logs
@@ -345,8 +365,18 @@ async def create_console_session(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Create a graphics console session."""
+    # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
+    # active grant (raises 403 break_glass_required otherwise). In-scope self-service and
+    # local dev are unaffected.
+    from app.services.break_glass_service import enforce_sensitive_access
+    from app.core.org_scope import resolve_cluster_org
+    async with async_session_maker() as _bg_db:
+        _bg_grant = await enforce_sensitive_access(_rbac, host, _bg_db)
+        _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
+    _bg_grant_id = _bg_grant.id if _bg_grant else None
+
     console_service = get_console_service()
-    
+
     session_info, error = await console_service.create_console_session(
         instance_name=instance_name,
         host=host,
@@ -355,7 +385,7 @@ async def create_console_session(
         width=width,
         height=height,
     )
-    
+
     if error:
         # Log activity: console session creation failure (HIGH SEVERITY - security audit)
         activity_logger.log_activity(
@@ -365,10 +395,12 @@ async def create_console_session(
             target_host=host,
             target_project=project,
             result="failure",
-            error_message=error
+            error_message=error,
+            target_organization_id=_target_org_id,
+            target_organization_slug=_target_org_slug,
         )
         return ConsoleSessionResponse(success=False, error=error)
-    
+
     # Log activity: console session creation success (HIGH SEVERITY - security audit)
     activity_logger.log_activity(
         action="console.session.create",
@@ -377,7 +409,9 @@ async def create_console_session(
         target_host=host,
         target_project=project,
         result="success",
-        details={"console_type": console_type, "width": width, "height": height}
+        details={"console_type": console_type, "width": width, "height": height, "break_glass_grant_id": _bg_grant_id},
+        target_organization_id=_target_org_id,
+        target_organization_slug=_target_org_slug,
     )
     
     return ConsoleSessionResponse(success=True, session=session_info)
@@ -787,6 +821,9 @@ class ConsoleProxy:
         user_id: str = "anonymous",
         user_email: str = "",
         user_role: str = "unknown",
+        target_organization_id: Optional[int] = None,
+        target_org_slug: Optional[str] = None,
+        break_glass_grant_id: Optional[int] = None,
     ):
         self.browser_ws = browser_ws
         self.instance_name = instance_name
@@ -796,7 +833,10 @@ class ConsoleProxy:
         self.user_id = user_id
         self.user_email = user_email
         self.user_role = user_role
-        
+        self.target_organization_id = target_organization_id
+        self.target_org_slug = target_org_slug
+        self.break_glass_grant_id = break_glass_grant_id
+
         self.lxd_data_ws = None  # Data socket for SPICE data
         self.lxd_control_ws = None  # Control socket for lifecycle
         self._shutdown = asyncio.Event()
@@ -849,8 +889,11 @@ class ConsoleProxy:
                 user_id=self.user_id,
                 user_email=self.user_email,
                 user_role=self.user_role,
+                target_organization_id=self.target_organization_id,
+                target_org_slug=self.target_org_slug,
+                break_glass_grant_id=self.break_glass_grant_id,
             )
-            
+
             ssl_context = console_service.get_ssl_context(self.host)
             
             # LXD VGA console requires BOTH control and data sockets
@@ -1107,10 +1150,31 @@ async def console_websocket(
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
 
+    # Break-glass gate (defense in depth - a client can hit the WS directly). An admin
+    # reaching a tenant cluster they do not own must hold an active grant; otherwise close.
+    # Dev mode (no user / auth disabled) skips the gate inside enforce_sensitive_access.
+    _bg_grant_id: Optional[int] = None
+    _target_org_id: Optional[int] = None
+    _target_org_slug: Optional[str] = None
+    if user is not None:
+        from app.services.break_glass_service import enforce_sensitive_access
+        from app.core.org_scope import resolve_cluster_org
+        from app.core.database import async_session_maker
+        from fastapi import HTTPException as _HTTPException
+        async with async_session_maker() as _bg_db:
+            try:
+                _grant = await enforce_sensitive_access(user, host, _bg_db)
+            except _HTTPException:
+                await websocket.close(code=1008, reason="break_glass_required")
+                logger.warning(f"Console WS blocked (break_glass_required): {instance_name}@{host} user={user.email}")
+                return
+            _bg_grant_id = _grant.id if _grant else None
+            _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
+
     # Accept with 'binary' subprotocol - required by spice-html5
     # spice-html5 uses: new WebSocket(uri, 'binary')
     await websocket.accept(subprotocol="binary")
-    
+
     # Extract user details for session tracking
     user_id = user.user_id if user else "anonymous"
     user_email = user.email if user else ""
@@ -1122,7 +1186,7 @@ async def console_websocket(
     else:
         user_role = "unknown"
     logger.info(f"Console WebSocket connected: {instance_name}@{host} user={user_id}")
-    
+
     proxy = ConsoleProxy(
         browser_ws=websocket,
         instance_name=instance_name,
@@ -1132,6 +1196,9 @@ async def console_websocket(
         user_id=user_id,
         user_email=user_email,
         user_role=user_role,
+        target_organization_id=_target_org_id,
+        target_org_slug=_target_org_slug,
+        break_glass_grant_id=_bg_grant_id,
     )
     
     await proxy.run()

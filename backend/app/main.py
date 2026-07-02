@@ -451,7 +451,11 @@ Ensure your client certificates are properly configured.
     # Organization Router (Three-Tier RBAC)
     from app.routers.organizations import router as organizations_router
     app.include_router(organizations_router, prefix=settings.api_prefix)
-    
+
+    # Break-Glass Router (least-privilege admin access to tenant console/terminal)
+    from app.routers.break_glass import router as break_glass_router
+    app.include_router(break_glass_router, prefix=settings.api_prefix)
+
     # User Groups Router (Admin user assignment + Authentik sync)
     from app.routers.user_groups import router as user_groups_router
     app.include_router(user_groups_router, prefix=settings.api_prefix)

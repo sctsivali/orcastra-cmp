@@ -90,7 +90,19 @@ class Settings(BaseSettings):
         alias="READ_ONLY_MODE",
         description="When True, disable all create, update, delete operations"
     )
-    
+
+    # Break-glass (least-privilege admin access to tenant console/terminal)
+    break_glass_default_minutes: int = Field(
+        default=60,
+        alias="BREAK_GLASS_DEFAULT_MINUTES",
+        description="Default lifetime of a break-glass grant when the requester omits a duration"
+    )
+    break_glass_max_minutes: int = Field(
+        default=240,
+        alias="BREAK_GLASS_MAX_MINUTES",
+        description="Hard cap on a break-glass grant lifetime (minutes)"
+    )
+
     # Authentication / Authentik OIDC Configuration
     auth_enabled: bool = Field(
         default=True,

@@ -603,7 +603,17 @@ class SessionAuditLog(Base):
     user_id = Column(String(200), nullable=False, index=True, comment="User ID from auth provider")
     user_email = Column(String(200), nullable=False, index=True)
     user_role = Column(String(100), nullable=False, default="unknown")
-    
+
+    # Compliance / accountability context: which tenant org owns the accessed cluster,
+    # and (when the actor used break-glass) the grant that authorized this access.
+    target_organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    target_org_slug = Column(String(100), nullable=True)
+    break_glass_grant_id = Column(
+        Integer, ForeignKey("break_glass_grants.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     # Session metrics (populated on disconnect events)
     duration_seconds = Column(Integer, nullable=True, comment="Total session duration in seconds")
     download_bytes = Column(Integer, nullable=True, comment="Total bytes downloaded by user")
@@ -619,6 +629,59 @@ class SessionAuditLog(Base):
 
     def __repr__(self) -> str:
         return f"<SessionAuditLog(session={self.session_id}, event={self.event_type}, user={self.user_email})>"
+
+
+# ============================================
+# Break-Glass Grants (least-privilege admin access)
+# ============================================
+
+class BreakGlassGrant(Base):
+    """
+    Time-boxed, justified elevation that lets a platform admin access a tenant's
+    sensitive resources (console / terminal into a VM) that they otherwise cannot
+    reach without standing god-view.
+
+    Enforced at console/terminal session creation: an admin acting outside their
+    owned cluster set must hold an active grant for the target cluster. Scope is
+    per-cluster (cluster_id == the LXD host key) to keep the blast radius minimal
+    (data minimization / purpose limitation under UU PDP + GDPR).
+
+    Authoritative "is this grant live?" check is
+    ``revoked_at IS NULL AND expires_at > now()`` - status is advisory (lazy-expired
+    on read) so a clock/cron lag never widens access.
+    """
+    __tablename__ = "break_glass_grants"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    admin_email = Column(String(255), nullable=False, index=True, comment="grantee who may use it")
+    cluster_id = Column(String(255), nullable=False, index=True, comment="enforced scope == LXD host key")
+    # denormalized for the tenant-visible trail; nullable so an unbound cluster still grants
+    target_organization_id = Column(
+        Integer, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
+    )
+    target_org_slug = Column(String(100), nullable=True)
+
+    reason = Column(Text, nullable=False, comment="justification (compliance requirement)")
+    ticket_ref = Column(String(255), nullable=True)
+    status = Column(String(20), nullable=False, default="active", comment="active | expired | revoked")
+
+    created_by = Column(String(255), nullable=False)
+    approved_by = Column(String(255), nullable=True, comment="dual-control hook (Phase 3); NULL for self-service")
+
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_by = Column(String(255), nullable=True)
+
+    __table_args__ = (
+        # hot enforcement lookup: active grant for (admin, cluster)
+        Index("ix_bgg_active_lookup", "admin_email", "cluster_id", "status", "expires_at"),
+        Index("ix_bgg_org", "target_organization_id"),
+        Index("ix_bgg_created", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<BreakGlassGrant(admin={self.admin_email}, cluster={self.cluster_id}, status={self.status})>"
 
 
 # ============================================
