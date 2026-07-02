@@ -4,7 +4,7 @@ SQLAlchemy ORM models for PostgreSQL.
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -333,7 +333,9 @@ class OrganizationCluster(Base):
     __tablename__ = "organization_clusters"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    # nullable: a cluster registered by a partner who has no org yet is owned by the
+    # registrant (registered_by) until their org is synced, then reconcile binds it.
+    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True)
     cluster_id = Column(String(255), nullable=False)  # vault key
     registered_by = Column(String(255), nullable=True)
 
@@ -348,6 +350,15 @@ class OrganizationCluster(Base):
 
     __table_args__ = (
         UniqueConstraint("organization_id", "cluster_id", name="uq_org_cluster"),
+        # important: Postgres treats NULLs as distinct, so uq_org_cluster does NOT
+        # guard org-less rows. This partial unique index keeps at most one unbound
+        # (organization_id IS NULL) ownership row per cluster.
+        Index(
+            "uq_org_cluster_null",
+            "cluster_id",
+            unique=True,
+            postgresql_where=text("organization_id IS NULL"),
+        ),
         Index("ix_org_cluster_org_id", "organization_id"),
         Index("ix_org_cluster_cluster_id", "cluster_id"),
     )

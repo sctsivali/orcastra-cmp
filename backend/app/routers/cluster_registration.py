@@ -27,7 +27,7 @@ from app.core.config import get_settings
 from app.core.vault_client import get_vault_client, VaultClient, VaultClientError
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
 from app.services.activity_logger import get_activity_logger
 from app.core.database import get_db
@@ -150,34 +150,24 @@ async def register_cluster(
         # Save empty secrets (for compatibility)
         cert_manager.save_cluster_secrets(cluster_id=cluster_id, trust_password=None)
         
-        # Step 2b: Auto-bind cluster to the registering user's organization
-        # so it appears in org-scoped queries (partner/tenant see their clusters)
-        # NOTE: This must happen BEFORE cache invalidation so the org binding
-        # exists when the cache is repopulated
+        # Step 2b: Auto-bind cluster to the registering user's organization so it
+        # appears in org-scoped queries (partner/tenant see their own clusters).
+        # important: use the SAME membership predicate as cluster visibility
+        # (get_user_org_ids) so binding can never drift from the scope query - a
+        # role-filtered binding vs a role-agnostic scope was what orphaned clusters
+        # registered by tenant-role members of OrcaHub-synced orgs.
+        # NOTE: must run BEFORE cache invalidation so the binding exists when caches repopulate.
+        org_bind_warning: Optional[str] = None
         try:
-            from sqlalchemy import select as sa_select, or_ as sa_or
-            from app.models.db_models import Organization, OrganizationMember, OrganizationCluster
+            from sqlalchemy import select as sa_select
+            from app.models.db_models import OrganizationCluster
+            from app.core.org_scope import get_user_org_ids
 
-            # find orgs the user created or belongs to as partner
-            org_result = await db.execute(
-                sa_select(Organization.id).where(
-                    Organization.is_active == True,
-                    sa_or(
-                        Organization.created_by == _rbac.email,
-                        Organization.id.in_(
-                            sa_select(OrganizationMember.organization_id)
-                            .where(
-                                OrganizationMember.user_email == _rbac.email,
-                                OrganizationMember.role.in_(["partner", "admin"]),
-                            )
-                        ),
-                    ),
-                )
-            )
-            org_ids = list(org_result.scalars().all())
+            # orgs the user belongs to (owner/partner orgs first)
+            org_ids = await get_user_org_ids(_rbac, db)
 
             if org_ids:
-                # bind to the first (primary) org - avoid duplicates
+                # bind to the primary org - avoid duplicates
                 primary_org_id = org_ids[0]
                 existing = await db.execute(
                     sa_select(OrganizationCluster.id).where(
@@ -197,9 +187,31 @@ async def register_cluster(
                         f"for user {_rbac.email}"
                     )
             else:
-                logger.warning(
-                    f"User {_rbac.email} has no organization - "
-                    f"cluster {cluster_id} not bound to any org"
+                # partner with no synced org yet: still record ownership (org_id NULL)
+                # so the registrant can see and grant API-key access to their own cluster.
+                # reconcile_personal_clusters binds it to their org once it is synced.
+                existing = await db.execute(
+                    sa_select(OrganizationCluster.id).where(
+                        OrganizationCluster.organization_id.is_(None),
+                        OrganizationCluster.cluster_id == cluster_id,
+                        OrganizationCluster.registered_by == _rbac.email,
+                    )
+                )
+                if not existing.scalar_one_or_none():
+                    db.add(OrganizationCluster(
+                        organization_id=None,
+                        cluster_id=cluster_id,
+                        registered_by=_rbac.email,
+                    ))
+                    await db.commit()
+                    logger.info(
+                        f"Recorded unbound ownership of cluster {cluster_id} "
+                        f"for user {_rbac.email} (no organization yet)"
+                    )
+                org_bind_warning = (
+                    "Cluster registered and visible to you. Your account is not linked "
+                    "to an organization yet - complete the OrcaHub integration to assign "
+                    "it to your organization."
                 )
         except Exception as e:
             logger.error(f"Failed to auto-bind cluster {cluster_id} to org: {e}")
@@ -217,7 +229,10 @@ async def register_cluster(
             # Invalidate nodes status cache
             cache.delete("api_responses", get_scope_cache_key("nodes:status:all"))
             cache.delete("api_responses", "nodes:status:all:scope=all")
-            logger.info(f"Invalidated clusters list cache (scoped + vault_list) after registering {cluster_id}")
+            # Invalidate regions overview (all scopes) so the inventory/monitoring
+            # overview reflects the new cluster without a manual refresh
+            cache.delete_pattern("api_responses", "regions:*")
+            logger.info(f"Invalidated clusters list cache (scoped + vault_list + regions) after registering {cluster_id}")
         
         # Update connection_manager registered clusters whitelist
         from app.services.lxd_service import get_lxd_service
@@ -238,7 +253,10 @@ async def register_cluster(
             
             # Build CLI-friendly message based on detected type
             cli_tool = "incus" if cluster_type == "Incus" else "lxc"
-            
+            register_message = f"Certificate generated! Run the {cli_tool} command to add trust. Detected hypervisor: {cluster_type}."
+            if org_bind_warning:
+                register_message = f"{register_message} {org_bind_warning}"
+
             # Log activity: cluster registration success
             activity_logger.log_activity(
                 action="cluster.register",
@@ -257,7 +275,7 @@ async def register_cluster(
             
             return ClusterRegisterResponse(
                 success=True,
-                message=f"Certificate generated! Run the {cli_tool} command to add trust. Detected hypervisor: {cluster_type}.",
+                message=register_message,
                 cluster_id=cluster_id,
                 status=ClusterStatus.NOT_AUTHORIZED,
                 certificate_generated=True,
@@ -425,7 +443,9 @@ async def check_cluster_authentication(
                     cache.delete_pattern("api_responses", "projects:*")
                     cache.delete_pattern("api_responses", "vms:*")
                     cache.delete_pattern("api_responses", "nodes:*")
-                    logger.info(f"Invalidated all relevant caches (scoped + vault_list) after authenticating {cluster_id}")
+                    # Regions overview too so the inventory/monitoring overview updates immediately
+                    cache.delete_pattern("api_responses", "regions:*")
+                    logger.info(f"Invalidated all relevant caches (scoped + vault_list + regions) after authenticating {cluster_id}")
                 
                 return ClusterAuthCheckResponse(
                     cluster_id=cluster_id,
@@ -589,7 +609,10 @@ async def list_clusters(
     try:
         # When fresh=True, bypass Vault list cache to get latest data
         # This ensures deleted clusters don't appear in the list
-        cluster_ids = cert_manager.list_clusters(use_cache=not fresh)
+        # important: apply org-scope filter so partners/tenants only see their own
+        # org's clusters (admin = unfiltered). Matches overview/nodes behaviour and
+        # closes the cross-tenant visibility hole. Cache key is already scope-aware.
+        cluster_ids = apply_cluster_filter(cert_manager.list_clusters(use_cache=not fresh))
         
         # Fetch all cluster info in parallel for better performance
         tasks = [_get_cluster_info_async(cluster_id, cert_manager) for cluster_id in cluster_ids]
@@ -747,7 +770,12 @@ async def delete_cluster(
         vault = cert_manager.vault
         base_path = cert_manager.clusters_path
         loop = asyncio.get_event_loop()
-        
+
+        # important: bound cleanup so a slow/degraded Vault or a locked DB cannot make
+        # delete hang (users were double-clicking a button that never responded).
+        VAULT_DELETE_TIMEOUT = 20.0
+        DB_DELETE_TIMEOUT = 10.0
+
         logger.info(f"Starting deletion of cluster {cluster_id}")
         
         # Helper to run blocking vault ops in thread pool
@@ -765,14 +793,36 @@ async def delete_cluster(
             except Exception as e:
                 logger.warning(f"Failed to delete metadata {op_name} for {cluster_id}: {e}")
         
+        # Run a parallel batch of vault deletes, hard-bounded by VAULT_DELETE_TIMEOUT.
+        # Manual executor + shutdown(wait=False) so the timeout actually caps wall-clock
+        # (a `with ThreadPoolExecutor` block would re-block on its wait=True shutdown).
+        async def _run_vault_batch(delete_fn, ops, max_workers: int, label: str) -> None:
+            executor = ThreadPoolExecutor(max_workers=max_workers)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*[
+                        loop.run_in_executor(executor, delete_fn, path, name)
+                        for path, name in ops
+                    ]),
+                    timeout=VAULT_DELETE_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Vault {label} deletion timed out for {cluster_id} after "
+                    f"{VAULT_DELETE_TIMEOUT}s; continuing with cache/connection cleanup"
+                )
+            finally:
+                executor.shutdown(wait=False)
+
         # Step 1: Delete data paths in parallel (soft delete in KV v2)
         subpaths = ["metadata", "secrets", "certs", "pending_certs"]
-        with ThreadPoolExecutor(max_workers=4) as executor:
-            await asyncio.gather(*[
-                loop.run_in_executor(executor, _vault_delete_safe, f"{base_path}/{cluster_id}/{sp}", sp)
-                for sp in subpaths
-            ])
-        
+        await _run_vault_batch(
+            _vault_delete_safe,
+            [(f"{base_path}/{cluster_id}/{sp}", sp) for sp in subpaths],
+            max_workers=4,
+            label="data",
+        )
+
         # Step 2+3: Delete metadata for each subpath + parent folder in parallel
         # KV v2 requires deleting BOTH data and metadata paths
         metadata_ops = [
@@ -780,26 +830,36 @@ async def delete_cluster(
         ]
         # Include parent metadata folder deletion (CRITICAL - removes from LIST)
         metadata_ops.append((f"secret/metadata/clusters/{cluster_id}", "parent_folder"))
+        await _run_vault_batch(
+            _vault_delete_metadata_safe, metadata_ops, max_workers=5, label="metadata",
+        )
         
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            await asyncio.gather(*[
-                loop.run_in_executor(executor, _vault_delete_metadata_safe, path, name)
-                for path, name in metadata_ops
-            ])
-        
-        # Step 4: Delete OrganizationCluster DB binding so cluster disappears from org scope
+        # Step 4: Delete OrganizationCluster DB binding so cluster disappears from org scope.
+        # Bounded by DB_DELETE_TIMEOUT so a lock/slow DB can't hang the whole request.
         try:
             from app.models.db_models import OrganizationCluster
             from sqlalchemy import delete as sql_delete
-            result = await db.execute(
-                sql_delete(OrganizationCluster).where(OrganizationCluster.cluster_id == cluster_id)
-            )
-            await db.commit()
-            deleted_rows = result.rowcount
+
+            async def _delete_binding() -> int:
+                result = await db.execute(
+                    sql_delete(OrganizationCluster).where(OrganizationCluster.cluster_id == cluster_id)
+                )
+                await db.commit()
+                return result.rowcount
+
+            deleted_rows = await asyncio.wait_for(_delete_binding(), timeout=DB_DELETE_TIMEOUT)
             if deleted_rows > 0:
                 logger.info(f"Deleted {deleted_rows} OrganizationCluster binding(s) for {cluster_id}")
             else:
                 logger.info(f"No OrganizationCluster binding found for {cluster_id}")
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"DB binding deletion timed out for {cluster_id} after {DB_DELETE_TIMEOUT}s"
+            )
+            try:
+                await db.rollback()
+            except Exception:
+                pass
         except Exception as e:
             logger.warning(f"Failed to delete OrganizationCluster binding for {cluster_id}: {e}")
         
@@ -913,9 +973,11 @@ async def regenerate_certificate(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Regenerate certificate for a cluster."""
+    # verify caller may access this cluster (org-scope), matching get/delete/update
+    verify_cluster_access(cluster_id)
     try:
         settings = get_settings()
-        
+
         # Get cluster info to retrieve endpoint and detect type
         info = cert_manager.get_cluster_info(cluster_id)
         if not info:

@@ -16,7 +16,7 @@ import json
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_current_allowed_clusters
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
@@ -547,6 +547,7 @@ async def _upsert_synced_members(
     synced = 0
     removed = 0
     sync_svc = get_authentik_sync()
+    upserted_emails: set[str] = set()
 
     for m in members:
         try:
@@ -607,6 +608,7 @@ async def _upsert_synced_members(
                 ))
 
             synced += 1
+            upserted_emails.add(m.email)
 
             # push system role to Authentik
             try:
@@ -622,6 +624,14 @@ async def _upsert_synced_members(
         logger.info(
             f"Member sync: {synced} upserted, {removed} removed (api_key={api_key_id})"
         )
+
+    # Backstop reconcile: now that these members are linked to their org, bind any
+    # clusters they registered while org-less. Best-effort, idempotent, per member.
+    for email in upserted_emails:
+        try:
+            await reconcile_personal_clusters(db, email)
+        except Exception as e:
+            logger.warning(f"reconcile_personal_clusters failed for {email}: {e}")
 
     return synced, removed
 
@@ -702,10 +712,26 @@ async def create_api_key(
     request: APIKeyCreateRequest,
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Create a new API key for external integration."""
     vault_client = get_vault_integrations_client()
-    
+
+    # Multi-tenancy guard: a partner may only grant access to clusters they can see
+    # (their org's or personally registered). Admin (allowed is None) is unrestricted.
+    # Reuses the request-scoped set already resolved by org_scope_dependency - no extra
+    # query - and shares the source the cluster picker uses, so it never rejects an
+    # option the UI offered.
+    allowed = get_current_allowed_clusters()
+    if allowed is not None:
+        requested = {p.cluster_id for p in request.cluster_permissions}
+        invalid = requested - allowed
+        if invalid:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
+            )
+
     try:
         # Generate key pair
         key_id, key_secret, secret_hash = generate_api_key_pair()
@@ -737,7 +763,14 @@ async def create_api_key(
         # Clear all scoped cache variants
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
-        
+
+        # If this partner already has an org, bind any clusters they registered while
+        # org-less to it now. Best-effort: a failure here must not fail key creation.
+        try:
+            await reconcile_personal_clusters(db, _rbac.email)
+        except Exception as e:
+            logger.warning(f"reconcile_personal_clusters failed for {_rbac.email}: {e}")
+
         return APIKeyCreateResponse(
             api_key=APIKeyInfo(**metadata, user_mappings_count=0),
             api_key_id=key_id,
