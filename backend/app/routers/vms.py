@@ -34,6 +34,8 @@ from app.core.org_scope import (
 )
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
+from app.services.tag_service import TagService
+from app.routers.tags import get_tag_service_dep
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -541,6 +543,7 @@ async def delete_vm(
     force: bool = Query(False, description="Force delete running VM"),
     project: Optional[str] = Query(None, description="LXD project name"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    tag_service: TagService = Depends(get_tag_service_dep),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
@@ -554,7 +557,19 @@ async def delete_vm(
             project=project,
         )
         get_cache_manager().invalidate_instance_cache()
-        
+
+        # Clean up the instance's tag rows so the tag store doesn't drift from the
+        # deleted instance (best-effort — the instance is already gone).
+        try:
+            await tag_service.remove_resource_assignments(
+                "instance", vm_name,
+                resource_host=host, resource_project=project or "default",
+            )
+        except Exception as tag_err:
+            logger.warning(
+                f"Failed to clean up tags for deleted instance {vm_name}: {tag_err}"
+            )
+
         # Log activity: VM delete success
         activity_logger.log_activity(
             action="vm.delete",

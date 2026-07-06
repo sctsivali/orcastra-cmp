@@ -80,6 +80,7 @@ export interface VMListResponse {
 // VM Create Request
 export interface VMCreateRequest {
   name: string;
+  description?: string;
   host: string;
   image: string;
   image_server?: string;

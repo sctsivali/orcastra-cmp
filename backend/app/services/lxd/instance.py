@@ -8,7 +8,7 @@ import asyncio
 from typing import List, Tuple, Optional, Dict, Any
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pylxd.exceptions import LXDAPIException
+from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
 from app.models.schemas import VMInfo, VMStatus
 from app.core.config import get_settings
@@ -666,6 +666,7 @@ class InstanceManager:
         project: str = "default",
         image_server: Optional[str] = None,
         image_protocol: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking).
 
@@ -700,6 +701,19 @@ class InstanceManager:
                     raise LXDOperationError(f"Could not open project '{project}' on {host}")
                 create_client = client  # fall back to pooled (default project)
 
+            # Fail fast on a duplicate name. LXD accepts a duplicate-name create as
+            # an async 202 and only fails the background operation, which the
+            # non-blocking flow can't surface cleanly (the pre-existing instance is
+            # already in the list, so the failing placeholder looks "resolved").
+            # A synchronous check gives the user an immediate, clear error.
+            already_exists = await asyncio.to_thread(
+                create_client.instances.exists, name
+            )
+            if already_exists:
+                raise LXDOperationError(
+                    f"An instance named '{name}' already exists in project '{project}' on {host}"
+                )
+
             # Build instance configuration
             instance_config = config or {}
             if cloud_init:
@@ -725,6 +739,8 @@ class InstanceManager:
                 "profiles": profiles or ["default"],
                 "config": instance_config,
             }
+            if description:
+                instance_def["description"] = description
             if devices:
                 instance_def["devices"] = devices
 
@@ -759,6 +775,10 @@ class InstanceManager:
 
             return operation_id
 
+        except ClientConnectionFailed as e:
+            # Cluster unreachable during exists()/POST — surface as a connection
+            # error so the router maps it to 503, not a blanket 500.
+            raise LXDConnectionError(f"Failed to reach {host}: {e}")
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
 
