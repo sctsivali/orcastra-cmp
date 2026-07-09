@@ -322,6 +322,7 @@ class LXDService:
         project: str = "default",
         image_server: Optional[str] = None,
         image_protocol: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking); returns the operation id.
 
@@ -330,7 +331,7 @@ class LXDService:
         return await self.instance_manager.create_instance(
             name, host, image, instance_type, profiles, config,
             cloud_init, devices, start_on_create, project,
-            image_server, image_protocol
+            image_server, image_protocol, description
         )
 
     # Image operations

@@ -57,7 +57,7 @@ export function TagBadge({
     <Badge
       variant="secondary"
       className={cn(
-        "gap-1 transition-all",
+        "gap-1 transition-all whitespace-nowrap",
         size === "sm" ? "text-xs py-0 h-5 px-1.5" : "text-xs py-0.5 px-2",
         className
       )}

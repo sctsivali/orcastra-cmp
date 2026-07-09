@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { Play, Square, RotateCw, Trash2, Search, Filter, Terminal, Monitor, Loader2 } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
+import { TagBadge } from "@/components/tag-manager";
 import { removePendingCreate } from "@/lib/pending-creates";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
@@ -325,6 +326,7 @@ export default function InstancesPage() {
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <TableHead>Tags</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -359,13 +361,14 @@ export default function InstancesPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">—</TableCell>
                   <TableCell className="text-muted-foreground">—</TableCell>
+                  <TableCell className="text-muted-foreground">—</TableCell>
                   <TableCell />
                 </TableRow>
               ))}
               {paginatedInstances.length === 0 ? (
                 visiblePendingCreates.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                       No instances found
                     </TableCell>
                   </TableRow>
@@ -402,6 +405,22 @@ export default function InstancesPage() {
                         {profile}
                       </Badge>
                     ))}
+                  </TableCell>
+                  <TableCell>
+                    {instance.tags && instance.tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {instance.tags.slice(0, 3).map((tag: string) => (
+                          <TagBadge key={tag} tag={tag} size="sm" />
+                        ))}
+                        {instance.tags.length > 3 && (
+                          <span className="text-xs text-muted-foreground">
+                            +{instance.tags.length - 3}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">

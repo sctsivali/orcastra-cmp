@@ -95,6 +95,7 @@ class VMListResponse(BaseModel):
 class VMCreateRequest(BaseModel):
     """Request body for creating a new VM."""
     name: str = Field(..., min_length=1, max_length=63, description="VM hostname")
+    description: Optional[str] = Field(None, description="Instance description")
     host: str = Field(..., description="Target LXD host (node1 or node2)")
     image: str = Field(..., description="Image alias or fingerprint")
     image_server: Optional[str] = Field(

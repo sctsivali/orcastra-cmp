@@ -16,9 +16,11 @@ import {
   Plus,
   Trash2,
   ChevronDown,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -65,6 +67,7 @@ import {
 } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { addPendingCreate } from "@/lib/pending-creates";
+import { api } from "@/lib/api";
 import type {
   VMCreateRequest,
   ImageInfo,
@@ -144,6 +147,7 @@ interface FormState {
   maxProcesses: string; // "" = default (containers)
   storageValue: string;
   storageUnit: string;
+  tags: string[];
 }
 
 const DEFAULT_FORM: FormState = {
@@ -164,6 +168,7 @@ const DEFAULT_FORM: FormState = {
   maxProcesses: "",
   storageValue: "10",
   storageUnit: "GiB",
+  tags: [],
 };
 
 export function InstanceCreateForm() {
@@ -173,6 +178,16 @@ export function InstanceCreateForm() {
   const isSubmitting = createInstance.isPending;
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [tagInput, setTagInput] = useState("");
+
+  // Inline tag editor helpers (write straight to form.tags).
+  const addTag = (raw: string) => {
+    const v = raw.trim().toLowerCase();
+    if (v && !form.tags.includes(v)) updateField("tags", [...form.tags, v]);
+    setTagInput("");
+  };
+  const removeTag = (tag: string) =>
+    updateField("tags", form.tags.filter((t) => t !== tag));
 
   const wantedImageType: "container" | "virtual-machine" =
     form.type === "vm" ? "virtual-machine" : "container";
@@ -666,6 +681,7 @@ export function InstanceCreateForm() {
 
     const payload: VMCreateRequest = {
       name: form.name,
+      ...(form.description.trim() ? { description: form.description.trim() } : {}),
       host: form.selectedNode,
       image,
       ...(image_server ? { image_server, image_protocol } : {}),
@@ -685,6 +701,12 @@ export function InstanceCreateForm() {
         ...(form.diskPriority.trim()
           ? { "limits.disk.priority": form.diskPriority.trim() }
           : {}),
+        // Set user.tags at creation so tags show immediately (the tag service's
+        // LXD sync can't run while the instance is still provisioning). Both this
+        // and the updateInstanceTags call below consume form.tags, which is
+        // already normalized (lowercased/trimmed/deduped) in addTag — single
+        // source of truth, so the two write paths can't drift.
+        ...(form.tags.length ? { "user.tags": form.tags.join(",") } : {}),
         ...advConfig,
       },
       ...(Object.keys(devices).length ? { devices } : {}),
@@ -693,6 +715,27 @@ export function InstanceCreateForm() {
 
     try {
       const result = await createInstance.mutateAsync(payload);
+      // Apply tags after the create is accepted. Tags live in the separate tag
+      // service keyed by (host, project, name), so they can be set before the
+      // instance finishes provisioning. Best-effort: a tag failure shouldn't
+      // block the create that already succeeded.
+      if (form.tags.length > 0) {
+        try {
+          await api.tags.updateInstanceTags(
+            form.selectedNode,
+            form.name,
+            form.tags,
+            form.selectedProject || "default",
+          );
+        } catch (tagErr) {
+          toast({
+            title: "Instance creating, but tags were not applied",
+            description:
+              tagErr instanceof Error ? tagErr.message : "Failed to set tags",
+            variant: "destructive",
+          });
+        }
+      }
       // Seed a pending-create entry so the instances list shows a live
       // "Creating… <progress>" row driven by the operation-events stream.
       addPendingCreate({
@@ -875,6 +918,41 @@ export function InstanceCreateForm() {
                   onChange={(e) => updateField("description", e.target.value)}
                   placeholder="Optional description"
                   rows={2}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="tags">Tags</Label>
+                {form.tags.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {form.tags.map((tag) => (
+                      <Badge key={tag} variant="secondary" className="gap-1">
+                        {tag}
+                        <button
+                          type="button"
+                          onClick={() => removeTag(tag)}
+                          className="rounded-full hover:bg-muted-foreground/20"
+                          aria-label={`Remove tag ${tag}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+                <Input
+                  id="tags"
+                  value={tagInput}
+                  onChange={(e) => setTagInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === ",") {
+                      e.preventDefault();
+                      addTag(tagInput);
+                    }
+                  }}
+                  onBlur={() => {
+                    if (tagInput.trim()) addTag(tagInput);
+                  }}
+                  placeholder="Type a tag and press Enter"
                 />
               </div>
 
