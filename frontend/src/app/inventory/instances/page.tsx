@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -28,12 +28,23 @@ import { removePendingCreate } from "@/lib/pending-creates";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import { 
-  useInstances, 
-  useStartInstance, 
-  useStopInstance, 
-  useRestartInstance 
+import {
+  useInstances,
+  useStartInstance,
+  useStopInstance,
+  useRestartInstance,
+  useDeleteInstance,
 } from "@/hooks/use-lxd";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { useRouter } from "next/navigation";
@@ -88,8 +99,18 @@ export default function InstancesPage() {
   const startInstance = useStartInstance();
   const stopInstance = useStopInstance();
   const restartInstance = useRestartInstance();
-  
+  const deleteInstance = useDeleteInstance();
+
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  // Instance pending delete confirmation (controls the shared AlertDialog).
+  const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
+  // Radix keeps AlertDialogContent mounted through its ~200ms exit fade, so
+  // reading a just-nulled deleteTarget flashes blank name/host. Keep the last
+  // target around and render the dialog body from it so it stays populated
+  // during that fade (on both the Delete and Cancel paths).
+  const deleteDisplayRef = useRef<VMInfo | null>(null);
+  if (deleteTarget) deleteDisplayRef.current = deleteTarget;
+  const deleteDisplay = deleteTarget ?? deleteDisplayRef.current;
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterProject, setFilterProject] = useState<string>("all");
@@ -104,6 +125,8 @@ export default function InstancesPage() {
   const { hasPermission } = useTenantAccess();
   const { hasRole } = usePermissions();
   const canCreateInstance = hasRole(Role.PARTNER);
+  // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
+  const canDeleteInstance = hasRole(Role.PARTNER);
 
   const sortAccessors = useMemo(
     () => ({
@@ -169,6 +192,31 @@ export default function InstancesPage() {
       });
     } finally {
       setActionLoading(null);
+    }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    try {
+      await deleteInstance.mutateAsync({
+        name: target.name,
+        host: target.host,
+        force: true, // stops a running instance before deleting
+        project: target.project || "default",
+      });
+      toast({
+        title: "Instance deleted",
+        description: `"${target.name}" has been deleted.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to delete instance",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setDeleteTarget(null);
     }
   };
 
@@ -494,6 +542,26 @@ export default function InstancesPage() {
                           </Button>
                         </>
                       )}
+                      {canDeleteInstance && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setDeleteTarget(instance)}
+                          // Only the row actually being deleted greys out; a
+                          // page-wide isPending would disable every row's button.
+                          disabled={
+                            isReadOnly ||
+                            (deleteInstance.isPending &&
+                              deleteTarget?.name === instance.name &&
+                              deleteTarget?.host === instance.host)
+                          }
+                          aria-label={`Delete instance ${instance.name}`}
+                          title={isReadOnly ? "Action disabled in read-only mode" : "Delete instance"}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -521,6 +589,55 @@ export default function InstancesPage() {
         }}
         project={selectedInstance?.project || "default"}
       />
+
+      {/* Delete confirmation (shared across rows, controlled by deleteTarget) */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          // Don't let Esc / outside-click dismiss it mid-delete; the delete
+          // keeps running server-side and closing would strand the UI.
+          if (!open && !deleteInstance.isPending) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete instance &quot;{deleteDisplay?.name}&quot;?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the instance and its data from{" "}
+              {deleteDisplay?.host}.
+              {deleteDisplay?.status === "Running" &&
+                " The instance is currently running and will be force-stopped first."}
+              {deleteDisplay?.status === "Frozen" &&
+                " The instance is frozen by billing policy and will be force-stopped first."}{" "}
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteInstance.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              // preventDefault blocks Radix's built-in close so the dialog stays
+              // open (and populated, with the spinner) for the full 10-30s that a
+              // force-stop + delete takes. The finally in handleDeleteConfirm
+              // closes it once the request resolves.
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeleteConfirm();
+              }}
+              disabled={deleteInstance.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteInstance.isPending && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              {deleteInstance.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

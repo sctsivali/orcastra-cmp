@@ -547,15 +547,17 @@ class InstanceManager:
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
             
-            # Stop if running and force is True
-            if instance.status == "Running":
+            # Stop an active instance before deleting when force is set. A Frozen
+            # instance (billing-paused) is still active, so LXD refuses to delete
+            # it until it is stopped -- force-stop covers both Running and Frozen.
+            if instance.status in ("Running", "Frozen"):
                 if force:
                     instance.stop(force=True, wait=True)
                 else:
                     raise LXDOperationError(
-                        f"VM {name} is running. Stop it first or use force=true"
+                        f"VM {name} is {instance.status.lower()}. Stop it first or use force=true"
                     )
-            
+
             instance.delete(wait=True)
             
             logger.info(f"Deleted VM {name} from {host} (project: {project_name})")
