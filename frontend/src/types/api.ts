@@ -419,6 +419,8 @@ export interface NetworkListResponse {
   total: number;
   networks: NetworkInfo[];
   nodes: string[];
+  /** Nodes that could not be reached; their networks are missing from `networks`. */
+  unreachable_nodes?: string[];
 }
 
 export interface NetworkCreateRequest {

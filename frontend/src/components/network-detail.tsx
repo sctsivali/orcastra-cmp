@@ -1,0 +1,286 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import { useToast } from "@/hooks/use-toast";
+import {
+  useNetwork,
+  useNetworkState,
+  useDeleteNetwork,
+} from "@/hooks/use-lxd";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { usePermissions } from "@/hooks/use-permissions";
+import { Role } from "@/types/rbac";
+import { NetworkInfo } from "@/types/api";
+import { formatBytes } from "@/lib/utils";
+import { Network, Box, Layers, Trash2, Loader2 } from "lucide-react";
+
+interface NetworkDetailProps {
+  name: string;
+  host: string;
+}
+
+interface UsedByRef {
+  kind: string; // "instances" | "profiles" | ...
+  name: string;
+  project?: string;
+}
+
+function parseUsedBy(url: string): UsedByRef {
+  const [path, query] = url.split("?");
+  const parts = path.split("/").filter(Boolean); // ["1.0","instances","name"]
+  const kind = parts[1] || "";
+  const name = decodeURIComponent(parts[parts.length - 1] || "");
+  const project =
+    new URLSearchParams(query || "").get("project") || undefined;
+  return { kind, name, project };
+}
+
+/** Wrap the shared formatBytes (lib/utils) so RX/TX render "-" when absent. */
+function formatCounter(bytes?: number): string | null {
+  if (bytes == null || Number.isNaN(bytes)) return null;
+  return formatBytes(bytes);
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-1 sm:gap-4 py-2 border-b last:border-b-0">
+      <div className="text-sm text-muted-foreground">{label}</div>
+      <div className="text-sm">{children}</div>
+    </div>
+  );
+}
+
+export function NetworkDetail({ name, host }: NetworkDetailProps) {
+  const router = useRouter();
+  const { toast } = useToast();
+  const { data, isLoading, error } = useNetwork(name, host);
+  const network = data as NetworkInfo | undefined;
+  const { data: stateData } = useNetworkState(name, host);
+  const deleteNetwork = useDeleteNetwork();
+  const { isReadOnly } = useReadOnlyMode();
+  const { hasRole } = usePermissions();
+  const canDelete = hasRole(Role.PARTNER) && !isReadOnly;
+
+  if (isLoading) return <LoadingLottiePage />;
+
+  if (error || !network) {
+    return (
+      <div className="space-y-4">
+        <Link href="/inventory/networks" className="text-sm text-primary hover:underline">
+          &larr; Back to Networks
+        </Link>
+        <div className="p-4 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
+          Failed to load network &quot;{name}&quot; on {host}.
+        </div>
+      </div>
+    );
+  }
+
+  // LXD refuses to delete unmanaged networks (a physical NIC, `lo`, ...), so
+  // don't offer a button that is guaranteed to fail.
+  const canDeleteThis = canDelete && network.managed;
+
+  const config: Record<string, string> = network.config || {};
+  const refs = (network.used_by || []).map(parseUsedBy);
+  const instances = refs.filter((r) => r.kind === "instances");
+  const profiles = refs.filter((r) => r.kind === "profiles");
+  const others = refs.filter(
+    (r) => r.kind !== "instances" && r.kind !== "profiles",
+  );
+
+  const state = (stateData as any)?.state;
+  const counters = state?.counters || {};
+  const rx = formatCounter(counters.bytes_received);
+  const tx = formatCounter(counters.bytes_sent);
+
+  const handleDelete = async () => {
+    try {
+      await deleteNetwork.mutateAsync({ name, host });
+      toast({ title: "Network deleted", description: `"${name}" was deleted.` });
+      router.push("/inventory/networks");
+    } catch (e) {
+      toast({
+        title: "Failed to delete network",
+        description: e instanceof Error ? e.message : String(e),
+        variant: "destructive",
+      });
+    }
+  };
+
+  const refBadge = (r: UsedByRef, icon: React.ReactNode) => (
+    <Badge
+      key={`${r.kind}-${r.project || ""}-${r.name}`}
+      variant="secondary"
+      className="gap-1 font-normal"
+    >
+      {icon}
+      {r.name}
+    </Badge>
+  );
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* Breadcrumb header */}
+      <div className="flex items-center justify-between">
+        <div className="text-2xl font-bold flex items-center gap-2">
+          <Link href="/inventory/networks" className="text-primary hover:underline">
+            Networks
+          </Link>
+          <span className="text-muted-foreground">/</span>
+          <span>{network.name}</span>
+        </div>
+        {canDeleteThis && (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button variant="destructive" size="sm">
+                <Trash2 className="h-4 w-4 mr-2" />
+                Delete network
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete network &quot;{network.name}&quot;?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This permanently deletes the network on {host}. Networks that are
+                  still in use by instances or profiles cannot be deleted.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction
+                  onClick={handleDelete}
+                  className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                >
+                  {deleteNetwork.isPending && (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  )}
+                  Delete
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
+      </div>
+
+      {/* Connections / topology */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Connections</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {refs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              This network is not used by any instance or profile.
+            </p>
+          ) : (
+            <div className="flex items-center overflow-x-auto py-2">
+              <Badge variant="outline" className="gap-1 shrink-0">
+                <Network className="h-3.5 w-3.5" />
+                {network.name}
+              </Badge>
+              {/* horizontal line from the network to the trunk */}
+              <div className="h-px w-6 bg-border shrink-0" />
+              <div className="flex flex-col">
+                {[...instances, ...profiles, ...others].map((r, i, arr) => {
+                  const isFirst = i === 0;
+                  const isLast = i === arr.length - 1;
+                  const icon =
+                    r.kind === "instances" ? (
+                      <Box className="h-3.5 w-3.5" />
+                    ) : r.kind === "profiles" ? (
+                      <Layers className="h-3.5 w-3.5" />
+                    ) : (
+                      <Network className="h-3.5 w-3.5" />
+                    );
+                  return (
+                    <div
+                      key={`${r.kind}-${r.project || ""}-${r.name}`}
+                      className="flex items-center h-9"
+                    >
+                      {/* connector cell: vertical trunk + horizontal branch */}
+                      <div className="relative w-6 self-stretch shrink-0">
+                        {arr.length > 1 && (
+                          <span
+                            className="absolute left-0 w-px bg-border"
+                            style={{
+                              top: isFirst ? "50%" : 0,
+                              bottom: isLast ? "50%" : 0,
+                            }}
+                          />
+                        )}
+                        <span className="absolute left-0 top-1/2 h-px w-6 bg-border" />
+                      </div>
+                      <Badge
+                        variant="secondary"
+                        className="gap-1 font-normal shrink-0"
+                      >
+                        {icon}
+                        {r.name}
+                      </Badge>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* General */}
+      <Card>
+        <CardHeader>
+          <CardTitle>General</CardTitle>
+        </CardHeader>
+        <CardContent className="py-0">
+          <Field label="Type">
+            <span className="capitalize">{network.type}</span>
+          </Field>
+          <Field label="Description">{network.description || "-"}</Field>
+          <Field label="ACLs">{config["security.acls"] || "-"}</Field>
+          <Field label="IPv4 address">{config["ipv4.address"] || "-"}</Field>
+          <Field label="IPv6 address">{config["ipv6.address"] || "-"}</Field>
+          <Field label="RX">
+            {rx != null
+              ? `${rx} (${counters.packets_received ?? 0} packets)`
+              : "-"}
+          </Field>
+          <Field label="TX">
+            {tx != null
+              ? `${tx} (${counters.packets_sent ?? 0} packets)`
+              : "-"}
+          </Field>
+          <Field label="Status">{network.status || "-"}</Field>
+          <Field label="Managed">{network.managed ? "Yes" : "No"}</Field>
+          <Field label="Used by profiles">
+            {profiles.length === 0 ? (
+              "-"
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {profiles.map((r) =>
+                  refBadge(r, <Layers className="h-3.5 w-3.5" />),
+                )}
+              </div>
+            )}
+          </Field>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

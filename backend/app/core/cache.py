@@ -232,11 +232,13 @@ class CacheManager:
         """
         cache_key = self._make_key(namespace, key)
         should_decrypt = self._should_encrypt(namespace)
-        
-        # Try Redis first with fast timeout
+
+        # Try Redis first with fast timeout.
+        redis_answered = False
         if self.redis_client:
             try:
                 value = self.redis_client.get(cache_key)
+                redis_answered = True  # Redis responded — hit OR miss.
                 if value is not None:
                     logger.debug(f"Redis cache HIT: {cache_key}")
                     data = json.loads(value)
@@ -248,8 +250,18 @@ class CacheManager:
                 logger.warning(f"Redis timeout for key: {cache_key}, falling back to memory")
             except Exception as e:
                 logger.warning(f"Redis get error: {e}, falling back to memory")
-        
-        # Fallback to memory cache
+
+        # Redis answered with a MISS -> that is authoritative; do NOT consult the
+        # per-worker memory cache. We run multiple uvicorn workers, each with its
+        # own memory cache, and an invalidation (delete/delete_pattern) can only
+        # clear Redis + the *local* worker's memory. Falling through to memory on
+        # a Redis miss makes the other workers keep serving stale entries until
+        # their TTL expires. The memory cache is a Redis-is-down fallback only.
+        if redis_answered:
+            logger.debug(f"Cache MISS (redis authoritative): {cache_key}")
+            return None
+
+        # Redis unavailable/errored -> degraded mode, fall back to memory cache.
         cached = self.memory_cache.get(cache_key)
         if cached:
             value, expiry = cached
