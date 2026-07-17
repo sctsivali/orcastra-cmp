@@ -27,6 +27,9 @@ const TRUSTED_CLIENT_IP_HEADERS = (
   .map((headerName) => headerName.trim().toLowerCase())
   .filter(Boolean);
 
+// Statuses that must never carry a response body (RFC 9110).
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
+
 const HOP_BY_HOP_HEADERS = [
   "connection",
   "content-length",
@@ -174,23 +177,37 @@ async function proxyRequest(req: NextRequest): Promise<Response> {
       duplex: "half",
     });
 
+    // 204/205/304 are null-body statuses: passing ANY body (even a zero-length
+    // buffer) makes the Response constructor throw "Invalid response status
+    // code", which the catch below would report as a bogus "Backend
+    // unavailable" 502. This hit every no-content reply, e.g. tus PATCH chunks.
+    const isNullBody = NULL_BODY_STATUSES.has(upstream.status);
     // Buffer the full (decompressed) body so Content-Length is accurate
-    const body = await upstream.arrayBuffer();
+    const body = isNullBody ? null : await upstream.arrayBuffer();
 
     const responseHeaders = new Headers(upstream.headers);
     // Remove hop-by-hop and encoding headers that are no longer valid
     responseHeaders.delete("transfer-encoding");
     responseHeaders.delete("connection");
     responseHeaders.delete("content-encoding");
-    // Set correct Content-Length for the decompressed body
-    responseHeaders.set("content-length", String(body.byteLength));
+    if (isNullBody) {
+      responseHeaders.delete("content-length");
+    } else {
+      // Set correct Content-Length for the decompressed body
+      responseHeaders.set("content-length", String(body!.byteLength));
+    }
 
     return new Response(body, {
       status: upstream.status,
       statusText: upstream.statusText,
       headers: responseHeaders,
     });
-  } catch {
+  } catch (err) {
+    console.error("[api-proxy] upstream fetch failed", {
+      method: req.method,
+      path: pathname,
+      error: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+    });
     return NextResponse.json(
       { error: "Backend unavailable" },
       { status: 502 }

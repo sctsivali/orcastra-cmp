@@ -790,3 +790,39 @@ class ImageUploadSession(Base):
         nullable=False,
     )
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class IsoUploadSession(Base):
+    """Resumable upload + LXD import session for an OrcaHub partner custom ISO.
+
+    Mirrors ImageUploadSession, but the file is imported as an LXD custom storage volume of
+    content-type 'iso' into a chosen pool (not the image store). Identity is (pool, volume_name)
+    rather than an image fingerprint/alias. Status flow:
+    pending -> uploading -> uploaded -> importing -> ready | failed.
+    """
+    __tablename__ = "iso_upload_sessions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(64), unique=True, nullable=False, index=True)
+    cluster_id = Column(String(255), nullable=False, index=True)
+    project = Column(String(255), nullable=False, server_default="default")
+    pool = Column(String(255), nullable=False)              # target storage pool
+    volume_name = Column(String(255), nullable=False)       # LXD custom volume name (the ISO)
+    iso_ref = Column(String(255), nullable=True)            # OrcaHub CustomIso id
+    api_key_id = Column(String(255), nullable=True)
+    expected_sha256 = Column(String(64), nullable=True)
+    max_bytes = Column(BigInteger, nullable=False)
+    total_bytes = Column(BigInteger, nullable=False)
+    upload_offset = Column(BigInteger, nullable=False, server_default="0")
+    status = Column(String(32), nullable=False, server_default="pending", index=True)
+    size = Column(BigInteger, nullable=True)
+    error = Column(Text, nullable=True)
+    staging_path = Column(String(512), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
