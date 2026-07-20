@@ -119,6 +119,15 @@ export default function InstancesPage() {
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
+  // Confirmation for stop/restart, with a Force option (power-cycle) for guests
+  // that can't answer a graceful ACPI shutdown — e.g. a VM with no OS installed.
+  const [confirmAction, setConfirmAction] = useState<{
+    open: boolean;
+    action: "stop" | "restart" | null;
+    name: string;
+    host: string;
+    force: boolean;
+  }>({ open: false, action: null, name: "", host: "", force: false });
   const router = useRouter();
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
@@ -152,7 +161,10 @@ export default function InstancesPage() {
     setIsMonitoringModalOpen(true);
   };
 
-  const handleAction = async (
+  // Entry point for the row action buttons. Start fires immediately; stop and
+  // restart open a confirm dialog so the user can choose a graceful or forced
+  // (power-cycle) operation.
+  const handleAction = (
     instanceName: string,
     host: string,
     action: "start" | "stop" | "restart"
@@ -165,23 +177,35 @@ export default function InstancesPage() {
       });
       return;
     }
+    if (action === "start") {
+      runAction(instanceName, host, action);
+      return;
+    }
+    setConfirmAction({ open: true, action, name: instanceName, host, force: false });
+  };
 
+  const runAction = async (
+    instanceName: string,
+    host: string,
+    action: "start" | "stop" | "restart",
+    force = false
+  ) => {
     try {
       setActionLoading(`${instanceName}-${action}`);
-      
-      const mutation = action === "start" 
-        ? startInstance 
-        : action === "stop" 
-        ? stopInstance 
-        : restartInstance;
-      
-      await mutation.mutateAsync({ name: instanceName, host });
-      
+
+      if (action === "start") {
+        await startInstance.mutateAsync({ name: instanceName, host });
+      } else if (action === "stop") {
+        await stopInstance.mutateAsync({ name: instanceName, host, force });
+      } else {
+        await restartInstance.mutateAsync({ name: instanceName, host, force });
+      }
+
       toast({
         title: "Success",
         description: `Instance ${instanceName} ${action} initiated`,
       });
-      
+
       // Refresh instances after action
       setTimeout(() => refetch(), 2000);
     } catch (error) {
@@ -218,6 +242,13 @@ export default function InstancesPage() {
     } finally {
       setDeleteTarget(null);
     }
+  };
+
+  const confirmActionRun = () => {
+    if (confirmAction.action) {
+      runAction(confirmAction.name, confirmAction.host, confirmAction.action, confirmAction.force);
+    }
+    setConfirmAction((prev) => ({ ...prev, open: false }));
   };
 
   const getStatusColor = (status: string) => {
@@ -634,6 +665,55 @@ export default function InstancesPage() {
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               )}
               {deleteInstance.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Stop / Restart confirmation, with a Force (power-cycle) option. */}
+      <AlertDialog
+        open={confirmAction.open}
+        onOpenChange={(open) => setConfirmAction((prev) => ({ ...prev, open }))}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction.action === "stop" ? "Stop" : "Restart"} “{confirmAction.name}”?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction.action === "stop"
+                ? "This will shut down the instance."
+                : "This will restart the instance."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {/* A graceful stop asks the guest OS to shut down over ACPI. A VM with
+              no OS installed, or one at a boot menu/UEFI shell, has nothing
+              listening and will time out — force power-cycles those. */}
+          <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={confirmAction.force}
+              onChange={(e) =>
+                setConfirmAction((prev) => ({ ...prev, force: e.target.checked }))
+              }
+            />
+            <span className="text-sm">
+              <span className="font-medium">
+                Force (power-cycle, don&apos;t wait for the guest)
+              </span>
+              <span className="block text-xs text-muted-foreground mt-0.5">
+                {confirmAction.force
+                  ? "Cuts power immediately — like pulling the plug. Unsaved data in the guest may be lost."
+                  : "Use this if nothing in the guest will answer a graceful shutdown: no OS installed yet, sitting at a boot menu, still booting, or a live/installer image that ignores ACPI."}
+              </span>
+            </span>
+          </label>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmActionRun}>
+              {confirmAction.force ? "Force " : ""}
+              {confirmAction.action === "stop" ? "Stop" : "Restart"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

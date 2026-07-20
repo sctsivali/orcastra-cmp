@@ -6,6 +6,7 @@ import {
   VMListResponse,
   VMInfo,
   VMCreateRequest,
+  InstanceCreateRequest,
   VMCreateResponse,
   VMActionRequest,
   VMActionResponse,
@@ -804,7 +805,7 @@ const systemAPI = {
 
 // Instance Operations (similar to VMs but more comprehensive)
 export const instanceAPI = {
-  create: async (data: VMCreateRequest): Promise<VMCreateResponse> => {
+  create: async (data: InstanceCreateRequest): Promise<VMCreateResponse> => {
     return fetchAPI<VMCreateResponse>("/instances", {
       method: "POST",
       body: JSON.stringify(data),

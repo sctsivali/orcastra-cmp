@@ -312,7 +312,7 @@ class LXDService:
         self,
         name: str,
         host: str,
-        image: str,
+        image: Optional[str] = None,
         instance_type: str = "virtual-machine",
         profiles: Optional[List[str]] = None,
         config: Optional[Dict[str, str]] = None,
@@ -323,15 +323,17 @@ class LXDService:
         image_server: Optional[str] = None,
         image_protocol: Optional[str] = None,
         description: Optional[str] = None,
+        source_type: str = "image",
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking); returns the operation id.
 
         Backs the dashboard's `POST /instances`. See InstanceManager.create_instance.
+        `source_type="none"` creates a blank VM (empty root disk, no OS).
         """
         return await self.instance_manager.create_instance(
             name, host, image, instance_type, profiles, config,
             cloud_init, devices, start_on_create, project,
-            image_server, image_protocol, description
+            image_server, image_protocol, description, source_type,
         )
 
     # Image operations
