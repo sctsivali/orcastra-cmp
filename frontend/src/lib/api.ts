@@ -368,9 +368,14 @@ export const vmAPI = {
     const params = new URLSearchParams({ host, force: String(force) });
     if (project) params.append("project", project);
 
+    // A force delete stops a running VM first, which on a large guest can exceed
+    // the default 45s. The abort is client-side only, so a premature timeout
+    // leaves the delete running server-side (onSuccess never fires, the row
+    // lingers, a retry 404s). Give it a generous window.
     return fetchAPI<VMActionResponse>(
       `/vms/${encodeURIComponent(name)}?${params.toString()}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
+      300000
     );
   },
 
