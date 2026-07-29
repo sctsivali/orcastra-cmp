@@ -12,6 +12,7 @@ import {
   Layers,
   Cpu,
   HardDrive,
+  Disc,
   Server,
   Package,
   Settings,
@@ -754,6 +755,18 @@ export function Sidebar({ className }: SidebarProps) {
                         <SidebarLink href="/inventory/storage-volumes">
                           <HardDrive className="h-4 w-4 mr-2" />
                           Volumes
+                        </SidebarLink>
+                      </Button>
+
+                      <Button
+                        variant={pathname === "/inventory/iso-images" ? "secondary" : "ghost"}
+                        className="w-full justify-start text-sm"
+                        size="sm"
+                        asChild
+                      >
+                        <SidebarLink href="/inventory/iso-images">
+                          <Disc className="h-4 w-4 mr-2" />
+                          ISO Images
                         </SidebarLink>
                       </Button>
                     </div>

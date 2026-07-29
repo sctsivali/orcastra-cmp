@@ -21,20 +21,26 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, UploadCloud } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useImages } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { ImageListResponse } from "@/types/api";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { ImageUploadDialog } from "@/components/image-upload-dialog";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { Role } from "@/types/rbac";
 
 interface ImageInfo {
   fingerprint: string;
   architecture: string;
   type: string;
   size: number;
-  aliases: Array<{ name: string; description: string }>;
+  // The API returns aliases as plain strings (see backend ImageInfo / types/api.ts).
+  aliases: string[];
   properties: Record<string, string>;
   public: boolean;
   cached: boolean;
@@ -54,7 +60,11 @@ export default function ImagesPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [uploadOpen, setUploadOpen] = useState(false);
   const { toast } = useToast();
+  const { hasRole } = usePermissions();
+  const { isReadOnly } = useReadOnlyMode();
+  const canUpload = hasRole(Role.PARTNER);
 
   const sortAccessors = useMemo(
     () => ({
@@ -100,8 +110,8 @@ export default function ImagesPage() {
       filtered = filtered.filter(
         (img: any) =>
           img.fingerprint?.toLowerCase()?.includes(query) ||
-          img.aliases?.some((alias: any) =>
-            alias?.name?.toLowerCase()?.includes(query)
+          img.aliases?.some((alias: string) =>
+            alias?.toLowerCase()?.includes(query)
           ) ||
           (img.properties?.description &&
             img.properties.description.toLowerCase().includes(query))
@@ -150,12 +160,25 @@ export default function ImagesPage() {
             Manage hypervisor container and VM images
           </p>
         </div>
-        <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
-          label="Refresh images"
-          onClick={() => refetch()}
-        />
+        <div className="flex items-center gap-2">
+          <RefreshButton
+            disabled={isRefetching}
+            isRefreshing={isRefetching}
+            label="Refresh images"
+            onClick={() => refetch()}
+          />
+          {/* Partner+ only; the upload endpoint requires Partner. */}
+          {canUpload && (
+            <Button
+              onClick={() => setUploadOpen(true)}
+              disabled={isReadOnly}
+              title={isReadOnly ? "Action disabled in read-only mode" : "Upload a custom image"}
+            >
+              <UploadCloud className="h-4 w-4 mr-2" />
+              Upload Image
+            </Button>
+          )}
+        </div>
       </div>
 
       <Card>
@@ -256,8 +279,8 @@ export default function ImagesPage() {
                       {image.fingerprint.substring(0, 12)}...
                     </TableCell>
                     <TableCell>
-                      {image.aliases && image.aliases.length > 0 && image.aliases[0].name ? (
-                        <Badge variant="outline">{image.aliases[0].name}</Badge>
+                      {image.aliases && image.aliases.length > 0 && image.aliases[0] ? (
+                        <Badge variant="outline">{image.aliases[0]}</Badge>
                       ) : (
                         <span className="text-muted-foreground text-xs">
                           N/A
@@ -322,6 +345,12 @@ export default function ImagesPage() {
           )}
         </CardContent>
       </Card>
+
+      <ImageUploadDialog
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+        onUploaded={() => refetch()}
+      />
     </div>
   );
 }
