@@ -12,7 +12,7 @@ from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
 from app.models.schemas import VMInfo, VMStatus
 from app.core.config import get_settings
-from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError
+from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError, LXDSnapshotExistsError
 from .utils import parse_vm_status, extract_ip_addresses, find_instance_in_projects
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
@@ -53,6 +53,21 @@ def _is_graceful_timeout(exc: Exception) -> bool:
         "context deadline exceeded" in msg
         or "failed shutting down instance" in msg
     )
+
+
+def _lxd_snapshot_names(client, name: str, project: str) -> List[str]:
+    """List an instance's snapshot names via the raw LXD API.
+
+    find_instance_in_projects returns an InstanceWrapper (raw-API backed), which
+    has no pylxd `.snapshots`, so query GET /instances/{name}/snapshots directly.
+    """
+    try:
+        resp = client.api.instances[name].snapshots.get(params={"project": project})
+        meta = resp.json().get("metadata") or []
+        return [str(u).rstrip("/").rsplit("/", 1)[-1] for u in meta]
+    except Exception as e:  # noqa: BLE001 - absent/uncreatable snapshots -> treat as none
+        logger.warning("Could not list snapshots for %s: %s", name, e)
+        return []
 
 # Thread pool for parallel instance state fetching
 # Enterprise setting: 50 workers for high concurrency
@@ -663,7 +678,116 @@ class InstanceManager:
             
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to delete VM: {str(e)}")
-    
+
+    async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None) -> Dict[str, Any]:
+        """Gather what the rebuild flow needs before it starts: the instance status,
+        its snapshots (the block condition -- LXD refuses to rebuild an instance that
+        has any), and a snapshot of the config + attached custom volumes for the job
+        record. Blocking pylxd calls run off the event loop.
+        """
+        def _work() -> Dict[str, Any]:
+            client = self._get_client_with_reconnect(host)
+            if client is None:
+                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+            instance, project_name = find_instance_in_projects(client, name, project)
+            if instance is None:
+                raise LXDOperationError(f"Instance {name} not found on {host}")
+            snapshots = _lxd_snapshot_names(client, name, project_name)
+            data = instance._data or {}
+            config = dict(data.get("config") or {})
+            devices = dict(data.get("expanded_devices") or data.get("devices") or {})
+            # Attached custom volumes survive a rebuild: disk devices other than the
+            # root that reference a pool volume by source.
+            attached = {
+                dname: dcfg for dname, dcfg in devices.items()
+                if dcfg.get("type") == "disk" and dname != "root" and dcfg.get("source")
+            }
+            base_image = config.get("image.description") or config.get("volatile.base_image")
+            return {
+                "project": project_name,
+                "status": instance.status,
+                "type": instance.type,
+                "snapshots": snapshots,
+                "config": config,
+                "attached_volumes": attached,
+                "base_image": base_image,
+            }
+        return await asyncio.to_thread(_work)
+
+    async def rebuild_instance(
+        self,
+        name: str,
+        host: str,
+        source: Dict[str, Any],
+        project: Optional[str] = None,
+        cloud_init: Optional[str] = None,
+        wait_timeout: int = 1800,
+    ) -> str:
+        """Rebuild the instance's root disk from `source` (LXD `POST .../rebuild`).
+
+        Reinstalls the root disk while LXD preserves the instance identity, config
+        and attached volumes. The instance must already be stopped and must have no
+        snapshots (caller enforces both). Optionally sets cloud-init.user-data first
+        so the fresh root disk picks it up on first boot. pylxd has no rebuild
+        helper, so this drives the raw API and waits on the returned operation.
+        Returns the LXD operation id.
+        """
+        client = self._get_client_with_reconnect(host)
+        if client is None:
+            raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+        instance, project_name = find_instance_in_projects(client, name, project)
+        if instance is None:
+            raise LXDOperationError(f"Instance {name} not found on {host}")
+
+        # Snapshot guard: LXD rejects a rebuild if any snapshot exists. Surface it
+        # as a typed error the router maps to a clear 409 listing the snapshots.
+        snapshots = await asyncio.to_thread(_lxd_snapshot_names, client, name, project_name)
+        if snapshots:
+            raise LXDSnapshotExistsError(snapshots)
+
+        if cloud_init is not None:
+            # PATCH merges config, so this only sets cloud-init.user-data. The new
+            # root disk picks it up on first boot.
+            def _set_ci():
+                client.api.instances[name].patch(
+                    json={"config": {"cloud-init.user-data": cloud_init}},
+                    params={"project": project_name},
+                )
+            await asyncio.to_thread(_set_ci)
+
+        endpoint = client.api._api_endpoint  # e.g. https://host:8443/1.0
+        session = client.api.session
+        project_q = f"?project={project_name}" if project_name and project_name != "default" else ""
+
+        def _do_rebuild() -> str:
+            resp = session.post(
+                f"{endpoint}/instances/{name}/rebuild{project_q}",
+                json={"source": source},
+                verify=False,
+                timeout=(5, 120),
+            )
+            if resp.status_code >= 400:
+                raise LXDOperationError(f"LXD rebuild failed: {resp.status_code} {resp.text[:300]}")
+            op = resp.json()
+            op_path = op.get("operation")  # /1.0/operations/<id>
+            if not op_path:
+                return ""  # completed synchronously
+            op_id = op_path.rstrip("/").rsplit("/", 1)[-1]
+            wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=wait_timeout)
+            wbody = wresp.json() or {}
+            if wbody.get("type") == "error" or wbody.get("error"):
+                raise LXDOperationError(f"LXD rebuild failed: {wbody.get('error') or 'unknown error'}")
+            wdata = wbody.get("metadata") or {}
+            if wdata.get("status") != "Success":
+                raise LXDOperationError(
+                    f"LXD rebuild operation failed: {wdata.get('err') or wdata.get('status') or 'unknown'}"
+                )
+            return op_id
+
+        op_id = await asyncio.to_thread(_do_rebuild)
+        logger.info("Rebuilt instance %s on %s (project=%s, op=%s)", name, host, project_name, op_id)
+        return op_id
+
     @audit_operation(
         "lxd.instance.create", "instance",
         extract_details=lambda args, kwargs, result: {

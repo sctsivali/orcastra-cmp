@@ -449,6 +449,10 @@ Ensure your client certificates are properly configured.
     from app.routers.image_uploads_dashboard import router as image_uploads_dashboard_router
     app.include_router(image_uploads_dashboard_router, prefix=settings.api_prefix)
 
+    # Instance rebuild (JWT) — reinstall root disk, preserve identity/config/volumes
+    from app.routers.instance_rebuild import router as instance_rebuild_router
+    app.include_router(instance_rebuild_router, prefix=settings.api_prefix)
+
     # Cluster Registration Router (Vault Integration)
     app.include_router(cluster_registration_router, prefix=settings.api_prefix)
     

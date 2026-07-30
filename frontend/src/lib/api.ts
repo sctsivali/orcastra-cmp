@@ -804,12 +804,77 @@ const systemAPI = {
 };
 
 // Instance Operations (similar to VMs but more comprehensive)
+export interface RebuildRequest {
+  host: string;
+  project?: string;
+  mode: "image" | "empty" | "cloud-init";
+  image?: string;
+  image_server?: string;
+  image_protocol?: string;
+  cloud_init?: string;
+  confirm_name: string;
+  run_provisioning?: boolean;
+}
+
+export type RebuildStatus =
+  | "pending" | "stopping" | "rebuilding" | "starting" | "provisioning" | "ready" | "failed";
+
+export interface RebuildJobStatus {
+  job_id: string;
+  instance_name: string;
+  host: string;
+  project: string;
+  mode: string;
+  requested_image: string | null;
+  old_image: string | null;
+  status: RebuildStatus;
+  operation_id: string | null;
+  error: string | null;
+  attached_volumes: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface RebuildPreflight {
+  instance_name: string;
+  host: string;
+  status: string;
+  type: string;
+  snapshots: string[];
+  attached_volumes: string[];
+  base_image: string | null;
+}
+
 export const instanceAPI = {
   create: async (data: InstanceCreateRequest): Promise<VMCreateResponse> => {
     return fetchAPI<VMCreateResponse>("/instances", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  },
+
+  // Read-only pre-check for the Rebuild dialog (snapshots block, volumes survive).
+  rebuildPreflight: async (name: string, host: string, project = "default"): Promise<RebuildPreflight> => {
+    const p = new URLSearchParams({ host, project });
+    return fetchAPI<RebuildPreflight>(
+      `/instances/${encodeURIComponent(name)}/rebuild-preflight?${p.toString()}`,
+    );
+  },
+
+  // Kick off a rebuild; returns the job to poll. Reinstalls the root disk while
+  // preserving identity/config/attached volumes.
+  rebuild: async (name: string, body: RebuildRequest): Promise<RebuildJobStatus> => {
+    return fetchAPI<RebuildJobStatus>(
+      `/instances/${encodeURIComponent(name)}/rebuild`,
+      { method: "POST", body: JSON.stringify(body) },
+      60000,
+    );
+  },
+
+  getRebuildJob: async (name: string, jobId: string): Promise<RebuildJobStatus> => {
+    return fetchAPI<RebuildJobStatus>(
+      `/instances/${encodeURIComponent(name)}/rebuild/${encodeURIComponent(jobId)}`,
+    );
   },
 
   list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number): Promise<VMListResponse> => {

@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Play, Square, RotateCw, Trash2, Search, Filter, Terminal, Monitor, Loader2 } from "lucide-react";
+import { Play, Square, RotateCw, RefreshCw, Trash2, Search, Filter, Terminal, Monitor, Loader2 } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
 import { TagBadge } from "@/components/tag-manager";
 import { removePendingCreate } from "@/lib/pending-creates";
@@ -57,6 +57,7 @@ import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Plus } from "lucide-react";
+import { RebuildDialog } from "@/components/rebuild-dialog";
 
 // How long a "Creating…" placeholder must live before a same-named instance in
 // the list is trusted as its resolution (guards against stale-cache races).
@@ -104,6 +105,8 @@ export default function InstancesPage() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   // Instance pending delete confirmation (controls the shared AlertDialog).
   const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
+  // Instance pending rebuild (controls the shared RebuildDialog).
+  const [rebuildTarget, setRebuildTarget] = useState<VMInfo | null>(null);
   // Radix keeps AlertDialogContent mounted through its ~200ms exit fade, so
   // reading a just-nulled deleteTarget flashes blank name/host. Keep the last
   // target around and render the dialog body from it so it stays populated
@@ -577,6 +580,21 @@ export default function InstancesPage() {
                         <Button
                           size="sm"
                           variant="outline"
+                          onClick={() => setRebuildTarget(instance)}
+                          disabled={
+                            isReadOnly ||
+                            !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
+                          }
+                          aria-label={`Rebuild instance ${instance.name}`}
+                          title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Rebuild instance (reinstall root disk)"}
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {canDeleteInstance && (
+                        <Button
+                          size="sm"
+                          variant="outline"
                           className="text-destructive hover:text-destructive"
                           onClick={() => setDeleteTarget(instance)}
                           // Only the row actually being deleted greys out; a
@@ -620,6 +638,22 @@ export default function InstancesPage() {
         }}
         project={selectedInstance?.project || "default"}
       />
+
+      {/* Rebuild (shared across rows, controlled by rebuildTarget) */}
+      {rebuildTarget && (
+        <RebuildDialog
+          open={!!rebuildTarget}
+          onOpenChange={(open) => {
+            if (!open) setRebuildTarget(null);
+          }}
+          instance={{
+            name: rebuildTarget.name,
+            host: rebuildTarget.host,
+            project: rebuildTarget.project || "default",
+          }}
+          onDone={() => refetch()}
+        />
+      )}
 
       {/* Delete confirmation (shared across rows, controlled by deleteTarget) */}
       <AlertDialog

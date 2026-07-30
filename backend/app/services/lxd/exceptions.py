@@ -22,3 +22,19 @@ class LXDGracefulTimeoutError(LXDOperationError):
     or one sitting at a boot menu/UEFI shell, which has nothing listening.
     """
     pass
+
+
+class LXDSnapshotExistsError(LXDOperationError):
+    """A rebuild was blocked because the instance still has snapshots.
+
+    LXD refuses to rebuild an instance that has snapshots. This is recoverable in
+    a specific way (delete the snapshots first), so the router maps it to a clear
+    409 that lists them rather than a generic failure.
+    """
+    def __init__(self, snapshots):
+        self.snapshots = list(snapshots)
+        names = ", ".join(self.snapshots) if self.snapshots else ""
+        super().__init__(
+            f"Cannot rebuild: the instance has {len(self.snapshots)} snapshot(s) "
+            f"({names}). Delete them first, then retry the rebuild."
+        )

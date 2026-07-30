@@ -826,3 +826,46 @@ class IsoUploadSession(Base):
         nullable=False,
     )
     expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+
+# ============================================
+# Instance Rebuild Jobs
+# ============================================
+
+class RebuildJob(Base):
+    """A record of an instance 'rebuild' (LXD `POST /1.0/instances/{name}/rebuild`).
+
+    Rebuild reinstalls the root disk from a fresh source while preserving the
+    instance's identity, config, and attached custom volumes. This table is the
+    durable, pollable record of one such job (dashboard-initiated), capturing what
+    was requested, a snapshot of the pre-rebuild config, and its progress so the
+    UI can show status/history. Status flow:
+    pending -> stopping -> rebuilding -> starting -> provisioning -> ready | failed.
+    """
+    __tablename__ = "rebuild_jobs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    job_id = Column(String(64), unique=True, nullable=False, index=True)
+    cluster_id = Column(String(255), nullable=False, index=True)   # host / cluster member
+    project = Column(String(255), nullable=False, server_default="default")
+    instance_name = Column(String(255), nullable=False, index=True)
+    # "image" (from a base image), "empty" (blank root disk, install from ISO after),
+    # or "cloud-init" (image + apply cloud-init user-data on first boot).
+    mode = Column(String(32), nullable=False)
+    requested_image = Column(String(512), nullable=True)   # alias/fingerprint (null for empty)
+    old_image = Column(String(512), nullable=True)         # previous base image, if known
+    source = Column(JSONB, nullable=True)                  # the LXD rebuild `source` payload
+    previous_config = Column(JSONB, nullable=True)         # snapshot of instance config pre-rebuild
+    attached_volumes = Column(JSONB, nullable=True)        # preserved custom-volume devices
+    cloud_init = Column(Text, nullable=True)               # cloud-init user-data applied, if any
+    requester = Column(String(255), nullable=True)         # user email/id that triggered it
+    operation_id = Column(String(255), nullable=True)      # LXD operation id
+    status = Column(String(32), nullable=False, server_default="pending", index=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
