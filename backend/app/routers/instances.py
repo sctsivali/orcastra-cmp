@@ -11,7 +11,7 @@ import logging
 from app.models.schemas import (
     VMListResponse,
     VMInfo,
-    VMCreateRequest,
+    InstanceCreateRequest,
     VMCreateResponse,
     VMActionRequest,
     VMActionResponse,
@@ -23,6 +23,7 @@ from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
     LXDOperationError,
+    LXDGracefulTimeoutError,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -30,6 +31,8 @@ from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
+from app.services.tag_service import TagService
+from app.routers.tags import get_tag_service_dep
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -183,7 +186,7 @@ async def get_instance(
     description="Create a new instance (container or VM).",
 )
 async def create_instance(
-    request: VMCreateRequest,
+    request: InstanceCreateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -205,6 +208,8 @@ async def create_instance(
             project=request.project,
             image_server=request.image_server,
             image_protocol=request.image_protocol,
+            description=request.description,
+            source_type=request.source_type,
         )
 
         # Log activity: instance creation success
@@ -234,7 +239,7 @@ async def create_instance(
         )
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
-        
+
         # Log activity: instance creation failure
         activity_logger.log_activity(
             action="instance.create",
@@ -246,11 +251,35 @@ async def create_instance(
             error_message=str(e),
             details={"image": request.image, "instance_type": request.instance_type}
         )
-        
-        raise HTTPException(status_code=500, detail=str(e))
+
+        # Map to a meaningful status instead of a blanket 500.
+        low = str(e).lower()
+        if "already exists" in low:
+            status = 409
+        elif "not found" in low:
+            status = 404
+        elif "connect" in low or "not available" in low or "could not open project" in low:
+            status = 503
+        else:
+            status = 400
+        raise HTTPException(status_code=status, detail=str(e))
+    except LXDConnectionError as e:
+        # Cluster unreachable (e.g. during the duplicate-name exists() check or
+        # the create POST) — 503, matching the other instance endpoints.
+        logger.error(f"LXD connection error creating instance: {e}")
+        activity_logger.log_activity(
+            action="instance.create",
+            target_type="instance",
+            target_id=request.name,
+            target_host=request.host,
+            result="failure",
+            error_code="LXD_CONNECTION_ERROR",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating instance: {e}")
-        
+
         # Log activity: instance creation failure
         activity_logger.log_activity(
             action="instance.create",
@@ -361,6 +390,21 @@ async def stop_instance(
             action="stop",
             new_status=VMStatus.STOPPED  # Stop always results in Stopped
         )
+    except LXDGracefulTimeoutError as e:
+        # The guest ignored the ACPI shutdown (commonly a VM with no OS, or one
+        # sitting at a boot menu). Recoverable by retrying with force, so say so
+        # rather than reporting a bare 500.
+        logger.warning(f"Graceful stop timed out for {instance_name}: {e}")
+        activity_logger.log_activity(
+            action="instance.stop",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error(f"Error stopping instance {instance_name}: {e}")
         
@@ -418,6 +462,21 @@ async def restart_instance(
             action="restart",
             new_status=VMStatus.RUNNING  # Restart ends in Running
         )
+    except LXDGracefulTimeoutError as e:
+        # The guest ignored the ACPI shutdown (commonly a VM with no OS, or one
+        # sitting at a boot menu). Recoverable by retrying with force, so say so
+        # rather than reporting a bare 500.
+        logger.warning(f"Graceful restart timed out for {instance_name}: {e}")
+        activity_logger.log_activity(
+            action="instance.restart",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error(f"Error restarting instance {instance_name}: {e}")
         
@@ -446,6 +505,7 @@ async def delete_instance(
     project: Optional[str] = Query(None, description="LXD project name"),
     force: bool = Query(False, description="Force delete a running instance"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    tag_service: TagService = Depends(get_tag_service_dep),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
@@ -454,6 +514,18 @@ async def delete_instance(
     try:
         await lxd_service.delete_vm(instance_name, host, force=force, project=project)
         get_cache_manager().invalidate_instance_cache()
+
+        # Clean up the instance's tag rows so the tag store doesn't drift from the
+        # deleted container (best-effort — the instance is already gone).
+        try:
+            await tag_service.remove_resource_assignments(
+                "instance", instance_name,
+                resource_host=host, resource_project=project or "default",
+            )
+        except Exception as tag_err:
+            logger.warning(
+                f"Failed to clean up tags for deleted instance {instance_name}: {tag_err}"
+            )
 
         # Log activity: instance deletion success
         activity_logger.log_activity(

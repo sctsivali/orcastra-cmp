@@ -20,7 +20,9 @@ import {
   Rocket,
   ChevronDown,
   MousePointer2,
+  RefreshCw,
 } from "lucide-react";
+import { RebuildDialog } from "@/components/rebuild-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -81,6 +83,8 @@ interface ConfirmDialogState {
   operation: OperationType | null;
   title: string;
   description: string;
+  // Power-cycle instead of requesting a graceful guest shutdown.
+  force: boolean;
 }
 
 // BIOS boot key options
@@ -122,17 +126,21 @@ export function ConsoleToolbar({
   const updateInstanceStatus = useConsoleStore(s => s.updateInstanceStatus);
   const [loading, setLoading] = useState<OperationType | null>(null);
   const [spamming, setSpamming] = useState(false);
+  const [rebuildOpen, setRebuildOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
     open: false,
     operation: null,
     title: "",
     description: "",
+    force: false,
   });
 
-  // Execute instance operation
-  const executeOperation = useCallback(async (operation: OperationType) => {
+  // Execute instance operation. `force` power-cycles instead of asking the guest
+  // to shut down: required for a VM with no OS installed (or one sitting at a
+  // boot menu/UEFI shell), which has nothing listening for the ACPI request.
+  const executeOperation = useCallback(async (operation: OperationType, force = false) => {
     setLoading(operation);
-    
+
     const transitionStatus: Record<OperationType, InstanceStatus> = {
       start: 'Starting',
       stop: 'Stopping',
@@ -151,7 +159,7 @@ export function ConsoleToolbar({
           },
           body: JSON.stringify({
             host,
-            force: false,
+            force,
             timeout: 30,
           }),
         }
@@ -203,16 +211,17 @@ export function ConsoleToolbar({
       description: operation === 'stop'
         ? `Are you sure you want to stop "${instanceName}"? This will terminate all running processes.`
         : `Are you sure you want to restart "${instanceName}"? This will briefly interrupt all running processes.`,
+      force: false,
     });
   }, [instanceName, executeOperation]);
 
   // Confirm operation
   const confirmOperation = useCallback(() => {
     if (confirmDialog.operation) {
-      executeOperation(confirmDialog.operation);
+      executeOperation(confirmDialog.operation, confirmDialog.force);
     }
-    setConfirmDialog({ open: false, operation: null, title: "", description: "" });
-  }, [confirmDialog.operation, executeOperation]);
+    setConfirmDialog({ open: false, operation: null, title: "", description: "", force: false });
+  }, [confirmDialog.operation, confirmDialog.force, executeOperation]);
 
   // BIOS spam key - sends key 15 times with 100ms interval
   const handleBiosSpam = useCallback(async (key: string) => {
@@ -331,6 +340,23 @@ export function ConsoleToolbar({
               </Button>
             </TooltipTrigger>
             <TooltipContent>Restart Instance</TooltipContent>
+          </Tooltip>
+
+          {/* Rebuild (reinstall root disk) */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95"
+                disabled={isTransitioning || loading !== null}
+                onClick={() => setRebuildOpen(true)}
+                onTouchEnd={(e) => { e.preventDefault(); if (!isTransitioning && loading === null) setRebuildOpen(true); }}
+              >
+                <RefreshCw className="h-4 w-4 text-amber-500" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Rebuild Instance (reinstall root disk)</TooltipContent>
           </Tooltip>
         </div>
 
@@ -519,14 +545,54 @@ export function ConsoleToolbar({
             <AlertDialogTitle>{confirmDialog.title}</AlertDialogTitle>
             <AlertDialogDescription>{confirmDialog.description}</AlertDialogDescription>
           </AlertDialogHeader>
+          {/* A graceful stop asks the guest OS to shut down over ACPI. A VM with
+              no OS installed, or one sitting at a boot menu/UEFI shell, has
+              nothing listening and will just time out — force is the only way
+              to power-cycle those. */}
+          <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={confirmDialog.force}
+              onChange={(e) =>
+                setConfirmDialog((prev) => ({ ...prev, force: e.target.checked }))
+              }
+            />
+            <span className="text-sm">
+              <span className="font-medium">
+                Force (power-cycle, don&apos;t wait for the guest)
+              </span>
+              <span className="block text-xs text-muted-foreground mt-0.5">
+                {confirmDialog.force
+                  ? "Cuts power immediately — like pulling the plug. Unsaved data in the guest may be lost."
+                  : "Use this if nothing in the guest will answer a graceful shutdown: no OS installed yet, sitting at a boot menu, still booting, or a live/installer image that ignores ACPI."}
+              </span>
+            </span>
+          </label>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={confirmOperation}>
+              {confirmDialog.force ? 'Force ' : ''}
               {confirmDialog.operation === 'stop' ? 'Stop' : 'Restart'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rebuild dialog (reinstall root disk from a fresh source) */}
+      {rebuildOpen && (
+        <RebuildDialog
+          open={rebuildOpen}
+          onOpenChange={setRebuildOpen}
+          instance={{ name: instanceName, host, project }}
+          onDone={() => {
+            // The root disk was reinstalled; empty mode leaves it stopped,
+            // image/cloud-init modes leave it running. Reflect stopped as a safe
+            // default the console's own status stream will quickly correct.
+            updateInstanceStatus(consoleId, 'Stopped');
+          }}
+        />
+      )}
     </TooltipProvider>
   );
 }

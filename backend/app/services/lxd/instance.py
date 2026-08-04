@@ -8,17 +8,66 @@ import asyncio
 from typing import List, Tuple, Optional, Dict, Any
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pylxd.exceptions import LXDAPIException
+from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
 from app.models.schemas import VMInfo, VMStatus
 from app.core.config import get_settings
-from .exceptions import LXDConnectionError, LXDOperationError
+from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError, LXDSnapshotExistsError
 from .utils import parse_vm_status, extract_ip_addresses, find_instance_in_projects
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
 from .audit import audit_operation
 
 logger = logging.getLogger(__name__)
+
+# The pooled client is built for fast failure detection (3s connect / 8s read).
+# That read timeout is shorter than the graceful-shutdown waits callers ask for,
+# so the HTTP read would expire before LXD's own operation timeout -- making the
+# caller's `timeout` argument meaningless and surfacing a raw connection error
+# instead of a clean result. Stop/restart therefore use a client whose read
+# timeout outlives the requested wait by this margin.
+_GRACEFUL_READ_MARGIN_SECONDS = 30
+
+# Hard ceiling on the wait a caller can request, mirroring VMActionRequest's
+# `le=600` bound. Clamped again here so any internal caller that bypasses the
+# request schema still can't hold an LXD operation request (and its worker) open
+# for an unbounded time.
+_MAX_ACTION_TIMEOUT_SECONDS = 600
+
+
+def _is_graceful_timeout(exc: Exception) -> bool:
+    """True if `exc` means the guest never completed a graceful shutdown.
+
+    Because `_rebind_for_wait` gives the client a read timeout of
+    ``timeout + _GRACEFUL_READ_MARGIN_SECONDS``, the HTTP read always outlives
+    LXD's own operation deadline, so the failure surfaces as LXD's message --
+    'Failed shutting down instance, status is "Running": context deadline
+    exceeded' -- and never as a raw HTTP read timeout. We therefore match only
+    those two guest-side shapes. Matching the bare substring "timed out" would
+    misclassify connection failures ('Connection to <ip> timed out', 'Connection
+    pool timed out ...') as a guest ACPI failure and wrongly tell the operator to
+    retry with force during a connectivity outage.
+    """
+    msg = str(exc).lower()
+    return (
+        "context deadline exceeded" in msg
+        or "failed shutting down instance" in msg
+    )
+
+
+def _lxd_snapshot_names(client, name: str, project: str) -> List[str]:
+    """List an instance's snapshot names via the raw LXD API.
+
+    find_instance_in_projects returns an InstanceWrapper (raw-API backed), which
+    has no pylxd `.snapshots`, so query GET /instances/{name}/snapshots directly.
+    """
+    try:
+        resp = client.api.instances[name].snapshots.get(params={"project": project})
+        meta = resp.json().get("metadata") or []
+        return [str(u).rstrip("/").rsplit("/", 1)[-1] for u in meta]
+    except Exception as e:  # noqa: BLE001 - absent/uncreatable snapshots -> treat as none
+        logger.warning("Could not list snapshots for %s: %s", name, e)
+        return []
 
 # Thread pool for parallel instance state fetching
 # Enterprise setting: 50 workers for high concurrency
@@ -448,41 +497,90 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to start VM: {str(e)}")
     
+    def _rebind_for_wait(self, instance, host: str, project_name: str, timeout: int):
+        """Re-fetch `instance` on a client whose read timeout outlives `timeout`.
+
+        Returns the original instance unchanged if such a client can't be built,
+        so a graceful stop/restart degrades to the old behaviour rather than
+        failing outright.
+        """
+        try:
+            waiting_client = self.connection_manager.get_project_client(
+                host, project_name, (5, timeout + _GRACEFUL_READ_MARGIN_SECONDS)
+            )
+            if waiting_client is not None:
+                return waiting_client.instances.get(instance.name)
+        except Exception as e:  # noqa: BLE001 - fall back to the pooled client
+            logger.warning(
+                "Could not build a long-timeout client for %s on %s: %s", instance.name, host, e
+            )
+        return instance
+
+    @staticmethod
+    def _graceful_timeout(name: str, action: str, timeout: int) -> LXDGracefulTimeoutError:
+        # A graceful stop only works if software inside the guest acts on the ACPI
+        # power event. A fully-booted OS does so in about a second; the cases below
+        # never will, no matter how long the timeout.
+        return LXDGracefulTimeoutError(
+            f"Timed out after {timeout}s waiting for '{name}' to shut down gracefully: "
+            f"nothing in the guest acted on the ACPI shutdown request. Common causes: "
+            f"no OS is installed, it is sitting at a boot menu or UEFI shell, it is "
+            f"still early in boot, or the OS does not handle ACPI power events (many "
+            f"live/installer images do not). Retry the {action} with force to "
+            f"power-cycle it."
+        )
+
     @audit_operation("lxd.instance.stop", "instance")
     async def stop_vm(
-        self, 
-        name: str, 
-        host: str, 
+        self,
+        name: str,
+        host: str,
         force: bool = False,
         timeout: int = 30,
         project: Optional[str] = None,
     ) -> VMInfo:
         """Stop a VM (searches all projects)."""
+        timeout = max(1, min(timeout, _MAX_ACTION_TIMEOUT_SECONDS))
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             if instance.status == "Stopped":
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
             else:
-                instance.stop(force=force, wait=True, timeout=timeout)
-                instance.sync()
+                # A graceful stop blocks on the guest for up to `timeout`s. Those
+                # pylxd calls are synchronous, so run them in a worker thread to
+                # avoid stalling the event loop for the whole wait (a blank VM
+                # burns the full timeout since nothing answers ACPI). A forced
+                # stop is immediate but goes through the same path for uniformity.
+                def _do_stop():
+                    target = instance if force else self._rebind_for_wait(instance, host, project_name, timeout)
+                    try:
+                        target.stop(force=force, wait=True, timeout=timeout)
+                    except Exception as e:
+                        if not force and _is_graceful_timeout(e):
+                            raise self._graceful_timeout(name, "stop", timeout) from e
+                        raise
+                    target.sync()
+                    return target
+
+                target = await asyncio.to_thread(_do_stop)
                 logger.info(f"Stopped VM {name} on {host} (project: {project_name})")
-                vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            
+                vm_info = self._instance_to_vm_info(target, host, endpoint)
+
             if vm_info.config is None:
                 vm_info.config = {}
             vm_info.config['project'] = project_name
-            
+
             return vm_info
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to stop VM: {str(e)}")
     
@@ -496,35 +594,50 @@ class InstanceManager:
         project: Optional[str] = None,
     ) -> VMInfo:
         """Restart a VM (searches all projects)."""
+        timeout = max(1, min(timeout, _MAX_ACTION_TIMEOUT_SECONDS))
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             if instance.status == "Frozen":
                 raise LXDOperationError(
                     f"Instance {name} is frozen by billing policy and cannot be restarted. "
                     f"Please reactivate the subscription through the billing portal."
                 )
-            
-            instance.restart(force=force, wait=True, timeout=timeout)
-            instance.sync()
-            
+
+            # The graceful restart blocks on the guest shutdown for up to
+            # `timeout`s; run the synchronous pylxd calls in a worker thread so the
+            # event loop isn't stalled for the full wait. A forced restart is a
+            # power-cycle but goes through the same path for uniformity.
+            def _do_restart():
+                target = instance if force else self._rebind_for_wait(instance, host, project_name, timeout)
+                try:
+                    target.restart(force=force, wait=True, timeout=timeout)
+                except Exception as e:
+                    if not force and _is_graceful_timeout(e):
+                        raise self._graceful_timeout(name, "restart", timeout) from e
+                    raise
+                target.sync()
+                return target
+
+            target = await asyncio.to_thread(_do_restart)
+
             logger.info(f"Restarted VM {name} on {host} (project: {project_name})")
-            vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            
+            vm_info = self._instance_to_vm_info(target, host, endpoint)
+
             if vm_info.config is None:
                 vm_info.config = {}
             vm_info.config['project'] = project_name
-            
+
             return vm_info
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to restart VM: {str(e)}")
     
@@ -547,15 +660,17 @@ class InstanceManager:
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
             
-            # Stop if running and force is True
-            if instance.status == "Running":
+            # Stop an active instance before deleting when force is set. A Frozen
+            # instance (billing-paused) is still active, so LXD refuses to delete
+            # it until it is stopped -- force-stop covers both Running and Frozen.
+            if instance.status in ("Running", "Frozen"):
                 if force:
                     instance.stop(force=True, wait=True)
                 else:
                     raise LXDOperationError(
-                        f"VM {name} is running. Stop it first or use force=true"
+                        f"VM {name} is {instance.status.lower()}. Stop it first or use force=true"
                     )
-            
+
             instance.delete(wait=True)
             
             logger.info(f"Deleted VM {name} from {host} (project: {project_name})")
@@ -563,7 +678,116 @@ class InstanceManager:
             
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to delete VM: {str(e)}")
-    
+
+    async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None) -> Dict[str, Any]:
+        """Gather what the rebuild flow needs before it starts: the instance status,
+        its snapshots (the block condition -- LXD refuses to rebuild an instance that
+        has any), and a snapshot of the config + attached custom volumes for the job
+        record. Blocking pylxd calls run off the event loop.
+        """
+        def _work() -> Dict[str, Any]:
+            client = self._get_client_with_reconnect(host)
+            if client is None:
+                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+            instance, project_name = find_instance_in_projects(client, name, project)
+            if instance is None:
+                raise LXDOperationError(f"Instance {name} not found on {host}")
+            snapshots = _lxd_snapshot_names(client, name, project_name)
+            data = instance._data or {}
+            config = dict(data.get("config") or {})
+            devices = dict(data.get("expanded_devices") or data.get("devices") or {})
+            # Attached custom volumes survive a rebuild: disk devices other than the
+            # root that reference a pool volume by source.
+            attached = {
+                dname: dcfg for dname, dcfg in devices.items()
+                if dcfg.get("type") == "disk" and dname != "root" and dcfg.get("source")
+            }
+            base_image = config.get("image.description") or config.get("volatile.base_image")
+            return {
+                "project": project_name,
+                "status": instance.status,
+                "type": instance.type,
+                "snapshots": snapshots,
+                "config": config,
+                "attached_volumes": attached,
+                "base_image": base_image,
+            }
+        return await asyncio.to_thread(_work)
+
+    async def rebuild_instance(
+        self,
+        name: str,
+        host: str,
+        source: Dict[str, Any],
+        project: Optional[str] = None,
+        cloud_init: Optional[str] = None,
+        wait_timeout: int = 1800,
+    ) -> str:
+        """Rebuild the instance's root disk from `source` (LXD `POST .../rebuild`).
+
+        Reinstalls the root disk while LXD preserves the instance identity, config
+        and attached volumes. The instance must already be stopped and must have no
+        snapshots (caller enforces both). Optionally sets cloud-init.user-data first
+        so the fresh root disk picks it up on first boot. pylxd has no rebuild
+        helper, so this drives the raw API and waits on the returned operation.
+        Returns the LXD operation id.
+        """
+        client = self._get_client_with_reconnect(host)
+        if client is None:
+            raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+        instance, project_name = find_instance_in_projects(client, name, project)
+        if instance is None:
+            raise LXDOperationError(f"Instance {name} not found on {host}")
+
+        # Snapshot guard: LXD rejects a rebuild if any snapshot exists. Surface it
+        # as a typed error the router maps to a clear 409 listing the snapshots.
+        snapshots = await asyncio.to_thread(_lxd_snapshot_names, client, name, project_name)
+        if snapshots:
+            raise LXDSnapshotExistsError(snapshots)
+
+        if cloud_init is not None:
+            # PATCH merges config, so this only sets cloud-init.user-data. The new
+            # root disk picks it up on first boot.
+            def _set_ci():
+                client.api.instances[name].patch(
+                    json={"config": {"cloud-init.user-data": cloud_init}},
+                    params={"project": project_name},
+                )
+            await asyncio.to_thread(_set_ci)
+
+        endpoint = client.api._api_endpoint  # e.g. https://host:8443/1.0
+        session = client.api.session
+        project_q = f"?project={project_name}" if project_name and project_name != "default" else ""
+
+        def _do_rebuild() -> str:
+            resp = session.post(
+                f"{endpoint}/instances/{name}/rebuild{project_q}",
+                json={"source": source},
+                verify=False,
+                timeout=(5, 120),
+            )
+            if resp.status_code >= 400:
+                raise LXDOperationError(f"LXD rebuild failed: {resp.status_code} {resp.text[:300]}")
+            op = resp.json()
+            op_path = op.get("operation")  # /1.0/operations/<id>
+            if not op_path:
+                return ""  # completed synchronously
+            op_id = op_path.rstrip("/").rsplit("/", 1)[-1]
+            wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=wait_timeout)
+            wbody = wresp.json() or {}
+            if wbody.get("type") == "error" or wbody.get("error"):
+                raise LXDOperationError(f"LXD rebuild failed: {wbody.get('error') or 'unknown error'}")
+            wdata = wbody.get("metadata") or {}
+            if wdata.get("status") != "Success":
+                raise LXDOperationError(
+                    f"LXD rebuild operation failed: {wdata.get('err') or wdata.get('status') or 'unknown'}"
+                )
+            return op_id
+
+        op_id = await asyncio.to_thread(_do_rebuild)
+        logger.info("Rebuilt instance %s on %s (project=%s, op=%s)", name, host, project_name, op_id)
+        return op_id
+
     @audit_operation(
         "lxd.instance.create", "instance",
         extract_details=lambda args, kwargs, result: {
@@ -656,7 +880,7 @@ class InstanceManager:
         self,
         name: str,
         host: str,
-        image: str,
+        image: Optional[str] = None,
         instance_type: str = "virtual-machine",
         profiles: Optional[List[str]] = None,
         config: Optional[Dict[str, str]] = None,
@@ -666,6 +890,8 @@ class InstanceManager:
         project: str = "default",
         image_server: Optional[str] = None,
         image_protocol: Optional[str] = None,
+        description: Optional[str] = None,
+        source_type: str = "image",
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking).
 
@@ -700,23 +926,43 @@ class InstanceManager:
                     raise LXDOperationError(f"Could not open project '{project}' on {host}")
                 create_client = client  # fall back to pooled (default project)
 
+            # Fail fast on a duplicate name. LXD accepts a duplicate-name create as
+            # an async 202 and only fails the background operation, which the
+            # non-blocking flow can't surface cleanly (the pre-existing instance is
+            # already in the list, so the failing placeholder looks "resolved").
+            # A synchronous check gives the user an immediate, clear error.
+            already_exists = await asyncio.to_thread(
+                create_client.instances.exists, name
+            )
+            if already_exists:
+                raise LXDOperationError(
+                    f"An instance named '{name}' already exists in project '{project}' on {host}"
+                )
+
             # Build instance configuration
             instance_config = config or {}
             if cloud_init:
                 instance_config["user.user-data"] = cloud_init
 
             # Determine source configuration
-            source = {"type": "image"}
-            if image_server:
-                # Pull from a remote simplestreams server by alias.
-                source["mode"] = "pull"
-                source["server"] = image_server
-                source["protocol"] = image_protocol or "simplestreams"
-                source["alias"] = image
-            elif len(image) == 64:  # Local fingerprint
-                source["fingerprint"] = image
-            else:  # Local alias
-                source["alias"] = image
+            if source_type == "none":
+                # Blank VM: an empty root disk and no OS, equivalent to
+                # `lxc init <name> --empty --vm`. There is nothing to boot yet --
+                # an OS is installed afterwards by attaching an install ISO as
+                # boot media and driving the VGA console.
+                source = {"type": "none"}
+            else:
+                source = {"type": "image"}
+                if image_server:
+                    # Pull from a remote simplestreams server by alias.
+                    source["mode"] = "pull"
+                    source["server"] = image_server
+                    source["protocol"] = image_protocol or "simplestreams"
+                    source["alias"] = image
+                elif len(image) == 64:  # Local fingerprint
+                    source["fingerprint"] = image
+                else:  # Local alias
+                    source["alias"] = image
 
             instance_def = {
                 "name": name,
@@ -725,6 +971,8 @@ class InstanceManager:
                 "profiles": profiles or ["default"],
                 "config": instance_config,
             }
+            if description:
+                instance_def["description"] = description
             if devices:
                 instance_def["devices"] = devices
 
@@ -759,6 +1007,10 @@ class InstanceManager:
 
             return operation_id
 
+        except ClientConnectionFailed as e:
+            # Cluster unreachable during exists()/POST — surface as a connection
+            # error so the router maps it to 503, not a blanket 500.
+            raise LXDConnectionError(f"Failed to reach {host}: {e}")
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
 

@@ -206,7 +206,9 @@ function ConsoleContent() {
     operation: OperationType | null;
     title: string;
     description: string;
-  }>({ open: false, operation: null, title: "", description: "" });
+    // Power-cycle instead of requesting a graceful guest shutdown.
+    force: boolean;
+  }>({ open: false, operation: null, title: "", description: "", force: false });
   
   // New feature states
   const [showKeyboard, setShowKeyboard] = useState(false);
@@ -873,7 +875,10 @@ function ConsoleContent() {
   }, [activeTab, screenId]);
 
   // Execute instance operation
-  const executeOperation = useCallback(async (operation: OperationType) => {
+  // `force` power-cycles instead of asking the guest to shut down: required for
+  // a VM with no OS installed (or one at a boot menu/UEFI shell), which has
+  // nothing listening for the ACPI request.
+  const executeOperation = useCallback(async (operation: OperationType, force = false) => {
     setOperationLoading(operation);
 
     const transitionStatus: Record<OperationType, InstanceStatus> = {
@@ -892,7 +897,7 @@ function ConsoleContent() {
             "Content-Type": "application/json",
             ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
           },
-          body: JSON.stringify({ host, force: false, timeout: 30 }),
+          body: JSON.stringify({ host, force, timeout: 30 }),
         }
       );
 
@@ -954,15 +959,16 @@ function ConsoleContent() {
       open: true,
       operation,
       ...dialogConfig[operation],
+      force: false,
     });
   }, [instanceName, executeOperation]);
 
   const handleConfirm = useCallback(() => {
     if (confirmDialog.operation) {
-      executeOperation(confirmDialog.operation);
+      executeOperation(confirmDialog.operation, confirmDialog.force);
     }
     setConfirmDialog((prev) => ({ ...prev, open: false }));
-  }, [confirmDialog.operation, executeOperation]);
+  }, [confirmDialog.operation, confirmDialog.force, executeOperation]);
 
   const isRunning = instanceStatus === "Running";
   const isStopped = instanceStatus === "Stopped";
@@ -1720,6 +1726,30 @@ function ConsoleContent() {
               {confirmDialog.description}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {/* A graceful stop asks the guest OS to shut down over ACPI. A VM with
+              no OS installed, or one at a boot menu/UEFI shell, has nothing
+              listening and will time out — force is the only way to power-cycle
+              those. */}
+          <label className="flex items-start gap-2 rounded-md border border-[#292e42] p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={confirmDialog.force}
+              onChange={(e) =>
+                setConfirmDialog((prev) => ({ ...prev, force: e.target.checked }))
+              }
+            />
+            <span className="text-sm">
+              <span className="font-medium text-gray-200">
+                Force (power-cycle, don&apos;t wait for the guest)
+              </span>
+              <span className="block text-xs text-gray-400 mt-0.5">
+                {confirmDialog.force
+                  ? "Cuts power immediately — like pulling the plug. Unsaved data in the guest may be lost."
+                  : "Use this if nothing in the guest will answer a graceful shutdown: no OS installed yet, sitting at a boot menu, still booting, or a live/installer image that ignores ACPI."}
+              </span>
+            </span>
+          </label>
           <AlertDialogFooter>
             <AlertDialogCancel className="bg-transparent border-gray-600 text-gray-300 hover:bg-gray-800">
               Cancel

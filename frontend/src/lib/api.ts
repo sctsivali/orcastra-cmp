@@ -6,6 +6,7 @@ import {
   VMListResponse,
   VMInfo,
   VMCreateRequest,
+  InstanceCreateRequest,
   VMCreateResponse,
   VMActionRequest,
   VMActionResponse,
@@ -368,9 +369,14 @@ export const vmAPI = {
     const params = new URLSearchParams({ host, force: String(force) });
     if (project) params.append("project", project);
 
+    // A force delete stops a running VM first, which on a large guest can exceed
+    // the default 45s. The abort is client-side only, so a premature timeout
+    // leaves the delete running server-side (onSuccess never fires, the row
+    // lingers, a retry 404s). Give it a generous window.
     return fetchAPI<VMActionResponse>(
       `/vms/${encodeURIComponent(name)}?${params.toString()}`,
-      { method: "DELETE" }
+      { method: "DELETE" },
+      300000
     );
   },
 
@@ -798,12 +804,77 @@ const systemAPI = {
 };
 
 // Instance Operations (similar to VMs but more comprehensive)
+export interface RebuildRequest {
+  host: string;
+  project?: string;
+  mode: "image" | "empty" | "cloud-init";
+  image?: string;
+  image_server?: string;
+  image_protocol?: string;
+  cloud_init?: string;
+  confirm_name: string;
+  run_provisioning?: boolean;
+}
+
+export type RebuildStatus =
+  | "pending" | "stopping" | "rebuilding" | "starting" | "provisioning" | "ready" | "failed";
+
+export interface RebuildJobStatus {
+  job_id: string;
+  instance_name: string;
+  host: string;
+  project: string;
+  mode: string;
+  requested_image: string | null;
+  old_image: string | null;
+  status: RebuildStatus;
+  operation_id: string | null;
+  error: string | null;
+  attached_volumes: string[];
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface RebuildPreflight {
+  instance_name: string;
+  host: string;
+  status: string;
+  type: string;
+  snapshots: string[];
+  attached_volumes: string[];
+  base_image: string | null;
+}
+
 export const instanceAPI = {
-  create: async (data: VMCreateRequest): Promise<VMCreateResponse> => {
+  create: async (data: InstanceCreateRequest): Promise<VMCreateResponse> => {
     return fetchAPI<VMCreateResponse>("/instances", {
       method: "POST",
       body: JSON.stringify(data),
     });
+  },
+
+  // Read-only pre-check for the Rebuild dialog (snapshots block, volumes survive).
+  rebuildPreflight: async (name: string, host: string, project = "default"): Promise<RebuildPreflight> => {
+    const p = new URLSearchParams({ host, project });
+    return fetchAPI<RebuildPreflight>(
+      `/instances/${encodeURIComponent(name)}/rebuild-preflight?${p.toString()}`,
+    );
+  },
+
+  // Kick off a rebuild; returns the job to poll. Reinstalls the root disk while
+  // preserving identity/config/attached volumes.
+  rebuild: async (name: string, body: RebuildRequest): Promise<RebuildJobStatus> => {
+    return fetchAPI<RebuildJobStatus>(
+      `/instances/${encodeURIComponent(name)}/rebuild`,
+      { method: "POST", body: JSON.stringify(body) },
+      60000,
+    );
+  },
+
+  getRebuildJob: async (name: string, jobId: string): Promise<RebuildJobStatus> => {
+    return fetchAPI<RebuildJobStatus>(
+      `/instances/${encodeURIComponent(name)}/rebuild/${encodeURIComponent(jobId)}`,
+    );
   },
 
   list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number): Promise<VMListResponse> => {
@@ -1012,6 +1083,216 @@ export const storageVolumeAPI = {
         method: "DELETE",
       }
     );
+  },
+};
+
+// ISO upload (resumable, tus-style). Raw fetch is used for the binary PATCH so
+// the file streams in chunks instead of being buffered as JSON.
+const ISO_UPLOAD_BASE = `${API_BASE_URL}${API_PREFIX}/storage/iso-uploads`;
+
+function isoAuthHeaders(extra?: Record<string, string>): Record<string, string> {
+  const token = getAccessToken();
+  return {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(extra || {}),
+  };
+}
+
+export interface IsoUploadCreateBody {
+  cluster_id: string;
+  project?: string;
+  pool: string;
+  volume_name: string;
+  total_bytes: number;
+  max_bytes: number;
+  expected_sha256?: string;
+  iso_ref?: string;
+}
+
+export interface IsoUploadStatus {
+  session_id: string;
+  status: "pending" | "uploading" | "uploaded" | "importing" | "ready" | "failed";
+  offset: number;
+  total_bytes: number;
+  pool: string;
+  volume_name: string;
+  size: number | null;
+  error: string | null;
+}
+
+async function isoErr(res: Response, fallback: string): Promise<Error> {
+  try {
+    const body = await res.json();
+    return new Error(body?.detail || fallback);
+  } catch {
+    return new Error(fallback);
+  }
+}
+
+export const isoUploadAPI = {
+  create: async (
+    body: IsoUploadCreateBody,
+  ): Promise<{ session_id: string; offset: number; expires_at: string }> => {
+    const res = await fetch(ISO_UPLOAD_BASE, {
+      method: "POST",
+      headers: isoAuthHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw await isoErr(res, `Failed to start upload (${res.status})`);
+    return res.json();
+  },
+
+  // Append one chunk at `offset`; returns the server's new offset (also handles a
+  // 409 offset-mismatch by returning the authoritative offset so the caller resumes).
+  patchChunk: async (
+    sessionId: string,
+    offset: number,
+    chunk: Blob,
+  ): Promise<number> => {
+    const res = await fetch(`${ISO_UPLOAD_BASE}/${sessionId}`, {
+      method: "PATCH",
+      headers: isoAuthHeaders({
+        "Content-Type": "application/offset+octet-stream",
+        "Upload-Offset": String(offset),
+      }),
+      body: chunk,
+    });
+    if (res.status === 409) {
+      return Number(res.headers.get("Upload-Offset") || String(offset));
+    }
+    if (!res.ok) throw await isoErr(res, `Chunk upload failed (${res.status})`);
+    return Number(
+      res.headers.get("Upload-Offset") || String(offset + chunk.size),
+    );
+  },
+
+  finalize: async (sessionId: string): Promise<IsoUploadStatus> => {
+    const res = await fetch(`${ISO_UPLOAD_BASE}/${sessionId}/finalize`, {
+      method: "POST",
+      headers: isoAuthHeaders(),
+    });
+    if (!res.ok) throw await isoErr(res, `Finalize failed (${res.status})`);
+    return res.json();
+  },
+
+  status: async (sessionId: string): Promise<IsoUploadStatus> => {
+    const res = await fetch(`${ISO_UPLOAD_BASE}/${sessionId}`, {
+      method: "GET",
+      headers: isoAuthHeaders(),
+    });
+    if (!res.ok) throw await isoErr(res, `Status check failed (${res.status})`);
+    return res.json();
+  },
+
+  // Best-effort cancel: releases the server-side upload slot immediately instead
+  // of waiting for the idle sweep/TTL. Never throws so it is safe to fire from
+  // cancel/error/teardown paths. `keepalive` lets it survive a tab close/reload.
+  abort: async (sessionId: string): Promise<void> => {
+    try {
+      await fetch(`${ISO_UPLOAD_BASE}/${sessionId}`, {
+        method: "DELETE",
+        headers: isoAuthHeaders(),
+        keepalive: true,
+      });
+    } catch {
+      /* nothing to do: the idle sweep and TTL are the backstop */
+    }
+  },
+};
+
+// Custom-image upload (resumable, tus-style) — the direct analogue of
+// isoUploadAPI, hitting the JWT image-upload router. A unified LXD image file is
+// streamed in chunks and imported into the cluster's image store under a private
+// alias.
+const IMAGE_UPLOAD_BASE = `${API_BASE_URL}${API_PREFIX}/images/uploads`;
+
+export interface ImageUploadCreateBody {
+  cluster_id: string;
+  project?: string;
+  alias: string;
+  instance_type: "container" | "virtual-machine";
+  total_bytes: number;
+  max_bytes: number;
+  expected_sha256?: string;
+  image_ref?: string;
+}
+
+export interface ImageUploadStatus {
+  session_id: string;
+  status: "pending" | "uploading" | "uploaded" | "importing" | "ready" | "failed";
+  offset: number;
+  total_bytes: number;
+  fingerprint: string | null;
+  size: number | null;
+  alias: string;
+  error: string | null;
+}
+
+export const imageUploadAPI = {
+  create: async (
+    body: ImageUploadCreateBody,
+  ): Promise<{ session_id: string; offset: number; expires_at: string }> => {
+    const res = await fetch(IMAGE_UPLOAD_BASE, {
+      method: "POST",
+      headers: isoAuthHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw await isoErr(res, `Failed to start upload (${res.status})`);
+    return res.json();
+  },
+
+  // Append one chunk at `offset`; returns the server's new offset (also handles a
+  // 409 offset-mismatch by returning the authoritative offset so the caller resumes).
+  patchChunk: async (
+    sessionId: string,
+    offset: number,
+    chunk: Blob,
+  ): Promise<number> => {
+    const res = await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}`, {
+      method: "PATCH",
+      headers: isoAuthHeaders({
+        "Content-Type": "application/offset+octet-stream",
+        "Upload-Offset": String(offset),
+      }),
+      body: chunk,
+    });
+    if (res.status === 409) {
+      return Number(res.headers.get("Upload-Offset") || String(offset));
+    }
+    if (!res.ok) throw await isoErr(res, `Chunk upload failed (${res.status})`);
+    return Number(
+      res.headers.get("Upload-Offset") || String(offset + chunk.size),
+    );
+  },
+
+  finalize: async (sessionId: string): Promise<ImageUploadStatus> => {
+    const res = await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}/finalize`, {
+      method: "POST",
+      headers: isoAuthHeaders(),
+    });
+    if (!res.ok) throw await isoErr(res, `Finalize failed (${res.status})`);
+    return res.json();
+  },
+
+  status: async (sessionId: string): Promise<ImageUploadStatus> => {
+    const res = await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}`, {
+      method: "GET",
+      headers: isoAuthHeaders(),
+    });
+    if (!res.ok) throw await isoErr(res, `Status check failed (${res.status})`);
+    return res.json();
+  },
+
+  abort: async (sessionId: string): Promise<void> => {
+    try {
+      await fetch(`${IMAGE_UPLOAD_BASE}/${sessionId}`, {
+        method: "DELETE",
+        headers: isoAuthHeaders(),
+        keepalive: true,
+      });
+    } catch {
+      /* nothing to do: the idle sweep and TTL are the backstop */
+    }
   },
 };
 
@@ -1477,6 +1758,8 @@ export const api = {
   networkACLs: networkACLAPI,
   storagePools: storagePoolAPI,
   storageVolumes: storageVolumeAPI,
+  isoUploads: isoUploadAPI,
+  imageUploads: imageUploadAPI,
   operations: operationAPI,
   warnings: warningAPI,
   server: serverAPI,

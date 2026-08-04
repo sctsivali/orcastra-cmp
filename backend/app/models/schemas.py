@@ -3,7 +3,7 @@ Pydantic models for Orcastra Dashboard API.
 Defines request/response schemas for VMs and operations.
 """
 
-from pydantic import BaseModel, Field, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
 from typing import Optional, Dict, Any, List, Literal
 from enum import Enum
 from datetime import datetime
@@ -95,6 +95,7 @@ class VMListResponse(BaseModel):
 class VMCreateRequest(BaseModel):
     """Request body for creating a new VM."""
     name: str = Field(..., min_length=1, max_length=63, description="VM hostname")
+    description: Optional[str] = Field(None, description="Instance description")
     host: str = Field(..., description="Target LXD host (node1 or node2)")
     image: str = Field(..., description="Image alias or fingerprint")
     image_server: Optional[str] = Field(
@@ -149,6 +150,47 @@ class VMCreateRequest(BaseModel):
         }
 
 
+class InstanceCreateRequest(VMCreateRequest):
+    """Request body for the dashboard's ``POST /instances``.
+
+    Extends VMCreateRequest with a blank-VM ("no OS") source. VMCreateRequest
+    itself is left untouched because Orcahub's ``POST /vms`` depends on it -- in
+    particular `image` stays required there, and only relaxes to optional here.
+    """
+
+    # Optional so a blank VM can be created without one; enforced in _check_source.
+    image: Optional[str] = Field(
+        None,
+        description="Image alias or fingerprint. Omit when source_type is 'none'.",
+    )
+    source_type: Literal["image", "none"] = Field(
+        default="image",
+        description=(
+            "'image' creates from a base image. 'none' creates a blank VM: an empty "
+            "root disk with no OS, to install onto later by attaching an ISO as boot "
+            "media and using the console (LXD: `lxc init <name> --empty --vm`)."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _check_source(self):
+        if self.source_type == "image":
+            if not (self.image or "").strip():
+                raise ValueError("image is required when source_type is 'image'")
+            return self
+        # source_type == "none": LXD can only create an empty root disk for a VM;
+        # a container has no OS to boot without a rootfs, so reject it up front.
+        if self.instance_type != "virtual-machine":
+            raise ValueError(
+                "A blank instance (source_type 'none') is only supported for virtual-machine"
+            )
+        if (self.image or "").strip():
+            raise ValueError("image must be omitted when source_type is 'none'")
+        if self.image_server:
+            raise ValueError("image_server must be omitted when source_type is 'none'")
+        return self
+
+
 class VMCreateResponse(BaseModel):
     """Response after VM creation."""
     success: bool
@@ -162,7 +204,10 @@ class VMActionRequest(BaseModel):
     host: str = Field(..., description="LXD host where VM resides")
     project: Optional[str] = Field(None, description="LXD project where VM resides")
     force: bool = Field(default=False, description="Force the action")
-    timeout: int = Field(default=30, description="Action timeout in seconds")
+    # Bounded so a graceful stop/restart can't hold an HTTP request (and its
+    # uvicorn worker) open indefinitely: LXD keeps the operation request open for
+    # the whole wait, so an unbounded timeout is a trivial worker-exhaustion DoS.
+    timeout: int = Field(default=30, ge=1, le=600, description="Action timeout in seconds (1-600)")
 
 
 class VMActionResponse(BaseModel):

@@ -217,6 +217,14 @@ async def lifespan(app: FastAPI):
         logger.info("Custom-image import recovery loop started")
     except Exception as recovery_err:
         logger.warning(f"Could not start import recovery loop: {recovery_err}")
+
+    # Same recovery guarantee for stranded custom-ISO imports (see iso_uploads.py).
+    try:
+        from app.routers.iso_uploads import start_import_recovery as start_iso_import_recovery
+        start_iso_import_recovery()
+        logger.info("Custom-ISO import recovery loop started")
+    except Exception as iso_recovery_err:
+        logger.warning(f"Could not start ISO import recovery loop: {iso_recovery_err}")
     
     # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
     try:
@@ -429,7 +437,22 @@ Ensure your client certificates are properly configured.
 
     from app.routers.image_uploads import router as image_uploads_router
     app.include_router(image_uploads_router, prefix=settings.api_prefix)
-    
+
+    from app.routers.iso_uploads import router as iso_uploads_router
+    app.include_router(iso_uploads_router, prefix=settings.api_prefix)
+
+    # Dashboard (JWT) ISO upload — same machinery, user-session auth
+    from app.routers.iso_uploads_dashboard import router as iso_uploads_dashboard_router
+    app.include_router(iso_uploads_dashboard_router, prefix=settings.api_prefix)
+
+    # Dashboard (JWT) custom-image upload — same machinery, user-session auth
+    from app.routers.image_uploads_dashboard import router as image_uploads_dashboard_router
+    app.include_router(image_uploads_dashboard_router, prefix=settings.api_prefix)
+
+    # Instance rebuild (JWT) — reinstall root disk, preserve identity/config/volumes
+    from app.routers.instance_rebuild import router as instance_rebuild_router
+    app.include_router(instance_rebuild_router, prefix=settings.api_prefix)
+
     # Cluster Registration Router (Vault Integration)
     app.include_router(cluster_registration_router, prefix=settings.api_prefix)
     

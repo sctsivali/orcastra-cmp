@@ -11,3 +11,30 @@ class LXDConnectionError(Exception):
 class LXDOperationError(Exception):
     """Exception raised when an LXD operation fails."""
     pass
+
+
+class LXDGracefulTimeoutError(LXDOperationError):
+    """A graceful stop/restart timed out waiting for the guest to shut down.
+
+    Distinct from a generic operation failure because it is recoverable in a
+    specific way: the caller can retry with force. It most often means the guest
+    never answered the ACPI shutdown request -- e.g. a VM with no OS installed,
+    or one sitting at a boot menu/UEFI shell, which has nothing listening.
+    """
+    pass
+
+
+class LXDSnapshotExistsError(LXDOperationError):
+    """A rebuild was blocked because the instance still has snapshots.
+
+    LXD refuses to rebuild an instance that has snapshots. This is recoverable in
+    a specific way (delete the snapshots first), so the router maps it to a clear
+    409 that lists them rather than a generic failure.
+    """
+    def __init__(self, snapshots):
+        self.snapshots = list(snapshots)
+        names = ", ".join(self.snapshots) if self.snapshots else ""
+        super().__init__(
+            f"Cannot rebuild: the instance has {len(self.snapshots)} snapshot(s) "
+            f"({names}). Delete them first, then retry the rebuild."
+        )

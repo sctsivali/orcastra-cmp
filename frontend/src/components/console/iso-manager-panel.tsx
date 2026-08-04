@@ -55,6 +55,19 @@ interface ISOInfo {
   createdAt?: string;
 }
 
+// LXD boot.priority: "A higher value indicates a higher boot precedence for the
+// disk device." So to boot an install ISO ahead of the (empty) root disk, the
+// cdrom needs a HIGHER value than the disk — a disk with no boot.priority set
+// effectively has none, so any value above 0 wins.
+const BOOT_PRIORITY_OPTIONS = [
+  { value: 10, label: "10 — Boot first (install from ISO)" },
+  { value: 5, label: "5 — High" },
+  { value: 1, label: "1 — Above an unset disk" },
+  { value: 0, label: "0 — Lowest (boot from disk first)" },
+];
+// Default for a fresh attach: the point of attaching an install ISO is to boot it.
+const DEFAULT_BOOT_PRIORITY = 10;
+
 interface ISOManagerPanelProps {
   consoleId: string;
   instanceName: string;
@@ -81,7 +94,8 @@ export function ISOManagerPanel({
   const [attachedISO, setAttachedISOState] = useState<AttachedISO | null>(null);
   const [availableISOs, setAvailableISOs] = useState<ISOInfo[]>([]);
   const [selectedISO, setSelectedISO] = useState<ISOInfo | null>(null);
-  const [bootPriority, setBootPriority] = useState(0);
+  const [bootPriority, setBootPriority] = useState(DEFAULT_BOOT_PRIORITY);
+  const [savingPriority, setSavingPriority] = useState(false);
   const [loading, setLoading] = useState(true);
   const [attaching, setAttaching] = useState(false);
   const [ejecting, setEjecting] = useState(false);
@@ -157,6 +171,55 @@ export function ISOManagerPanel({
     };
     load();
   }, [fetchAttachedISO, fetchAvailableISOs]);
+
+  // Change the boot priority of the already-attached ISO. Re-attaching the same
+  // volume patches the existing device in place (attach_iso does an add/update),
+  // which is how boot.priority is changed — there is no separate device-update
+  // endpoint.
+  const handleChangeBootPriority = async (priority: number) => {
+    if (!attachedISO || !attachedISO.pool) return;
+
+    setSavingPriority(true);
+    try {
+      const response = await fetch(
+        `${API_URL}/console/${encodeURIComponent(instanceName)}/iso/attach?host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) },
+          body: JSON.stringify({
+            pool: attachedISO.pool,
+            volume: attachedISO.source,
+            device_name: attachedISO.deviceName,
+            boot_priority: priority,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ detail: 'Unknown error' }));
+        throw new Error(err.detail || 'Failed to change boot priority');
+      }
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Failed to change boot priority');
+
+      toast({
+        title: "Boot priority updated",
+        description:
+          priority > 0
+            ? `"${attachedISO.source}" is set to boot priority ${priority}. Restart the VM to boot from it.`
+            : `"${attachedISO.source}" is set to ${priority} — the VM will boot from its disk first.`,
+      });
+      await fetchAttachedISO();
+    } catch (err) {
+      toast({
+        title: "Error",
+        description: err instanceof Error ? err.message : 'Failed to change boot priority',
+        variant: "destructive",
+      });
+    } finally {
+      setSavingPriority(false);
+    }
+  };
 
   // Attach ISO
   const handleAttach = async () => {
@@ -292,7 +355,28 @@ export function ISOManagerPanel({
               <p className="font-medium truncate">{attachedISO.source}</p>
               <div className="flex items-center gap-2 mt-1">
                 <Badge variant="secondary">Device: {attachedISO.deviceName}</Badge>
-                <Badge variant="outline">Boot: {attachedISO.bootPriority}</Badge>
+              </div>
+              {/* Boot priority is editable in place: higher boots first, so this
+                  is what decides whether the VM boots the ISO or its disk. */}
+              <div className="flex items-center gap-2 mt-2">
+                <Label className="text-xs shrink-0">Boot priority</Label>
+                <Select
+                  value={String(attachedISO.bootPriority)}
+                  onValueChange={(v) => handleChangeBootPriority(parseInt(v))}
+                  disabled={savingPriority}
+                >
+                  <SelectTrigger className="h-7 text-xs w-[15rem]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BOOT_PRIORITY_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={String(o.value)}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {savingPriority && <Loader2 className="h-3 w-3 animate-spin" />}
               </div>
             </div>
             <Button
@@ -397,12 +481,11 @@ export function ISOManagerPanel({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">0 - Highest (boot first)</SelectItem>
-                  <SelectItem value="1">1</SelectItem>
-                  <SelectItem value="2">2</SelectItem>
-                  <SelectItem value="5">5</SelectItem>
-                  <SelectItem value="10">10 - Lower</SelectItem>
-                  <SelectItem value="99">99 - Lowest</SelectItem>
+                  {BOOT_PRIORITY_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={String(o.value)}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

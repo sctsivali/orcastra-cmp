@@ -289,7 +289,25 @@ class LXDService:
     ) -> bool:
         """Delete a VM (searches all projects)."""
         return await self.instance_manager.delete_vm(name, host, force, project)
-    
+
+    async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None):
+        """Status + snapshots + config/attached-volumes snapshot for a rebuild."""
+        return await self.instance_manager.get_rebuild_preflight(name, host, project)
+
+    async def rebuild_instance(
+        self,
+        name: str,
+        host: str,
+        source: dict,
+        project: Optional[str] = None,
+        cloud_init: Optional[str] = None,
+        wait_timeout: int = 1800,
+    ) -> str:
+        """Rebuild an instance's root disk from `source` (preserves identity/config/volumes)."""
+        return await self.instance_manager.rebuild_instance(
+            name, host, source, project, cloud_init, wait_timeout
+        )
+
     async def create_vm(
         self,
         name: str,
@@ -312,7 +330,7 @@ class LXDService:
         self,
         name: str,
         host: str,
-        image: str,
+        image: Optional[str] = None,
         instance_type: str = "virtual-machine",
         profiles: Optional[List[str]] = None,
         config: Optional[Dict[str, str]] = None,
@@ -322,15 +340,18 @@ class LXDService:
         project: str = "default",
         image_server: Optional[str] = None,
         image_protocol: Optional[str] = None,
+        description: Optional[str] = None,
+        source_type: str = "image",
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking); returns the operation id.
 
         Backs the dashboard's `POST /instances`. See InstanceManager.create_instance.
+        `source_type="none"` creates a blank VM (empty root disk, no OS).
         """
         return await self.instance_manager.create_instance(
             name, host, image, instance_type, profiles, config,
             cloud_init, devices, start_on_create, project,
-            image_server, image_protocol
+            image_server, image_protocol, description, source_type,
         )
 
     # Image operations

@@ -1192,22 +1192,66 @@ class TagService:
             updated_at=tag.updated_at,
         )
     
+    async def remove_resource_assignments(
+        self,
+        resource_type: str,
+        resource_id: str,
+        resource_host: Optional[str] = None,
+        resource_project: Optional[str] = None,
+    ) -> int:
+        """Remove all tag assignments for a resource (e.g. when an instance is
+        deleted) and recompute usage_count for the affected tags so the Postgres
+        side doesn't drift from reality. Returns the number of affected tags.
+        """
+        match = and_(
+            TagAssignment.resource_type == resource_type,
+            TagAssignment.resource_id == resource_id,
+            TagAssignment.resource_host == resource_host,
+            TagAssignment.resource_project == resource_project,
+        )
+        rows = await self.db.execute(select(TagAssignment.tag_id).where(match))
+        tag_ids = {row[0] for row in rows.all()}
+        if not tag_ids:
+            return 0
+
+        await self.db.execute(delete(TagAssignment).where(match))
+
+        # Recompute usage_count from the surviving assignments (robust against any
+        # prior drift, not just a decrement).
+        for tag_id in tag_ids:
+            remaining = (
+                await self.db.execute(
+                    select(func.count(TagAssignment.id)).where(
+                        TagAssignment.tag_id == tag_id
+                    )
+                )
+            ).scalar() or 0
+            tag = await self.db.get(Tag, tag_id)
+            if tag:
+                tag.usage_count = remaining
+
+        await self.db.commit()
+        self._invalidate_tag_cache()
+        self._invalidate_resource_cache(resource_type)
+        return len(tag_ids)
+
     def _invalidate_tag_cache(self):
         """Invalidate all tag-related caches."""
-        self.cache.delete("tags", "tags:list:*")
-        self.cache.delete("tags", "categories:all:*")
-        self.cache.delete("tags", "stats:*")
-    
+        # Use delete_pattern (glob/prefix match), not delete (single literal key)
+        # — otherwise the trailing "*" never matches the real keys.
+        self.cache.delete_pattern("tags", "tags:list:*")
+        self.cache.delete_pattern("tags", "categories:all:*")
+        self.cache.delete_pattern("tags", "stats:*")
+
     def _invalidate_resource_cache(self, resource_type: str):
         """Invalidate resource-related caches after tag operations."""
         if resource_type == "project":
-            self.cache.delete("api_responses", "projects:list:all")
-            self.cache.delete("api_responses", "projects:*")
+            self.cache.delete_pattern("api_responses", "projects:*")
         elif resource_type == "instance":
-            self.cache.delete("api_responses", "vms:*")
-            self.cache.delete("api_responses", "instances:*")
+            self.cache.delete_pattern("api_responses", "vms:*")
+            self.cache.delete_pattern("api_responses", "instances:*")
         elif resource_type == "node":
-            self.cache.delete("api_responses", "nodes:*")
+            self.cache.delete_pattern("api_responses", "nodes:*")
 
 
 # ============================================

@@ -22,9 +22,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { Search, Plus, AlertTriangle } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworks } from "@/hooks/use-lxd";
+import { Button } from "@/components/ui/button";
+import { useRouter } from "next/navigation";
+import { usePermissions } from "@/hooks/use-permissions";
+import { Role } from "@/types/rbac";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -43,7 +48,15 @@ interface NetworkInfo {
 export default function NetworksPage() {
   const { data, isLoading, refetch, isRefetching } = useNetworks();
   const networks = (data as any)?.networks || [];
-  
+
+  const router = useRouter();
+  const { hasRole } = usePermissions();
+  const { isReadOnly } = useReadOnlyMode();
+  const canCreateNetwork = hasRole(Role.PARTNER);
+  // Nodes we could not reach: their networks are absent from the list, so warn
+  // rather than silently showing "0 networks" (indistinguishable from empty).
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
@@ -128,13 +141,40 @@ export default function NetworksPage() {
             Manage hypervisor network configurations
           </p>
         </div>
-        <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
-          label="Refresh networks"
-          onClick={() => refetch()}
-        />
+        <div className="flex items-center gap-2">
+          <RefreshButton
+            disabled={isRefetching}
+            isRefreshing={isRefetching}
+            label="Refresh networks"
+            onClick={() => refetch()}
+          />
+          {/* Only Partner+ can create; the create page enforces this too. */}
+          {canCreateNetwork && (
+            <Button
+              onClick={() => router.push("/inventory/networks/create")}
+              disabled={isReadOnly}
+              title={isReadOnly ? "Action disabled in read-only mode" : "Create a new network"}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Create network
+            </Button>
+          )}
+        </div>
       </div>
+
+      {unreachableNodes.length > 0 && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+          <div>
+            <span className="font-medium">
+              Could not reach {unreachableNodes.length} node
+              {unreachableNodes.length === 1 ? "" : "s"}:
+            </span>{" "}
+            {unreachableNodes.join(", ")}. Their networks are not shown, so this
+            list may be incomplete.
+          </div>
+        </div>
+      )}
 
       <Card>
         <CardContent className="pt-6">
@@ -229,7 +269,16 @@ export default function NetworksPage() {
                   
                   return (
                     <TableRow key={`${network.node}-${network.name}-${idx}`}>
-                      <TableCell className="font-medium">{network.name}</TableCell>
+                      <TableCell
+                        className="font-medium cursor-pointer hover:text-primary hover:underline"
+                        onClick={() =>
+                          router.push(
+                            `/inventory/networks/${encodeURIComponent(network.name)}?host=${encodeURIComponent(network.node)}`,
+                          )
+                        }
+                      >
+                        {network.name}
+                      </TableCell>
                       <TableCell>
                         <Badge variant="outline">{network.type}</Badge>
                       </TableCell>

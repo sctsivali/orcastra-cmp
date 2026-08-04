@@ -22,6 +22,7 @@ from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
     LXDOperationError,
+    LXDGracefulTimeoutError,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -34,6 +35,8 @@ from app.core.org_scope import (
 )
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
+from app.services.tag_service import TagService
+from app.routers.tags import get_tag_service_dep
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -422,7 +425,23 @@ async def stop_vm(
             action="stop",
             new_status=vm.status,
         )
-        
+
+    except LXDGracefulTimeoutError as e:
+        # Must precede LXDOperationError (its parent). The guest ignored the ACPI
+        # shutdown (commonly a VM with no OS, or one at a boot menu); recoverable
+        # by retrying with force, so return 504 + a GRACEFUL_TIMEOUT audit signal
+        # instead of a bare 400 -- matching /instances/{name}/stop.
+        logger.warning(f"Graceful stop timed out for VM {vm_name}: {e}")
+        activity_logger.log_activity(
+            action="vm.stop",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM stop failure
         activity_logger.log_activity(
@@ -496,7 +515,22 @@ async def restart_vm(
             action="restart",
             new_status=vm.status,
         )
-        
+
+    except LXDGracefulTimeoutError as e:
+        # Must precede LXDOperationError (its parent). Guest ignored the ACPI
+        # shutdown during the restart; recoverable with force. 504 + GRACEFUL_TIMEOUT
+        # audit signal, matching /instances/{name}/restart.
+        logger.warning(f"Graceful restart timed out for VM {vm_name}: {e}")
+        activity_logger.log_activity(
+            action="vm.restart",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM restart failure
         activity_logger.log_activity(
@@ -541,6 +575,7 @@ async def delete_vm(
     force: bool = Query(False, description="Force delete running VM"),
     project: Optional[str] = Query(None, description="LXD project name"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    tag_service: TagService = Depends(get_tag_service_dep),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
@@ -554,7 +589,19 @@ async def delete_vm(
             project=project,
         )
         get_cache_manager().invalidate_instance_cache()
-        
+
+        # Clean up the instance's tag rows so the tag store doesn't drift from the
+        # deleted instance (best-effort — the instance is already gone).
+        try:
+            await tag_service.remove_resource_assignments(
+                "instance", vm_name,
+                resource_host=host, resource_project=project or "default",
+            )
+        except Exception as tag_err:
+            logger.warning(
+                f"Failed to clean up tags for deleted instance {vm_name}: {tag_err}"
+            )
+
         # Log activity: VM delete success
         activity_logger.log_activity(
             action="vm.delete",

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -21,18 +21,30 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Play, Square, RotateCw, Trash2, Search, Filter, Terminal, Monitor, Loader2 } from "lucide-react";
+import { Play, Square, RotateCw, RefreshCw, Trash2, Search, Filter, Terminal, Monitor, Loader2 } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
+import { TagBadge } from "@/components/tag-manager";
 import { removePendingCreate } from "@/lib/pending-creates";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import { 
-  useInstances, 
-  useStartInstance, 
-  useStopInstance, 
-  useRestartInstance 
+import {
+  useInstances,
+  useStartInstance,
+  useStopInstance,
+  useRestartInstance,
+  useDeleteInstance,
 } from "@/hooks/use-lxd";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { useRouter } from "next/navigation";
@@ -45,6 +57,7 @@ import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Plus } from "lucide-react";
+import { RebuildDialog } from "@/components/rebuild-dialog";
 
 // How long a "Creating…" placeholder must live before a same-named instance in
 // the list is trusted as its resolution (guards against stale-cache races).
@@ -87,8 +100,20 @@ export default function InstancesPage() {
   const startInstance = useStartInstance();
   const stopInstance = useStopInstance();
   const restartInstance = useRestartInstance();
-  
+  const deleteInstance = useDeleteInstance();
+
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  // Instance pending delete confirmation (controls the shared AlertDialog).
+  const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
+  // Instance pending rebuild (controls the shared RebuildDialog).
+  const [rebuildTarget, setRebuildTarget] = useState<VMInfo | null>(null);
+  // Radix keeps AlertDialogContent mounted through its ~200ms exit fade, so
+  // reading a just-nulled deleteTarget flashes blank name/host. Keep the last
+  // target around and render the dialog body from it so it stays populated
+  // during that fade (on both the Delete and Cancel paths).
+  const deleteDisplayRef = useRef<VMInfo | null>(null);
+  if (deleteTarget) deleteDisplayRef.current = deleteTarget;
+  const deleteDisplay = deleteTarget ?? deleteDisplayRef.current;
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterProject, setFilterProject] = useState<string>("all");
@@ -97,12 +122,23 @@ export default function InstancesPage() {
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
+  // Confirmation for stop/restart, with a Force option (power-cycle) for guests
+  // that can't answer a graceful ACPI shutdown — e.g. a VM with no OS installed.
+  const [confirmAction, setConfirmAction] = useState<{
+    open: boolean;
+    action: "stop" | "restart" | null;
+    name: string;
+    host: string;
+    force: boolean;
+  }>({ open: false, action: null, name: "", host: "", force: false });
   const router = useRouter();
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
   const { hasPermission } = useTenantAccess();
   const { hasRole } = usePermissions();
   const canCreateInstance = hasRole(Role.PARTNER);
+  // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
+  const canDeleteInstance = hasRole(Role.PARTNER);
 
   const sortAccessors = useMemo(
     () => ({
@@ -128,7 +164,10 @@ export default function InstancesPage() {
     setIsMonitoringModalOpen(true);
   };
 
-  const handleAction = async (
+  // Entry point for the row action buttons. Start fires immediately; stop and
+  // restart open a confirm dialog so the user can choose a graceful or forced
+  // (power-cycle) operation.
+  const handleAction = (
     instanceName: string,
     host: string,
     action: "start" | "stop" | "restart"
@@ -141,23 +180,35 @@ export default function InstancesPage() {
       });
       return;
     }
+    if (action === "start") {
+      runAction(instanceName, host, action);
+      return;
+    }
+    setConfirmAction({ open: true, action, name: instanceName, host, force: false });
+  };
 
+  const runAction = async (
+    instanceName: string,
+    host: string,
+    action: "start" | "stop" | "restart",
+    force = false
+  ) => {
     try {
       setActionLoading(`${instanceName}-${action}`);
-      
-      const mutation = action === "start" 
-        ? startInstance 
-        : action === "stop" 
-        ? stopInstance 
-        : restartInstance;
-      
-      await mutation.mutateAsync({ name: instanceName, host });
-      
+
+      if (action === "start") {
+        await startInstance.mutateAsync({ name: instanceName, host });
+      } else if (action === "stop") {
+        await stopInstance.mutateAsync({ name: instanceName, host, force });
+      } else {
+        await restartInstance.mutateAsync({ name: instanceName, host, force });
+      }
+
       toast({
         title: "Success",
         description: `Instance ${instanceName} ${action} initiated`,
       });
-      
+
       // Refresh instances after action
       setTimeout(() => refetch(), 2000);
     } catch (error) {
@@ -169,6 +220,38 @@ export default function InstancesPage() {
     } finally {
       setActionLoading(null);
     }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    const target = deleteTarget;
+    try {
+      await deleteInstance.mutateAsync({
+        name: target.name,
+        host: target.host,
+        force: true, // stops a running instance before deleting
+        project: target.project || "default",
+      });
+      toast({
+        title: "Instance deleted",
+        description: `"${target.name}" has been deleted.`,
+      });
+    } catch (err) {
+      toast({
+        title: "Failed to delete instance",
+        description: err instanceof Error ? err.message : String(err),
+        variant: "destructive",
+      });
+    } finally {
+      setDeleteTarget(null);
+    }
+  };
+
+  const confirmActionRun = () => {
+    if (confirmAction.action) {
+      runAction(confirmAction.name, confirmAction.host, confirmAction.action, confirmAction.force);
+    }
+    setConfirmAction((prev) => ({ ...prev, open: false }));
   };
 
   const getStatusColor = (status: string) => {
@@ -325,6 +408,7 @@ export default function InstancesPage() {
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <TableHead>Tags</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -359,13 +443,14 @@ export default function InstancesPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">—</TableCell>
                   <TableCell className="text-muted-foreground">—</TableCell>
+                  <TableCell className="text-muted-foreground">—</TableCell>
                   <TableCell />
                 </TableRow>
               ))}
               {paginatedInstances.length === 0 ? (
                 visiblePendingCreates.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                       No instances found
                     </TableCell>
                   </TableRow>
@@ -402,6 +487,22 @@ export default function InstancesPage() {
                         {profile}
                       </Badge>
                     ))}
+                  </TableCell>
+                  <TableCell>
+                    {instance.tags && instance.tags.length > 0 ? (
+                      <div className="flex flex-wrap gap-1.5">
+                        {instance.tags.slice(0, 3).map((tag: string) => (
+                          <TagBadge key={tag} tag={tag} size="sm" />
+                        ))}
+                        {instance.tags.length > 3 && (
+                          <span className="text-xs text-muted-foreground">
+                            +{instance.tags.length - 3}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">
@@ -475,6 +576,41 @@ export default function InstancesPage() {
                           </Button>
                         </>
                       )}
+                      {canDeleteInstance && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRebuildTarget(instance)}
+                          disabled={
+                            isReadOnly ||
+                            !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
+                          }
+                          aria-label={`Rebuild instance ${instance.name}`}
+                          title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Rebuild instance (reinstall root disk)"}
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {canDeleteInstance && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="text-destructive hover:text-destructive"
+                          onClick={() => setDeleteTarget(instance)}
+                          // Only the row actually being deleted greys out; a
+                          // page-wide isPending would disable every row's button.
+                          disabled={
+                            isReadOnly ||
+                            (deleteInstance.isPending &&
+                              deleteTarget?.name === instance.name &&
+                              deleteTarget?.host === instance.host)
+                          }
+                          aria-label={`Delete instance ${instance.name}`}
+                          title={isReadOnly ? "Action disabled in read-only mode" : "Delete instance"}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -502,6 +638,120 @@ export default function InstancesPage() {
         }}
         project={selectedInstance?.project || "default"}
       />
+
+      {/* Rebuild (shared across rows, controlled by rebuildTarget) */}
+      {rebuildTarget && (
+        <RebuildDialog
+          open={!!rebuildTarget}
+          onOpenChange={(open) => {
+            if (!open) setRebuildTarget(null);
+          }}
+          instance={{
+            name: rebuildTarget.name,
+            host: rebuildTarget.host,
+            project: rebuildTarget.project || "default",
+          }}
+          onDone={() => refetch()}
+        />
+      )}
+
+      {/* Delete confirmation (shared across rows, controlled by deleteTarget) */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          // Don't let Esc / outside-click dismiss it mid-delete; the delete
+          // keeps running server-side and closing would strand the UI.
+          if (!open && !deleteInstance.isPending) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete instance &quot;{deleteDisplay?.name}&quot;?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes the instance and its data from{" "}
+              {deleteDisplay?.host}.
+              {deleteDisplay?.status === "Running" &&
+                " The instance is currently running and will be force-stopped first."}
+              {deleteDisplay?.status === "Frozen" &&
+                " The instance is frozen by billing policy and will be force-stopped first."}{" "}
+              This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteInstance.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              // preventDefault blocks Radix's built-in close so the dialog stays
+              // open (and populated, with the spinner) for the full 10-30s that a
+              // force-stop + delete takes. The finally in handleDeleteConfirm
+              // closes it once the request resolves.
+              onClick={(e) => {
+                e.preventDefault();
+                handleDeleteConfirm();
+              }}
+              disabled={deleteInstance.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteInstance.isPending && (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              )}
+              {deleteInstance.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Stop / Restart confirmation, with a Force (power-cycle) option. */}
+      <AlertDialog
+        open={confirmAction.open}
+        onOpenChange={(open) => setConfirmAction((prev) => ({ ...prev, open }))}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {confirmAction.action === "stop" ? "Stop" : "Restart"} “{confirmAction.name}”?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmAction.action === "stop"
+                ? "This will shut down the instance."
+                : "This will restart the instance."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {/* A graceful stop asks the guest OS to shut down over ACPI. A VM with
+              no OS installed, or one at a boot menu/UEFI shell, has nothing
+              listening and will time out — force power-cycles those. */}
+          <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={confirmAction.force}
+              onChange={(e) =>
+                setConfirmAction((prev) => ({ ...prev, force: e.target.checked }))
+              }
+            />
+            <span className="text-sm">
+              <span className="font-medium">
+                Force (power-cycle, don&apos;t wait for the guest)
+              </span>
+              <span className="block text-xs text-muted-foreground mt-0.5">
+                {confirmAction.force
+                  ? "Cuts power immediately — like pulling the plug. Unsaved data in the guest may be lost."
+                  : "Use this if nothing in the guest will answer a graceful shutdown: no OS installed yet, sitting at a boot menu, still booting, or a live/installer image that ignores ACPI."}
+              </span>
+            </span>
+          </label>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmActionRun}>
+              {confirmAction.force ? "Force " : ""}
+              {confirmAction.action === "stop" ? "Stop" : "Restart"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
