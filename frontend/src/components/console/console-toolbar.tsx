@@ -20,7 +20,9 @@ import {
   Rocket,
   ChevronDown,
   MousePointer2,
+  RefreshCw,
 } from "lucide-react";
+import { RebuildDialog } from "@/components/rebuild-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -124,6 +126,7 @@ export function ConsoleToolbar({
   const updateInstanceStatus = useConsoleStore(s => s.updateInstanceStatus);
   const [loading, setLoading] = useState<OperationType | null>(null);
   const [spamming, setSpamming] = useState(false);
+  const [rebuildOpen, setRebuildOpen] = useState(false);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>({
     open: false,
     operation: null,
@@ -337,6 +340,23 @@ export function ConsoleToolbar({
               </Button>
             </TooltipTrigger>
             <TooltipContent>Restart Instance</TooltipContent>
+          </Tooltip>
+
+          {/* Rebuild (reinstall root disk) */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 min-h-[32px] min-w-[32px] touch-manipulation active:scale-95"
+                disabled={isTransitioning || loading !== null}
+                onClick={() => setRebuildOpen(true)}
+                onTouchEnd={(e) => { e.preventDefault(); if (!isTransitioning && loading === null) setRebuildOpen(true); }}
+              >
+                <RefreshCw className="h-4 w-4 text-amber-500" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Rebuild Instance (reinstall root disk)</TooltipContent>
           </Tooltip>
         </div>
 
@@ -558,6 +578,21 @@ export function ConsoleToolbar({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Rebuild dialog (reinstall root disk from a fresh source) */}
+      {rebuildOpen && (
+        <RebuildDialog
+          open={rebuildOpen}
+          onOpenChange={setRebuildOpen}
+          instance={{ name: instanceName, host, project }}
+          onDone={() => {
+            // The root disk was reinstalled; empty mode leaves it stopped,
+            // image/cloud-init modes leave it running. Reflect stopped as a safe
+            // default the console's own status stream will quickly correct.
+            updateInstanceStatus(consoleId, 'Stopped');
+          }}
+        />
+      )}
     </TooltipProvider>
   );
 }

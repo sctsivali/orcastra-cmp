@@ -289,7 +289,25 @@ class LXDService:
     ) -> bool:
         """Delete a VM (searches all projects)."""
         return await self.instance_manager.delete_vm(name, host, force, project)
-    
+
+    async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None):
+        """Status + snapshots + config/attached-volumes snapshot for a rebuild."""
+        return await self.instance_manager.get_rebuild_preflight(name, host, project)
+
+    async def rebuild_instance(
+        self,
+        name: str,
+        host: str,
+        source: dict,
+        project: Optional[str] = None,
+        cloud_init: Optional[str] = None,
+        wait_timeout: int = 1800,
+    ) -> str:
+        """Rebuild an instance's root disk from `source` (preserves identity/config/volumes)."""
+        return await self.instance_manager.rebuild_instance(
+            name, host, source, project, cloud_init, wait_timeout
+        )
+
     async def create_vm(
         self,
         name: str,
