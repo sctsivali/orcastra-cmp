@@ -14,7 +14,7 @@ import {
   healthCheck,
   api 
 } from "@/lib/api";
-import { VMCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse } from "@/types";
+import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse } from "@/types";
 import { STATIC_DATA_CONFIG, SEMI_STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG } from "@/lib/query-config";
 
 // Query Keys
@@ -1068,7 +1068,7 @@ export function useCreateInstance() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: (data: VMCreateRequest) => api.instances.create(data),
+    mutationFn: (data: InstanceCreateRequest) => api.instances.create(data),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
@@ -1090,10 +1090,12 @@ export function useStartInstance() {
 
 export function useStopInstance() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: ({ name, host }: { name: string; host: string }) => 
-      api.vms.stop(name, { host }),
+    // force power-cycles instead of a graceful ACPI shutdown (needed for a VM
+    // with no OS installed / sitting at a boot menu, which can't answer ACPI).
+    mutationFn: ({ name, host, force }: { name: string; host: string; force?: boolean }) =>
+      api.vms.stop(name, { host, force, timeout: 30 }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
@@ -1102,10 +1104,10 @@ export function useStopInstance() {
 
 export function useRestartInstance() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: ({ name, host }: { name: string; host: string }) => 
-      api.vms.restart(name, { host }),
+    mutationFn: ({ name, host, force }: { name: string; host: string; force?: boolean }) =>
+      api.vms.restart(name, { host, force, timeout: 30 }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },

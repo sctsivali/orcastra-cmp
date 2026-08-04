@@ -94,6 +94,15 @@ export interface VMCreateRequest {
   start_on_create?: boolean;
 }
 
+// Body for the dashboard's POST /instances. Mirrors the backend's
+// InstanceCreateRequest: same as VMCreateRequest but with a blank-VM source, so
+// `image` is omitted when source_type is "none" (an empty root disk, no OS).
+// VMCreateRequest stays as-is for Orcahub's POST /vms, where image is required.
+export interface InstanceCreateRequest extends Omit<VMCreateRequest, "image"> {
+  image?: string;
+  source_type?: "image" | "none";
+}
+
 // A physical GPU on a node (from the LXD resources API)
 export interface GpuCardInfo {
   vendor: string;

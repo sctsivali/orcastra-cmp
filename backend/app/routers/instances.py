@@ -11,7 +11,7 @@ import logging
 from app.models.schemas import (
     VMListResponse,
     VMInfo,
-    VMCreateRequest,
+    InstanceCreateRequest,
     VMCreateResponse,
     VMActionRequest,
     VMActionResponse,
@@ -23,6 +23,7 @@ from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
     LXDOperationError,
+    LXDGracefulTimeoutError,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -185,7 +186,7 @@ async def get_instance(
     description="Create a new instance (container or VM).",
 )
 async def create_instance(
-    request: VMCreateRequest,
+    request: InstanceCreateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -208,6 +209,7 @@ async def create_instance(
             image_server=request.image_server,
             image_protocol=request.image_protocol,
             description=request.description,
+            source_type=request.source_type,
         )
 
         # Log activity: instance creation success
@@ -388,6 +390,21 @@ async def stop_instance(
             action="stop",
             new_status=VMStatus.STOPPED  # Stop always results in Stopped
         )
+    except LXDGracefulTimeoutError as e:
+        # The guest ignored the ACPI shutdown (commonly a VM with no OS, or one
+        # sitting at a boot menu). Recoverable by retrying with force, so say so
+        # rather than reporting a bare 500.
+        logger.warning(f"Graceful stop timed out for {instance_name}: {e}")
+        activity_logger.log_activity(
+            action="instance.stop",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error(f"Error stopping instance {instance_name}: {e}")
         
@@ -445,6 +462,21 @@ async def restart_instance(
             action="restart",
             new_status=VMStatus.RUNNING  # Restart ends in Running
         )
+    except LXDGracefulTimeoutError as e:
+        # The guest ignored the ACPI shutdown (commonly a VM with no OS, or one
+        # sitting at a boot menu). Recoverable by retrying with force, so say so
+        # rather than reporting a bare 500.
+        logger.warning(f"Graceful restart timed out for {instance_name}: {e}")
+        activity_logger.log_activity(
+            action="instance.restart",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except Exception as e:
         logger.error(f"Error restarting instance {instance_name}: {e}")
         

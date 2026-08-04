@@ -12,13 +12,47 @@ from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
 from app.models.schemas import VMInfo, VMStatus
 from app.core.config import get_settings
-from .exceptions import LXDConnectionError, LXDOperationError
+from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError
 from .utils import parse_vm_status, extract_ip_addresses, find_instance_in_projects
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
 from .audit import audit_operation
 
 logger = logging.getLogger(__name__)
+
+# The pooled client is built for fast failure detection (3s connect / 8s read).
+# That read timeout is shorter than the graceful-shutdown waits callers ask for,
+# so the HTTP read would expire before LXD's own operation timeout -- making the
+# caller's `timeout` argument meaningless and surfacing a raw connection error
+# instead of a clean result. Stop/restart therefore use a client whose read
+# timeout outlives the requested wait by this margin.
+_GRACEFUL_READ_MARGIN_SECONDS = 30
+
+# Hard ceiling on the wait a caller can request, mirroring VMActionRequest's
+# `le=600` bound. Clamped again here so any internal caller that bypasses the
+# request schema still can't hold an LXD operation request (and its worker) open
+# for an unbounded time.
+_MAX_ACTION_TIMEOUT_SECONDS = 600
+
+
+def _is_graceful_timeout(exc: Exception) -> bool:
+    """True if `exc` means the guest never completed a graceful shutdown.
+
+    Because `_rebind_for_wait` gives the client a read timeout of
+    ``timeout + _GRACEFUL_READ_MARGIN_SECONDS``, the HTTP read always outlives
+    LXD's own operation deadline, so the failure surfaces as LXD's message --
+    'Failed shutting down instance, status is "Running": context deadline
+    exceeded' -- and never as a raw HTTP read timeout. We therefore match only
+    those two guest-side shapes. Matching the bare substring "timed out" would
+    misclassify connection failures ('Connection to <ip> timed out', 'Connection
+    pool timed out ...') as a guest ACPI failure and wrongly tell the operator to
+    retry with force during a connectivity outage.
+    """
+    msg = str(exc).lower()
+    return (
+        "context deadline exceeded" in msg
+        or "failed shutting down instance" in msg
+    )
 
 # Thread pool for parallel instance state fetching
 # Enterprise setting: 50 workers for high concurrency
@@ -448,41 +482,90 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to start VM: {str(e)}")
     
+    def _rebind_for_wait(self, instance, host: str, project_name: str, timeout: int):
+        """Re-fetch `instance` on a client whose read timeout outlives `timeout`.
+
+        Returns the original instance unchanged if such a client can't be built,
+        so a graceful stop/restart degrades to the old behaviour rather than
+        failing outright.
+        """
+        try:
+            waiting_client = self.connection_manager.get_project_client(
+                host, project_name, (5, timeout + _GRACEFUL_READ_MARGIN_SECONDS)
+            )
+            if waiting_client is not None:
+                return waiting_client.instances.get(instance.name)
+        except Exception as e:  # noqa: BLE001 - fall back to the pooled client
+            logger.warning(
+                "Could not build a long-timeout client for %s on %s: %s", instance.name, host, e
+            )
+        return instance
+
+    @staticmethod
+    def _graceful_timeout(name: str, action: str, timeout: int) -> LXDGracefulTimeoutError:
+        # A graceful stop only works if software inside the guest acts on the ACPI
+        # power event. A fully-booted OS does so in about a second; the cases below
+        # never will, no matter how long the timeout.
+        return LXDGracefulTimeoutError(
+            f"Timed out after {timeout}s waiting for '{name}' to shut down gracefully: "
+            f"nothing in the guest acted on the ACPI shutdown request. Common causes: "
+            f"no OS is installed, it is sitting at a boot menu or UEFI shell, it is "
+            f"still early in boot, or the OS does not handle ACPI power events (many "
+            f"live/installer images do not). Retry the {action} with force to "
+            f"power-cycle it."
+        )
+
     @audit_operation("lxd.instance.stop", "instance")
     async def stop_vm(
-        self, 
-        name: str, 
-        host: str, 
+        self,
+        name: str,
+        host: str,
         force: bool = False,
         timeout: int = 30,
         project: Optional[str] = None,
     ) -> VMInfo:
         """Stop a VM (searches all projects)."""
+        timeout = max(1, min(timeout, _MAX_ACTION_TIMEOUT_SECONDS))
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             if instance.status == "Stopped":
                 vm_info = self._instance_to_vm_info(instance, host, endpoint)
             else:
-                instance.stop(force=force, wait=True, timeout=timeout)
-                instance.sync()
+                # A graceful stop blocks on the guest for up to `timeout`s. Those
+                # pylxd calls are synchronous, so run them in a worker thread to
+                # avoid stalling the event loop for the whole wait (a blank VM
+                # burns the full timeout since nothing answers ACPI). A forced
+                # stop is immediate but goes through the same path for uniformity.
+                def _do_stop():
+                    target = instance if force else self._rebind_for_wait(instance, host, project_name, timeout)
+                    try:
+                        target.stop(force=force, wait=True, timeout=timeout)
+                    except Exception as e:
+                        if not force and _is_graceful_timeout(e):
+                            raise self._graceful_timeout(name, "stop", timeout) from e
+                        raise
+                    target.sync()
+                    return target
+
+                target = await asyncio.to_thread(_do_stop)
                 logger.info(f"Stopped VM {name} on {host} (project: {project_name})")
-                vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            
+                vm_info = self._instance_to_vm_info(target, host, endpoint)
+
             if vm_info.config is None:
                 vm_info.config = {}
             vm_info.config['project'] = project_name
-            
+
             return vm_info
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to stop VM: {str(e)}")
     
@@ -496,35 +579,50 @@ class InstanceManager:
         project: Optional[str] = None,
     ) -> VMInfo:
         """Restart a VM (searches all projects)."""
+        timeout = max(1, min(timeout, _MAX_ACTION_TIMEOUT_SECONDS))
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDOperationError(f"Failed to connect to {host}: connection not available")
             endpoint = self._get_node_endpoint(host)
-            
+
             instance, project_name = find_instance_in_projects(client, name, project)
-            
+
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
-            
+
             if instance.status == "Frozen":
                 raise LXDOperationError(
                     f"Instance {name} is frozen by billing policy and cannot be restarted. "
                     f"Please reactivate the subscription through the billing portal."
                 )
-            
-            instance.restart(force=force, wait=True, timeout=timeout)
-            instance.sync()
-            
+
+            # The graceful restart blocks on the guest shutdown for up to
+            # `timeout`s; run the synchronous pylxd calls in a worker thread so the
+            # event loop isn't stalled for the full wait. A forced restart is a
+            # power-cycle but goes through the same path for uniformity.
+            def _do_restart():
+                target = instance if force else self._rebind_for_wait(instance, host, project_name, timeout)
+                try:
+                    target.restart(force=force, wait=True, timeout=timeout)
+                except Exception as e:
+                    if not force and _is_graceful_timeout(e):
+                        raise self._graceful_timeout(name, "restart", timeout) from e
+                    raise
+                target.sync()
+                return target
+
+            target = await asyncio.to_thread(_do_restart)
+
             logger.info(f"Restarted VM {name} on {host} (project: {project_name})")
-            vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            
+            vm_info = self._instance_to_vm_info(target, host, endpoint)
+
             if vm_info.config is None:
                 vm_info.config = {}
             vm_info.config['project'] = project_name
-            
+
             return vm_info
-            
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to restart VM: {str(e)}")
     
@@ -658,7 +756,7 @@ class InstanceManager:
         self,
         name: str,
         host: str,
-        image: str,
+        image: Optional[str] = None,
         instance_type: str = "virtual-machine",
         profiles: Optional[List[str]] = None,
         config: Optional[Dict[str, str]] = None,
@@ -669,6 +767,7 @@ class InstanceManager:
         image_server: Optional[str] = None,
         image_protocol: Optional[str] = None,
         description: Optional[str] = None,
+        source_type: str = "image",
     ) -> Optional[str]:
         """Start creating a new instance (non-blocking).
 
@@ -722,17 +821,24 @@ class InstanceManager:
                 instance_config["user.user-data"] = cloud_init
 
             # Determine source configuration
-            source = {"type": "image"}
-            if image_server:
-                # Pull from a remote simplestreams server by alias.
-                source["mode"] = "pull"
-                source["server"] = image_server
-                source["protocol"] = image_protocol or "simplestreams"
-                source["alias"] = image
-            elif len(image) == 64:  # Local fingerprint
-                source["fingerprint"] = image
-            else:  # Local alias
-                source["alias"] = image
+            if source_type == "none":
+                # Blank VM: an empty root disk and no OS, equivalent to
+                # `lxc init <name> --empty --vm`. There is nothing to boot yet --
+                # an OS is installed afterwards by attaching an install ISO as
+                # boot media and driving the VGA console.
+                source = {"type": "none"}
+            else:
+                source = {"type": "image"}
+                if image_server:
+                    # Pull from a remote simplestreams server by alias.
+                    source["mode"] = "pull"
+                    source["server"] = image_server
+                    source["protocol"] = image_protocol or "simplestreams"
+                    source["alias"] = image
+                elif len(image) == 64:  # Local fingerprint
+                    source["fingerprint"] = image
+                else:  # Local alias
+                    source["alias"] = image
 
             instance_def = {
                 "name": name,

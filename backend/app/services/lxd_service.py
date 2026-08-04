@@ -8,6 +8,7 @@ from .lxd import (
     get_lxd_service,
     LXDConnectionError,
     LXDOperationError,
+    LXDGracefulTimeoutError,
 )
 
 __all__ = [
@@ -15,4 +16,5 @@ __all__ = [
     'get_lxd_service',
     'LXDConnectionError',
     'LXDOperationError',
+    'LXDGracefulTimeoutError',
 ]

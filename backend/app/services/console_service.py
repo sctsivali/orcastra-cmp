@@ -662,11 +662,15 @@ class ConsoleService:
                             device_config.get("boot.priority") is not None or
                             device_name in ("cdrom", "iso", "install-media")
                         ):
-                            boot_priority_str = device_config.get("boot.priority", "99")
+                            # LXD: "A higher value indicates a higher boot
+                            # precedence." An unset boot.priority therefore means
+                            # no precedence at all (lowest), not the highest --
+                            # reporting 99 here would read as "boots first".
+                            boot_priority_str = device_config.get("boot.priority", "0")
                             try:
                                 boot_priority = int(boot_priority_str)
-                            except:
-                                boot_priority = 99
+                            except (TypeError, ValueError):
+                                boot_priority = 0
                             
                             attached = AttachedISO(
                                 device_name=device_name,

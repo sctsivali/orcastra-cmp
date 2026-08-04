@@ -22,6 +22,7 @@ from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
     LXDOperationError,
+    LXDGracefulTimeoutError,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -424,7 +425,23 @@ async def stop_vm(
             action="stop",
             new_status=vm.status,
         )
-        
+
+    except LXDGracefulTimeoutError as e:
+        # Must precede LXDOperationError (its parent). The guest ignored the ACPI
+        # shutdown (commonly a VM with no OS, or one at a boot menu); recoverable
+        # by retrying with force, so return 504 + a GRACEFUL_TIMEOUT audit signal
+        # instead of a bare 400 -- matching /instances/{name}/stop.
+        logger.warning(f"Graceful stop timed out for VM {vm_name}: {e}")
+        activity_logger.log_activity(
+            action="vm.stop",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM stop failure
         activity_logger.log_activity(
@@ -498,7 +515,22 @@ async def restart_vm(
             action="restart",
             new_status=vm.status,
         )
-        
+
+    except LXDGracefulTimeoutError as e:
+        # Must precede LXDOperationError (its parent). Guest ignored the ACPI
+        # shutdown during the restart; recoverable with force. 504 + GRACEFUL_TIMEOUT
+        # audit signal, matching /instances/{name}/restart.
+        logger.warning(f"Graceful restart timed out for VM {vm_name}: {e}")
+        activity_logger.log_activity(
+            action="vm.restart",
+            target_type="vm",
+            target_id=vm_name,
+            target_host=request.host,
+            result="failure",
+            error_code="GRACEFUL_TIMEOUT",
+            error_message=str(e),
+        )
+        raise HTTPException(status_code=504, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM restart failure
         activity_logger.log_activity(

@@ -11,6 +11,7 @@ import {
   HardDrive,
   Loader2,
   HardDriveDownload,
+  Disc,
   Gauge,
   ListTree,
   Plus,
@@ -69,7 +70,7 @@ import { useToast } from "@/hooks/use-toast";
 import { addPendingCreate } from "@/lib/pending-creates";
 import { api } from "@/lib/api";
 import type {
-  VMCreateRequest,
+  InstanceCreateRequest,
   ImageInfo,
   StoragePoolInfo,
   StoragePoolListResponse,
@@ -133,11 +134,21 @@ interface FormState {
   description: string;
   selectedNode: string;
   selectedProject: string;
+  // Boot source. "image" installs a base image into the root disk (VM boots the
+  // OS). "none" creates an empty root disk and attaches a chosen ISO as boot
+  // media, so the VM boots the ISO/installer. VM-only -- a container has no OS to
+  // boot without a rootfs, so containers are always "image".
+  sourceType: "image" | "none";
   // Selected base image: the value to send (fingerprint for local, alias for
   // remote), the remote server ("" for local), and a display label.
   selectedImage: string;
   imageServer: string;
   imageLabel: string;
+  // ISO boot media (only when sourceType === "none"): the custom ISO volume the
+  // VM boots. Attached at create as a cdrom device with a high boot priority.
+  selectedIso: string;      // volume name
+  selectedIsoPool: string;  // the ISO volume's storage pool
+  selectedIsoLabel: string; // display label
   selectedPool: string;
   cpu: string;
   memoryValue: string;
@@ -156,9 +167,13 @@ const DEFAULT_FORM: FormState = {
   description: "",
   selectedNode: "",
   selectedProject: "default",
+  sourceType: "image",
   selectedImage: "",
   imageServer: "",
   imageLabel: "",
+  selectedIso: "",
+  selectedIsoPool: "",
+  selectedIsoLabel: "",
   selectedPool: "",
   cpu: "1",
   memoryValue: "1",
@@ -234,6 +249,14 @@ export function InstanceCreateForm() {
     customVolumes.filter((v) => v.pool === pool);
   const volumeContentType = (pool: string, name: string) =>
     customVolumes.find((v) => v.pool === pool && v.name === name)?.content_type;
+
+  // Custom ISO volumes on the node, for the "From ISO" boot-source picker. The
+  // option value encodes pool + name so we can rebuild the cdrom device on submit.
+  const isoVolumes = customVolumes.filter((v) => v.content_type === "iso");
+  const isoOptions = isoVolumes.map((v) => ({
+    value: `${v.pool}/${v.name}`,
+    label: `${v.name} (${v.pool})`,
+  }));
 
   const addDisk = () =>
     setDisks((d) => [
@@ -529,11 +552,16 @@ export function InstanceCreateForm() {
   // too, otherwise e.g. "bad name" reaches LXD and fails with an opaque error.
   const nameValid =
     /^[a-zA-Z][a-zA-Z0-9-]*$/.test(form.name) && form.name.length <= 63;
+  // A blank VM has no base image to pick, so it must not gate submit on one.
+  // sourceType "none" now means "boot from ISO": an empty root disk plus a
+  // required ISO (no bare blank VM). Kept named `bootFromIso` for clarity.
+  const bootFromIso = form.sourceType === "none";
   const canSubmit =
     !isSubmitting &&
     nameValid &&
     !!form.selectedNode &&
-    !!form.selectedImage &&
+    // Image mode needs an image; ISO mode needs an ISO. No bare blank.
+    (bootFromIso ? !!form.selectedIso : !!form.selectedImage) &&
     resourcesValid &&
     disksValid &&
     nicsValid &&
@@ -551,6 +579,9 @@ export function InstanceCreateForm() {
       selectedImage: "",
       imageServer: "",
       imageLabel: "",
+      selectedIso: "",
+      selectedIsoPool: "",
+      selectedIsoLabel: "",
       selectedPool: "",
       selectedProject: "default",
     }));
@@ -566,9 +597,15 @@ export function InstanceCreateForm() {
     setForm((prev) => ({
       ...prev,
       type,
+      // ISO boot is VM-only, so switching to a container drops back to
+      // installing from an image and clears any ISO selection.
+      sourceType: type === "container" ? "image" : prev.sourceType,
       selectedImage: "",
       imageServer: "",
       imageLabel: "",
+      selectedIso: "",
+      selectedIsoPool: "",
+      selectedIsoLabel: "",
     }));
     setDisks([]);
   };
@@ -580,6 +617,9 @@ export function InstanceCreateForm() {
       selectedImage: "",
       imageServer: "",
       imageLabel: "",
+      selectedIso: "",
+      selectedIsoPool: "",
+      selectedIsoLabel: "",
     }));
 
   // --- Submit -----------------------------------------------------------------
@@ -592,10 +632,11 @@ export function InstanceCreateForm() {
     }
 
     // Local images create by fingerprint (no server); remote images pull by
-    // alias from their source server.
-    const image = form.selectedImage;
-    const image_server = form.imageServer || undefined;
-    const image_protocol = form.imageServer ? "simplestreams" : undefined;
+    // alias from their source server. An ISO-boot VM has no image at all.
+    const image = bootFromIso ? undefined : form.selectedImage;
+    const image_server = bootFromIso ? undefined : form.imageServer || undefined;
+    const image_protocol =
+      !bootFromIso && form.imageServer ? "simplestreams" : undefined;
 
     // Build the devices map: the root disk (size override) plus any attached disks.
     const devices: Record<string, Record<string, string>> = {};
@@ -645,6 +686,17 @@ export function InstanceCreateForm() {
           : { id: g.gid.trim() }),
       };
     });
+    // ISO boot media: attach the chosen ISO as a cdrom with a high boot.priority
+    // so the VM boots the installer ahead of the empty root disk. (LXD: a higher
+    // boot.priority wins; the root disk has none set.)
+    if (bootFromIso && form.selectedIso) {
+      devices.cdrom = {
+        type: "disk",
+        source: form.selectedIso,
+        pool: form.selectedIsoPool,
+        "boot.priority": "10",
+      };
+    }
 
     // Advanced options → LXD config keys. Only sent when set (tri-state selects
     // use "" = inherit). Container/VM-only keys are gated by instance type.
@@ -679,11 +731,13 @@ export function InstanceCreateForm() {
     setIf("cloud-init.vendor-data", adv.ciVendor);
     setIf("cloud-init.network-config", adv.ciNetwork);
 
-    const payload: VMCreateRequest = {
+    const payload: InstanceCreateRequest = {
       name: form.name,
       ...(form.description.trim() ? { description: form.description.trim() } : {}),
       host: form.selectedNode,
-      image,
+      // Blank VM: no image, and source_type tells the backend to create an
+      // empty root disk instead of unpacking one.
+      ...(bootFromIso ? { source_type: "none" as const } : { image }),
       ...(image_server ? { image_server, image_protocol } : {}),
       project: form.selectedProject || "default",
       instance_type: wantedImageType,
@@ -999,31 +1053,134 @@ export function InstanceCreateForm() {
                 </div>
               </div>
 
-              {/* Base image — picked via the Select base image dialog */}
-              <div className="grid gap-2">
-                <Label className="flex items-center gap-2">
-                  <HardDriveDownload className="h-4 w-4" />
-                  Base image *
-                </Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="justify-start font-normal"
-                  onClick={openImageDialog}
-                  disabled={!form.selectedNode || imagesLoading}
-                >
-                  {form.imageLabel ||
-                    (!form.selectedNode
-                      ? "Select a node first"
-                      : imagesLoading
-                        ? "Loading images…"
-                        : "Select base image")}
-                </Button>
-                <p className="text-xs text-muted-foreground">
-                  Browse Local, Custom (images.lxd.canonical.com) and Ubuntu
-                  images. Remote images are pulled on creation.
-                </p>
-              </div>
+              {/* Operating system: install from an image, or create a blank VM
+                  (empty disk) to install onto from an ISO later. VM-only. */}
+              {form.type === "vm" && (
+                <div className="grid gap-2">
+                  <Label className="flex items-center gap-2">
+                    <HardDriveDownload className="h-4 w-4" />
+                    Operating system
+                  </Label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => updateField("sourceType", "image")}
+                      className={`flex-1 p-3 rounded-lg border-2 text-left transition-all ${
+                        !bootFromIso
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <div
+                        className={`text-sm font-medium ${!bootFromIso ? "text-primary" : "text-foreground"}`}
+                      >
+                        From base image
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Ready to boot with an OS pre-installed
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => updateField("sourceType", "none")}
+                      className={`flex-1 p-3 rounded-lg border-2 text-left transition-all ${
+                        bootFromIso
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-muted-foreground/30"
+                      }`}
+                    >
+                      <div
+                        className={`text-sm font-medium ${bootFromIso ? "text-primary" : "text-foreground"}`}
+                      >
+                        From ISO
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        Empty disk that boots a custom ISO installer
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Boot source body: pick a base image, or (VM only) pick the ISO
+                  the VM boots from — attached at create with a high boot priority. */}
+              {bootFromIso ? (
+                <div className="grid gap-2">
+                  <Label className="flex items-center gap-2">
+                    <Disc className="h-4 w-4" />
+                    Boot ISO *
+                  </Label>
+                  {isoOptions.length > 0 ? (
+                    <>
+                      <SearchableSelect
+                        value={
+                          form.selectedIso
+                            ? `${form.selectedIsoPool}/${form.selectedIso}`
+                            : ""
+                        }
+                        onValueChange={(v) => {
+                          const sep = v.indexOf("/");
+                          const pool = v.slice(0, sep);
+                          const name = v.slice(sep + 1);
+                          setForm((prev) => ({
+                            ...prev,
+                            selectedIso: name,
+                            selectedIsoPool: pool,
+                            selectedIsoLabel: `${name} (${pool})`,
+                          }));
+                        }}
+                        options={isoOptions}
+                        placeholder={
+                          form.selectedNode ? "Select an ISO" : "Select a node first"
+                        }
+                        searchPlaceholder="Search ISOs..."
+                        emptyText="No ISOs found."
+                        disabled={!form.selectedNode}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        The VM boots this ISO on an empty {form.storageValue.trim()}
+                        {form.storageUnit} disk. Install the OS to the disk from the
+                        console, then eject the ISO and reboot.
+                      </p>
+                    </>
+                  ) : (
+                    <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
+                      <p className="font-medium text-foreground mb-1">
+                        No ISOs available on this node.
+                      </p>
+                      <p>
+                        Upload one under Inventory → Storage → ISO Images, then it
+                        will appear here to boot from.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  <Label className="flex items-center gap-2">
+                    <HardDriveDownload className="h-4 w-4" />
+                    Base image *
+                  </Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="justify-start font-normal"
+                    onClick={openImageDialog}
+                    disabled={!form.selectedNode || imagesLoading}
+                  >
+                    {form.imageLabel ||
+                      (!form.selectedNode
+                        ? "Select a node first"
+                        : imagesLoading
+                          ? "Loading images…"
+                          : "Select base image")}
+                  </Button>
+                  <p className="text-xs text-muted-foreground">
+                    Browse Local, Custom (images.lxd.canonical.com) and Ubuntu
+                    images. Remote images are pulled on creation.
+                  </p>
+                </div>
+              )}
             </CardContent>
           </Card>
 
