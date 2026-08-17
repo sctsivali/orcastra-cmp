@@ -202,9 +202,19 @@ install-all: install-backend install-frontend ## Install all dependencies locall
 
 ##@ Testing Commands
 
-test-backend: ## Run backend tests
+# note: the runtime image does not ship pytest (it is in requirements-dev.txt, not
+# requirements.txt), so the default target runs on the host. Override PYTEST to point at
+# a specific interpreter, ex; PYTEST=.venv/bin/pytest make test-backend
+PYTEST ?= python3 -m pytest
+
+test-backend: ## Run backend tests (host)
 	@echo "$(COLOR_GREEN)Running backend tests...$(COLOR_RESET)"
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec backend pytest
+	@cd backend && $(PYTEST)
+
+test-backend-docker: ## Run backend tests inside the running backend container
+	@echo "$(COLOR_GREEN)Running backend tests in container...$(COLOR_RESET)"
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec backend pip install --user -q -r requirements-dev.txt
+	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec backend python -m pytest
 
 test-frontend: ## Run frontend tests
 	@echo "$(COLOR_GREEN)Running frontend tests...$(COLOR_RESET)"

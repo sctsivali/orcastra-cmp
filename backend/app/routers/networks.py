@@ -20,6 +20,7 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.core.cache import get_cache_manager
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.activity_logger import get_activity_logger
 
@@ -34,6 +35,13 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+
+# Wall-clock cap for a create. On a cluster the call is N+4 sequential round trips, each
+# already bounded to the pooled (3, 8) by TimeoutHTTPAdapter, so this only has to cover a
+# realistic member count rather than an unbounded wait.
+NETWORK_CREATE_TIMEOUT = 90.0
+# Shed rather than queue: the pool is 5 wide and shared with the list fan-out.
+NETWORK_MAX_IN_FLIGHT = 10
 
 
 class NetworkInfo(BaseModel):
@@ -344,7 +352,15 @@ async def create_network(
 ):
     """Create a new network."""
     verify_cluster_access(host)
-    try:
+
+    def _create_blocking():
+        """All the pylxd work for one create, in one hop off the loop.
+
+        important: on a cluster this is N+4 sequential HTTP round trips (connect, cluster
+        probe, member list, one define per member, the cluster-wide create, the read-back),
+        so it scales with cluster size. Run inline it parks the event-loop thread for that
+        whole sequence.
+        """
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
@@ -365,15 +381,39 @@ async def create_network(
                 "config": request.config,
                 "description": request.description,
             })
-            network = client.networks.get(request.name)
-        else:
-            # Standalone host: unchanged (this is the tested path).
-            network = client.networks.create(
-                name=request.name,
-                type=request.type,
-                config=request.config,
-                description=request.description
+            return client.networks.get(request.name)
+        # Standalone host: unchanged (this is the tested path).
+        return client.networks.create(
+            name=request.name,
+            type=request.type,
+            config=request.config,
+            description=request.description
+        )
+
+    try:
+        try:
+            network = await run_blocking(
+                _create_blocking,
+                timeout=NETWORK_CREATE_TIMEOUT,
+                label=f"create_network[{host}/{request.name}]",
+                executor=_executor,
+                max_in_flight=NETWORK_MAX_IN_FLIGHT,
             )
+        except BlockingTimeout:
+            # The define/create fan-out may have partially applied; say so rather than
+            # implying nothing happened.
+            logger.error(f"create_network timed out on {host} for {request.name}")
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"Network creation on {host} exceeded {NETWORK_CREATE_TIMEOUT:.0f}s and may "
+                    "be partially applied; re-check the network list before retrying"
+                ),
+            ) from None
+        except BlockingPoolFull:
+            raise HTTPException(
+                status_code=503, detail="Network operations saturated; please retry shortly"
+            ) from None
 
         # Log activity: network creation success
         activity_logger.log_activity(

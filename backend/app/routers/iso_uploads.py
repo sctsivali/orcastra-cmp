@@ -35,7 +35,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
+from app.core.upload_stream import append_request_body
 from app.models.db_models import IsoUploadSession
 from app.routers.integrations import validate_api_key
 from app.services.lxd_service import get_lxd_service
@@ -51,6 +53,11 @@ UPLOAD_DIR = os.getenv("ISO_UPLOAD_DIR", os.getenv("IMAGE_UPLOAD_DIR", "/app/upl
 SESSION_TTL_HOURS = int(os.getenv("ISO_UPLOAD_TTL_HOURS", "6"))
 DISK_HEADROOM_BYTES = int(os.getenv("ISO_UPLOAD_DISK_HEADROOM", str(2 * 1024 * 1024 * 1024)))
 MAX_ACTIVE_SESSIONS = int(os.getenv("ISO_UPLOAD_MAX_ACTIVE", "2"))
+# Server-side ceiling for one upload. important: this is advertised as Tus-Max-Size AND
+# enforced at create. Both matter -- max_bytes/total_bytes arrive from the client, so
+# without this the only ceiling is free disk, and staging shares a filesystem with the rest
+# of the box.
+MAX_UPLOAD_BYTES = int(os.getenv("ISO_UPLOAD_MAX_BYTES", str(8 * 1024 * 1024 * 1024)))
 TUS_VERSION = "1.0.0"
 
 # LXD custom-volume names: letters, digits, dot, hyphen (LXD rejects slashes/spaces). This is also the
@@ -62,6 +69,11 @@ _VOLUME_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\Z")
 _POOL_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\Z")
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="iso_import")
+
+# Cap for the connect probe in the recovery sweep. Generous relative to the pooled (3, 8)
+# because get_client may rebuild the session, but bounded so one unreachable cluster cannot
+# stall the sweep for the rest of the candidates.
+RECOVERY_CONNECT_TIMEOUT = 30.0
 
 _ACTIVE = ("pending", "uploading", "uploaded", "importing")
 _TERMINAL = ("ready", "failed")
@@ -159,6 +171,12 @@ async def create_upload(
         )
     if body.total_bytes > body.max_bytes:
         raise HTTPException(status_code=413, detail="Declared size exceeds the allowed maximum")
+    # Both figures come from the client, so clamp against the server ceiling too.
+    if body.total_bytes > MAX_UPLOAD_BYTES or body.max_bytes > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Declared size exceeds the server maximum of {MAX_UPLOAD_BYTES} bytes",
+        )
 
     _ensure_dir()
     await _gc_expired(db)
@@ -232,7 +250,7 @@ async def options_upload(session_id: str):
             "Tus-Resumable": TUS_VERSION,
             "Tus-Version": TUS_VERSION,
             "Tus-Extension": "creation",
-            "Tus-Max-Size": os.getenv("ISO_UPLOAD_MAX_BYTES", str(8 * 1024 * 1024 * 1024)),
+            "Tus-Max-Size": str(MAX_UPLOAD_BYTES),
         },
     )
 
@@ -257,13 +275,13 @@ async def patch_upload(
     if client_offset != row.upload_offset:
         raise HTTPException(status_code=409, detail="Upload-Offset does not match", headers={"Upload-Offset": str(row.upload_offset)})
 
-    chunk = await request.body()
-    new_offset = row.upload_offset + len(chunk)
-    if new_offset > row.total_bytes or new_offset > row.max_bytes:
-        raise HTTPException(status_code=413, detail="Upload exceeds declared size")
-
-    with open(row.staging_path, "ab") as f:
-        f.write(chunk)
+    new_offset = await append_request_body(
+        request,
+        row.staging_path,
+        start_offset=row.upload_offset,
+        limit=min(row.total_bytes, row.max_bytes),
+        label=f"iso_upload[{session_id}]",
+    )
 
     row.upload_offset = new_offset
     row.status = "uploaded" if new_offset >= row.total_bytes else "uploading"
@@ -334,6 +352,11 @@ def _sha256_file(path: str) -> str:
 
 _IMPORT_UPLOAD_TIMEOUT = int(os.getenv("ISO_IMPORT_UPLOAD_TIMEOUT", "600"))  # stream the file in
 _IMPORT_WAIT_TIMEOUT = int(os.getenv("ISO_IMPORT_WAIT_TIMEOUT", "900"))      # wait for LXD to create the volume
+# important: pass (connect, read), never a scalar. requests applies a scalar to BOTH legs, so
+# `timeout=900` also grants a 900s *connect* budget -- against a peer that accepts TCP and
+# then goes silent that is the RC3 failure shape with extra steps. The read leg has to be
+# long (multi-GB stream, then an LXD operation wait); the connect leg never does.
+_CONNECT_TIMEOUT = int(os.getenv("ISO_IMPORT_CONNECT_TIMEOUT", "5"))
 
 _HEARTBEAT_INTERVAL_SECONDS = int(os.getenv("ISO_IMPORT_HEARTBEAT_INTERVAL", "30"))
 _RECOVERY_STALE_SECONDS = int(os.getenv("ISO_IMPORT_HEARTBEAT_STALE", "180"))
@@ -412,7 +435,7 @@ def _lxd_import_iso_sync(cluster_id: str, path: str, pool: str, volume_name: str
                 "X-LXD-type": "iso",
             },
             verify=False,
-            timeout=_IMPORT_UPLOAD_TIMEOUT,
+            timeout=(_CONNECT_TIMEOUT, _IMPORT_UPLOAD_TIMEOUT),
         )
 
     if resp.status_code >= 400:
@@ -436,7 +459,8 @@ def _lxd_import_iso_sync(cluster_id: str, path: str, pool: str, volume_name: str
         raise RuntimeError("LXD did not return an import operation")
 
     try:
-        wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=_IMPORT_WAIT_TIMEOUT)
+        wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False,
+                            timeout=(_CONNECT_TIMEOUT, _IMPORT_WAIT_TIMEOUT))
         wbody = wresp.json() or {}
         if wbody.get("type") == "error" or wbody.get("error"):
             raise RuntimeError(f"LXD ISO import failed: {wbody.get('error') or 'unknown error'}")
@@ -573,8 +597,23 @@ async def _recover_orphaned_imports() -> None:
             continue
 
         # 2) Cluster offline -> leave for a later sweep (a transient blip must not fail it).
+        # get_client does a TLS handshake and a probe request, so it must not run inline:
+        # this sweep runs on every uvicorn worker and iterates every stale candidate, which
+        # would park the loop once per candidate against a slow cluster.
         svc = get_lxd_service()
-        if svc.connection_manager.get_client(cluster_id) is None:
+        try:
+            client = await run_blocking(
+                svc.connection_manager.get_client,
+                cluster_id,
+                timeout=RECOVERY_CONNECT_TIMEOUT,
+                label=f"iso_recovery_connect[{cluster_id}]",
+                executor=_executor,
+            )
+        except (BlockingTimeout, BlockingPoolFull) as exc:
+            logger.info("Recovery: cluster %s not reachable (%s); deferring ISO import session=%s",
+                        cluster_id, exc, sid)
+            continue
+        if client is None:
             logger.info("Recovery: cluster %s offline; deferring ISO import session=%s", cluster_id, sid)
             continue
 

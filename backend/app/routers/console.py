@@ -365,6 +365,14 @@ async def create_console_session(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Create a graphics console session."""
+    # Per-project enforcement (flag-gated so the deploy is a no-op until flipped): today console has
+    # no cluster/ACL check at all beyond break-glass. verify_cluster_access + verify_tenant_permission
+    # are no-ops for admin/partner (allowed=None / acl=None) and enforce for tenants.
+    from app.core.org_scope import verify_cluster_access, verify_tenant_permission
+    from app.core.config import get_settings
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_cluster_access(host)
+        verify_tenant_permission(host, project, instance_name, "console")
     # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
     # active grant (raises 403 break_glass_required otherwise). In-scope self-service and
     # local dev are unaffected.

@@ -1,12 +1,14 @@
 "use client";
 
+import { Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+import { Loader2 } from "lucide-react";
 
 import { NetworkDetail } from "@/components/network-detail";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import Link from "next/link";
 
-export default function NetworkDetailPage() {
+function NetworkDetailContent() {
   const params = useParams();
   const searchParams = useSearchParams();
   const name = decodeURIComponent((params?.name as string) || "");
@@ -31,5 +33,26 @@ export default function NetworkDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// Loading fallback while useSearchParams suspends.
+function NetworkDetailLoading() {
+  return (
+    <div className="p-8">
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    </div>
+  );
+}
+
+// Export with a Suspense wrapper - required because NetworkDetailContent calls
+// useSearchParams(); without it `next build` fails prerendering this route.
+export default function NetworkDetailPage() {
+  return (
+    <Suspense fallback={<NetworkDetailLoading />}>
+      <NetworkDetailContent />
+    </Suspense>
   );
 }

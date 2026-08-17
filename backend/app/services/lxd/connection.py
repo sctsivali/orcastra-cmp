@@ -20,6 +20,48 @@ from .exceptions import LXDConnectionError
 
 logger = logging.getLogger(__name__)
 
+# House default for LXD traffic, matching the value pylxd clients are constructed with below.
+DEFAULT_LXD_TIMEOUT: Tuple[int, int] = (3, 8)
+
+
+def _read_retries_enabled() -> bool:
+    """Whether a read timeout should be retried by the pooled adapter.
+
+    Off by default. Retrying a read timeout multiplies wall clock by the attempt count:
+    measured against a peer that accepts TCP then goes silent, Retry(total=3) turned an 8s
+    read timeout into 35s of thread time across 4 connections. A read timeout against LXD is
+    almost never transient in a way three more attempts would fix, and retrying a POST read
+    timeout can execute an instance create twice.
+
+    Set ORCASTRA_LXD_RETRY_READ=true to restore the pre-fix behaviour without a rebuild.
+    """
+    return os.environ.get("ORCASTRA_LXD_RETRY_READ", "false").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+class TimeoutHTTPAdapter(HTTPAdapter):
+    """HTTPAdapter that applies a default timeout when the caller supplied none.
+
+    important: this is the single choke point that bounds every pylxd call in the process.
+    pylxd only injects its configured timeout when a call goes through client.api.<verb>
+    (_APINode.get does kwargs["timeout"] = kwargs.get("timeout", self._timeout)). Code that
+    reaches for client.api.session directly bypasses that entirely, and a bare requests
+    session has no default, so such a call blocks forever against a silent peer. Mounting
+    this adapter closes that hole for callers that have not been audited.
+    """
+
+    def __init__(self, *args, default_timeout: Tuple[int, int] = DEFAULT_LXD_TIMEOUT, **kwargs):
+        self.default_timeout = default_timeout
+        super().__init__(*args, **kwargs)
+
+    def send(self, request, *args, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = self.default_timeout
+        return super().send(request, *args, **kwargs)
+
 
 class LXDConnectionManager:
     """
@@ -63,13 +105,14 @@ class LXDConnectionManager:
                 retry_strategy = Retry(
                     total=3,
                     connect=0,
+                    read=None if _read_retries_enabled() else 0,
                     backoff_factor=0.5,
                     status_forcelist=[429, 500, 502, 503, 504],
                     allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
                     raise_on_status=False
                 )
-                
-                adapter = HTTPAdapter(
+
+                adapter = TimeoutHTTPAdapter(
                     max_retries=retry_strategy,
                     pool_connections=self.POOL_CONNECTIONS,
                     pool_maxsize=self.POOL_MAXSIZE,
@@ -89,13 +132,14 @@ class LXDConnectionManager:
         retry_strategy = Retry(
             total=3,
             connect=0,
+            read=None if _read_retries_enabled() else 0,
             backoff_factor=1,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
             raise_on_status=False
         )
-        
-        adapter = HTTPAdapter(
+
+        adapter = TimeoutHTTPAdapter(
             max_retries=retry_strategy,
             pool_connections=self.POOL_CONNECTIONS,
             pool_maxsize=self.POOL_MAXSIZE,

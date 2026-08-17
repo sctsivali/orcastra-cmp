@@ -28,6 +28,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, verify_tenant_permission
+from app.core.config import get_settings
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
@@ -308,6 +309,9 @@ async def start_instance(
 ):
     """Start an instance."""
     verify_cluster_access(request.host)
+    # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
     try:
         vm = await lxd_service.start_vm(
             instance_name,
@@ -363,6 +367,8 @@ async def stop_instance(
 ):
     """Stop an instance."""
     verify_cluster_access(request.host)
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
     try:
         await lxd_service.stop_vm(
             instance_name, 
@@ -435,6 +441,8 @@ async def restart_instance(
 ):
     """Restart an instance."""
     verify_cluster_access(request.host)
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
     try:
         await lxd_service.restart_vm(
             instance_name,

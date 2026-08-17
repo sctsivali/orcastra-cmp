@@ -495,6 +495,18 @@ async def terminal_websocket(
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
 
+    # Per-project enforcement (flag-gated). No-op for admin/partner (acl is None); for a tenant a
+    # missing/insufficient 'console' rule closes the socket with 1008 rather than raising.
+    if _settings.tenant_perm_enforcement_enabled and user is not None:
+        from app.core.org_scope import verify_tenant_permission
+        from fastapi import HTTPException as _HTTPExc
+        try:
+            verify_tenant_permission(host, project, instance_name, "console")
+        except _HTTPExc:
+            await websocket.close(code=1008, reason="permission_denied")
+            logger.warning(f"Terminal WS blocked (no console permission): {instance_name}@{host} user={user.email}")
+            return
+
     # Break-glass gate (defense in depth). An admin reaching a tenant cluster they do not
     # own must hold an active grant; otherwise reject. Dev/no-user skips inside enforce.
     _bg_grant_id: Optional[int] = None

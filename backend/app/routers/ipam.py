@@ -15,6 +15,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from pydantic import BaseModel, Field
+from app.services.lxd.proxy import socket_timeout_for
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, verify_cluster_access, check_tenant_permission
 from app.core.cache import get_cache_manager
@@ -74,7 +75,12 @@ def _fetch_ipam_for_node(
                 base_url = client.api._api_endpoint
                 allocations_url = f"network-allocations?project={project_name}&recursion=1"
                 full_url = f"{base_url}/{allocations_url}"
-                allocations_response = client.api.session.get(full_url)
+                # important: client.api.session bypasses pylxd's _APINode, so the timeout
+                # _APINode would have injected never applies. Without this the call blocks
+                # forever against a silent node and permanently burns a pool thread.
+                allocations_response = client.api.session.get(
+                    full_url, timeout=socket_timeout_for(client)
+                )
 
                 if allocations_response.status_code == 200:
                     allocations_data = allocations_response.json().get('metadata', [])

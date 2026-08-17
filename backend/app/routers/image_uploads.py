@@ -34,6 +34,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db, async_session_maker
+from app.core.upload_stream import append_request_body
 from app.models.db_models import ImageUploadSession
 from app.routers.integrations import validate_api_key
 from app.services.lxd_service import get_lxd_service
@@ -51,6 +52,11 @@ SESSION_TTL_HOURS = int(os.getenv("IMAGE_UPLOAD_TTL_HOURS", "6"))
 DISK_HEADROOM_BYTES = int(os.getenv("IMAGE_UPLOAD_DISK_HEADROOM", str(2 * 1024 * 1024 * 1024)))
 # Serialize to bound staging disk (each session can stage up to its max_bytes).
 MAX_ACTIVE_SESSIONS = int(os.getenv("IMAGE_UPLOAD_MAX_ACTIVE", "2"))
+# Server-side ceiling for one upload. important: this is advertised as Tus-Max-Size AND
+# enforced at create. Both matter -- max_bytes/total_bytes arrive from the client, so
+# without this the only ceiling is free disk, and staging shares a filesystem with the rest
+# of the box.
+MAX_UPLOAD_BYTES = int(os.getenv("IMAGE_UPLOAD_MAX_BYTES", str(4 * 1024 * 1024 * 1024)))
 TUS_VERSION = "1.0.0"
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="image_import")
@@ -136,6 +142,12 @@ async def create_upload(
     x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
 ):
     _assert_cluster_permission(api_key, body.cluster_id, "write")
+    # Both figures come from the client, so clamp against the server ceiling too.
+    if body.total_bytes > MAX_UPLOAD_BYTES or body.max_bytes > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Declared size exceeds the server maximum of {MAX_UPLOAD_BYTES} bytes",
+        )
     if body.total_bytes > body.max_bytes:
         raise HTTPException(status_code=413, detail="Declared size exceeds the allowed maximum")
 
@@ -211,7 +223,7 @@ async def options_upload(session_id: str):
             "Tus-Resumable": TUS_VERSION,
             "Tus-Version": TUS_VERSION,
             "Tus-Extension": "creation",
-            "Tus-Max-Size": os.getenv("IMAGE_UPLOAD_MAX_BYTES", str(4 * 1024 * 1024 * 1024)),
+            "Tus-Max-Size": str(MAX_UPLOAD_BYTES),
         },
     )
 
@@ -238,14 +250,13 @@ async def patch_upload(
         # tus: offset mismatch -> 409 so the client re-HEADs and resumes from the true offset.
         raise HTTPException(status_code=409, detail="Upload-Offset does not match", headers={"Upload-Offset": str(row.upload_offset)})
 
-    chunk = await request.body()
-    new_offset = row.upload_offset + len(chunk)
-    if new_offset > row.total_bytes or new_offset > row.max_bytes:
-        raise HTTPException(status_code=413, detail="Upload exceeds declared size")
-
-    # Append the chunk. Each PATCH is a single tus chunk (bounded by the client chunkSize).
-    with open(row.staging_path, "ab") as f:
-        f.write(chunk)
+    new_offset = await append_request_body(
+        request,
+        row.staging_path,
+        start_offset=row.upload_offset,
+        limit=min(row.total_bytes, row.max_bytes),
+        label=f"image_upload[{session_id}]",
+    )
 
     row.upload_offset = new_offset
     row.status = "uploaded" if new_offset >= row.total_bytes else "uploading"
@@ -319,6 +330,10 @@ def _sha256_file(path: str) -> str:
 # important: explicit timeouts so a slow/flaky cluster cannot block the import indefinitely.
 _IMPORT_UPLOAD_TIMEOUT = int(os.getenv("IMAGE_IMPORT_UPLOAD_TIMEOUT", "600"))  # stream the file in
 _IMPORT_WAIT_TIMEOUT = int(os.getenv("IMAGE_IMPORT_WAIT_TIMEOUT", "900"))      # wait for LXD to import (slow ARM ok)
+# important: pass (connect, read), never a scalar. requests applies a scalar to BOTH legs, so
+# `timeout=900` also grants a 900s *connect* budget against a peer that accepts TCP and then
+# goes silent. The read leg has to be long here; the connect leg never does.
+_CONNECT_TIMEOUT = int(os.getenv("IMAGE_IMPORT_CONNECT_TIMEOUT", "5"))
 
 # Durability knobs: a live import bumps updated_at every _HEARTBEAT_INTERVAL_SECONDS; the recovery sweep
 # treats an 'importing' row with no heartbeat for _RECOVERY_STALE_SECONDS as orphaned (its worker died)
@@ -415,7 +430,7 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
                 data=f,
                 headers={"Content-Type": "application/octet-stream", "X-LXD-public": "false"},
                 verify=False,
-                timeout=_IMPORT_UPLOAD_TIMEOUT,
+                timeout=(_CONNECT_TIMEOUT, _IMPORT_UPLOAD_TIMEOUT),
             )
         if resp.status_code >= 400:
             # A duplicate-fingerprint store error means the image is already there - resolve + continue.
@@ -433,7 +448,8 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
             if not op_path:
                 raise RuntimeError("LXD did not return an import operation")
             try:
-                wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=_IMPORT_WAIT_TIMEOUT)
+                wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False,
+                                    timeout=(_CONNECT_TIMEOUT, _IMPORT_WAIT_TIMEOUT))
                 wbody = wresp.json() or {}
                 # /wait can return an error envelope {"type":"error","error":...,"metadata":null} (ex; a bad
                 # image -> "Unsupported compression") OR a success envelope {"metadata":{"status":"Success"}}.

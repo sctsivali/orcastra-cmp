@@ -12,6 +12,7 @@ from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
 from app.models.schemas import VMInfo, VMStatus
 from app.core.config import get_settings
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError, LXDSnapshotExistsError
 from .utils import parse_vm_status, extract_ip_addresses, find_instance_in_projects
 from .resources import ResourceManager
@@ -33,6 +34,19 @@ _GRACEFUL_READ_MARGIN_SECONDS = 30
 # request schema still can't hold an LXD operation request (and its worker) open
 # for an unbounded time.
 _MAX_ACTION_TIMEOUT_SECONDS = 600
+
+# Connect leg for the raw rebuild calls. Kept separate from the (long) read leg because
+# requests applies a scalar timeout to both, and nothing justifies a multi-minute budget for
+# completing a TCP+TLS handshake.
+_REBUILD_CONNECT_TIMEOUT = 5
+
+# A rebuild holds its worker for as long as LXD takes to reinstall the root disk, up to
+# wait_timeout (default 1800s). asyncio.to_thread would put that on the loop's DEFAULT
+# executor, which is also where FastAPI runs every sync route handler -- a handful of
+# concurrent rebuilds would starve unrelated requests. Own pool, and shed past it rather
+# than queue.
+_rebuild_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lxd_rebuild")
+_REBUILD_MAX_IN_FLIGHT = 8
 
 
 def _is_graceful_timeout(exc: Exception) -> bool:
@@ -773,7 +787,11 @@ class InstanceManager:
             if not op_path:
                 return ""  # completed synchronously
             op_id = op_path.rstrip("/").rsplit("/", 1)[-1]
-            wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False, timeout=wait_timeout)
+            # (connect, read): a scalar would grant the same 1800s budget to the connect leg,
+            # so a peer that never completes the handshake would pin this thread for half an
+            # hour. The read leg genuinely needs to be long -- a rebuild is slow.
+            wresp = session.get(f"{endpoint}{op_path[4:]}/wait", verify=False,
+                                timeout=(_REBUILD_CONNECT_TIMEOUT, wait_timeout))
             wbody = wresp.json() or {}
             if wbody.get("type") == "error" or wbody.get("error"):
                 raise LXDOperationError(f"LXD rebuild failed: {wbody.get('error') or 'unknown error'}")
@@ -784,7 +802,25 @@ class InstanceManager:
                 )
             return op_id
 
-        op_id = await asyncio.to_thread(_do_rebuild)
+        try:
+            op_id = await run_blocking(
+                _do_rebuild,
+                # The socket timeouts above are what actually free the worker; this only
+                # bounds how long the caller waits. Margin over wait_timeout so a normal
+                # slow rebuild reports LXD's own result rather than this cap.
+                timeout=wait_timeout + _GRACEFUL_READ_MARGIN_SECONDS,
+                label=f"rebuild[{host}/{name}]",
+                executor=_rebuild_executor,
+                max_in_flight=_REBUILD_MAX_IN_FLIGHT,
+            )
+        except BlockingTimeout as exc:
+            raise LXDOperationError(
+                f"Rebuild of {name} on {host} did not complete within {wait_timeout}s"
+            ) from exc
+        except BlockingPoolFull as exc:
+            raise LXDOperationError(
+                f"Too many rebuilds in flight; retry {name} on {host} shortly"
+            ) from exc
         logger.info("Rebuilt instance %s on %s (project=%s, op=%s)", name, host, project_name, op_id)
         return op_id
 

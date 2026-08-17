@@ -80,3 +80,7 @@ CHANGELOG.md
 # Claude Code (local AI tooling - not committed to this public repo)
 .claude/
 CLAUDE.md
+
+# graphify knowledge graph (local tooling, never committed)
+graphify-out/
+.graphifyignore

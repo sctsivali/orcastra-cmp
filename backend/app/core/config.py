@@ -18,16 +18,20 @@ class Settings(BaseSettings):
         alias="APP_VERSION",
         description="Application version - propagates to all components"
     )
-    # build_date: str = Field(
-    #     default="",
-    #     alias="BUILD_DATE",
-    #     description="Build timestamp"
-    # )
-    # build_commit: str = Field(
-    #     default="",
-    #     alias="BUILD_COMMIT",
-    #     description="Git commit hash"
-    # )
+    # important: APP_VERSION is a mutable env string, the commit is not. These are what make
+    # "prove the running container is the image we built" answerable. main.py and
+    # routers/system.py already read them via getattr and returned null while they stayed
+    # commented out.
+    build_date: str = Field(
+        default="",
+        alias="BUILD_DATE",
+        description="Build timestamp, stamped at image build time"
+    )
+    build_commit: str = Field(
+        default="",
+        alias="BUILD_COMMIT",
+        description="Git commit the image was built from"
+    )
     
     # API Settings
     api_title: str = "Orcastra Dashboard API"
@@ -101,6 +105,36 @@ class Settings(BaseSettings):
         default=240,
         alias="BREAK_GLASS_MAX_MINUTES",
         description="Hard cap on a break-glass grant lifetime (minutes)"
+    )
+
+    # Per-project tenant permission enforcement on power/console/terminal routes.
+    # Default OFF: today those routes gate on cluster membership only. Turn ON only after every
+    # ACTIVE project has a policy carrying the required perms, or a policy-less active tenant is
+    # denied by default. Flipping requires a container restart (settings are lru_cache'd).
+    tenant_perm_enforcement_enabled: bool = Field(
+        default=False,
+        alias="TENANT_PERM_ENFORCEMENT_ENABLED",
+        description="Enforce per-project tenant ACL (operate/console) on power and console routes, not just cluster access."
+    )
+
+    # Offboarding: remove OrganizationMember rows for orgs present in a sync push whose email is
+    # no longer in OrcaHub's pushed roster (OrcaHub is the source of truth and never sends an
+    # explicit member-remove). Default OFF because it is DESTRUCTIVE: it revokes org-scope access
+    # and cascades tenant policy assignments. Only turn ON once you trust OrcaHub sends a complete
+    # roster per pushed org. Flipping requires a container restart (settings are lru_cache'd).
+    member_reconcile_enabled: bool = Field(
+        default=False,
+        alias="MEMBER_RECONCILE_ENABLED",
+        description="Remove members no longer in OrcaHub's pushed roster (per synced org). Destructive; default off."
+    )
+
+    # Observe-only mode for the member reconcile. Default ON so the FIRST time reconcile is enabled
+    # it only LOGS the members it would remove (no deletes), letting ops audit a few real syncs
+    # before flipping this off to actually enforce removals. Requires a container restart to flip.
+    member_reconcile_dry_run: bool = Field(
+        default=True,
+        alias="MEMBER_RECONCILE_DRY_RUN",
+        description="When member reconcile is enabled, only log intended removals instead of deleting. Default on (observe-only)."
     )
 
     # Authentication / Authentik OIDC Configuration

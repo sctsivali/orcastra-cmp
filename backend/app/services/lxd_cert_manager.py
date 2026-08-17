@@ -12,6 +12,7 @@ import requests
 from pylxd import Client
 
 from app.core.vault_client import VaultClient, VaultClientError
+from app.services.lxd.connection import DEFAULT_LXD_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -261,10 +262,15 @@ class LXDCertificateManager:
             os.close(key_fd)
             os.chmod(key_path, 0o600)
             
+            # important: without an explicit timeout pylxd stores _timeout=None, so its own
+            # constructor probe and every later client.api call on this standalone client
+            # block forever against a peer that accepts TCP then goes silent. Matches the
+            # value LXDConnectionManager builds pooled clients with.
             client = Client(
                 endpoint=endpoint,
                 cert=(cert_path, key_path),
-                verify=False
+                verify=False,
+                timeout=DEFAULT_LXD_TIMEOUT
             )
             
             # Store temp file paths on client for later cleanup if needed

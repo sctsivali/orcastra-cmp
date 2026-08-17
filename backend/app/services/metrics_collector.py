@@ -6,10 +6,24 @@ This ensures historical data continuity even when no clients are connected.
 
 import asyncio
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 import threading
 
+from app.core.blocking import BlockingTimeout, run_blocking
+
 logger = logging.getLogger(__name__)
+
+# note: background work gets its own small pool. Using the loop's default executor would put
+# a periodic timer task in the same place FastAPI runs sync route handlers.
+_metrics_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="metrics_bg")
+
+# Generous: this walks every registered cluster and may open TLS connections. The point of
+# the cap is that a stuck cluster cannot wedge the collector forever, not to be tight.
+ENSURE_CONNECTIONS_TIMEOUT = float(
+    os.environ.get("ORCASTRA_ENSURE_CONNECTIONS_TIMEOUT", "60")
+)
 
 
 class MetricsCollector:
@@ -294,6 +308,30 @@ class MetricsCollector:
             return None
     
     async def _ensure_cluster_connections(self):
+        """Run the connection sweep off the event loop.
+
+        important: the body below is entirely blocking (Vault reads, TLS handshakes, LXD
+        probes) and it runs on a timer. Inline it stalled the loop on every cycle. Measured
+        with py-spy on dev, 42 of 127 event-loop samples were parked in
+        connect_with_vault_cert reached from here, which is what drove /health to 11s and to
+        outright timeouts. Background work must never be the reason a request stalls.
+        """
+        try:
+            await run_blocking(
+                self._ensure_cluster_connections_blocking,
+                timeout=ENSURE_CONNECTIONS_TIMEOUT,
+                label="metrics.ensure_cluster_connections",
+                executor=_metrics_executor,
+            )
+        except BlockingTimeout:
+            logger.warning(
+                f"Cluster connection sweep exceeded {ENSURE_CONNECTIONS_TIMEOUT}s, "
+                "skipping this cycle"
+            )
+        except Exception as e:
+            logger.debug(f"Cluster connection health check error: {e}")
+
+    def _ensure_cluster_connections_blocking(self):
         """
         Ensure all registered clusters are connected.
         This is crucial for maintaining cluster status as "Online" rather than "Pending Trust".

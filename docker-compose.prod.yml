@@ -76,6 +76,15 @@ services:
       - AUTHENTIK_API_URL=${AUTHENTIK_API_URL:-}
       - AUTHENTIK_API_TOKEN=${AUTHENTIK_API_TOKEN:-}
       - ORCASTRA_DOMAIN=${ORCASTRA_DOMAIN:-orcastra.io}
+      # Worker count is tunable without a rebuild. Keep at 4 unless an incident calls for it:
+      # fewer workers doubles the blast radius of a single wedged event loop.
+      - WEB_CONCURRENCY=${WEB_CONCURRENCY:-4}
+      # Incident levers, tunable without a rebuild. Defaults live in
+      # app/services/lxd/proxy.py; set these only to override during an incident.
+      - ORCASTRA_RAW_PROXY_TIMEOUT=${ORCASTRA_RAW_PROXY_TIMEOUT:-20}
+      - ORCASTRA_PROXY_CONNECT_TIMEOUT=${ORCASTRA_PROXY_CONNECT_TIMEOUT:-15}
+      - ORCASTRA_PROXY_POOL_WORKERS=${ORCASTRA_PROXY_POOL_WORKERS:-8}
+      - ORCASTRA_LXD_RETRY_READ=${ORCASTRA_LXD_RETRY_READ:-false}
     volumes:
       - ./config:/app/config:rw
       - /var/orcastra/uploads:/app/uploads:rw
@@ -92,11 +101,23 @@ services:
     mem_limit: ${BACKEND_MEM_LIMIT:-2g}
     cpus: ${BACKEND_CPUS:-2}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')"]
-      interval: 30s
-      timeout: 10s
+      # Must stay in sync with backend/Dockerfile HEALTHCHECK. Compose wins at runtime, the
+      # Dockerfile value is what a bare `docker run` of the image gets.
+      # The probe carries its own 3s timeout: without one, a hung probe is indistinguishable
+      # from a hung app, which is the same defect class this release fixes in the app itself.
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4050/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
       retries: 5
       start_period: 120s
+    # Gives uvicorn's 20s graceful shutdown room to drain before Docker SIGKILLs it. Without
+    # this, Docker's 10s default cuts live terminal and console sessions on every deploy.
+    stop_grace_period: 30s
+    labels:
+      # Consumed by the autoheal sidecar below. restart:always only reacts to process exit,
+      # and the RC3 outage was a process that stayed alive while serving nothing: the
+      # healthcheck failed 4543 consecutive times with no actor subscribed to the signal.
+      - "autoheal=true"
     security_opt:
       - no-new-privileges:true
     read_only: false
@@ -134,6 +155,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+    labels:
+      - "autoheal=true"
 
   # Fluent Bit Log Collector (Sidecar)
   fluent-bit:
@@ -165,6 +188,44 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+  # Watchdog that restarts containers Docker has marked unhealthy.
+  #
+  # Why this exists: `restart: always` only reacts to a process EXIT. A uvicorn whose event
+  # loops are all blocked stays alive and serves nothing, so it never restarts itself. The
+  # healthcheck detected exactly that and failed 4543 consecutive times with nothing
+  # subscribed to the signal, which is how a fault became a 50 hour outage.
+  #
+  # This is defence in depth, not the fix. The fix is that outbound cluster calls are now
+  # bounded and off the event loop.
+  #
+  # Opt-in by label on purpose, never AUTOHEAL_CONTAINER_LABEL=all. Notably NOT labelled:
+  #   postgres/redis - restarting a datastore on a health blip is worse than the blip
+  #   fluent-bit     - its healthcheck goes red when OpenSearch is unreachable, so labelling
+  #                    it would restart-storm the log shipper through any OpenSearch outage
+  #                    and discard its buffers on each cycle
+  #
+  # Docker's own start_period is the anti-loop guard: during it a container reports `starting`
+  # and never `unhealthy`, so a container that cannot boot is restarted at most once per cycle
+  # rather than in a tight loop.
+  #
+  # note: mounting docker.sock grants this container root-equivalent control of the host.
+  # network_mode: none removes its only exfiltration path, since it talks to the daemon over
+  # a unix socket and needs no network at all.
+  autoheal:
+    image: willfarrell/autoheal:1.2.0
+    container_name: ${CONTAINER_PREFIX:-orcastra-dashboard}-autoheal
+    restart: always
+    network_mode: none
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=${AUTOHEAL_INTERVAL:-5}
+      - AUTOHEAL_START_PERIOD=${AUTOHEAL_START_PERIOD:-120}
+      - AUTOHEAL_DEFAULT_STOP_TIMEOUT=${AUTOHEAL_DEFAULT_STOP_TIMEOUT:-30}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    security_opt:
+      - no-new-privileges:true
 
 networks:
   orcastra-dashboard:

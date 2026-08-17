@@ -33,6 +33,7 @@ from app.core.org_scope import (
     check_tenant_permission,
     verify_tenant_permission,
 )
+from app.core.config import get_settings
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
@@ -326,6 +327,9 @@ async def start_vm(
 ):
     """Start a VM."""
     verify_cluster_access(request.host)
+    # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
     try:
         vm = await lxd_service.start_vm(
             name=vm_name,
@@ -398,6 +402,8 @@ async def stop_vm(
 ):
     """Stop a VM."""
     verify_cluster_access(request.host)
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
     try:
         vm = await lxd_service.stop_vm(
             name=vm_name,
@@ -488,6 +494,8 @@ async def restart_vm(
 ):
     """Restart a VM."""
     verify_cluster_access(request.host)
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
     try:
         vm = await lxd_service.restart_vm(
             name=vm_name,

@@ -47,6 +47,9 @@ services:
       dockerfile: Dockerfile
       args:
         - APP_VERSION=${APP_VERSION:-latest}
+        # Provenance: the version string is for humans, the commit is what identifies the code.
+        - BUILD_COMMIT=${BUILD_COMMIT:-}
+        - BUILD_DATE=${BUILD_DATE:-}
     image: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-backend:${APP_VERSION:-latest}
     container_name: ${CONTAINER_PREFIX:-dev-orcastra-dashboard}-backend
     restart: always

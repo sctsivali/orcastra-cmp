@@ -1,0 +1,8 @@
+# Test-only dependencies. Deliberately NOT in requirements.txt: the runtime image
+# should not ship a test framework.
+#
+# Install:  pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.24

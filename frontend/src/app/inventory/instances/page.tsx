@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { Suspense, useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -47,7 +47,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -64,7 +64,7 @@ import { RebuildDialog } from "@/components/rebuild-dialog";
 // Exceeds one instance-list poll cycle (10s) so the list has refreshed first.
 const PENDING_GRACE_MS = 12000;
 
-export default function InstancesPage() {
+function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
   // LXD events stream (no polling). useInstanceStream patches this query's cache.
   const { data, isLoading, refetch, isRefetching } = useInstances(undefined, {
@@ -102,6 +102,9 @@ export default function InstancesPage() {
   const restartInstance = useRestartInstance();
   const deleteInstance = useDeleteInstance();
 
+  // Deep link from OrcaHub: /inventory/instances?instance=<name>&project=<lxd-project>&host=<cluster>
+  // seeds the initial filters. They are only the initial state; the user stays free to change them.
+  const searchParams = useSearchParams();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   // Instance pending delete confirmation (controls the shared AlertDialog).
   const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
@@ -114,9 +117,9 @@ export default function InstancesPage() {
   const deleteDisplayRef = useRef<VMInfo | null>(null);
   if (deleteTarget) deleteDisplayRef.current = deleteTarget;
   const deleteDisplay = deleteTarget ?? deleteDisplayRef.current;
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterNode, setFilterNode] = useState<string>("all");
-  const [filterProject, setFilterProject] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get("instance") ?? "");
+  const [filterNode, setFilterNode] = useState<string>(() => searchParams.get("host") ?? "all");
+  const [filterProject, setFilterProject] = useState<string>(() => searchParams.get("project") ?? "all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -753,5 +756,23 @@ export default function InstancesPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// Loading fallback while useSearchParams suspends (Next.js requires the Suspense boundary below).
+function InstancesLoading() {
+  return (
+    <div className="flex items-center justify-center py-24">
+      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+    </div>
+  );
+}
+
+// Export with a Suspense wrapper - required because InstancesContent calls useSearchParams().
+export default function InstancesPage() {
+  return (
+    <Suspense fallback={<InstancesLoading />}>
+      <InstancesContent />
+    </Suspense>
   );
 }

@@ -244,9 +244,16 @@ export const authConfig: NextAuthConfig = {
         return true; // Allow access to auth pages for non-logged-in users
       }
 
-      // Require authentication for all other pages
+      // Require authentication for all other pages.
+      // important: return a redirect Response, not `false`. next-auth v5 checks
+      // `authorized instanceof Response` BEFORE the custom middleware function in middleware.ts, so a
+      // bare `false` is shadowed and never fires the sign-in redirect - leaving /console and /terminal
+      // to render tokenless and fail their WebSocket. The redirect drives /auth/signin -> silent SSO
+      // (shared IdP) -> back with a token, which those pages need.
       if (!isLoggedIn) {
-        return false;
+        const signInUrl = new URL("/auth/signin", nextUrl.origin);
+        signInUrl.searchParams.set("callbackUrl", nextUrl.href);
+        return Response.redirect(signInUrl);
       }
 
       // ---- Three-Tier Role-based route protection ----

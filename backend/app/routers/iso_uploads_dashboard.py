@@ -25,7 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_cache_manager
 from app.core.database import get_db
-from app.core.dependencies import require_tenant, require_partner, AuthenticatedUser
+from app.core.upload_stream import append_request_body
+from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.routers.iso_uploads import (
     CreateUploadRequest,
@@ -43,6 +44,7 @@ from app.routers.iso_uploads import (
     _VOLUME_NAME_RE,
     DISK_HEADROOM_BYTES,
     MAX_ACTIVE_SESSIONS,
+    MAX_UPLOAD_BYTES,
     SESSION_TTL_HOURS,
     TUS_VERSION,
     UPLOAD_DIR,
@@ -129,6 +131,7 @@ async def create_upload(
     body: CreateUploadRequest,
     db: AsyncSession = Depends(get_db),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    _ro: None = Depends(check_read_only_mode),
 ):
     verify_cluster_access(body.cluster_id)
     if not _VOLUME_NAME_RE.match(body.volume_name):
@@ -145,6 +148,12 @@ async def create_upload(
         )
     if body.total_bytes > body.max_bytes:
         raise HTTPException(status_code=413, detail="Declared size exceeds the allowed maximum")
+    # Both figures come from the client, so clamp against the server ceiling too.
+    if body.total_bytes > MAX_UPLOAD_BYTES or body.max_bytes > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Declared size exceeds the server maximum of {MAX_UPLOAD_BYTES} bytes",
+        )
 
     _ensure_dir()
     await _gc_expired(db)
@@ -208,6 +217,7 @@ async def patch_upload(
     request: Request,
     db: AsyncSession = Depends(get_db),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    _ro: None = Depends(check_read_only_mode),
 ):
     row = await _authz_session(db, session_id)
 
@@ -221,13 +231,13 @@ async def patch_upload(
     if client_offset != row.upload_offset:
         raise HTTPException(status_code=409, detail="Upload-Offset does not match", headers={"Upload-Offset": str(row.upload_offset)})
 
-    chunk = await request.body()
-    new_offset = row.upload_offset + len(chunk)
-    if new_offset > row.total_bytes or new_offset > row.max_bytes:
-        raise HTTPException(status_code=413, detail="Upload exceeds declared size")
-
-    with open(row.staging_path, "ab") as f:
-        f.write(chunk)
+    new_offset = await append_request_body(
+        request,
+        row.staging_path,
+        start_offset=row.upload_offset,
+        limit=min(row.total_bytes, row.max_bytes),
+        label=f"iso_upload_dashboard[{session_id}]",
+    )
 
     row.upload_offset = new_offset
     row.status = "uploaded" if new_offset >= row.total_bytes else "uploading"
@@ -241,6 +251,7 @@ async def finalize_upload(
     session_id: str,
     db: AsyncSession = Depends(get_db),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    _ro: None = Depends(check_read_only_mode),
 ):
     row = await _authz_session(db, session_id)
 
@@ -260,6 +271,7 @@ async def abort_upload(
     session_id: str,
     db: AsyncSession = Depends(get_db),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    _ro: None = Depends(check_read_only_mode),
 ):
     """Cancel an in-progress upload and release its slot immediately.
 

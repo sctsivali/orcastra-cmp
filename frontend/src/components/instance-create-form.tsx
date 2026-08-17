@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -192,6 +192,11 @@ export function InstanceCreateForm() {
   const { toast } = useToast();
   const createInstance = useCreateInstance();
   const isSubmitting = createInstance.isPending;
+  // important: `isSubmitting` is derived from the mutation's isPending, which only flips
+  // after React re-renders. Two clicks landing in the same tick therefore both pass the
+  // disabled check and each fire a create, provisioning two instances. This ref is the
+  // synchronous half of the guard; the disabled prop stays for the visible state.
+  const submitInFlightRef = useRef(false);
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [error, setError] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
@@ -625,10 +630,16 @@ export function InstanceCreateForm() {
 
   // --- Submit -----------------------------------------------------------------
   const submit = async (startAfterCreate: boolean) => {
+    // Claim the slot before anything can await. A second click that arrives before the
+    // first render carrying isSubmitting=true lands here and is dropped.
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
+
     setError(null);
 
     if (!resourcesValid) {
       setError("CPU, Memory and Storage must be positive whole numbers.");
+      submitInFlightRef.current = false;
       return;
     }
 
@@ -811,6 +822,10 @@ export function InstanceCreateForm() {
       router.push("/inventory/instances");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create instance");
+    } finally {
+      // Released on the failure path so the operator can correct and retry. On success the
+      // form has already navigated away, so this only tidies up the unmounting component.
+      submitInFlightRef.current = false;
     }
   };
 

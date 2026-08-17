@@ -4,17 +4,37 @@ Provides endpoints for managing API keys, external app connections, and delegate
 Supports integration with Orcahub and other external applications (soon with Orcalens, Orcasonic, Orcaflux, other Orca product).
 """
 
+import asyncio
 import secrets
 import hashlib
 import hmac
 import logging
+import threading
+import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
 from pydantic import BaseModel, Field
 import json
 
 from app.services.lxd_service import LXDService, get_lxd_service
+from app.services.lxd import health
+from app.services.lxd.proxy import (
+    ALLOWED_METHODS,
+    API_KEY_CACHE_TTL,
+    LAST_USED_WRITE_INTERVAL,
+    PROXY_CONNECT_TIMEOUT,
+    PROXY_MAX_IN_FLIGHT,
+    PROXY_OP_TIMEOUT,
+    RAW_PROXY_TIMEOUT,
+    SYNC_CLUSTER_TIMEOUT,
+    VALIDATE_KEY_TIMEOUT,
+    auth_executor,
+    proxy_executor,
+    raw_request,
+    socket_timeout_for,
+)
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
 from app.core.cache import get_cache_manager
@@ -252,7 +272,11 @@ class RawProxyResponse(BaseModel):
 class ProxyResponse(BaseModel):
     """Response from proxied operation."""
     success: bool
-    data: Optional[Dict[str, Any]] = None
+    # important: the list_* operations return a list, not a mapping. Typed as Dict only, every
+    # one of them failed response validation and reported success:false, so this endpoint has
+    # never returned data for any operation. Widened rather than wrapped so the payload shape
+    # matches what the operation naturally produces.
+    data: Optional[Union[Dict[str, Any], List[Any]]] = None
     error: Optional[str] = None
     operation_id: Optional[str] = None
 
@@ -453,6 +477,298 @@ def update_api_key_last_used(vault_client, key_id: str):
         logger.warning(f"Failed to update last_used_at: {e}")
 
 
+# Process-local API key cache and last-used throttle.
+#
+# important: this stays in process memory and never reaches Redis. CacheManager writes
+# non-sensitive namespaces to Redis, and API key material has no business leaving the
+# process. Mirrors the module-level-lock-plus-dict pattern already used by
+# app/services/lxd/health.py.
+_key_cache_lock = threading.Lock()
+# digest -> (cached_at_monotonic, key_id, metadata)
+_key_cache: Dict[str, tuple] = {}
+# key_id -> monotonic timestamp of the last last_used_at write
+_last_used_written: Dict[str, float] = {}
+
+
+def _api_key_digest(key_id: str, key_secret: str) -> str:
+    """Cache key covering BOTH halves, so a wrong secret can never hit a cached entry."""
+    return hashlib.sha256(f"{key_id}:{key_secret}".encode()).hexdigest()
+
+
+def _cached_key_metadata(digest: str) -> Optional[Dict[str, Any]]:
+    with _key_cache_lock:
+        entry = _key_cache.get(digest)
+        if not entry:
+            return None
+        cached_at, _key_id, metadata = entry
+        if time.monotonic() - cached_at > API_KEY_CACHE_TTL:
+            _key_cache.pop(digest, None)
+            return None
+        return metadata
+
+
+def _store_key_metadata(digest: str, key_id: str, metadata: Dict[str, Any]) -> None:
+    with _key_cache_lock:
+        _key_cache[digest] = (time.monotonic(), key_id, metadata)
+
+
+def evict_api_key_cache(key_id: str) -> None:
+    """Drop cached metadata for a key so revocation takes effect immediately."""
+    with _key_cache_lock:
+        for digest in [d for d, (_, kid, _m) in _key_cache.items() if kid == key_id]:
+            _key_cache.pop(digest, None)
+        _last_used_written.pop(key_id, None)
+
+
+def _write_last_used_blocking(key_id: str) -> None:
+    """Runs on auth_executor.
+
+    important: the Vault client is built here, inside the thread, not by the caller.
+    get_vault_integrations_client raises when Vault is unconfigured, and building it on the
+    event loop would turn a bookkeeping failure into a failed authentication.
+    """
+    try:
+        update_api_key_last_used(get_vault_integrations_client(), key_id)
+    except Exception as e:
+        logger.debug(f"last_used_at update skipped for {key_id}: {e}")
+
+
+def _schedule_last_used_update(key_id: str) -> None:
+    """Record last_used_at at most once per interval, off the event loop, without awaiting.
+
+    Fire and forget on purpose: a request must never pay Vault latency, nor fail, for a
+    bookkeeping field.
+    """
+    now = time.monotonic()
+    with _key_cache_lock:
+        if now - _last_used_written.get(key_id, 0.0) < LAST_USED_WRITE_INTERVAL:
+            return
+        _last_used_written[key_id] = now
+    try:
+        auth_executor.submit(_write_last_used_blocking, key_id)
+    except RuntimeError:  # pool shutting down
+        pass
+
+
+_PROXY_WAIT_OPERATIONS = frozenset({
+    "create_instance", "delete_instance", "start_instance",
+    "stop_instance", "restart_instance",
+})
+
+
+def _execute_proxy_operation(
+    lxd_service, cluster_id: str, operation: str, params: Dict[str, Any], project: str
+) -> Any:
+    """Blocking half of proxy_operation. Only ever runs on proxy_executor.
+
+    important: pylxd binds the project at the CLIENT level. Instance.all/get/create and
+    Project.all/Image.all take no `project=` kwarg (verified against the pylxd in the runtime
+    image), so the previous per-call `project=` raised TypeError before any network I/O and
+    every instance branch returned success=False. Project scoping now goes through
+    get_project_client, which is what that method exists for.
+    """
+    # The pooled client first: it populates the cached connection info and temp cert paths
+    # that get_project_client reuses, and it is what the reconnect logic maintains.
+    client = lxd_service.connection_manager.get_client(cluster_id)
+    if not client:
+        raise HTTPException(
+            status_code=503, detail=f"Cluster {cluster_id} is not connected"
+        )
+
+    # Operations that poll an LXD operation to completion need a wider read window than the
+    # pooled client's default, and a non-default project needs a scoped client either way.
+    needs_scope = (project and project != "default") or operation in _PROXY_WAIT_OPERATIONS
+    if needs_scope:
+        scoped = lxd_service.connection_manager.get_project_client(
+            cluster_id, project or "default", timeout=(3, 30)
+        )
+        if scoped:
+            client = scoped
+        elif project and project != "default":
+            raise HTTPException(
+                status_code=503,
+                detail=f"Cannot scope to project {project} on {cluster_id}",
+            )
+
+    def _named_instance():
+        name = params.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="Instance name required")
+        return client.instances.get(name)
+
+    if operation == "list_instances":
+        return [
+            {"name": i.name, "status": i.status, "type": i.type,
+             "architecture": i.architecture}
+            for i in client.instances.all()
+        ]
+    if operation == "get_instance":
+        instance = _named_instance()
+        return {
+            "name": instance.name, "status": instance.status, "type": instance.type,
+            "architecture": instance.architecture, "config": dict(instance.config),
+        }
+    if operation == "create_instance":
+        instance = client.instances.create(params, wait=True)
+        return {"name": instance.name, "status": instance.status}
+    if operation == "delete_instance":
+        _named_instance().delete(wait=True)
+        return {"deleted": True}
+    if operation == "start_instance":
+        _named_instance().start(wait=True)
+        return {"status": "Running"}
+    if operation == "stop_instance":
+        _named_instance().stop(force=params.get("force", False), wait=True)
+        return {"status": "Stopped"}
+    if operation == "restart_instance":
+        _named_instance().restart(force=params.get("force", False), wait=True)
+        return {"status": "Running"}
+    if operation == "list_projects":
+        return [{"name": p.name, "description": p.description} for p in client.projects.all()]
+    if operation == "list_images":
+        return [
+            {"fingerprint": img.fingerprint[:12],
+             "description": img.properties.get("description", ""),
+             "size": img.size}
+            for img in client.images.all()
+        ]
+
+    raise HTTPException(status_code=400, detail=f"Unknown operation: {operation}")
+
+
+def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
+    """Blocking half of the sync cluster-info fan-out. Reads Vault, so it must not run on the
+    event loop. Returns a single-item list so it composes with the shared gather helper.
+    """
+    cluster_info = cert_manager.get_cluster_info(cluster_id)
+    metadata = cluster_info.get("metadata", {})
+    location_data = metadata.get("location", {})
+    public_location = _public_location_data(location_data)
+    zone_name = location_data.get("region_name") or location_data.get("city") or None
+    return [{
+        "id": cluster_id,
+        "name": metadata.get("name", cluster_id),
+        "endpoint": metadata.get("endpoint"),
+        "server_type": metadata.get("server_type", "lxd"),
+        "registered_at": metadata.get("registered_at"),
+        "zone": zone_name,
+        "location_data": public_location or None,
+        "region_id": public_location.get("region_id"),
+        "region_name": public_location.get("region_name"),
+        "city": public_location.get("city"),
+        "country_code": public_location.get("country_code"),
+        "country_name": public_location.get("country_name"),
+        "latitude": public_location.get("latitude"),
+        "longitude": public_location.get("longitude"),
+        "facility_name": public_location.get("facility_name"),
+        "facility_provider": public_location.get("facility_provider"),
+    }]
+
+
+def _fetch_cluster_projects(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
+    """Blocking half of the sync projects fan-out. Only ever runs on proxy_executor."""
+    client = lxd_service.connection_manager.get_client(cluster_id)
+    if not client:
+        return []
+    return [
+        {"name": p.name, "cluster_id": cluster_id, "description": p.description}
+        for p in client.projects.all()
+    ]
+
+
+def _fetch_cluster_instances(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
+    """Blocking half of the sync instances fan-out. Only ever runs on proxy_executor."""
+    client = lxd_service.connection_manager.get_client(cluster_id)
+    if not client:
+        return []
+    return [
+        {
+            "name": i.name,
+            "cluster_id": cluster_id,
+            "status": i.status,
+            "type": i.type,
+        }
+        for i in client.instances.all()
+    ]
+
+
+async def _gather_per_cluster(
+    fn, ctx, cluster_ids, label: str
+) -> List[Dict[str, Any]]:
+    """Run a blocking per-cluster fetch across clusters concurrently and off the event loop.
+
+    important: this replaced a serial in-loop fan-out. With one silent cluster that shape
+    blocked the whole process for the sum of every cluster's timeout. Measured on dev before
+    the change, a single POST /integrations/sync held the loop for 35.7s, which is what made
+    /health spike to 11s. Now the cost is the slowest cluster, paid on a worker thread, and a
+    cluster the breaker has already tripped is skipped entirely.
+    """
+    async def one(cluster_id: str) -> List[Dict[str, Any]]:
+        if health.is_tripped(cluster_id):
+            logger.debug(f"sync: skipping {label} for tripped cluster {cluster_id}")
+            return []
+        try:
+            return await run_blocking(
+                fn,
+                ctx,
+                cluster_id,
+                timeout=SYNC_CLUSTER_TIMEOUT,
+                label=f"sync_{label}[{cluster_id}]",
+                executor=proxy_executor,
+                max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+        except BlockingTimeout:
+            # important: deliberately does NOT trip the shared breaker. A bulk list timing
+            # out means "this cluster has a lot of data or is slow right now", which is not
+            # the same as "unreachable". Condemning it here would make every raw_proxy call
+            # for that cluster return 503 for a full TTL, so one large tenant could take its
+            # own proxy access down.
+            logger.warning(
+                f"sync: {label} for {cluster_id} timed out after {SYNC_CLUSTER_TIMEOUT}s; "
+                "returning partial results for this cluster"
+            )
+            return []
+        except BlockingPoolFull:
+            logger.warning(f"sync: {label} for {cluster_id} shed, proxy pool saturated")
+            return []
+        except Exception as e:
+            logger.warning(f"Could not get {label} for {cluster_id}: {e}")
+            return []
+
+    batches = await asyncio.gather(*[one(c) for c in cluster_ids])
+    return [item for batch in batches for item in batch]
+
+
+def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
+    """Every Vault round trip needed to validate a key. Only ever runs on auth_executor.
+
+    Was previously inline on the event loop: 6 to 7 blocking Vault calls per request, each
+    (2,3) with Retry(total=2), so a degraded Vault could park a worker for a minute or more.
+    """
+    vault_client = get_vault_integrations_client()
+    metadata, secret_hash = get_api_key_from_vault(vault_client, key_id)
+
+    if not verify_api_key_secret(key_secret, secret_hash):
+        raise HTTPException(status_code=401, detail="Invalid API key secret")
+
+    # Backfill raw secret if not already stored (for callback auth)
+    try:
+        secret_data = vault_client.vault_read(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
+        )
+        if not secret_data.get("raw"):
+            secret_data["raw"] = key_secret
+            vault_client.vault_kv_put(
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
+                secret_data,
+            )
+            logger.info(f"Backfilled raw secret for API key {key_id}")
+    except Exception:
+        pass  # non-critical
+
+    return metadata
+
+
 def _store_app_url_in_vault(api_key_id: str, app_url: str):
     """Store external app callback URL in Vault alongside API key metadata."""
     try:
@@ -474,33 +790,69 @@ async def _upsert_synced_organizations(
     api_key_id: str,
 ) -> int:
     """
-    Upsert organizations pushed from external app into PostgreSQL.
-    Uses (source, external_id) as dedup key.
-    Returns count of synced organizations.
+    Persist organizations pushed from OrcaHub. Idempotent by design: this endpoint is
+    re-called on every sync (scheduled every ~5 min + manual), so it must never 500 on
+    a re-run and must never corrupt data.
+
+    Identity is (source='orcahub', external_id). `slug` is a separate UNIQUE column, and
+    OrcaHub itself enforces globally-unique org slugs, so an existing source='orcahub' row
+    that shares a slug IS the same logical org (its external_id churned via delete+recreate).
+
+    Two passes so a slug freed by a rename in this same batch is available before any insert:
+      Pass 1 - update every known identity in place (may free a renamed slug).
+      Pass 2 - for the rest: slug free -> insert; slug held by a source='orcahub' row whose
+               external_id is RETIRED (absent from this push) -> re-link it (the deleted
+               predecessor of an org that reused the slug); slug held by any still-live row
+               (a non-orcahub org, or an orcahub org still present in this push) -> skip +
+               warn, never overwrite another org's identity or re-parent its members.
+
+    Each org commits on its own, so one bad/conflicting row is skipped (degraded) instead of
+    aborting the whole sync. Returns count of synced organizations.
     """
     synced = 0
+    handled: set[str] = set()
+    # Identities present in THIS push. A slug-owning orcahub row whose external_id is still
+    # in this set is a live org we must not steal the slug from (only genuinely retired
+    # identities are safe to re-link).
+    incoming_ids = {o.id for o in organizations}
+
+    # Pass 1: reconcile known identities. Updating here frees any slug the org renamed away
+    # from, so Pass 2's inserts/re-links see the post-rename slug map.
     for org_data in organizations:
         try:
-            # check if org already exists by source + external_id
-            stmt = select(Organization).where(
-                and_(
-                    Organization.source == "orcahub",
-                    Organization.external_id == org_data.id,
+            existing = (await db.execute(
+                select(Organization).where(
+                    and_(
+                        Organization.source == "orcahub",
+                        Organization.external_id == org_data.id,
+                    )
                 )
-            )
-            result = await db.execute(stmt)
-            existing = result.scalar_one_or_none()
+            )).scalar_one_or_none()
+            if not existing:
+                continue
+            existing.name = org_data.name
+            existing.slug = org_data.slug
+            existing.description = org_data.description
+            existing.api_key_id = api_key_id
+            existing.is_active = True
+            await db.commit()
+            handled.add(org_data.id)
+            synced += 1
+        except Exception as e:
+            await db.rollback()
+            logger.warning(f"Skipped organization {org_data.id} (slug={org_data.slug}) during sync update: {e}")
 
-            if existing:
-                # update mutable fields
-                existing.name = org_data.name
-                existing.slug = org_data.slug
-                existing.description = org_data.description
-                existing.api_key_id = api_key_id
-                existing.is_active = True
-            else:
-                # create new synced org
-                new_org = Organization(
+    # Pass 2: create or re-link the orgs not matched by identity above.
+    for org_data in organizations:
+        if org_data.id in handled:
+            continue
+        try:
+            slug_owner = (await db.execute(
+                select(Organization).where(Organization.slug == org_data.slug)
+            )).scalar_one_or_none()
+
+            if slug_owner is None:
+                db.add(Organization(
                     name=org_data.name,
                     slug=org_data.slug,
                     description=org_data.description,
@@ -509,15 +861,36 @@ async def _upsert_synced_organizations(
                     external_id=org_data.id,
                     api_key_id=api_key_id,
                     is_active=True,
+                ))
+            elif slug_owner.source == "orcahub" and slug_owner.external_id not in incoming_ids:
+                # The row's OrcaHub identity is RETIRED (its external_id is absent from this
+                # push) and OrcaHub slugs are globally unique, so this row is the deleted
+                # predecessor of the incoming org that reused the slug. Re-link it in place.
+                slug_owner.name = org_data.name
+                slug_owner.description = org_data.description
+                slug_owner.external_id = org_data.id
+                slug_owner.api_key_id = api_key_id
+                slug_owner.is_active = True
+            else:
+                # important: the slug is held by a row we must NOT steal - either a non-OrcaHub
+                # org (ex; a partner's local org) or another OrcaHub org whose identity is still
+                # live in this push (a Pass-1 rename that could not land yet). Overwriting it
+                # would hijack that org and re-parent its members. Surface the clash and skip;
+                # the next sync retries once the clash is resolved.
+                logger.warning(
+                    f"Skipped organization {org_data.id}: slug '{org_data.slug}' is held by a live "
+                    f"{slug_owner.source} org (id={slug_owner.id}, external_id={slug_owner.external_id}); "
+                    f"resolve the slug clash to sync it"
                 )
-                db.add(new_org)
+                continue
 
+            await db.commit()
             synced += 1
         except Exception as e:
-            logger.error(f"Failed to upsert organization {org_data.id}: {e}")
+            await db.rollback()
+            logger.warning(f"Skipped organization {org_data.id} (slug={org_data.slug}) during sync insert: {e}")
 
     if synced > 0:
-        await db.commit()
         logger.info(f"Synced {synced} organizations from OrcaHub (api_key={api_key_id})")
 
     return synced
@@ -529,6 +902,25 @@ _ORCAHUB_ROLE_MAP = {
     "TENANT": "tenant",
     "USER": "tenant",  # legacy alias
 }
+
+
+async def _revoke_role_if_orphaned(db: AsyncSession, sync_svc, email: str) -> None:
+    """
+    Revoke a user's GLOBAL Authentik role only if they no longer belong to ANY org.
+    Orcastra roles are global system roles (one per user), so stripping them on leaving a
+    single org would wrongly de-role a user still active in another org. Best-effort: the
+    caller has already deleted the membership row (which is what actually cuts org-scope
+    access), so a failed IdP revoke leaves only an inert role group, logged for cleanup.
+    """
+    remaining = len((await db.execute(
+        select(OrganizationMember.id).where(OrganizationMember.user_email == email)
+    )).scalars().all())
+    if remaining > 0:
+        return
+    try:
+        await sync_svc.remove_user_from_all_roles(email)
+    except Exception as e:
+        logger.warning(f"Authentik role revoke failed for offboarded user {email}: {e}")
 
 
 async def _upsert_synced_members(
@@ -552,51 +944,49 @@ async def _upsert_synced_members(
     for m in members:
         try:
             # resolve external org UUID to local org id
-            stmt = select(Organization).where(
-                and_(
-                    Organization.source == "orcahub",
-                    Organization.external_id == m.organization_id,
+            org = (await db.execute(
+                select(Organization).where(
+                    and_(
+                        Organization.source == "orcahub",
+                        Organization.external_id == m.organization_id,
+                    )
                 )
-            )
-            result = await db.execute(stmt)
-            org = result.scalar_one_or_none()
+            )).scalar_one_or_none()
             if not org:
                 logger.warning(f"Org not found for external_id={m.organization_id}, skipping member {m.email}")
                 continue
 
             if m.action == "remove":
-                # remove membership
-                del_stmt = select(OrganizationMember).where(
+                # remove membership (idempotent: an already-absent member is a no-op success)
+                existing = (await db.execute(
+                    select(OrganizationMember).where(
+                        and_(
+                            OrganizationMember.organization_id == org.id,
+                            OrganizationMember.user_email == m.email,
+                        )
+                    )
+                )).scalar_one_or_none()
+                if existing:
+                    await db.delete(existing)
+                    await db.commit()
+                    removed += 1
+                    # Revoke the global role only if this was the user's LAST membership.
+                    await _revoke_role_if_orphaned(db, sync_svc, m.email)
+                continue
+
+            # upsert membership. map OrcaHub role → local member role.
+            # Identity is (organization_id, user_email), so update-if-present / insert-else
+            # is unambiguous. Per-member commit isolates a failing row from the rest.
+            orcastra_role = _ORCAHUB_ROLE_MAP.get(m.role.upper(), "tenant")
+
+            existing = (await db.execute(
+                select(OrganizationMember).where(
                     and_(
                         OrganizationMember.organization_id == org.id,
                         OrganizationMember.user_email == m.email,
                     )
                 )
-                del_result = await db.execute(del_stmt)
-                existing = del_result.scalar_one_or_none()
-                if existing:
-                    await db.delete(existing)
-                    removed += 1
-                    # remove from Authentik roles
-                    try:
-                        await sync_svc.remove_user_from_all_roles(m.email)
-                    except Exception as e:
-                        logger.warning(f"Authentik role removal failed for {m.email}: {e}")
-                continue
-
-            # upsert membership
-            # map OrcaHub role → local member role
-            orcastra_role = _ORCAHUB_ROLE_MAP.get(m.role.upper(), "tenant")
-
-            stmt2 = select(OrganizationMember).where(
-                and_(
-                    OrganizationMember.organization_id == org.id,
-                    OrganizationMember.user_email == m.email,
-                )
-            )
-            result2 = await db.execute(stmt2)
-            existing = result2.scalar_one_or_none()
-
+            )).scalar_one_or_none()
             if existing:
                 existing.role = orcastra_role
             else:
@@ -606,6 +996,7 @@ async def _upsert_synced_members(
                     role=orcastra_role,
                     invited_by="orcahub-sync",
                 ))
+            await db.commit()
 
             synced += 1
             upserted_emails.add(m.email)
@@ -617,10 +1008,10 @@ async def _upsert_synced_members(
                 logger.warning(f"Authentik sync failed for {m.email} → {orcastra_role}: {e}")
 
         except Exception as e:
+            await db.rollback()
             logger.error(f"Failed to sync member {m.email}: {e}")
 
     if synced > 0 or removed > 0:
-        await db.commit()
         logger.info(
             f"Member sync: {synced} upserted, {removed} removed (api_key={api_key_id})"
         )
@@ -636,6 +1027,122 @@ async def _upsert_synced_members(
     return synced, removed
 
 
+# Circuit breaker: no legitimate single sync removes anywhere near this many members. If a push
+# would remove more than this (ex; an OrcaHub-side query regression), abort the whole reconcile
+# and alert rather than mass-revoke access.
+_RECONCILE_MAX_REMOVALS_PER_SYNC = 50
+
+
+async def _reconcile_synced_members(
+    db: AsyncSession,
+    organizations: List["SyncOrganization"],
+    members: List["SyncMember"],
+    api_key_id: str,
+    dry_run: bool,
+) -> int:
+    """
+    Offboarding reconcile. OrcaHub is the source of truth and pushes a COMPLETE member roster per
+    org it syncs, but never an explicit member-remove, so a member who left an org is otherwise
+    never removed here and keeps org-scope access. For every org PRESENT in this push, remove the
+    OrganizationMember rows whose email is not in the pushed roster for that org.
+
+    Destructive (deleting a member cuts org-scope access and CASCADEs their TenantPolicyAssignment),
+    so it is layered with guards:
+      - global: an empty members[] is "no data this push" -> skip.
+      - per-org FLOOR: an org present in the push whose roster contribution is EMPTY is suspicious
+        (OrcaHub drops an emptied org from the push entirely, it never sends a bare org), so it is
+        skipped, never purged. This is the primary protection against a mass delete.
+      - CIRCUIT BREAKER: if total intended removals exceed _RECONCILE_MAX_REMOVALS_PER_SYNC, abort
+        the whole run and alert (delete nothing).
+      - dry_run: log intended removals without deleting (observe-only rollout).
+      - per-ROW isolation on the delete pass, so one bad row cannot block the rest.
+      - a user removed from their LAST org also has their global role revoked (best-effort).
+    Email matching is exact, consistent with the case-sensitive UNIQUE(org, user_email) and the
+    upsert write path. Returns the number of members actually removed (0 in dry-run).
+    """
+    from app.services.authentik_sync import get_authentik_sync
+
+    if not members:
+        return 0
+
+    # Pass 1 (read-only): compute intended removals, applying the per-org empty-roster floor.
+    intended = []  # (org_slug, member_id, email)
+    for org_data in organizations:
+        try:
+            org = (await db.execute(
+                select(Organization).where(
+                    and_(
+                        Organization.source == "orcahub",
+                        Organization.external_id == str(org_data.id),
+                    )
+                )
+            )).scalar_one_or_none()
+            if not org:
+                continue  # org not synced (ex; slug clash skipped it); nothing to reconcile
+
+            desired_emails = {
+                m.email for m in members
+                if str(m.organization_id) == str(org_data.id) and m.action != "remove"
+            }
+            if not desired_emails:
+                # important: never purge every member of an org from an empty roster - that is the
+                # catastrophic false-positive. A legitimately emptied org drops out of the push.
+                logger.warning(
+                    f"Reconcile: org {org.slug} is present in the push with an empty roster; "
+                    f"skipping (not purging its members)"
+                )
+                continue
+
+            existing_members = (await db.execute(
+                select(OrganizationMember).where(OrganizationMember.organization_id == org.id)
+            )).scalars().all()
+            for member in existing_members:
+                if member.user_email not in desired_emails:
+                    intended.append((org.slug, member.id, member.user_email))
+        except Exception as e:
+            logger.warning(f"Member reconcile scan skipped org {org_data.id}: {e}")
+
+    if not intended:
+        return 0
+
+    if len(intended) > _RECONCILE_MAX_REMOVALS_PER_SYNC:
+        logger.error(
+            f"Member reconcile ABORTED: {len(intended)} intended removals exceed the safety cap "
+            f"({_RECONCILE_MAX_REMOVALS_PER_SYNC}); deleting nothing. Investigate the OrcaHub push "
+            f"(api_key={api_key_id})"
+        )
+        return 0
+
+    if dry_run:
+        for slug, _mid, email in intended:
+            logger.info(f"Reconcile DRY-RUN: would remove member {email} from org {slug}")
+        logger.info(
+            f"Member reconcile dry-run: {len(intended)} member(s) would be removed (api_key={api_key_id})"
+        )
+        return 0
+
+    # Pass 2: delete, with PER-ROW isolation so one failure cannot block the rest.
+    sync_svc = get_authentik_sync()
+    removed = 0
+    for slug, mid, email in intended:
+        try:
+            member = await db.get(OrganizationMember, mid)
+            if member is None:
+                continue  # already gone (concurrent sync); idempotent
+            await db.delete(member)
+            await db.commit()
+            removed += 1
+            logger.info(f"Reconcile: removed member {email} from org {slug} (api_key={api_key_id})")
+            await _revoke_role_if_orphaned(db, sync_svc, email)
+        except Exception as e:
+            await db.rollback()
+            logger.warning(f"Reconcile: failed to remove member {email} from org {slug}: {e}")
+
+    if removed > 0:
+        logger.info(f"Member reconcile removed {removed} departed member(s) (api_key={api_key_id})")
+    return removed
+
+
 # ============================================
 # API Key Validation Dependency
 # ============================================
@@ -648,53 +1155,55 @@ async def validate_api_key(
     Dependency to validate API key from headers.
     Returns the API key metadata if valid.
     """
-    vault_client = get_vault_integrations_client()
-    
-    try:
-        metadata, secret_hash = get_api_key_from_vault(vault_client, x_api_key_id)
-    except HTTPException:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    
-    # Verify secret
-    if not verify_api_key_secret(x_api_key_secret, secret_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
-    
-    # Backfill raw secret if not already stored (for callback auth)
-    try:
-        secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{x_api_key_id}/secret"
-        )
-        if not secret_data.get("raw"):
-            secret_data["raw"] = x_api_key_secret
-            vault_client.vault_kv_put(
-                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{x_api_key_id}/secret",
-                secret_data,
+    digest = _api_key_digest(x_api_key_id, x_api_key_secret)
+    metadata = _cached_key_metadata(digest)
+
+    if metadata is None:
+        try:
+            metadata = await run_blocking(
+                _validate_api_key_blocking,
+                x_api_key_id,
+                x_api_key_secret,
+                timeout=VALIDATE_KEY_TIMEOUT,
+                label=f"validate_api_key[{x_api_key_id}]",
+                executor=auth_executor,
             )
-            logger.info(f"Backfilled raw secret for API key {x_api_key_id}")
-    except Exception:
-        pass  # non-critical
-    
+        except BlockingTimeout:
+            logger.warning(
+                f"API key validation timed out after {VALIDATE_KEY_TIMEOUT}s "
+                f"(key={x_api_key_id})"
+            )
+            raise HTTPException(
+                status_code=503, detail="Authentication backend unavailable"
+            ) from None
+        except HTTPException as exc:
+            # get_api_key_from_vault reports a missing key as 404. Externally that is an
+            # authentication failure, and must not leak whether the id exists.
+            if exc.status_code == 404:
+                raise HTTPException(status_code=401, detail="Invalid API key") from None
+            raise
+        _store_key_metadata(digest, x_api_key_id, metadata)
+
+    # note: state checks run on every request, cache hit or not, straight from in-memory
+    # metadata. They cost nothing and keep expiry exact even while the entry is cached.
+
     # Check if revoked
     if metadata.get("is_revoked", False):
         raise HTTPException(status_code=401, detail="API key has been revoked")
-    
+
     # Check if active
     if not metadata.get("is_active", True):
         raise HTTPException(status_code=401, detail="API key is not active")
-    
+
     # Check expiration
     expires_at = metadata.get("expires_at")
     if expires_at:
         exp_date = datetime.fromisoformat(expires_at)
         if datetime.utcnow() > exp_date:
             raise HTTPException(status_code=401, detail="API key has expired")
-    
-    # Update last used (async, don't block)
-    try:
-        update_api_key_last_used(vault_client, x_api_key_id)
-    except Exception:
-        pass
-    
+
+    _schedule_last_used_update(x_api_key_id)
+
     return metadata
 
 
@@ -906,10 +1415,13 @@ async def update_api_key_permissions(
         # Clear all scoped cache variants
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
-        
+        # important: also drop the process-local validation cache, otherwise the old
+        # cluster_permissions keep authorising proxy calls until its TTL expires.
+        evict_api_key_cache(key_id)
+
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
         return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -948,7 +1460,10 @@ async def revoke_api_key(
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         cache.delete("api_responses", f"integrations:api_key:{key_id}")
-        
+        # important: revocation must be immediate. Without this the key keeps working from
+        # the process-local validation cache until its TTL expires.
+        evict_api_key_cache(key_id)
+
         logger.info(f"API key {key_id} revoked")
         
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
@@ -980,11 +1495,12 @@ async def delete_api_key(
         
         # Delete from Vault
         delete_api_key_from_vault(vault_client, key_id)
-        
+
         # Clear all scoped cache variants
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
-        
+        evict_api_key_cache(key_id)
+
         return {"success": True, "message": f"API key {key_id} deleted"}
         
     except HTTPException:
@@ -1209,9 +1725,30 @@ async def sync_data(
             result.members_synced = members_synced
             result.members_removed = members_removed
 
+        # ── Offboarding reconcile (flag-gated, default off): drop members no longer in the
+        #    pushed roster for each synced org. See _reconcile_synced_members for the guards. ──
+        _settings = get_settings()
+        if _settings.member_reconcile_enabled and request.organizations:
+            result.members_removed += await _reconcile_synced_members(
+                db, request.organizations, request.members, api_key_id,
+                dry_run=_settings.member_reconcile_dry_run,
+            )
+
         # ── Store callback URL in Vault API key metadata ──
         if request.app_url:
-            _store_app_url_in_vault(api_key_id, request.app_url)
+            # note: Vault write, so off the loop like the rest of this handler. Best effort:
+            # a bookkeeping write must not fail or slow the sync.
+            try:
+                await run_blocking(
+                    _store_app_url_in_vault,
+                    api_key_id,
+                    request.app_url,
+                    timeout=VALIDATE_KEY_TIMEOUT,
+                    label=f"store_app_url[{api_key_id}]",
+                    executor=auth_executor,
+                )
+            except Exception as e:
+                logger.warning(f"Could not store app_url for {api_key_id}: {e}")
         
         # Get allowed cluster IDs from API key permissions
         allowed_clusters = {
@@ -1233,65 +1770,20 @@ async def sync_data(
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                for cluster_id in cluster_ids:
-                    try:
-                        cluster_info = cert_manager.get_cluster_info(cluster_id)
-                        # Return only non-sensitive info
-                        location_data = cluster_info.get("metadata", {}).get("location", {})
-                        public_location = _public_location_data(location_data)
-                        zone_name = location_data.get("region_name") or location_data.get("city") or None
-                        result.clusters.append({
-                            "id": cluster_id,
-                            "name": cluster_info.get("metadata", {}).get("name", cluster_id),
-                            "endpoint": cluster_info.get("metadata", {}).get("endpoint"),
-                            "server_type": cluster_info.get("metadata", {}).get("server_type", "lxd"),
-                            "registered_at": cluster_info.get("metadata", {}).get("registered_at"),
-                            "zone": zone_name,
-                            "location_data": public_location or None,
-                            "region_id": public_location.get("region_id"),
-                            "region_name": public_location.get("region_name"),
-                            "city": public_location.get("city"),
-                            "country_code": public_location.get("country_code"),
-                            "country_name": public_location.get("country_name"),
-                            "latitude": public_location.get("latitude"),
-                            "longitude": public_location.get("longitude"),
-                            "facility_name": public_location.get("facility_name"),
-                            "facility_provider": public_location.get("facility_provider"),
-                        })
-                    except Exception as e:
-                        logger.warning(f"Could not get cluster info for {cluster_id}: {e}")
+                result.clusters = await _gather_per_cluster(
+                    _fetch_cluster_info, cert_manager, cluster_ids, "cluster_info"
+                )
         
         if request.include_projects:
-            # Get projects from allowed clusters
-            for cluster_id in cluster_ids:
-                try:
-                    client = lxd_service.connection_manager.get_client(cluster_id)
-                    if client:
-                        for project in client.projects.all():
-                            result.projects.append({
-                                "name": project.name,
-                                "cluster_id": cluster_id,
-                                "description": project.description,
-                            })
-                except Exception as e:
-                    logger.warning(f"Could not get projects for {cluster_id}: {e}")
-        
+            result.projects = await _gather_per_cluster(
+                _fetch_cluster_projects, lxd_service, cluster_ids, "projects"
+            )
+
         if request.include_instances:
-            # Get instances from allowed clusters
-            for cluster_id in cluster_ids:
-                try:
-                    client = lxd_service.connection_manager.get_client(cluster_id)
-                    if client:
-                        for instance in client.instances.all():
-                            result.instances.append({
-                                "name": instance.name,
-                                "cluster_id": cluster_id,
-                                "status": instance.status,
-                                "type": instance.type,
-                            })
-                except Exception as e:
-                    logger.warning(f"Could not get instances for {cluster_id}: {e}")
-        
+            result.instances = await _gather_per_cluster(
+                _fetch_cluster_instances, lxd_service, cluster_ids, "instances"
+            )
+
         return result
         
     except HTTPException:
@@ -1405,8 +1897,15 @@ async def raw_proxy(
         
         # Determine required permission based on method
         method = request.method.upper()
+
+        # note: validated out here in the outer try so it surfaces as a real HTTP 400. Raised
+        # inside the inner block it would be swallowed by the generic handler and downgraded
+        # to HTTP 200 carrying status_code 500.
+        if method not in ALLOWED_METHODS:
+            raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
+
         required_permission = "read"
-        
+
         if method in ["POST", "PUT", "PATCH"]:
             required_permission = "write"
         elif method == "DELETE":
@@ -1426,14 +1925,44 @@ async def raw_proxy(
                 detail=f"Operation requires {required_permission} permission"
             )
         
-        # Get LXD client for the cluster
-        client = lxd_service.connection_manager.get_client(request.cluster_id)
+        # important: the breaker check sits AFTER the permission checks on purpose, so
+        # response timing cannot be used to probe which clusters exist without permission.
+        if health.is_tripped(request.cluster_id):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Cluster {request.cluster_id} recently unreachable: "
+                    f"{health.get_reason(request.cluster_id) or 'unknown'}"
+                ),
+            )
+
+        # note: get_client blocks too. It revalidates the pooled connection with a live
+        # request and may rebuild the client, so it needs the same offload as the verb call
+        # below. Wrapping only the verb call would leave this on the event loop.
+        try:
+            client = await run_blocking(
+                lxd_service.connection_manager.get_client,
+                request.cluster_id,
+                timeout=PROXY_CONNECT_TIMEOUT,
+                label=f"get_client[{request.cluster_id}]",
+                executor=proxy_executor,
+                max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+        except BlockingTimeout:
+            health.record_failure(request.cluster_id, "connect timed out")
+            raise HTTPException(
+                status_code=503,
+                detail=f"Cluster {request.cluster_id} is not reachable (connect timed out)",
+            )
+        except BlockingPoolFull:
+            raise HTTPException(status_code=503, detail="Proxy saturated, retry shortly")
+
         if not client:
             raise HTTPException(
                 status_code=503,
                 detail=f"Cluster {request.cluster_id} is not connected"
             )
-        
+
         # Use pylxd client's API directly
         # The path should be relative to /1.0, ex;, "/1.0/instances" or just "/instances"
         path = request.path
@@ -1468,51 +1997,75 @@ async def raw_proxy(
         
         full_url = f"{endpoint}{full_path}"
         
-        # Make the request using client's session (which has certs configured)
+        # important: this reaches into client.api.session, which bypasses pylxd's _APINode and
+        # therefore the timeout _APINode would have injected. The socket timeout is passed
+        # explicitly, and the call runs off the event loop: an LXD endpoint that accepts TCP
+        # and then goes silent must degrade this one cluster, never the whole process.
         try:
-            session = client.api.session
-            
-            if method == "GET":
-                response = session.get(full_url, verify=False)
-            elif method == "POST":
-                response = session.post(full_url, json=request.body, verify=False)
-            elif method == "PUT":
-                response = session.put(full_url, json=request.body, verify=False)
-            elif method == "PATCH":
-                response = session.patch(full_url, json=request.body, verify=False)
-            elif method == "DELETE":
-                response = session.delete(full_url, verify=False)
-            else:
-                raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
-            
+            response = await run_blocking(
+                raw_request,
+                client.api.session,
+                method,
+                full_url,
+                request.body,
+                socket_timeout_for(client),
+                timeout=RAW_PROXY_TIMEOUT,
+                label=f"raw_proxy[{method} {request.cluster_id}]",
+                executor=proxy_executor,
+                max_in_flight=PROXY_MAX_IN_FLIGHT,
+            )
+            health.clear(request.cluster_id)
+
             # Parse response
             status_code = response.status_code
             try:
                 data = response.json()
-            except:
+            except Exception:
                 data = {"raw": response.text if hasattr(response, 'text') else str(response)}
-            
+
             # Log the operation for audit
             logger.info(
                 f"Raw proxy: {method} {request.path} on {request.cluster_id}/{project} "
                 f"by {request.external_user_email or 'unknown'} via {api_key.get('app_name', 'unknown')} "
                 f"-> {status_code}"
             )
-            
+
             return RawProxyResponse(
                 status_code=status_code,
                 data=data,
                 headers={},
             )
-            
+
+        except BlockingTimeout as timeout_error:
+            health.record_failure(request.cluster_id, str(timeout_error))
+            logger.warning(
+                f"Raw proxy timeout: {method} {request.path} on {request.cluster_id}/{project} "
+                f"after {RAW_PROXY_TIMEOUT}s"
+            )
+            return RawProxyResponse(
+                status_code=504,
+                data=None,
+                error=str(timeout_error),
+            )
+        except BlockingPoolFull as pool_error:
+            return RawProxyResponse(
+                status_code=503,
+                data=None,
+                error=str(pool_error),
+            )
+        except HTTPException:
+            # note: re-raised so a real transport status is never downgraded to a 200 envelope
+            # by the generic handler below.
+            raise
         except Exception as api_error:
+            health.record_failure(request.cluster_id, str(api_error))
             logger.error(f"LXD API error: {api_error}")
             return RawProxyResponse(
                 status_code=500,
                 data=None,
                 error=str(api_error),
             )
-        
+
     except HTTPException:
         raise
     except Exception as e:
@@ -1584,105 +2137,45 @@ async def proxy_operation(
                 detail=f"Operation requires {required_permission} permission"
             )
         
-        # Get LXD client for cluster
-        client = lxd_service.connection_manager.get_client(request.cluster_id)
-        if not client:
+        # important: the breaker check sits AFTER the permission checks so response timing
+        # cannot be used to probe which clusters exist without permission.
+        if health.is_tripped(request.cluster_id):
             raise HTTPException(
                 status_code=503,
-                detail=f"Cluster {request.cluster_id} is not connected"
+                detail=(
+                    f"Cluster {request.cluster_id} recently unreachable: "
+                    f"{health.get_reason(request.cluster_id) or 'unknown'}"
+                ),
             )
-        
-        # Execute operation
-        result_data = None
+
         operation_id = None
-        
-        if operation == "list_instances":
-            instances = client.instances.all(project=request.project)
-            result_data = [
-                {
-                    "name": i.name,
-                    "status": i.status,
-                    "type": i.type,
-                    "architecture": i.architecture,
-                }
-                for i in instances
-            ]
-        
-        elif operation == "get_instance":
-            name = request.params.get("name")
-            if not name:
-                raise HTTPException(status_code=400, detail="Instance name required")
-            instance = client.instances.get(name, project=request.project)
-            result_data = {
-                "name": instance.name,
-                "status": instance.status,
-                "type": instance.type,
-                "architecture": instance.architecture,
-                "config": dict(instance.config),
-            }
-        
-        elif operation == "create_instance":
-            config = request.params
-            instance = client.instances.create(config, project=request.project, wait=True)
-            result_data = {"name": instance.name, "status": instance.status}
-        
-        elif operation == "delete_instance":
-            name = request.params.get("name")
-            if not name:
-                raise HTTPException(status_code=400, detail="Instance name required")
-            instance = client.instances.get(name, project=request.project)
-            instance.delete(wait=True)
-            result_data = {"deleted": True}
-        
-        elif operation == "start_instance":
-            name = request.params.get("name")
-            if not name:
-                raise HTTPException(status_code=400, detail="Instance name required")
-            instance = client.instances.get(name, project=request.project)
-            instance.start(wait=True)
-            result_data = {"status": "Running"}
-        
-        elif operation == "stop_instance":
-            name = request.params.get("name")
-            if not name:
-                raise HTTPException(status_code=400, detail="Instance name required")
-            instance = client.instances.get(name, project=request.project)
-            force = request.params.get("force", False)
-            instance.stop(force=force, wait=True)
-            result_data = {"status": "Stopped"}
-        
-        elif operation == "restart_instance":
-            name = request.params.get("name")
-            if not name:
-                raise HTTPException(status_code=400, detail="Instance name required")
-            instance = client.instances.get(name, project=request.project)
-            force = request.params.get("force", False)
-            instance.restart(force=force, wait=True)
-            result_data = {"status": "Running"}
-        
-        elif operation == "list_projects":
-            projects = client.projects.all()
-            result_data = [
-                {"name": p.name, "description": p.description}
-                for p in projects
-            ]
-        
-        elif operation == "list_images":
-            images = client.images.all()
-            result_data = [
-                {
-                    "fingerprint": img.fingerprint[:12],
-                    "description": img.properties.get("description", ""),
-                    "size": img.size,
-                }
-                for img in images
-            ]
-        
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown operation: {operation}"
+
+        # Every branch below is a blocking pylxd call, and the wait=True ones poll an LXD
+        # operation to completion. Inline on the loop that is the same failure mode as the
+        # raw proxy, with a longer tail.
+        try:
+            result_data = await run_blocking(
+                _execute_proxy_operation,
+                lxd_service,
+                request.cluster_id,
+                operation,
+                request.params or {},
+                request.project,
+                timeout=PROXY_OP_TIMEOUT,
+                label=f"proxy_operation[{operation} {request.cluster_id}]",
+                executor=proxy_executor,
+                max_in_flight=PROXY_MAX_IN_FLIGHT,
             )
+            health.clear(request.cluster_id)
+        except BlockingTimeout as timeout_error:
+            health.record_failure(request.cluster_id, str(timeout_error))
+            logger.warning(
+                f"Proxy operation timeout: {operation} on {request.cluster_id} "
+                f"after {PROXY_OP_TIMEOUT}s"
+            )
+            return ProxyResponse(success=False, error=str(timeout_error))
+        except BlockingPoolFull as pool_error:
+            return ProxyResponse(success=False, error=str(pool_error))
         
         # Log the operation for audit
         logger.info(
@@ -2289,6 +2782,9 @@ async def provision_tenant_access(
             external_id=body.organization_external_id,
             api_key_id=api_key_id,
             is_active=True,
+            # important: created_by is NOT NULL. Omitting it made this INSERT fail, so a brand-new
+            # buyer org silently received no ACL at purchase (500, no policy). Stamp the provisioning key.
+            created_by=api_key.get("created_by") or "orcahub-provisioning",
         )
         db.add(org)
         await db.flush()
@@ -2524,4 +3020,131 @@ async def provision_tenant_access(
         org_created=org_created,
         members_created=members_created,
         cluster_mapped=cluster_mapped,
+    )
+
+
+# ============================================
+# Revoke Tenant Access (called by OrcaHub when a project's paid term ends)
+# ============================================
+
+class RevokeTenantAccessRequest(BaseModel):
+    """Request from OrcaHub to remove tenant access for a project (term ended / cancelled)."""
+    organization_external_id: str = Field(..., description="OrcaHub organization UUID")
+    cluster_id: str = Field(..., description="Cluster ID of the project")
+    project_name: str = Field(..., description="LXD project name")
+    user_emails: List[str] = Field(
+        default_factory=list,
+        description="If given, revoke only these users' assignments; otherwise revoke the whole project policy",
+    )
+
+
+class RevokeTenantAccessResponse(BaseModel):
+    """Response for revoked tenant access. Idempotent: already-absent reports zero deletions."""
+    policy_deleted: bool = False
+    policy_id: Optional[int] = None
+    rules_deleted: int = 0
+    assignments_deleted: int = 0
+    organization_id: Optional[int] = None
+
+
+@external_router.post(
+    "/revoke-tenant-access",
+    response_model=RevokeTenantAccessResponse,
+    summary="Revoke tenant access for a project",
+    description=(
+        "Called by OrcaHub when a project's paid term ends. Deletes the auto-provisioned "
+        "`auto:{project}` policy (its rules + assignments go with it via CASCADE), or only "
+        "specific users' assignments. Idempotent: an already-absent org/policy is a success."
+    ),
+)
+async def revoke_tenant_access(
+    body: RevokeTenantAccessRequest,
+    api_key: Dict[str, Any] = Depends(validate_api_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Inverse of provision-tenant-access. Reactivation re-grants via provision (find-or-create)."""
+    from app.models.db_models import TenantAccessPolicy, TenantPolicyRule, TenantPolicyAssignment
+
+    # Scope check: same cluster/project allow-list the raw proxy uses.
+    cluster_permissions = {p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])}
+    if body.cluster_id not in cluster_permissions:
+        raise HTTPException(status_code=403, detail=f"No permission for cluster {body.cluster_id}")
+    allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
+    if body.project_name not in allowed_projects and "*" not in allowed_projects:
+        raise HTTPException(status_code=403, detail=f"No permission for project {body.project_name}")
+
+    def _invalidate_tenant_caches():
+        try:
+            cache = get_cache_manager()
+            cache.delete_pattern("api_responses", "instances:*")
+            cache.delete_pattern("api_responses", "projects:*")
+            cache.delete_pattern("api_responses", "monitoring:*")
+        except Exception:
+            pass
+
+    # Resolve org as provision does; absent org = nothing to revoke (idempotent success).
+    org = (await db.execute(select(Organization).where(and_(
+        Organization.source == "orcahub",
+        Organization.external_id == body.organization_external_id,
+        Organization.api_key_id == api_key.get("id", ""),
+    )))).scalar_one_or_none()
+    if not org:
+        return RevokeTenantAccessResponse()
+
+    policy_name = f"auto:{body.project_name}"
+    policy = (await db.execute(select(TenantAccessPolicy).where(and_(
+        TenantAccessPolicy.organization_id == org.id,
+        TenantAccessPolicy.name == policy_name,
+    )))).scalar_one_or_none()
+    if not policy:
+        return RevokeTenantAccessResponse(organization_id=org.id)
+
+    rule_count = len((await db.execute(
+        select(TenantPolicyRule).where(TenantPolicyRule.policy_id == policy.id)
+    )).scalars().all())
+    assignment_rows = (await db.execute(
+        select(TenantPolicyAssignment).where(TenantPolicyAssignment.policy_id == policy.id)
+    )).scalars().all()
+
+    # Project-level revoke (no user_emails) OR user-level that removes the last assignment:
+    # delete the whole policy and let CASCADE take its rules + assignments.
+    if not body.user_emails:
+        policy_id = policy.id
+        await db.delete(policy)
+        await db.commit()
+        _invalidate_tenant_caches()
+        logger.info(f"Tenant access revoked (policy): {policy_name}, org={org.slug}, rules={rule_count}, assignments={len(assignment_rows)}")
+        return RevokeTenantAccessResponse(
+            policy_deleted=True, policy_id=policy_id,
+            rules_deleted=rule_count, assignments_deleted=len(assignment_rows),
+            organization_id=org.id,
+        )
+
+    member_ids = {m.id for m in (await db.execute(select(OrganizationMember).where(and_(
+        OrganizationMember.organization_id == org.id,
+        OrganizationMember.user_email.in_(body.user_emails),
+    )))).scalars().all()}
+    to_delete = [a for a in assignment_rows if a.org_member_id in member_ids]
+
+    if to_delete and len(to_delete) == len(assignment_rows):
+        policy_id = policy.id
+        await db.delete(policy)
+        await db.commit()
+        _invalidate_tenant_caches()
+        logger.info(f"Tenant access revoked (last users -> policy): {policy_name}, org={org.slug}")
+        return RevokeTenantAccessResponse(
+            policy_deleted=True, policy_id=policy_id,
+            rules_deleted=rule_count, assignments_deleted=len(to_delete),
+            organization_id=org.id,
+        )
+
+    for a in to_delete:
+        await db.delete(a)
+    await db.commit()
+    _invalidate_tenant_caches()
+    logger.info(f"Tenant access revoked (users): {policy_name}, org={org.slug}, assignments={len(to_delete)}")
+    return RevokeTenantAccessResponse(
+        policy_deleted=False, policy_id=policy.id,
+        rules_deleted=0, assignments_deleted=len(to_delete),
+        organization_id=org.id,
     )

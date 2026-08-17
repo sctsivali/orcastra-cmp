@@ -1,0 +1,143 @@
+"""
+Bounded, off-loop staging of a resumable-upload (tus PATCH) body.
+
+Two failure modes are reachable from a single request when a handler does
+``chunk = await request.body()`` and then writes it inline:
+
+  - the whole body is materialised in memory *before* any size check can run, so the 413
+    the code intends to return never happens. A client that declares a small chunk and
+    then sends a multi-GB one takes the worker out on memory instead;
+  - the append is a synchronous write on the event loop, repeated once per chunk for the
+    entire file, so a contended or slow disk stalls every other request on that worker.
+
+Reading the body incrementally closes both: the ceiling is enforced per chunk before any
+bytes are retained, and each flush goes to a bounded pool via ``run_blocking``.
+
+important: on any failure the staging file is truncated back to the offset the caller
+started from. The DB row is only advanced by the caller after this returns, so file and
+row stay consistent and the session remains resumable at the recorded offset.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
+
+from fastapi import HTTPException, Request
+
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+
+logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ[name])
+    except KeyError:
+        return default
+    except (TypeError, ValueError):
+        logger.warning("invalid %s, falling back to %d", name, default)
+        return default
+
+
+# Bytes held in memory before a flush. Bounds peak memory per in-flight upload to roughly
+# this plus one transport chunk, regardless of what the client sends in one PATCH.
+FLUSH_BYTES = _env_int("ORCASTRA_UPLOAD_FLUSH_BYTES", 8 * 1024 * 1024)
+
+# Wall-clock cap for a single flush. A local disk write of FLUSH_BYTES is milliseconds; this
+# only fires when the filesystem itself is wedged, and it is what stops the request from
+# waiting on it forever.
+WRITE_TIMEOUT = float(_env_int("ORCASTRA_UPLOAD_WRITE_TIMEOUT", 60))
+
+# Dedicated pool. Deliberately not the import pool: a multi-GB import must not be able to
+# starve the staging writes of an unrelated upload, and neither may run on the loop's
+# default executor, which FastAPI also uses for sync route handlers.
+WRITE_POOL_WORKERS = _env_int("ORCASTRA_UPLOAD_WRITE_WORKERS", 4)
+WRITE_MAX_IN_FLIGHT = _env_int("ORCASTRA_UPLOAD_WRITE_MAX_IN_FLIGHT", WRITE_POOL_WORKERS * 2)
+
+write_executor = ThreadPoolExecutor(
+    max_workers=WRITE_POOL_WORKERS, thread_name_prefix="upload_stage"
+)
+
+
+def _append(path: str, data: bytes) -> None:
+    with open(path, "ab") as f:
+        f.write(data)
+
+
+def _truncate(path: str, size: int) -> None:
+    with open(path, "r+b") as f:
+        f.truncate(size)
+
+
+async def _rollback(path: str, size: int, label: str) -> None:
+    """Best-effort: drop whatever was flushed so the file matches the caller's recorded offset."""
+    try:
+        await run_blocking(
+            _truncate, path, size, timeout=WRITE_TIMEOUT, label=f"{label}[rollback]",
+            executor=write_executor,
+        )
+    except Exception as exc:
+        # Losing the rollback is recoverable: the row still holds the old offset, so the next
+        # PATCH is rejected with 409 and the client re-HEADs. Worth a loud line either way.
+        logger.warning("could not roll back staging file %s to %d: %s", path, size, exc)
+
+
+async def append_request_body(
+    request: Request,
+    path: str,
+    *,
+    start_offset: int,
+    limit: int,
+    label: str,
+) -> int:
+    """Append the request body to ``path``, returning the new offset.
+
+    ``limit`` is the absolute ceiling for the resulting file size (the caller's
+    ``min(total_bytes, max_bytes)``). Exceeding it raises 413 before the offending bytes are
+    ever accumulated. A saturated or wedged write pool raises 503.
+    """
+    offset = start_offset
+    buf = bytearray()
+
+    async def flush() -> None:
+        nonlocal offset
+        if not buf:
+            return
+        await run_blocking(
+            _append, path, bytes(buf), timeout=WRITE_TIMEOUT, label=label,
+            executor=write_executor, max_in_flight=WRITE_MAX_IN_FLIGHT,
+        )
+        offset += len(buf)
+        buf.clear()
+
+    try:
+        async for chunk in request.stream():
+            if not chunk:
+                continue
+            # Checked before the bytes are retained, so an oversized body is rejected on the
+            # first chunk that crosses the line rather than after it is all in memory.
+            if offset + len(buf) + len(chunk) > limit:
+                raise HTTPException(status_code=413, detail="Upload exceeds declared size")
+            buf.extend(chunk)
+            if len(buf) >= FLUSH_BYTES:
+                await flush()
+        await flush()
+    except HTTPException:
+        await _rollback(path, start_offset, label)
+        raise
+    except BlockingPoolFull:
+        await _rollback(path, start_offset, label)
+        raise HTTPException(
+            status_code=503, detail="Upload staging saturated; please retry shortly"
+        ) from None
+    except BlockingTimeout:
+        await _rollback(path, start_offset, label)
+        logger.error("staging write %s exceeded %.0fs; is the upload volume wedged?", label, WRITE_TIMEOUT)
+        raise HTTPException(status_code=503, detail="Upload staging unavailable") from None
+    except Exception:
+        await _rollback(path, start_offset, label)
+        raise
+
+    return offset
