@@ -289,6 +289,8 @@ async def create_storage_pool(
             details={"driver": request.driver, "description": request.description}
         )
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("storage_pools", "storage_pool_resources")
         return {
             "success": True,
             "message": f"Storage pool {request.name} created successfully",
@@ -346,6 +348,8 @@ async def update_storage_pool(
         
         pool.save()
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("storage_pools", "storage_pool_resources")
         return {
             "success": True,
             "message": f"Storage pool {pool_name} updated successfully"
@@ -386,6 +390,8 @@ async def delete_storage_pool(
             result="success"
         )
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("storage_pools", "storage_pool_resources")
         return {
             "success": True,
             "message": f"Storage pool {pool_name} deleted successfully"

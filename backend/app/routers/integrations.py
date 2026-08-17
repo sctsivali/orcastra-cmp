@@ -1548,6 +1548,9 @@ async def add_user_mapping(
         # Save to Vault
         save_user_mapping_to_vault(vault_client, key_id, user_mapping)
         
+        # Mapping data rides along in the cached key metadata, exactly as the four sibling
+        # handlers assume when they clear this same pattern.
+        get_cache_manager().delete_pattern("api_responses", "integrations:api_keys:list*")
         return user_mapping
         
     except HTTPException:
@@ -2039,6 +2042,16 @@ async def raw_proxy(
                 f"-> {status_code}"
             )
 
+            # A raw call can be anything, so on a mutating verb the safe assumption is that
+            # something a cached list describes has changed. The path is opaque here, which is
+            # why this clears broadly: an unnecessary cache miss costs one refetch, whereas a
+            # missed invalidation hides an external system's change for the whole TTL.
+            if method not in ("GET", "HEAD", "OPTIONS") and 200 <= status_code < 300:
+                get_cache_manager().invalidate_resource_cache(
+                    "instances", "vms", "networks", "storage_volumes", "storage_pools",
+                    "profiles", "projects", "monitoring",
+                )
+
             return RawProxyResponse(
                 status_code=status_code,
                 data=data,
@@ -2188,6 +2201,9 @@ async def proxy_operation(
                 f"Proxy operation timeout: {operation} on {request.cluster_id} "
                 f"after {PROXY_OP_TIMEOUT}s"
             )
+            # This path mutates cluster state on behalf of an external system, where nobody is
+            # watching a UI to notice a stale list. Drop the cached reads it just invalidated.
+            get_cache_manager().invalidate_resource_cache("instances", "vms", "monitoring")
             return ProxyResponse(success=False, error=str(timeout_error))
         except BlockingPoolFull as pool_error:
             return ProxyResponse(success=False, error=str(pool_error))
@@ -2625,6 +2641,9 @@ async def sync_policies_from_external(
 
     await db.commit()
 
+    # This path mutates cluster state on behalf of an external system, where nobody is
+    # watching a UI to notice a stale list. Drop the cached reads it just invalidated.
+    get_cache_manager().invalidate_resource_cache("instances", "projects", "monitoring")
     return {
         "message": f"Synced {synced_count} policies",
         "synced": synced_count,

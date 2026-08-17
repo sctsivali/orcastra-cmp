@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import get_cache_manager
 from app.core.database import get_db, async_session_maker
 from app.core.dependencies import (
     check_read_only_mode,
@@ -123,6 +124,12 @@ async def _set_status(job_id: str, status: Optional[str] = None, **fields: Any) 
         for k, v in fields.items():
             setattr(row, k, v)
         await db.commit()
+
+    # A rebuild walks the instance through stopping, rebuilding, starting and ready, and the
+    # instance list carries that status. Invalidating on every transition rather than only at
+    # the end keeps the list honest while the job runs, and covers the failure path for free.
+    if status is not None:
+        get_cache_manager().invalidate_instance_cache()
 
 
 async def _wait_for_provisioning(lxd_service: LXDService, name: str, host: str, project: str) -> None:
@@ -266,6 +273,8 @@ async def rebuild_instance(
         await session.commit()
 
     asyncio.create_task(_run_rebuild(job_id, body.run_provisioning))
+    # Readers hold a cached list; without this the change is invisible until the TTL.
+    get_cache_manager().invalidate_instance_cache()
     return _job_payload(row)
 
 

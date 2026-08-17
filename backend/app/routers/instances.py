@@ -232,6 +232,8 @@ async def create_instance(
         schedule_orcahub_event("instance.created", request.host, None, request.name, "Running" if request.start_on_create else "Stopped")
         # Non-blocking: create_vm returns the operation id; the instance pulls/
         # creates in the background and appears via the polling instance list.
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_instance_cache()
         return VMCreateResponse(
             success=True,
             message=f"Creating instance '{request.name}' on {request.host}",

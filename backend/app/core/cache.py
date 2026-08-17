@@ -385,6 +385,22 @@ class CacheManager:
         self.delete_pattern("api_responses", "vms:*")
         self.delete_pattern("api_responses", "monitoring:*")
         logger.info("Cleared instance, VM, and monitoring caches")
+
+    def invalidate_resource_cache(self, *kinds: str):
+        """Drop the cached list responses for the named resource kinds.
+
+        Every list endpoint caches under `<kind>:list:...`, so a mutation that does not clear
+        its own kind leaves readers on a stale list until the TTL expires. That window is 30s
+        for instances and projects and 180s for profiles, storage volumes and storage pools,
+        which is long enough for an operator to create something, look at the list, and not
+        find it.
+
+        Pass the key prefixes the handler's own list endpoint uses, ex;
+        `invalidate_resource_cache("storage_pools", "storage_pool_resources")`.
+        """
+        for kind in kinds:
+            self.delete_pattern("api_responses", f"{kind}:*")
+        logger.info("Cleared cached list responses for: %s", ", ".join(kinds))
     
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""

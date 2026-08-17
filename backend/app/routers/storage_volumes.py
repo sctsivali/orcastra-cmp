@@ -238,6 +238,8 @@ async def create_storage_volume(
         )
         
         schedule_orcahub_event("volume.created", host, getattr(volume, "project", None), request.name, resource_type="VOLUME")
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("storage_volumes")
         return {
             "success": True,
             "message": f"Storage volume {request.name} created successfully",
@@ -297,6 +299,8 @@ async def update_storage_volume(
         
         volume.save()
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("storage_volumes")
         return {
             "success": True,
             "message": f"Storage volume {volume_name} updated successfully"
@@ -340,6 +344,8 @@ async def delete_storage_volume(
         )
         
         schedule_orcahub_event("volume.deleted", host, getattr(volume, "project", None), volume_name, resource_type="VOLUME")
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("storage_volumes")
         return {
             "success": True,
             "message": f"Storage volume {volume_name} deleted successfully"

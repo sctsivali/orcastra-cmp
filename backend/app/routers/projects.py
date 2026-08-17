@@ -268,6 +268,8 @@ async def create_project(
         )
         
         schedule_orcahub_event("project.created", request.host, request.name, request.name, resource_type="PROJECT")
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("projects")
         return ProjectCreateResponse(
             success=True,
             message=f"Project '{request.name}' created successfully on {request.host}",
@@ -412,6 +414,8 @@ async def update_project(
         
         project = ProjectInfo(**project_data)
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("projects")
         return ProjectUpdateResponse(
             success=True,
             message=f"Project '{project_name}' updated successfully on {host}",
@@ -474,6 +478,8 @@ async def delete_project(
         )
         
         schedule_orcahub_event("project.deleted", host, project_name, project_name, resource_type="PROJECT")
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("projects")
         return {
             "success": True,
             "message": f"Project '{project_name}' deleted successfully from {host}"

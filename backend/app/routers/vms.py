@@ -262,6 +262,8 @@ async def create_vm(
             }
         )
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_instance_cache()
         return VMCreateResponse(
             success=True,
             message=f"VM '{request.name}' created successfully on {request.host}",

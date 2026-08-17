@@ -1010,6 +1010,10 @@ async def regenerate_certificate(
         # Build CLI-friendly message based on detected type
         cli_tool = "incus" if cluster_type == "Incus" else "lxc"
         
+        # The rotated certificate is what the Vault cache holds. Leaving it means the next
+        # connect uses the superseded material and the cluster reports not_authorized.
+        from app.core.cache import get_cache_manager
+        get_cache_manager().invalidate_cluster_cache(cluster_id)
         return ClusterRegisterResponse(
             success=True,
             message=f"Certificate regenerated! Run the {cli_tool} command to re-add trust. Detected: {cluster_type}.",

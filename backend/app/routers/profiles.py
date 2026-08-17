@@ -220,6 +220,8 @@ async def create_profile(
             details={"description": request.description}
         )
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("profiles")
         return {
             "success": True,
             "message": f"Profile {request.name} created successfully",
@@ -288,6 +290,8 @@ async def update_profile(
             result="success"
         )
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("profiles")
         return {
             "success": True,
             "message": f"Profile {profile_name} updated successfully"
@@ -337,6 +341,8 @@ async def delete_profile(
             result="success"
         )
         
+        # Readers hold a cached list; without this the change is invisible until the TTL.
+        get_cache_manager().invalidate_resource_cache("profiles")
         return {
             "success": True,
             "message": f"Profile {profile_name} deleted successfully"
