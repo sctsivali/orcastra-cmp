@@ -173,7 +173,11 @@ async def create_upload(
 
     session_id = secrets.token_hex(16)
     path = _staging_path(session_id)
-    open(path, "wb").close()  # create empty staging file
+    # note: deliberately NOT pre-created. Creating the file before the row is committed leaks
+    # it on any failure between the two, and nothing sweeps staging files that have no row
+    # (the recovery loop only re-drives stuck imports). Two such leaks were found on the dev
+    # box. append_request_body creates the file on the first PATCH, so there is nothing to
+    # leak and one fewer thing to keep consistent.
 
     row = IsoUploadSession(
         session_id=session_id,

@@ -226,3 +226,20 @@ async def test_a_missing_staging_file_is_recreated_rather_than_crashing(tmp_path
     assert offset == 4
     with open(path, "rb") as f:
         assert f.read() == b"abcd"
+
+
+async def test_a_session_leaves_no_staging_file_until_the_first_write(tmp_path) -> None:
+    """No file may exist before there are bytes to put in it.
+
+    The routers used to create an empty staging file before committing the session row. Any
+    failure between the two leaked the file, and nothing reclaims a staging file that has no
+    row: the recovery loop only re-drives imports that are stuck. Two such leaks were found on
+    the dev box. Creating on first write removes the window entirely.
+    """
+    path = str(tmp_path / "not-yet.iso")
+    assert not os.path.exists(path)
+
+    await append_request_body(FakeRequest([b"first"]), path, start_offset=0, limit=64, label="t")
+
+    assert os.path.exists(path), "the first write must create the file"
+    assert os.path.getsize(path) == 5
