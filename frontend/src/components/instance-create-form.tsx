@@ -68,6 +68,7 @@ import {
 } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { addPendingCreate } from "@/lib/pending-creates";
+import { safeRandomUUID } from "@/lib/utils";
 import { api } from "@/lib/api";
 import type {
   InstanceCreateRequest,
@@ -261,7 +262,7 @@ export function InstanceCreateForm() {
   const addDisk = () =>
     setDisks((d) => [
       ...d,
-      { id: crypto.randomUUID(), kind: "volume", pool: defaultPool, source: "", path: "" },
+      { id: safeRandomUUID(), kind: "volume", pool: defaultPool, source: "", path: "" },
     ]);
   const updateDisk = (id: string, patch: Partial<DiskDevice>) =>
     setDisks((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
@@ -309,7 +310,7 @@ export function InstanceCreateForm() {
       return [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: safeRandomUUID(),
           network: inh?.network ?? "",
           name: inh?.name ?? `eth${prev.length}`,
         },
@@ -322,7 +323,7 @@ export function InstanceCreateForm() {
         ? prev
         : [
             ...prev,
-            { id: crypto.randomUUID(), network: inh.network, name: inh.name },
+            { id: safeRandomUUID(), network: inh.network, name: inh.name },
           ],
     );
   const updateNic = (id: string, patch: Partial<NicDevice>) =>
@@ -350,7 +351,7 @@ export function InstanceCreateForm() {
     setGpus((g) => [
       ...g,
       {
-        id: crypto.randomUUID(),
+        id: safeRandomUUID(),
         name: `gpu${g.length}`,
         // Prefer PCI when the card exposes an address; otherwise identify by DRM
         // id (picking "pci" for an address-less card makes the row invalid).
@@ -365,7 +366,7 @@ export function InstanceCreateForm() {
     setGpus((g) => [
       ...g,
       {
-        id: crypto.randomUUID(),
+        id: safeRandomUUID(),
         name: `gpu${g.length}`,
         identifyBy: "pci",
         pci: "",

@@ -53,6 +53,7 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { ClusterLocationDialog } from "@/components/cluster-location-dialog";
 import { usePermissions } from "@/hooks/use-permissions";
+import { copyText } from "@/lib/clipboard";
 
 const statusConfig = {
   [ClusterStatus.ONLINE]: {
@@ -191,62 +192,16 @@ export default function ClustersPage() {
   };
 
   const copyToClipboard = async (text: string, label: string) => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        toast({
-          title: "Copied!",
-          description: `${label} copied to clipboard`,
-        });
-      } else {
-        // Fallback for HTTP or older browsers
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        // Make sure textarea is visible but offscreen
-        textArea.style.position = 'fixed';
-        textArea.style.top = '0';
-        textArea.style.left = '0';
-        textArea.style.width = '2em';
-        textArea.style.height = '2em';
-        textArea.style.padding = '0';
-        textArea.style.border = 'none';
-        textArea.style.outline = 'none';
-        textArea.style.boxShadow = 'none';
-        textArea.style.background = 'transparent';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        
-        try {
-          const successful = document.execCommand('copy');
-          textArea.remove();
-          
-          if (successful) {
-            toast({
-              title: "Copied!",
-              description: `${label} copied to clipboard`,
-            });
-          } else {
-            throw new Error('execCommand returned false');
-          }
-        } catch (err) {
-          console.error('Copy failed:', err);
-          textArea.remove();
-          toast({
+    const ok = await copyText(text);
+    toast(
+      ok
+        ? { title: "Copied!", description: `${label} copied to clipboard` }
+        : {
             title: "Copy Failed",
             description: "Please select and copy the text manually (Ctrl+C or Cmd+C)",
             variant: "destructive",
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Copy error:', error);
-      toast({
-        title: "Copy Failed",
-        description: "Please select and copy the text manually (Ctrl+C or Cmd+C)",
-        variant: "destructive",
-      });
-    }
+          },
+    );
   };
 
   const handleDeleteClick = (cluster: any) => {

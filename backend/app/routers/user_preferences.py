@@ -9,7 +9,7 @@ Architecture:
 - Cross-browser sync is achieved through server-side storage
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -139,20 +139,14 @@ def get_default_settings() -> Dict[str, Any]:
     }
 
 
-def extract_user_info(
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
-    x_user_email: Optional[str] = Header(None, alias="X-User-Email"),
-) -> tuple[str, Optional[str]]:
-    """
-    Extract user info from request headers.
-    Frontend sends user ID and email in headers after authentication.
-    """
-    if not x_user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing X-User-ID header. User must be authenticated."
-        )
-    return x_user_id, x_user_email
+# important: identity comes from the validated JWT principal, never from a request
+# header. These endpoints used to key on X-User-ID, which any authenticated caller
+# could set to somebody else's subject and so read, overwrite or delete another
+# user's preferences. The header is now ignored entirely.
+def current_identity(user: AuthenticatedUser) -> tuple[str, Optional[str]]:
+    if not user or not user.user_id:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return user.user_id, user.email
 
 
 # ============================================
@@ -168,8 +162,7 @@ def extract_user_info(
 async def get_user_preferences(
     response: Response,
     db: AsyncSession = Depends(get_db),
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
-    x_user_email: Optional[str] = Header(None, alias="X-User-Email"),
+    user: AuthenticatedUser = Depends(require_authenticated()),
 ) -> Dict[str, Any]:
     """
     Get personalization settings for the current user.
@@ -185,10 +178,7 @@ async def get_user_preferences(
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     
-    if not x_user_id:
-        # Return default settings for unauthenticated requests
-        logger.debug("No user ID provided, returning default settings")
-        return get_default_settings()
+    x_user_id, x_user_email = current_identity(user)
     
     logger.info(f"Fetching preferences for user {x_user_id}")
     
@@ -242,8 +232,7 @@ async def update_user_preferences(
     settings: Dict[str, Any],
     response: Response,
     db: AsyncSession = Depends(get_db),
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
-    x_user_email: Optional[str] = Header(None, alias="X-User-Email"),
+    user: AuthenticatedUser = Depends(require_authenticated()),
     _: None = Depends(check_read_only_mode),
 ) -> Dict[str, Any]:
     """
@@ -257,11 +246,7 @@ async def update_user_preferences(
     # Set cache-control headers
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
     
-    if not x_user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing X-User-ID header. User must be authenticated."
-        )
+    x_user_id, x_user_email = current_identity(user)
     
     logger.info(f"Updating preferences for user {x_user_id}")
     
@@ -326,7 +311,7 @@ async def update_user_preferences(
 async def reset_user_preferences(
     response: Response,
     db: AsyncSession = Depends(get_db),
-    x_user_id: Optional[str] = Header(None, alias="X-User-ID"),
+    user: AuthenticatedUser = Depends(require_authenticated()),
     _: None = Depends(check_read_only_mode),
 ) -> Dict[str, str]:
     """
@@ -339,11 +324,7 @@ async def reset_user_preferences(
     # Set cache-control headers
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, private"
     
-    if not x_user_id:
-        raise HTTPException(
-            status_code=401,
-            detail="Missing X-User-ID header. User must be authenticated."
-        )
+    x_user_id, x_user_email = current_identity(user)
     
     logger.info(f"Resetting preferences for user {x_user_id}")
     

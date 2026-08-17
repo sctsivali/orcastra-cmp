@@ -14,7 +14,12 @@ import sqlalchemy as sa
 
 # revision identifiers
 revision: str = "002_org_external_source"
-down_revision: Union[str, None] = "001_tag_system"
+# Must follow 002_rbac_orgs, which CREATES the organizations table this migration
+# ALTERs. Both this and 003_org_prefs branch off 002_rbac_orgs; they re-merge at
+# 009_merge_org_heads. Chaining to 001_tag_system instead let Alembic order this
+# ALTER before organizations existed on a fresh base->head upgrade (an
+# intermittent "relation organizations does not exist" failure).
+down_revision: Union[str, None] = "002_rbac_orgs"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
