@@ -34,6 +34,7 @@ import { formatHypervisorType } from "@/lib/utils";
 import { ClusterStatus, APIError } from "@/types/api";
 import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
 import { getRegionById, REGIONS_DATA, type Region } from "@/lib/regions-data";
+import { copyText } from "@/lib/clipboard";
 
 const nodeRegisterSchema = z.object({
   cluster_id: z
@@ -203,47 +204,16 @@ export function NodeRegisterForm() {
   };
 
   const copyToClipboard = async (text: string, label: string) => {
-    try {
-      // Try modern clipboard API first
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        toast({
-          title: "Copied!",
-          description: `${label} copied to clipboard`,
-        });
-      } else {
-        // Fallback for HTTP or older browsers
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        try {
-          document.execCommand('copy');
-          textArea.remove();
-          toast({
-            title: "Copied!",
-            description: `${label} copied to clipboard`,
-          });
-        } catch (err) {
-          textArea.remove();
-          toast({
+    const ok = await copyText(text);
+    toast(
+      ok
+        ? { title: "Copied!", description: `${label} copied to clipboard` }
+        : {
             title: "Copy Failed",
             description: "Please copy manually",
             variant: "destructive",
-          });
-        }
-      }
-    } catch (error) {
-      toast({
-        title: "Copy Failed",
-        description: "Please copy manually",
-        variant: "destructive",
-      });
-    }
+          },
+    );
   };
 
   const onSubmit = async (data: NodeRegisterFormData) => {

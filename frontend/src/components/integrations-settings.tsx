@@ -64,6 +64,7 @@ import type {
   ClusterPermission,
   AvailableCluster,
 } from "@/types";
+import { copyText } from "@/lib/clipboard";
 
 // Create API Key Dialog Component
 function CreateAPIKeyDialog({
@@ -238,7 +239,15 @@ function APIKeySecretDialog({
   const [copied, setCopied] = useState<string | null>(null);
 
   const copyToClipboard = async (text: string, type: string) => {
-    await navigator.clipboard.writeText(text);
+    const ok = await copyText(text);
+    if (!ok) {
+      toast({
+        title: "Copy failed",
+        description: "Please select and copy the value manually.",
+        variant: "destructive",
+      });
+      return;
+    }
     setCopied(type);
     setTimeout(() => setCopied(null), 2000);
     toast({
