@@ -53,6 +53,11 @@ export const useBreakGlassStore = create<BreakGlassState>((set, get) => ({
   submit: async (reason, durationMinutes, ticketRef) => {
     const p = get().prompt;
     if (!p) return;
+    // important: the modal's button reads `submitting` through a subscription, so it only goes
+    // disabled on the next render. Two clicks inside one tick would both create a grant, and a
+    // break-glass grant is an audited privilege escalation. zustand's set is synchronous, so
+    // re-reading it here is a real guard and needs no ref.
+    if (get().submitting) return;
     set({ submitting: true, error: null });
     try {
       await api.breakGlass.createGrant({

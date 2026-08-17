@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -252,6 +252,11 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
     setPermissions(permissions.filter((_, i) => i !== index));
   };
 
+  // important: isPending is React state, so it only reaches the button's disabled prop on the
+  // next render. Two clicks inside one tick both pass it and both create a group. Claimed after
+  // the validation returns below, which are synchronous and cheap, so they need no release.
+  const submitInFlightRef = useRef(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
@@ -272,6 +277,9 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
       });
       return;
     }
+
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
 
     try {
       await createGroupMutation.mutateAsync({
@@ -301,6 +309,8 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
         description: error.message || "Failed to create group",
         variant: "destructive",
       });
+    } finally {
+      submitInFlightRef.current = false;
     }
   };
 

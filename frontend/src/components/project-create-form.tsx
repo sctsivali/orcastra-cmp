@@ -185,7 +185,15 @@ export function ProjectCreateForm() {
     fetchResources();
   }, [selectedHost]);
 
+  // important: the disabled flag is React state, so it only reaches the button on the next
+  // render. Two clicks inside one tick both pass it and both fire the mutation. react-hook-form
+  // does not help here: its handleSubmit has no re-entry guard and awaits the resolver before
+  // calling this, so the window is wider, not narrower. The ref is claimed synchronously.
+  const submitInFlightRef = React.useRef(false);
+
   const onSubmit = async (data: ProjectCreateFormData) => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     try {
       // build config - explicitly set all features
       const config: Record<string, string> = {
@@ -228,6 +236,10 @@ export function ProjectCreateForm() {
           : errorMessage,
         variant: "destructive",
       });
+    } finally {
+      // note: released even on the success path, which has already navigated away. Leaving it
+      // claimed would lock the form if the user comes back to it via the browser history.
+      submitInFlightRef.current = false;
     }
   };
 

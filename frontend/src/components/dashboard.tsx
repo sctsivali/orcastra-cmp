@@ -628,6 +628,10 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
     }
   }, [editDialogOpen, project.config, project.description, project.name]);
 
+  // important: isPending is React state, so the disabled prop only updates on the next render.
+  // Two clicks inside one tick both fire the mutation. Claimed synchronously, before any await.
+  const submitInFlightRef = React.useRef(false);
+
   const handleSave = async () => {
     if (isReadOnly) {
       toast({
@@ -637,6 +641,8 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       });
       return;
     }
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setIsSaving(true);
     try {
       const updateData: {
@@ -680,6 +686,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         variant: "destructive",
       });
     } finally {
+      submitInFlightRef.current = false;
       setIsSaving(false);
     }
   };

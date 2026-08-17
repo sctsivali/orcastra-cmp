@@ -74,8 +74,14 @@ export function ClusterLocationDialog({
     }
   }, [open, cluster]);
 
+  // important: isPending is React state, so the disabled prop only updates on the next render.
+  // Two clicks inside one tick both fire the mutation. Claimed synchronously, before any await.
+  const submitInFlightRef = React.useRef(false);
+
   const handleSave = async () => {
     if (!cluster || !selectedRegion) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
 
     try {
       await updateLocation.mutateAsync({
@@ -106,6 +112,8 @@ export function ClusterLocationDialog({
         description: error.message || "An error occurred",
         variant: "destructive",
       });
+    } finally {
+      submitInFlightRef.current = false;
     }
   };
 

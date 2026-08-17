@@ -216,7 +216,15 @@ export function NodeRegisterForm() {
     );
   };
 
+  // important: the disabled flag is React state, so it only reaches the button on the next
+  // render. Two clicks inside one tick both pass it and both fire the mutation. react-hook-form
+  // does not help here: its handleSubmit has no re-entry guard and awaits the resolver before
+  // calling this, so the window is wider, not narrower. The ref is claimed synchronously.
+  const submitInFlightRef = React.useRef(false);
+
   const onSubmit = async (data: NodeRegisterFormData) => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setIsSubmitting(true);
     setRegistrationResult(null);
 
@@ -290,6 +298,7 @@ export function NodeRegisterForm() {
         message: errorMessage,
       });
     } finally {
+      submitInFlightRef.current = false;
       setIsSubmitting(false);
     }
   };
