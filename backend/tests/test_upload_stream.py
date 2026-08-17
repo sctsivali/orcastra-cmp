@@ -137,33 +137,33 @@ async def test_rejected_upload_leaves_the_file_at_the_starting_offset(staging) -
 
 async def test_write_does_not_run_on_the_event_loop_thread(staging, monkeypatch) -> None:
     seen: List[int] = []
-    real_append = upload_stream._append
+    real_write = upload_stream._write_at
 
-    def recording_append(path: str, data: bytes) -> None:
+    def recording_write(path: str, pos: int, data: bytes) -> None:
         seen.append(threading.get_ident())
-        real_append(path, data)
+        real_write(path, pos, data)
 
-    monkeypatch.setattr(upload_stream, "_append", recording_append)
+    monkeypatch.setattr(upload_stream, "_write_at", recording_write)
 
     loop_thread = threading.get_ident()
     await append_request_body(
         FakeRequest([b"payload"]), staging, start_offset=0, limit=1024, label="t"
     )
 
-    assert seen, "the append never ran"
+    assert seen, "the write never ran"
     assert all(t != loop_thread for t in seen), "the write ran on the event loop thread"
 
 
 async def test_the_loop_keeps_running_while_a_slow_write_is_outstanding(
     staging, monkeypatch
 ) -> None:
-    real_append = upload_stream._append
+    real_write = upload_stream._write_at
 
-    def slow_append(path: str, data: bytes) -> None:
+    def slow_write(path: str, pos: int, data: bytes) -> None:
         time.sleep(0.3)
-        real_append(path, data)
+        real_write(path, pos, data)
 
-    monkeypatch.setattr(upload_stream, "_append", slow_append)
+    monkeypatch.setattr(upload_stream, "_write_at", slow_write)
 
     ticks: List[float] = []
     stop = asyncio.Event()
@@ -188,3 +188,41 @@ async def test_the_loop_keeps_running_while_a_slow_write_is_outstanding(
     # A nominal loop ticks ~100x/s; requiring 10x/s leaves room for a busy box while still
     # failing hard when the loop is parked (pre-fix this is ~0 for the write window).
     assert ticked >= 3, f"event loop starved during the write: only {ticked} ticks"
+
+
+async def test_a_file_longer_than_the_offset_is_healed_not_appended_past(staging) -> None:
+    """The invariant that keeps a resumed upload from silently corrupting.
+
+    The session row is the authority on how many bytes are committed. The staging file can
+    legitimately be longer than that: a rollback that could not run leaves the extra bytes
+    behind, and a write whose caller already timed out keeps going in its thread and lands
+    afterwards. Opened "ab" the next chunk would be written past those stray bytes, leaving a
+    gap that no later check catches because expected_sha256 is optional.
+
+    Here the row says 4 bytes are committed while the file holds 4 good bytes plus 6 stray
+    ones. Resuming at 4 must overwrite the strays, not skip past them.
+    """
+    with open(staging, "wb") as f:
+        f.write(b"HEAD" + b"XXXXXX")
+    req = FakeRequest([b"TAIL"])
+
+    offset = await append_request_body(
+        req, staging, start_offset=4, limit=1024, label="t"
+    )
+
+    assert offset == 8
+    with open(staging, "rb") as f:
+        assert f.read() == b"HEADTAIL"
+    assert os.path.getsize(staging) == offset, "file size must match the returned offset"
+
+
+async def test_a_missing_staging_file_is_recreated_rather_than_crashing(tmp_path) -> None:
+    """Recovery paths can delete the staging file; a resumed PATCH must not 500 on it."""
+    path = str(tmp_path / "gone.iso")
+    req = FakeRequest([b"abcd"])
+
+    offset = await append_request_body(req, path, start_offset=0, limit=1024, label="t")
+
+    assert offset == 4
+    with open(path, "rb") as f:
+        assert f.read() == b"abcd"

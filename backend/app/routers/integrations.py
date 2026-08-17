@@ -1982,11 +1982,19 @@ async def raw_proxy(
                 if "=" in param:
                     key, value = param.split("=", 1)
                     query_params[key] = value
-        
+
+        # important: `project` is authorised above from request.project, so a copy of it
+        # inside `path` is not the caller's to set. Dropping it closes a scope bypass: a key
+        # allowed only on "default" could otherwise declare project="default" (passing the
+        # check, and skipping the override below because it IS default) while sending
+        # ?project=<other> in the path, which LXD honours because these certs are registered
+        # unrestricted. Every other query key is legitimate passthrough and is left alone.
+        query_params.pop("project", None)
+
         # Add project parameter if not default
         if project and project != "default":
             query_params["project"] = project
-        
+
         # Build endpoint URL directly using client's session
         endpoint = client.api._api_endpoint
         
@@ -2750,6 +2758,17 @@ async def provision_tenant_access(
     Idempotent: if policy already exists for this project, updates rules and adds new assignments.
     Auto-creates org, members, and cluster mapping if they do not exist yet.
     """
+    # important: this writes an OrganizationCluster row and grants operate/console from a
+    # caller-supplied cluster_id, so it needs the same allow-list every other external
+    # endpoint applies. Without it any valid key can bind another partner's cluster to its
+    # own org and hand its tenants real access. Same check as revoke_tenant_access.
+    cluster_permissions = {p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])}
+    if body.cluster_id not in cluster_permissions:
+        raise HTTPException(status_code=403, detail=f"No permission for cluster {body.cluster_id}")
+    allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
+    if body.project_name not in allowed_projects and "*" not in allowed_projects:
+        raise HTTPException(status_code=403, detail=f"No permission for project {body.project_name}")
+
     api_key_id = api_key.get("id", "")
     org_created = False
     members_created = 0

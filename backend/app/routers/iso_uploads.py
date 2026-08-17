@@ -481,8 +481,8 @@ def _lxd_import_iso_sync(cluster_id: str, path: str, pool: str, volume_name: str
 
 async def _heartbeat(session_id: str) -> None:
     """Bump updated_at while an import runs so the recovery sweep can tell a live import from a dead one."""
-    try:
-        while True:
+    while True:
+        try:
             await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
             async with async_session_maker() as db:
                 await db.execute(
@@ -491,10 +491,14 @@ async def _heartbeat(session_id: str) -> None:
                     .values(updated_at=_now())
                 )
                 await db.commit()
-    except asyncio.CancelledError:
-        return
-    except Exception as e:  # noqa: BLE001
-        logger.warning("ISO import heartbeat error session=%s: %s", session_id, e)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:  # noqa: BLE001
+            # important: keep beating. Ending the loop on a transient DB error lets updated_at
+            # go stale while the import is still running, so the recovery sweep re-drives it.
+            # The two runs then race and the winner's staging-file cleanup pulls the file out
+            # from under the loser, which writes 'failed' over an already-'ready' row.
+            logger.warning("ISO import heartbeat error session=%s: %s", session_id, e)
 
 
 async def _run_import(session_id: str, recovery: bool = False) -> None:

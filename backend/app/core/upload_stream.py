@@ -61,8 +61,21 @@ write_executor = ThreadPoolExecutor(
 )
 
 
-def _append(path: str, data: bytes) -> None:
-    with open(path, "ab") as f:
+def _write_at(path: str, pos: int, data: bytes) -> None:
+    """Write ``data`` at ``pos``, discarding anything already past it.
+
+    important: anchored to the caller's recorded offset rather than opened "ab". Append mode
+    writes at EOF, so any time the file is longer than the offset in the session row the next
+    chunk lands past a gap and the staged file is silently corrupt. That is reachable: a
+    rollback that could not run logs a warning and leaves the file long, and a write whose
+    caller timed out keeps running in its thread (run_blocking shields it) and may land after
+    the 503. ``expected_sha256`` is optional, so nothing downstream would catch the corruption.
+    Seek plus truncate makes the row authoritative and lets a stale file heal on the retry.
+    """
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "r+b") as f:
+        f.seek(pos)
+        f.truncate()
         f.write(data)
 
 
@@ -106,7 +119,7 @@ async def append_request_body(
         if not buf:
             return
         await run_blocking(
-            _append, path, bytes(buf), timeout=WRITE_TIMEOUT, label=label,
+            _write_at, path, offset, bytes(buf), timeout=WRITE_TIMEOUT, label=label,
             executor=write_executor, max_in_flight=WRITE_MAX_IN_FLIGHT,
         )
         offset += len(buf)

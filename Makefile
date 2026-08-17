@@ -211,10 +211,19 @@ test-backend: ## Run backend tests (host)
 	@echo "$(COLOR_GREEN)Running backend tests...$(COLOR_RESET)"
 	@cd backend && $(PYTEST)
 
-test-backend-docker: ## Run backend tests inside the running backend container
-	@echo "$(COLOR_GREEN)Running backend tests in container...$(COLOR_RESET)"
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec backend pip install --user -q -r requirements-dev.txt
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec backend python -m pytest
+# The deployed image, which is what this target is meant to exercise. Falls back to the
+# APP_VERSION tag when nothing is running.
+BACKEND_IMAGE = $(shell docker inspect --format '{{.Config.Image}}' $(CONTAINER_PREFIX)-backend 2>/dev/null || echo $(CONTAINER_PREFIX)-backend:$(APP_VERSION))
+
+# note: a production image deliberately ships neither the test tree nor pytest, so the suite
+# cannot be run inside the live container. This mounts the source read-only into a throwaway
+# container built from the deployed image, which is the thing actually worth proving: that the
+# shipped interpreter and dependency set run the suite green. pytest writes its cache next to
+# the source, so it is disabled against the read-only mount.
+test-backend-docker: ## Run backend tests against the deployed image's dependency set
+	@echo "$(COLOR_GREEN)Running backend tests against $(BACKEND_IMAGE)...$(COLOR_RESET)"
+	@docker run --rm -v $(PWD)/backend:/src:ro -w /src --entrypoint sh $(BACKEND_IMAGE) \
+		-c 'pip install --user -q -r requirements-dev.txt && python -m pytest -p no:cacheprovider'
 
 test-frontend: ## Run frontend tests
 	@echo "$(COLOR_GREEN)Running frontend tests...$(COLOR_RESET)"

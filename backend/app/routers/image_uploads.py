@@ -33,6 +33,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import append_request_body
 from app.models.db_models import ImageUploadSession
@@ -60,6 +61,11 @@ MAX_UPLOAD_BYTES = int(os.getenv("IMAGE_UPLOAD_MAX_BYTES", str(4 * 1024 * 1024 *
 TUS_VERSION = "1.0.0"
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="image_import")
+
+# Cap for the connect probe in the recovery sweep. Generous relative to the pooled (3, 8)
+# because get_client may rebuild the session, but bounded so one unreachable cluster cannot
+# stall the sweep for the rest of the candidates.
+RECOVERY_CONNECT_TIMEOUT = 30.0
 
 _ACTIVE = ("pending", "uploading", "uploaded", "importing")
 _TERMINAL = ("ready", "failed")
@@ -484,8 +490,8 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
 async def _heartbeat(session_id: str) -> None:
     """Bump updated_at while an import runs so the recovery sweep can tell a live import from a dead one
     (a killed worker stops beating -> the row goes stale -> recovery re-drives it)."""
-    try:
-        while True:
+    while True:
+        try:
             await asyncio.sleep(_HEARTBEAT_INTERVAL_SECONDS)
             async with async_session_maker() as db:
                 await db.execute(
@@ -494,10 +500,14 @@ async def _heartbeat(session_id: str) -> None:
                     .values(updated_at=_now())
                 )
                 await db.commit()
-    except asyncio.CancelledError:
-        return
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Import heartbeat error session=%s: %s", session_id, e)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:  # noqa: BLE001
+            # important: keep beating. Ending the loop on a transient DB error lets updated_at
+            # go stale while the import is still running, so the recovery sweep re-drives it.
+            # The two runs then race and the winner's staging-file cleanup pulls the file out
+            # from under the loser, which writes 'failed' over an already-'ready' row.
+            logger.warning("Import heartbeat error session=%s: %s", session_id, e)
 
 
 async def _run_import(session_id: str, recovery: bool = False) -> None:
@@ -608,8 +618,23 @@ async def _recover_orphaned_imports() -> None:
             continue
 
         # 2) Cluster offline -> leave for a later sweep (a transient Tailscale blip must not fail it).
+        # get_client does a TLS handshake and a probe request, so it must not run inline:
+        # this sweep runs on every uvicorn worker and iterates every stale candidate, which
+        # would park the loop once per candidate against a slow cluster.
         svc = get_lxd_service()
-        if svc.connection_manager.get_client(cluster_id) is None:
+        try:
+            client = await run_blocking(
+                svc.connection_manager.get_client,
+                cluster_id,
+                timeout=RECOVERY_CONNECT_TIMEOUT,
+                label=f"image_recovery_connect[{cluster_id}]",
+                executor=_executor,
+            )
+        except (BlockingTimeout, BlockingPoolFull) as exc:
+            logger.info("Recovery: cluster %s not reachable (%s); deferring import session=%s",
+                        cluster_id, exc, sid)
+            continue
+        if client is None:
             logger.info("Recovery: cluster %s offline; deferring import session=%s", cluster_id, sid)
             continue
 
