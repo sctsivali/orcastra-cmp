@@ -98,7 +98,13 @@ services:
       postgres:
         condition: service_healthy
     # Resource limits — ensures Dashboard Host shows container resources, not the host
-    mem_limit: ${BACKEND_MEM_LIMIT:-2g}
+    # Measured, not guessed: four uvicorn workers sat at 587/524/461/446 MB under QA load,
+    # 2018 MB against a 2g cap, and the kernel OOM-killed two of them. That failure is silent
+    # (RestartCount stays 0, the healthcheck passes, no ERROR line is logged) and shows up
+    # only as dropped requests and severed console sessions. vm4 is specified at 8 GB, so the
+    # backend was simply under-provisioned. Scale this up further as clusters are added:
+    # per-worker memory grows with the number of registered clusters.
+    mem_limit: ${BACKEND_MEM_LIMIT:-4g}
     cpus: ${BACKEND_CPUS:-2}
     healthcheck:
       # Must stay in sync with backend/Dockerfile HEALTHCHECK. Compose wins at runtime, the
