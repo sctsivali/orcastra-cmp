@@ -80,15 +80,28 @@ async def _live_tables_and_stamp(dsn: str) -> Tuple[Set[str], bool]:
 
 
 def _plan(tables: Set[str], stamped: bool) -> Union[str, Tuple[str, List[str]]]:
-    """Decide what to do. Returns "managed" | "fresh" | "rc2" | ("unknown", found)."""
+    """Decide what to do.
+
+    Returns "managed" | "fresh" | "rc2" | ("unknown", found) | ("partial", missing).
+
+    important: a database only counts as RC2 when it has ALL of the core tables. A
+    partial match means somebody restored half a dump or stopped an old install
+    mid-flight; stamping that would claim migrations 001-007 had run when they had
+    not, and the upgrade would then die at 010 against a table that was never
+    created - leaving a wrong stamp behind, so every retry fails the same way.
+    """
     if stamped:
         return "managed"
-    if not any(t in tables for t in _RC2_CORE_TABLES):
+    present = [t for t in _RC2_CORE_TABLES if t in tables]
+    if not present:
         return "fresh"
     found_post = [t for t in _POST_RC2_TABLES if t in tables]
-    if not found_post:
-        return "rc2"
-    return ("unknown", found_post)
+    if found_post:
+        return ("unknown", found_post)
+    missing = [t for t in _RC2_CORE_TABLES if t not in tables]
+    if missing:
+        return ("partial", missing)
+    return "rc2"
 
 
 def _alembic_config():
@@ -129,12 +142,23 @@ def main() -> None:
         print("[db-bootstrap] stamp complete; proceeding to upgrade.")
         return
 
+    kind, offending = plan
+    if kind == "partial":
+        raise SystemExit(
+            "[db-bootstrap] REFUSING TO AUTO-STAMP.\n"
+            "  The database has application tables but no Alembic version stamp, and it is\n"
+            f"  missing tables an RC2 database always has (missing: {', '.join(offending)}).\n"
+            "  That is not a shape this can safely recognise, so migrations were not run.\n"
+            "  Restore a complete backup, or stamp the database manually to the revision\n"
+            "  matching its real schema, then redeploy.\n"
+            "  (Set RUN_MIGRATIONS=false to start the backend without migrating.)"
+        )
+
     # ("unknown", found_post): populated + unstamped + newer than the RC2 baseline.
-    _, found = plan
     raise SystemExit(
         "[db-bootstrap] REFUSING TO AUTO-STAMP.\n"
         "  The database has application tables but no Alembic version stamp, and its\n"
-        f"  schema is newer than the known RC2 baseline (found: {', '.join(found)}).\n"
+        f"  schema is newer than the known RC2 baseline (found: {', '.join(offending)}).\n"
         "  Auto-stamping could corrupt it, so migrations were not run. Stamp the\n"
         "  database manually to the revision matching its real schema, then redeploy.\n"
         "  (Set RUN_MIGRATIONS=false to start the backend without migrating.)"
