@@ -135,6 +135,11 @@ async def list_warnings(
             warnings=all_warnings,
             nodes=lxd_service.connection_manager.get_node_names()
         )
+    except HTTPException:
+        # note: an authorization refusal is a 403, not a server fault. The generic handler
+        # below would wrap it into a 500 whose body reads "403: Access denied ...", which
+        # misleads clients and pages an on-call for a working permission check.
+        raise
     except Exception as e:
         logger.error(f"Error listing warnings: {e}")
         raise HTTPException(status_code=500, detail=str(e))

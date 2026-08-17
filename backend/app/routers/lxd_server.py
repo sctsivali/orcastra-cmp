@@ -127,6 +127,11 @@ async def list_servers(
             servers=all_servers,
             total=len(all_servers)
         )
+    except HTTPException:
+        # note: an authorization refusal is a 403, not a server fault. The generic handler
+        # below would wrap it into a 500 whose body reads "403: Access denied ...", which
+        # misleads clients and pages an on-call for a working permission check.
+        raise
     except Exception as e:
         logger.error(f"Error listing server information: {e}")
         raise HTTPException(status_code=500, detail=str(e))
