@@ -99,9 +99,13 @@ services:
     mem_limit: ${BACKEND_MEM_LIMIT:-2g}
     cpus: ${BACKEND_CPUS:-2}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4050/health')"]
-      interval: 30s
-      timeout: 10s
+      # Kept identical to docker-compose.prod.yml and the Dockerfile HEALTHCHECK, so a probe
+      # verified here is the probe that runs in production. The probe carries its own 3s
+      # timeout: without one, a hung probe is indistinguishable from a hung app, which is the
+      # same defect class this release fixes in the app itself.
+      test: ["CMD", "python", "-c", "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:4050/health', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
       retries: 5
       start_period: 120s
 
