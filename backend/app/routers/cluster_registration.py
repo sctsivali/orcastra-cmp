@@ -5,7 +5,7 @@ Handles LXD cluster registration, certificate management, and trust establishmen
 
 import logging
 import asyncio
-from typing import Optional, List
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException, Depends, status
 from datetime import datetime
@@ -21,12 +21,11 @@ from app.models.schemas import (
     ClusterStatus,
     ClusterLocationUpdateRequest,
     ClusterLocationUpdateResponse,
-    GeoLocation,
 )
 from app.core.config import get_settings
-from app.core.vault_client import get_vault_client, VaultClient, VaultClientError
+from app.core.vault_client import get_vault_client
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
-from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
 from app.services.activity_logger import get_activity_logger
@@ -510,7 +509,7 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
         from app.services.lxd_service import get_lxd_service
         from app.core.config import get_settings
         
-        settings = get_settings()
+        _settings = get_settings()
         lxd_service = get_lxd_service()
         
         # Try to get client (this will auto-reconnect if connection info is stored)

@@ -6,13 +6,12 @@ Used by the terminal window's drag-and-drop file upload feature.
 """
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import get_lxd_service, LXDService, LXDConnectionError
-from app.core.dependencies import check_read_only_mode, require_partner, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.org_scope import org_scope_dependency
 from app.services.activity_logger import get_activity_logger
 
@@ -133,7 +132,7 @@ async def push_file_to_instance(
     try:
         import asyncio
 
-        result = await asyncio.get_event_loop().run_in_executor(
+        _result = await asyncio.get_event_loop().run_in_executor(
             _executor,
             _push_file_to_instance,
             lxd_service,

@@ -10,10 +10,9 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 import traceback
 
-from app.core.config import get_settings
 
 
 class StructuredJsonFormatter(logging.Formatter):

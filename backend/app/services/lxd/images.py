@@ -4,7 +4,7 @@ Handles listing and managing LXD images.
 """
 
 import logging
-from typing import List, Optional
+from typing import List
 
 from app.models.schemas import ImageInfo
 from .exceptions import LXDOperationError

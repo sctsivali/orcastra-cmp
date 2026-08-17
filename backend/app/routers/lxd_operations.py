@@ -8,7 +8,6 @@ from typing import Optional, List, Dict, Any
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
 
 from app.services.lxd_service import (
     LXDService,

@@ -3,7 +3,7 @@ API Router for LXD image operations.
 Provides endpoints for listing available images on each node.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, List, Optional, Set
 import logging
 import asyncio
@@ -12,7 +12,6 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
-    ImageInfo,
     ImageListResponse,
     RemoteImageInfo,
     RemoteImageListResponse,
@@ -220,7 +219,7 @@ async def list_all_images(
     cache_key = get_scope_cache_key("images:list:all")
     cached_data = cache.get("api_responses", cache_key)
     if cached_data is not None:
-        logger.debug(f"Returning cached images list")
+        logger.debug("Returning cached images list")
         # Reconstruct Pydantic models from cached dict
         return [ImageListResponse(**item) for item in cached_data]
     
@@ -246,7 +245,7 @@ async def list_all_images(
     # Cache as dict for 120 seconds
     cache_data = [item.model_dump() for item in response]
     cache.set("api_responses", cache_key, cache_data, ttl=180)
-    logger.debug(f"Cached images list for 120 seconds")
+    logger.debug("Cached images list for 120 seconds")
     
     return response
 

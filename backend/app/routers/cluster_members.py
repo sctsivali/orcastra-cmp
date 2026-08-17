@@ -16,15 +16,11 @@ from app.core.cache import get_cache_manager
 from app.core.config import get_settings
 from app.models.schemas import (
     MemberResources, 
-    GPUCardInfo, 
-    GPUDRMInfo, 
-    GPUNvidiaInfo, 
-    GPUSRIOVInfo, 
-    GPUMdevProfile,
+    GPUCardInfo,
 )
 
 logger = logging.getLogger(__name__)
-from app.core.dependencies import require_tenant, AuthenticatedUser
+from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 
 router = APIRouter(
@@ -208,7 +204,7 @@ async def list_cluster_members(
             
             # Cache as dict for 120 seconds
             cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug(f"Cached cluster members for 120 seconds")
+            logger.debug("Cached cluster members for 120 seconds")
             
             return response
             
@@ -342,7 +338,7 @@ async def get_member_resources(
                     pool_response = client.api["storage-pools"][pool_name].get(params={"target": member_name})
                     pool_data = pool_response.json().get("metadata", {})
                     
-                    pool_config = pool_data.get("config", {})
+                    _pool_config = pool_data.get("config", {})
                     pool_driver = pool_data.get("driver", "unknown")
                     
                     # Get pool resources

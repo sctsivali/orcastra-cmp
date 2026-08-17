@@ -4,7 +4,7 @@ Provides endpoints for managing LXD storage pools.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -149,7 +149,7 @@ async def list_storage_pools(
         )
         
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug(f"Cached storage pools list for 120 seconds")
+        logger.debug("Cached storage pools list for 120 seconds")
         
         return response
     except Exception as e:
@@ -416,7 +416,11 @@ async def delete_storage_pool(
     summary="Get all storage pool resources",
     description="Get resource usage information for all storage pools across all nodes.",
 )
-async def get_all_storage_pool_resources(
+# note: renamed off get_all_storage_pool_resources, which this shared with the /resources-all
+# handler above. FastAPI registers both routes from their decorators, so both endpoints worked,
+# but the second name shadowed the first in the module and anything importing it by name got the
+# wrong one.
+async def get_all_storage_pool_resources_legacy_path(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get storage pool resources for all pools."""

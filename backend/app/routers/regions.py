@@ -13,7 +13,6 @@ from app.services.lxd_service import LXDService, get_lxd_service
 from app.core.config import get_settings
 from app.core.cache import get_cache_manager
 from app.models.schemas import (
-    GeoLocation,
     ExtendedHardwareInfo,
     RegionNodeInfo,
     RegionSummary,
@@ -22,7 +21,7 @@ from app.models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
-from app.core.dependencies import require_tenant, AuthenticatedUser
+from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_cluster_filter, get_tenant_acl
 from app.core.tenant_visibility import tenant_acl_has_permission
 

@@ -6,12 +6,10 @@ LXD/Incus VMs use QEMU with SPICE for graphics console access.
 The console data is streamed via WebSocket from LXD API.
 """
 
-import asyncio
-import json
 import logging
 import ssl
 from typing import Optional, Dict, Any, Tuple, List
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 from app.services.lxd_service import get_lxd_service
@@ -292,7 +290,7 @@ class ConsoleService:
                     instance = client.instances.get(instance_name)
                     instance_type = instance.type
                     instance_status = instance.status
-            except Exception as e:
+            except Exception:
                 return None, f"Instance not found: {instance_name}"
             
             if instance_type != "virtual-machine":
@@ -749,7 +747,7 @@ class ConsoleService:
                     instance.devices = devices
                     instance.save(wait=True)
                 
-                msg = f"ISO attached successfully"
+                msg = "ISO attached successfully"
                 if needs_restart:
                     msg += " (restart required for changes to take effect)"
                 

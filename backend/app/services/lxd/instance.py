@@ -6,11 +6,10 @@ Handles create, start, stop, restart, delete, and list operations for instances.
 import logging
 import asyncio
 from typing import List, Tuple, Optional, Dict, Any
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
-from app.models.schemas import VMInfo, VMStatus
+from app.models.schemas import VMInfo
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError, LXDSnapshotExistsError

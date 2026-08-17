@@ -26,6 +26,27 @@ from app.core.rbac import (
 )
 
 
+# important: this module exists to re-export the auth and RBAC surface so routers have one
+# import site. Without __all__ those imports look unused and a linter strips them, which breaks
+# every router at import time. Declaring them here makes the intent explicit and keeps ruff's
+# F401 honest rather than silenced.
+__all__ = [
+    "get_current_user",
+    "get_optional_user",
+    "get_ws_user",
+    "AuthenticatedUser",
+    "Role",
+    "Permission",
+    "require_roles",
+    "require_permissions",
+    "require_authenticated",
+    "require_admin",
+    "require_partner",
+    "require_tenant",
+    "check_read_only_mode",
+]
+
+
 def check_read_only_mode():
     """
     Dependency to check if the application is in read-only mode.

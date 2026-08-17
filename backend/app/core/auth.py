@@ -344,7 +344,6 @@ async def get_ws_user(
     Returns ``None`` when auth is disabled; validates JWT otherwise.
     Does NOT close the socket - callers decide how to handle ``None``.
     """
-    from starlette.websockets import WebSocket as _WS  # type check only
 
     if not settings.auth_enabled or not settings.authentik_issuer:
         return None

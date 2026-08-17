@@ -1,7 +1,7 @@
 # Makefile for Orcastra Dashboard
 # This Makefile provides convenient commands for managing the development and production environment
 
-.PHONY: help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
+.PHONY: setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
 
 # Variables
 COMPOSE_FILE := docker-compose.yml
@@ -225,17 +225,36 @@ test-backend-docker: ## Run backend tests against the deployed image's dependenc
 	@docker run --rm -v $(PWD)/backend:/src:ro -w /src --entrypoint sh $(BACKEND_IMAGE) \
 		-c 'pip install --user -q -r requirements-dev.txt && python -m pytest -p no:cacheprovider'
 
-test-frontend: ## Run frontend tests
-	@echo "$(COLOR_GREEN)Running frontend tests...$(COLOR_RESET)"
-	@$(DOCKER_COMPOSE) -f $(COMPOSE_FILE) exec frontend npm test
+# note: there is no frontend unit-test suite and package.json has no `test` script, so this
+# target used to invoke a command that could not succeed. The checks that DO exist are a
+# typecheck, a lint and the structural submit-guard check; the behavioural coverage lives in the
+# out-of-tree Playwright harness. CONTRIBUTING.md points here, so it has to be honest.
+test-frontend: ## Run the frontend checks that exist (typecheck + structural guards)
+	@echo "$(COLOR_GREEN)Typechecking frontend...$(COLOR_RESET)"
+	@cd frontend && npx tsc --noEmit
+	@echo "$(COLOR_GREEN)Checking submit guards...$(COLOR_RESET)"
+	@node qa/check-submit-guards.mjs
+	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
 
+setup-hooks: ## Point git at the repo's hooks (run once per clone)
+	@git config core.hooksPath .githooks
+	@echo "$(COLOR_GREEN)✓ core.hooksPath set to .githooks$(COLOR_RESET)"
+	@echo "  The commit-msg hook needs frontend deps: cd frontend && npm install"
+
+# note: ruff, not pylint. There is no pylintrc anywhere in this repo, and unconfigured pylint on
+# 42k lines of FastAPI and SQLAlchemy emits thousands of missing-docstring and
+# too-many-arguments findings, so it could never be green without a curated disable-list. ruff's
+# E9,F set is bug-shaped and is green today. Scope and rationale: backend/ruff.toml.
 lint-backend: ## Lint backend code
 	@echo "$(COLOR_GREEN)Linting backend code...$(COLOR_RESET)"
-	@cd backend && pylint app/
+	@cd backend && ruff check app/
 
+# note: the local eslint binary, not `next lint`. The latter is deprecated in Next 15 and passes
+# eslintrc-era options that a newer ESLint rejects, so it fails for reasons unrelated to the
+# code. Scope and rationale: frontend/.eslintrc.README.md.
 lint-frontend: ## Lint frontend code
 	@echo "$(COLOR_GREEN)Linting frontend code...$(COLOR_RESET)"
-	@cd frontend && npm run lint
+	@cd frontend && ./node_modules/.bin/eslint src --ext .ts,.tsx
 
 ##@ Cleanup Commands
 

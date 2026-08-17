@@ -4,7 +4,7 @@ Provides endpoints for managing LXD networks.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Literal
 import logging
 import asyncio
 import re
@@ -281,7 +281,7 @@ async def list_networks(
         
         # Cache as dict for 120 seconds
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug(f"Cached networks list for 120 seconds")
+        logger.debug("Cached networks list for 120 seconds")
         
         return response
     except Exception as e:

@@ -4,7 +4,7 @@ Provides endpoints for listing and creating projects.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Optional, Tuple
+from typing import List, Optional
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor

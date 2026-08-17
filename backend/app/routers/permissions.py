@@ -13,7 +13,7 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode, require_admin, require_partner
+from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.org_scope import org_scope_dependency
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
@@ -581,7 +581,12 @@ async def update_group(
                                 if attempt < max_verify_attempts - 1:
                                     await asyncio.sleep(0.5)
                                     # Retry the PATCH
-                                    retry_response = client.api.auth.groups[group_name].patch(json=patch_data, timeout=(5, 30))
+                                    # note: mirrors the original call above. This line used to read
+                                    # `.patch(json=patch_data, ...)`, and patch_data does not exist
+                                    # in this scope, so the retry raised NameError the moment a
+                                    # permission failed to verify. Nothing exercised it, which is
+                                    # why it survived.
+                                    retry_response = client.api.auth.groups[group_name].put(json=put_data, timeout=(5, 30))
                                     if retry_response.status_code not in [200, 202]:
                                         logger.error(f"Retry PATCH failed: {retry_response.json().get('error', 'Unknown error')}")
                                     await asyncio.sleep(0.5)
@@ -817,7 +822,7 @@ async def remove_identity_from_group(
         if len(current_groups) == 1:
             raise HTTPException(
                 status_code=400, 
-                detail=f"Cannot remove identity from its only group. Identity must belong to at least one group."
+                detail="Cannot remove identity from its only group. Identity must belong to at least one group."
             )
         
         # Remove group from identity's groups list

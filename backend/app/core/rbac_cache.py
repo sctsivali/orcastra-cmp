@@ -10,11 +10,9 @@ Uses the existing CacheManager (Redis + LRU memory).
 """
 
 import logging
-import time
 from typing import Optional
 
 from app.core.cache import get_cache_manager
-from app.core.auth import AuthenticatedUser
 
 logger = logging.getLogger(__name__)
 

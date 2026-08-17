@@ -338,22 +338,26 @@ export function ConsoleWindow({
     }
   }, [isFullPage, loading, error, sessionCheckComplete, focusConsole]);
 
-  if (!consoleInstance) {
-    return null;
-  }
-
-  // Determine available tabs
+  // important: this must sit ABOVE the early return below. It used to be after it, so a render
+  // where consoleInstance was null skipped the hook entirely and the next render with an
+  // instance called one more hook than the previous one. React maps hook state by call order,
+  // so that either throws "Rendered more hooks than during the previous render" or silently
+  // hands this memo another hook's slot.
   const availableTabs = useMemo<ConsoleTab[]>(() => {
     const tabs: ConsoleTab[] = ["text"];
-    if (consoleInstance.capabilities?.graphicsConsole) {
+    if (consoleInstance?.capabilities?.graphicsConsole) {
       tabs.push("graphics");
     }
-    if (consoleInstance.capabilities?.isVM) {
+    if (consoleInstance?.capabilities?.isVM) {
       tabs.push("boot");
       tabs.push("iso");
     }
     return tabs;
-  }, [consoleInstance.capabilities]);
+  }, [consoleInstance?.capabilities]);
+
+  if (!consoleInstance) {
+    return null;
+  }
 
   // Get status badge
   const getStatusBadge = () => {

@@ -4,15 +4,13 @@ Provides endpoints for managing LXD profiles.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
-    LXDConnectionError,
-    LXDOperationError,
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
@@ -141,7 +139,7 @@ async def list_profiles(
         
         # Cache as dict for 120 seconds
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug(f"Cached profiles list for 120 seconds")
+        logger.debug("Cached profiles list for 120 seconds")
         
         return response
     except Exception as e:

@@ -10,14 +10,12 @@ Architecture:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
-import json
 import base64
 import ipaddress
 import socket

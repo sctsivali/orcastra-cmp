@@ -10,10 +10,10 @@ Tag Service
 
 import logging
 import re
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Tuple
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, func, and_, or_
+from sqlalchemy import select, delete, func, and_, or_
 from sqlalchemy.orm import selectinload
 
 from app.models.db_models import Tag, TagCategory, TagAssignment, UserTagVisibility

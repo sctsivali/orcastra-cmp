@@ -15,7 +15,6 @@ from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
 from pydantic import BaseModel, Field
-import json
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
@@ -37,7 +36,7 @@ from app.services.lxd.proxy import (
 )
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
+from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings

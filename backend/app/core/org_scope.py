@@ -18,7 +18,6 @@ from typing import Optional
 from fastapi import Depends, HTTPException, status
 from sqlalchemy import select, or_, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.database import get_db
@@ -494,7 +493,6 @@ async def get_tenant_acl_rules(
     from app.models.db_models import (
         OrganizationMember,
         TenantPolicyAssignment,
-        TenantAccessPolicy,
         TenantPolicyRule,
     )
 

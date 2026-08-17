@@ -12,10 +12,9 @@ cleanup task that runs alongside the collector.
 import logging
 import asyncio
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 
-from sqlalchemy import select, delete, func, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, delete, func
 
 from app.core.database import async_session_maker
 from app.models.db_models import MetricsSnapshot

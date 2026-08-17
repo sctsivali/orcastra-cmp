@@ -1,0 +1,124 @@
+# Continuous integration.
+#
+# The repo had no CI at all, so 104 backend tests including five structural guards ran only when
+# somebody remembered. Every job here is green on the commit that introduced this file, which is
+# the point: a gate that starts red is a gate people learn to skip.
+#
+# What is deliberately NOT here, because it needs the dev VM and cannot work on a hosted runner:
+# make test-backend-docker (inspects a running container), make test-frontend (calls an npm
+# script that does not exist), and the Playwright harness in /root/qa-orcastra, which drives real
+# Authentik SSO against a Tailscale address.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'          # matches backend/Dockerfile
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements-dev.txt
+
+      # E9 and F only: syntax errors, undefined names, unresolved imports, locals used before
+      # assignment. See backend/ruff.toml for why pylint is not used.
+      - name: Lint
+        working-directory: backend
+        run: ruff check app/
+
+      # The suite is hermetic. Proven by running it with DATABASE_URL and REDIS_URL pointed at a
+      # closed port: same 104 passed, same runtime. No service containers needed.
+      - name: Tests
+        working-directory: backend
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend types, lint and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'              # matches frontend/Dockerfile
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      # The local binary, not `next lint`: that is deprecated in Next 15 and passes eslintrc-era
+      # options a newer ESLint rejects, so it fails for reasons unrelated to the code.
+      - name: Lint
+        working-directory: frontend
+        run: ./node_modules/.bin/eslint src --ext .ts,.tsx
+
+      # Load-bearing rather than ceremonial: two routes are split behind Suspense precisely
+      # because useSearchParams breaks prerendering without it, and only the build catches that.
+      - name: Build
+        working-directory: frontend
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: npm run build
+
+  guards:
+    name: Structural guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # Pure filesystem AST walk over frontend/src, no install needed. Catches a mutation form
+      # shipping without a synchronous double-submit guard.
+      - name: Submit guards
+        run: node qa/check-submit-guards.mjs .
+
+  commit-format:
+    name: Conventional commits
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      # Mirrors .githooks/commit-msg so CI enforces what the local hook does. Merge commits are
+      # ignored by @commitlint/config-conventional's own defaults.
+      - name: Lint commit messages
+        working-directory: frontend
+        run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}

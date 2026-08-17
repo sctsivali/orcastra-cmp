@@ -5,7 +5,7 @@ Handles certificate lifecycle management, renewal, and monitoring.
 
 import logging
 import hashlib
-from typing import Optional, List
+from typing import Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, status, BackgroundTasks
 from cryptography import x509
@@ -22,13 +22,12 @@ from app.models.schemas import (
     CertificateWarning,
     SystemWarningsResponse,
     CertificateStatus,
-    ClusterStatus,
 )
 from app.core.config import get_settings
 from app.core.vault_client import get_vault_client, VaultClientError
-from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
-from app.core.dependencies import check_read_only_mode, require_admin, require_partner, AuthenticatedUser
-from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand, build_trust_add_command
+from app.services.lxd_cert_manager import LXDCertificateManager
+from app.core.dependencies import check_read_only_mode, require_partner
+from app.core.type_utils import build_trust_add_command
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 
 logger = logging.getLogger(__name__)
@@ -377,7 +376,7 @@ async def initiate_renewal(
         # Get cluster metadata
         metadata_path = f"{settings.vault_clusters_path}/{cluster_id}/metadata"
         metadata = cert_manager.vault.vault_read(metadata_path)
-        endpoint = metadata.get("endpoint", "")
+        _endpoint = metadata.get("endpoint", "")
         
         # Generate new certificate
         logger.info(f"Generating new certificate for {cluster_id} with TTL {request.ttl.value}")

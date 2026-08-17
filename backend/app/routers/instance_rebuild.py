@@ -37,7 +37,6 @@ from app.services.lxd_service import (
     LXDService,
     LXDOperationError,
     LXDConnectionError,
-    LXDSnapshotExistsError,
     get_lxd_service,
 )
 from app.routers.instances import _validate_image_server

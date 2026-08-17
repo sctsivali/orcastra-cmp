@@ -18,7 +18,6 @@ Endpoints:
 """
 
 import asyncio
-import json
 import logging
 from typing import Optional, List
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends
@@ -719,7 +718,7 @@ async def kill_all_sessions(
             running_ops = operations_data.get('running', [])
             
             for op in running_ops:
-                description = op.get('description', '')
+                _description = op.get('description', '')
                 op_class = op.get('class', '')
                 resources = op.get('resources', {})
                 instances = resources.get('instances', [])
@@ -1005,7 +1004,7 @@ class ConsoleProxy:
                                     if self._session:
                                         self._session.add_upload_bytes(len(message["bytes"]))
                                 except asyncio.TimeoutError:
-                                    logger.error(f"TIMEOUT sending to LXD data socket")
+                                    logger.error("TIMEOUT sending to LXD data socket")
                                     self._shutdown.set()
                                     break
                                 except Exception as send_err:

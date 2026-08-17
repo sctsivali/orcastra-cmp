@@ -12,11 +12,11 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select, distinct
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import AuthenticatedUser, require_admin, require_partner
+from app.core.dependencies import AuthenticatedUser, require_partner
 from app.core.rbac import Role, resolve_roles, get_highest_role
 from app.models.db_models import OrganizationMember, Organization
 from app.services.authentik_sync import get_authentik_sync

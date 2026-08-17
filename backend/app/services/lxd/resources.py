@@ -712,12 +712,12 @@ class ResourceManager:
                 successful_members = 0
                 
                 # Get current server name to identify which member we're connected to
-                current_server = environment.get("server_name", "")
+                _current_server = environment.get("server_name", "")
                 
                 # Iterate through each online member and aggregate resources
                 for member_data in online_members:
                     member_name = member_data.get("server_name", "unknown")
-                    member_url = member_data.get("url", "")
+                    _member_url = member_data.get("url", "")
                     
                     try:
                         # Query member-specific resources via cluster API
@@ -741,7 +741,7 @@ class ResourceManager:
                             # Extract GPU resources
                             gpu_info = member_resources.get("gpu", {})
                             gpu_cards_raw = gpu_info.get("cards", [])
-                            member_gpu_cards_total = len(gpu_cards_raw)
+                            _member_gpu_cards_total = len(gpu_cards_raw)
                             member_sys_mem = memory_info.get("total")
                             member_sys_product = (member_resources.get("system", {}) or {}).get("product")
                             

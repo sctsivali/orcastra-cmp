@@ -24,12 +24,11 @@ from app.models.schemas import (
 from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
-    LXDOperationError,
     get_lxd_service,
 )
 from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
-from app.core.dependencies import require_tenant, get_ws_user
+from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 from app.core.tenant_visibility import tenant_acl_active
 

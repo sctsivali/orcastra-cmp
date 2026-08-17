@@ -1,0 +1,6 @@
+.next/
+node_modules/
+public/
+next-env.d.ts
+# Pre-existing backup copies kept beside their sources. Not compiled, not shipped.
+*.bak-*

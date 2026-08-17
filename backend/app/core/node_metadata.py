@@ -4,7 +4,6 @@ Stores metadata in a JSON file.
 """
 
 import json
-import os
 import logging
 from typing import Dict, Optional
 from pathlib import Path

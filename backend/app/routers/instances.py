@@ -4,7 +4,7 @@ Provides endpoints for managing LXD instances (containers and VMs).
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List
+from typing import Optional
 from urllib.parse import urlparse
 import logging
 
@@ -16,7 +16,6 @@ from app.models.schemas import (
     VMActionRequest,
     VMActionResponse,
     VMStatus,
-    ErrorResponse,
     InstanceMetrics,
 )
 from app.services.lxd_service import (

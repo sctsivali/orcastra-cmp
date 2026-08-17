@@ -6,7 +6,6 @@ Logs all HTTP requests with structured fields for OpenSearch ingestion.
 import time
 import logging
 from datetime import datetime, timezone
-from typing import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request

@@ -4,7 +4,7 @@ Provides endpoints for managing LXD storage volumes.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -154,7 +154,7 @@ async def list_storage_volumes(
         
         # Cache as dict for 120 seconds
         cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug(f"Cached storage volumes list for 120 seconds")
+        logger.debug("Cached storage volumes list for 120 seconds")
         
         return response
     except Exception as e:

@@ -21,8 +21,8 @@ import logging
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency
-from app.services.tag_service import TagService, get_tag_service
-from app.services.lxd_service import get_lxd_service, LXDService, LXDConnectionError
+from app.services.tag_service import TagService
+from app.services.lxd_service import get_lxd_service
 from app.models.schemas import (
     # Tag schemas
     TagCreate, TagUpdate, TagResponse,
@@ -32,9 +32,7 @@ from app.models.schemas import (
     BulkTagAssignRequest, BulkTagAssignResponse,
     ResourceTagsResponse, TagGrouped,
     # User visibility
-    UserTagVisibilitySettings, UserTagVisibilityUpdate, UserTagVisibilityResponse,
-    # Common
-    ErrorResponse,
+    UserTagVisibilitySettings, UserTagVisibilityResponse,
 )
 
 logger = logging.getLogger(__name__)

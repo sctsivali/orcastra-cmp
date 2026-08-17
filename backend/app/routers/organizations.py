@@ -7,7 +7,7 @@ Scoped by RBAC: Admin sees all, Partner sees own, Tenant sees assigned.
 
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
@@ -17,7 +17,7 @@ from app.core.dependencies import (
     require_partner,
     require_tenant,
 )
-from app.core.rbac import Role, resolve_roles, get_highest_role
+from app.core.rbac import resolve_roles, get_highest_role
 from app.services.organization_service import OrganizationService
 from app.services.organization_preferences import (
     get_org_preferences_payload,

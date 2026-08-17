@@ -4,14 +4,13 @@ Provides endpoints for managing LXD network IP address allocations.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
     LXDService,
-    LXDConnectionError,
     get_lxd_service,
 )
 from pydantic import BaseModel, Field

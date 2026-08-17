@@ -512,7 +512,7 @@ class VaultClient:
         """
         start = time.perf_counter()
         try:
-            result = self.vault_read(f"pki_int/certs")
+            result = self.vault_read("pki_int/certs")
             certs = result.get("keys", [])
             duration = round((time.perf_counter() - start) * 1000, 2)
             _audit_vault_operation(

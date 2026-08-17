@@ -14,7 +14,7 @@ import logging
 import time
 from typing import Any, Callable, Dict, Optional
 
-from app.services.activity_logger import get_activity_logger, EventSeverity
+from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
 

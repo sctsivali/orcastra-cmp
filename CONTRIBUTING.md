@@ -50,14 +50,25 @@ make up
 make health
 ```
 
-If your change touches backend/frontend behavior, also run:
+First time in a fresh clone, point git at the repo's hooks so commit messages are validated
+locally the same way CI validates them:
 
 ```bash
-make test-backend
-make test-frontend
-make lint-backend
-make lint-frontend
+make setup-hooks
+cd frontend && npm install   # the commit-msg hook runs commitlint from here
 ```
+
+If your change touches backend or frontend behavior, also run:
+
+```bash
+make test-backend     # pytest, needs no database or cluster
+make lint-backend     # ruff, bug-shaped rules only
+make test-frontend    # typecheck + structural guards
+make lint-frontend    # eslint
+```
+
+These are the same gates CI runs (`.github/workflows/ci.yml`), so a green local run means a
+green pipeline.
 
 ## Security Reports
 

@@ -355,7 +355,7 @@ async def create_key(
                 }
             ]
             description = f"Admin group for {request.name} with full server access"
-            logger.info(f"Creating admin permissions: server-level admin access")
+            logger.info("Creating admin permissions: server-level admin access")
         else:
             # Standard gets project-level access with operator entitlement
             project_url = f"/1.0/projects/{request.project}"
@@ -426,7 +426,7 @@ async def create_key(
             if identity_id not in current_identities['tls']:
                 current_identities['tls'].append(identity_id)
             
-            logger.info(f"Trying alternative approach: PATCH identity to add group membership")
+            logger.info("Trying alternative approach: PATCH identity to add group membership")
             
             # Alternative approach: Instead of adding identity to group,
             # add group to identity's groups list
@@ -470,9 +470,9 @@ async def create_key(
                 
                 # Check if identity is actually in the group
                 if 'tls' not in final_identities or identity_id not in final_identities.get('tls', []):
-                    raise Exception(f"Identity verification failed: identity not found in group after PATCH")
+                    raise Exception("Identity verification failed: identity not found in group after PATCH")
                 if len(final_permissions) == 0:
-                    raise Exception(f"Permission verification failed: no permissions in group after creation")
+                    raise Exception("Permission verification failed: no permissions in group after creation")
             
         except Exception as e:
             logger.error(f"Failed to add identity to group: {e}")
@@ -837,7 +837,7 @@ async def cleanup_orphaned_groups(
                 groups_data = groups_response.json().get('metadata', [])
                 
                 # Track statistics
-                total_groups = len(groups_data)
+                _total_groups = len(groups_data)
                 orcastra_groups = 0
                 skipped_groups = 0
                 

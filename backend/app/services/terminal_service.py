@@ -3,7 +3,6 @@ Terminal Service - LXD Exec WebSocket Handler.
 Provides interactive terminal access to LXD instances via WebSocket.
 """
 
-import asyncio
 import json
 import logging
 import ssl

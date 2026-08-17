@@ -56,6 +56,10 @@ export function SearchableSelect({
   const [open, setOpen] = React.useState(false);
   const selected = options.find((o) => o.value === value);
   const showSearch = options.length > searchThreshold;
+  // A combobox must name the listbox it controls, otherwise a screen reader announces the
+  // trigger with no relationship to the options. Radix renders the list in a portal, so the two
+  // are not adjacent in the DOM and only an explicit id ties them together.
+  const listboxId = React.useId();
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -64,6 +68,7 @@ export function SearchableSelect({
           type="button"
           role="combobox"
           aria-expanded={open}
+          aria-controls={listboxId}
           disabled={disabled}
           className={cn(
             "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
@@ -90,7 +95,7 @@ export function SearchableSelect({
       >
         <Command>
           {showSearch && <CommandInput placeholder={searchPlaceholder} />}
-          <CommandList>
+          <CommandList id={listboxId}>
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
               {options.map((opt) => (

@@ -6,7 +6,6 @@ Handles certificate generation via Vault PKI and LXD trust registration.
 import logging
 import os
 import tempfile
-import re
 from typing import Dict, Any, Optional, Tuple
 import requests
 from pylxd import Client

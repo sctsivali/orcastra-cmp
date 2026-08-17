@@ -13,16 +13,14 @@ All endpoints require OPENSEARCH_ARCHIVE_ENABLED=true.
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from datetime import datetime
 import logging
 
-from app.core.dependencies import check_read_only_mode, require_admin, require_tenant, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_admin
 from app.services.archive_service import (
     ArchiveService,
     ArchiveServiceError,
     get_archive_service,
 )
-from app.core.config import get_settings
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)

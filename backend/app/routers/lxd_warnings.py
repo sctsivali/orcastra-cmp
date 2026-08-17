@@ -4,7 +4,7 @@ Provides endpoints for viewing LXD warnings.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -334,7 +334,10 @@ async def get_all_system_warnings(
                         # Check node connectivity
                         connected, error_msg = cert_manager.verify_connection(cluster_id)
                         if not connected:
-                            from datetime import datetime
+                            # note: the import that used to sit here made `datetime` a local for
+                            # the entire function, so the earlier `datetime.now(timezone.utc)` in
+                            # the certificate-expiry branch raised UnboundLocalError whenever it
+                            # ran. The name is already imported at the top of this function.
                             node_warnings.append({
                                 "cluster_id": cluster_id,
                                 "display_name": display_name,
