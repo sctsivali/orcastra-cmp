@@ -137,7 +137,25 @@ function InstancesContent() {
   const router = useRouter();
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
-  const { hasPermission } = useTenantAccess();
+  // permsLoading matters for the labels below: until the access rules arrive, hasPermission
+  // answers false for everyone, so an operator briefly sees every action disabled and tooltipped
+  // "No permission" when the real answer is "not known yet". The buttons stay disabled, which is
+  // the safe direction, but the label must not claim a denial that has not been established.
+  const { hasPermission, isLoading: permsLoading } = useTenantAccess();
+
+  const permissionTitle = (
+    host: string,
+    project: string,
+    name: string,
+    permission: Parameters<typeof hasPermission>[3],
+    allowed: string,
+    denied: string,
+  ) =>
+    permsLoading
+      ? "Checking permissions..."
+      : hasPermission(host, project, name, permission)
+        ? allowed
+        : denied;
   const { hasRole } = usePermissions();
   const canCreateInstance = hasRole(Role.PARTNER);
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
@@ -517,7 +535,7 @@ function InstancesContent() {
                             handleAction(instance.name, instance.host, "start")
                           }
                           disabled={actionLoading === `${instance.name}-start` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                          title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Start instance"}
+                          title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Start instance", "No operate permission")}
                         >
                           <Play className="h-4 w-4" />
                         </Button>
@@ -531,7 +549,7 @@ function InstancesContent() {
                               handleAction(instance.name, instance.host, "stop")
                             }
                             disabled={actionLoading === `${instance.name}-stop` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Stop instance"}
+                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Stop instance", "No operate permission")}
                           >
                             <Square className="h-4 w-4" />
                           </Button>
@@ -542,7 +560,7 @@ function InstancesContent() {
                               handleAction(instance.name, instance.host, "restart")
                             }
                             disabled={actionLoading === `${instance.name}-restart` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Restart instance"}
+                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Restart instance", "No operate permission")}
                           >
                             <RotateCw className="h-4 w-4" />
                           </Button>
@@ -557,7 +575,7 @@ function InstancesContent() {
                               });
                             }}
                             disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
-                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "console") ? "No console permission" : "Open Terminal"}
+                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Terminal", "No console permission")}
                           >
                             <Terminal className="h-4 w-4" />
                           </Button>
@@ -573,7 +591,7 @@ function InstancesContent() {
                               });
                             }}
                             disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
-                            title={!hasPermission(instance.host, instance.project || "default", instance.name, "console") ? "No console permission" : "Open Console"}
+                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Console", "No console permission")}
                           >
                             <Monitor className="h-4 w-4" />
                           </Button>
@@ -589,7 +607,7 @@ function InstancesContent() {
                             !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
                           }
                           aria-label={`Rebuild instance ${instance.name}`}
-                          title={!hasPermission(instance.host, instance.project || "default", instance.name, "operate") ? "No operate permission" : isReadOnly ? "Action disabled in read-only mode" : "Rebuild instance (reinstall root disk)"}
+                          title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Rebuild instance (reinstall root disk)", "No operate permission")}
                         >
                           <RefreshCw className="h-4 w-4" />
                         </Button>
