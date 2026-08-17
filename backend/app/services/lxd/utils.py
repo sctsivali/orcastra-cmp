@@ -4,7 +4,7 @@ Includes helpers for parsing status, extracting IPs, and finding instances.
 """
 
 import logging
-from typing import List, Tuple, Optional
+from typing import Any, List, Tuple, Optional
 import pylxd
 from pylxd import exceptions as pylxd_exceptions
 
@@ -249,3 +249,37 @@ class StateWrapper:
         self.pid = data.get('pid', 0)
         self.status = data.get('status', 'Unknown')
         self.started_at = data.get('started_at')
+
+
+def jsonable_lxd(value: Any) -> Any:
+    """Recursively convert a pylxd model into something FastAPI can serialise.
+
+    important: pylxd returns dict SUBCLASSES (``model.AttributeDict``) and slot-based objects.
+    Pydantic's serialiser does not recognise either, and the failure happens AFTER the handler
+    returns, while the response is being rendered, so the handler's own try/except never sees
+    it. The caller gets a bare 500 with `PydanticSerializationError: Unable to serialize unknown
+    type` in the log and nothing useful in the body.
+
+    Found live on `GET /networks/{name}/state`, which returned `pylxd.models.network.NetworkState`
+    straight out of `network.state()`. `routers/storage_pools.py` already carries a
+    single-purpose version of this for `StorageResources`, so this is the shared form.
+    """
+    if isinstance(value, dict):
+        return {k: jsonable_lxd(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [jsonable_lxd(v) for v in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    # Slot-based pylxd models expose their fields through marshall() or __slots__.
+    marshall = getattr(value, "marshall", None)
+    if callable(marshall):
+        try:
+            marshalled = marshall()
+            if marshalled:
+                return jsonable_lxd(marshalled)
+        except Exception:  # noqa: BLE001 - fall through to the slot walk below
+            pass
+    slots = getattr(type(value), "__slots__", None)
+    if slots:
+        return {s: jsonable_lxd(getattr(value, s, None)) for s in slots if not s.startswith("_")}
+    return str(value)

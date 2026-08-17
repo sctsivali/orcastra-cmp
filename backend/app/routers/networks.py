@@ -15,6 +15,7 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
+from app.services.lxd.utils import jsonable_lxd
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
@@ -612,11 +613,13 @@ async def get_network_state(
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this network")
 
-        state = network.state()
-
+        # jsonable_lxd, not the raw object: network.state() returns a pylxd AttributeDict that
+        # pydantic cannot serialise, and the failure happens while rendering the response, after
+        # this handler has returned, so the except blocks below never see it. The caller got a
+        # bare 500 on a perfectly healthy cluster.
         return {
             "name": network_name,
-            "state": state
+            "state": jsonable_lxd(network.state()),
         }
     except HTTPException:
         raise
