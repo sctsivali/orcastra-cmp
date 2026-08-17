@@ -64,6 +64,7 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { formatDate } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { copyText } from "@/lib/clipboard";
 
 const statusConfig = {
   [CertificateStatus.VALID]: {
@@ -268,32 +269,16 @@ export default function CertificatesPage() {
   };
 
   const copyToClipboard = async (text: string, label: string) => {
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        // Fallback for non-secure contexts
-        const textarea = document.createElement("textarea");
-        textarea.value = text;
-        textarea.style.position = "absolute";
-        textarea.style.left = "-9999px";
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
-      toast({
-        title: "Copied",
-        description: `${label} copied to clipboard`,
-      });
-    } catch (error) {
-      console.error("Failed to copy:", error);
-      toast({
-        title: "Failed to copy",
-        description: "Please copy manually",
-        variant: "destructive",
-      });
-    }
+    const ok = await copyText(text);
+    toast(
+      ok
+        ? { title: "Copied", description: `${label} copied to clipboard` }
+        : {
+            title: "Failed to copy",
+            description: "Please copy manually",
+            variant: "destructive",
+          },
+    );
   };
 
   if (isLoading) {

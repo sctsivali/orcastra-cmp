@@ -113,19 +113,18 @@ function readPersonalizationCookie(): PersonalizationSettings | null {
 
 /**
  * Build headers for API requests
+ *
+ * important: the user identity is NOT sent here. The backend derives it from the
+ * validated bearer token. It used to trust X-User-ID, which let any authenticated
+ * caller read or overwrite another user's preferences by changing one header.
+ * The parameters are kept so call sites stay unchanged and are deliberately unused.
  */
-function buildHeaders(userId?: string, userEmail?: string, accessToken?: string): Record<string, string> {
+function buildHeaders(_userId?: string, _userEmail?: string, accessToken?: string): Record<string, string> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
   if (accessToken) {
     headers["Authorization"] = `Bearer ${accessToken}`;
-  }
-  if (userId) {
-    headers["X-User-ID"] = userId;
-  }
-  if (userEmail) {
-    headers["X-User-Email"] = userEmail;
   }
   return headers;
 }

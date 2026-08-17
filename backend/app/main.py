@@ -75,13 +75,13 @@ async def lifespan(app: FastAPI):
         except Exception as jwks_err:
             logger.warning(f"JWKS pre-warm failed (will lazy-load on first request): {jwks_err}")
     
-    # Initialize PostgreSQL database
+    # Verify PostgreSQL is reachable and Alembic-managed (migrations run in the entrypoint)
     try:
         from app.core.database import init_db
         await init_db()
-        logger.info("PostgreSQL database initialized")
+        logger.info("PostgreSQL database ready")
     except Exception as db_err:
-        logger.warning(f"Could not initialize database: {db_err}")
+        logger.warning(f"Could not verify database schema: {db_err}")
     
     # Initialize LXD service and check connections
     try:

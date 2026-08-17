@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
+import { copyText } from "@/lib/clipboard";
 
 interface ClipboardEntry {
   id: string;
@@ -171,17 +172,17 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
 
   // Copy entry text to system clipboard
   const handleCopy = useCallback(async (entry: ClipboardEntry) => {
-    try {
-      await navigator.clipboard.writeText(entry.text);
-      setCopiedId(entry.id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch (e) {
+    const ok = await copyText(entry.text);
+    if (!ok) {
       toast({
         title: "Copy failed",
         description: "Unable to copy to clipboard",
         variant: "destructive",
       });
+      return;
     }
+    setCopiedId(entry.id);
+    setTimeout(() => setCopiedId(null), 2000);
   }, []);
 
   // Insert selected entry into console
