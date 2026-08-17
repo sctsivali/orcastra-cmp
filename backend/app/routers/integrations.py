@@ -16,6 +16,7 @@ from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
 from pydantic import BaseModel, Field
 import json
+import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd import health
@@ -2066,7 +2067,13 @@ async def raw_proxy(
             # by the generic handler below.
             raise
         except Exception as api_error:
-            health.record_failure(request.cluster_id, str(api_error))
+            # important: the breaker tracks REACHABILITY, so only a transport failure may trip
+            # it. It used to trip on any exception, which meant an LXD 4xx, a decode error or a
+            # bug in our own response handling marked the cluster dead for 60s. That now costs
+            # more than it did: connection.get_client consults the same breaker, so a wrongly
+            # tripped cluster disappears from the dashboard's own read paths too.
+            if isinstance(api_error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+                health.record_failure(request.cluster_id, str(api_error))
             logger.error(f"LXD API error: {api_error}")
             return RawProxyResponse(
                 status_code=500,

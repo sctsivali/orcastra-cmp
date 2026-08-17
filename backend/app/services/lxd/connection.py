@@ -16,6 +16,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from app.core.config import get_settings
+from . import health
 from .exceptions import LXDConnectionError
 
 logger = logging.getLogger(__name__)
@@ -255,11 +256,31 @@ class LXDConnectionManager:
         endpoint: str,
         cert_content: str,
         key_content: str,
-        verify: bool = False
-    ) -> pylxd.Client:
+        verify: bool = False,
+        force: bool = False,
+    ) -> Optional[pylxd.Client]:
         """
         Create LXD client connection using certificate content from Vault.
+
+        Returns None when the cluster is currently tripped in the breaker, unless ``force``.
+
+        important: this is the second door into "connect me to this cluster", and it is the
+        expensive one (TLS handshake plus a verifying probe, and its callers usually paid a
+        Vault round trip to get here). Gating only get_client made things worse, not better:
+        callers fall back to this path when get_client returns None, so a fast None simply
+        routed every request into the costlier route. Measured, that took /health from 10.3s
+        to 20.1s. Both doors have to be gated or neither is.
+
+        ``force`` is for the flows that must reach a cluster the breaker considers dead:
+        registration, auth checks and certificate rotation. Those are the operations that fix
+        a broken cluster, so refusing them would make the breaker self-sealing.
         """
+        if not force and health.is_tripped(cluster_id):
+            logger.debug(
+                "Skipping connect to %s: recently unreachable (%s)",
+                cluster_id, health.get_reason(cluster_id),
+            )
+            return None
         try:
             # Store FULL connection info in memory (for auto-reconnect)
             self._connection_info[cluster_id] = {
@@ -298,6 +319,7 @@ class LXDConnectionManager:
             # Cache the client
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
+            health.clear(cluster_id)
             logger.info(f"Connected to cluster {cluster_id} using Vault certificate")
 
             # audit: connection established
@@ -317,11 +339,16 @@ class LXDConnectionManager:
             return client
                     
         except LXDConnectionError:
+            # Raised above for an untrusted certificate, which is a real reachability failure:
+            # the peer answered and refused us, and it will keep refusing until someone rotates
+            # the cert. Recording it is what stops every later request paying the handshake.
+            health.record_failure(cluster_id, "certificate not trusted")
             raise
         except Exception as e:
             self._cleanup_temp_cert_files(cluster_id)
             if cluster_id in self._connection_info:
                 del self._connection_info[cluster_id]
+            health.record_failure(cluster_id, f"connect failed: {type(e).__name__}")
             logger.error(f"Failed to connect to cluster {cluster_id}: {e}")
             raise LXDConnectionError(f"Cannot connect to {cluster_id}: {str(e)}")
     
@@ -334,12 +361,27 @@ class LXDConnectionManager:
         - If validation fails, attempt auto-reconnect using stored credentials
         - NO TTL-based refresh (connections persist indefinitely while valid)
 
-        Returns None if the cluster is not in the current user's org scope.
+        Returns None if the cluster is not in the current user's org scope, or if the cluster
+        recently failed to connect.
         """
         # org-scope filter: deny access to clusters outside user's org
         from app.core.org_scope import get_current_allowed_clusters
         allowed = get_current_allowed_clusters()
         if allowed is not None and cluster_id not in allowed:
+            return None
+
+        # important: the breaker belongs HERE, at the one chokepoint every caller funnels
+        # through, not at individual call sites. This method is not a lookup: it revalidates
+        # with a live request and may rebuild the client, which costs seconds against an
+        # unreachable peer. Most callers are `async def` handlers that await it inline, so
+        # without this each request to a dead cluster parks a whole event loop. Measured on a
+        # fleet with one unreachable cluster, 12 concurrent requests pushed /health from 4ms
+        # to 10.3s, past the 5s container healthcheck timeout. Returning None early is already
+        # a contract every caller handles, so this needs no change at any of them.
+        if health.is_tripped(cluster_id):
+            logger.debug(
+                "Skipping %s: recently unreachable (%s)", cluster_id, health.get_reason(cluster_id)
+            )
             return None
 
         if cluster_id in self._clients:
@@ -401,6 +443,7 @@ class LXDConnectionManager:
         """
         if cluster_id not in self._connection_info:
             logger.debug(f"No stored connection info for {cluster_id}, cannot auto-reconnect")
+            health.record_failure(cluster_id, "no stored connection info")
             return None
         
         try:
@@ -428,10 +471,12 @@ class LXDConnectionManager:
                 if data.get("metadata", {}).get("auth") != "trusted":
                     logger.warning(f"Reconnect failed: cert not trusted by {cluster_id}")
                     self._cleanup_temp_cert_files(cluster_id)
+                    health.record_failure(cluster_id, "certificate not trusted")
                     return None
             
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
+            health.clear(cluster_id)
             logger.info(f"Auto-reconnected to {cluster_id}")
 
             # audit auto-reconnect events
@@ -453,6 +498,7 @@ class LXDConnectionManager:
         except Exception as e:
             logger.warning(f"Auto-reconnect to {cluster_id} failed: {e}")
             self._cleanup_temp_cert_files(cluster_id)
+            health.record_failure(cluster_id, f"reconnect failed: {type(e).__name__}")
 
             # audit failed reconnect
             try:

@@ -581,7 +581,8 @@ async def verify_renewal(
                     endpoint=endpoint,
                     cert_content=pending_data["client.crt"],
                     key_content=pending_data["client.key"],
-                    verify=False
+                    verify=False,
+                    force=True,
                 )
             except Exception as e:
                 logger.warning(f"Failed to update connection manager: {e}")

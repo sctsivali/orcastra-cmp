@@ -12,6 +12,7 @@ import requests
 from pylxd import Client
 
 from app.core.vault_client import VaultClient, VaultClientError
+from app.services.lxd import health
 from app.services.lxd.connection import DEFAULT_LXD_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -222,13 +223,31 @@ class LXDCertificateManager:
             logger.error(f"Failed to retrieve data from Vault: {e}")
             raise LXDCertManagerError(f"Vault data retrieval failed: {str(e)}")
     
-    def connect_with_vault_cert(self, cluster_id: str, connection_manager=None) -> Client:
+    def connect_with_vault_cert(
+        self, cluster_id: str, connection_manager=None, force: bool = False
+    ) -> Optional[Client]:
         """
         Connect to LXD using certificate from Vault.
         
         If connection_manager is provided, delegates to it for proper
         connection pooling and lifecycle management. Otherwise creates standalone client.
+
+        Returns None when the cluster is currently tripped in the breaker, unless ``force``.
+
+        important: checked here, before the Vault reads, because those are two HTTP round
+        trips paid before the LXD handshake even starts. Callers reach this path when
+        get_client already returned None, so without this gate a dead cluster costs MORE per
+        request after the breaker trips, not less.
+
+        ``force`` is for registration, auth checks and certificate rotation: the operations
+        that repair a broken cluster, which would be unreachable if the breaker sealed them.
         """
+        if not force and health.is_tripped(cluster_id):
+            logger.debug(
+                "Skipping Vault connect to %s: recently unreachable (%s)",
+                cluster_id, health.get_reason(cluster_id),
+            )
+            return None
         try:
             # Get metadata and certificate from Vault
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
@@ -245,7 +264,8 @@ class LXDCertificateManager:
                     endpoint=endpoint,
                     cert_content=cert_content,
                     key_content=key_content,
-                    verify=False
+                    verify=False,
+                    force=force,
                 )
             
             # Fallback: Create standalone client (for one-off operations)

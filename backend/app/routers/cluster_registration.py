@@ -357,7 +357,7 @@ async def check_cluster_authentication(
         if connected:
             # Get server info
             try:
-                client = cert_manager.connect_with_vault_cert(cluster_id)
+                client = cert_manager.connect_with_vault_cert(cluster_id, force=True)
                 server_info = client.api.get().json()
                 
                 # Re-detect and update cluster type from authenticated live connection
@@ -422,7 +422,8 @@ async def check_cluster_authentication(
                         endpoint=metadata["endpoint"],
                         cert_content=cert_data["client.crt"],
                         key_content=cert_data["client.key"],
-                        verify=False
+                        verify=False,
+                        force=True,
                     )
                     logger.info(f"Added authenticated cluster {cluster_id} to LXD service connection manager")
                 except Exception as conn_err:
@@ -533,7 +534,8 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
                     endpoint=info["metadata"]["endpoint"],
                     cert_content=cert_data["client.crt"],
                     key_content=cert_data["client.key"],
-                    verify=False
+                    verify=False,
+                    force=True,
                 )
                 connected = True
                 logger.info(f"Reconnected cluster {cluster_id} to connection pool from Vault certs")
