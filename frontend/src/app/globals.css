@@ -385,9 +385,25 @@ tbody tr {
 
 /* Fix for desktop-site mode on mobile - ensure fixed elements work properly */
 @media screen {
-  /* Ensure overlays and modals are viewport-relative */
+  /* Ensure overlays and modals are viewport-relative.
+   *
+   * important: the :not() is load-bearing. Radix gives role="dialog" to Popover.Content as well
+   * as Dialog.Content, and forcing position:fixed on a popover takes it out of its popper
+   * wrapper's flow. The wrapper then measures 0x0, so floating-ui positions every popover as
+   * though its content had no height: with side="top" the list is placed at
+   * anchorTop - sideOffset and draws downward off the bottom of the screen, leaving every option
+   * after the first unclickable, with nothing logged. Measured on a node picker at a 620px
+   * viewport: wrapper 0x0 at y=576 while the content was 511x106, so options sat at y=613 and
+   * y=645, outside the viewport and unreachable by any scroll because the wrapper is fixed.
+   * @media screen matches every screen, so this was never mobile-only.
+   *
+   * Real modals still need the override, so the exclusion is by marker class rather than by
+   * dropping the role: ui/dialog.tsx and ui/alert-dialog.tsx carry their own positioning, but
+   * a caller passing conflicting classes through cn() can strip it, and this rule is the
+   * backstop that keeps a modal on screen when that happens.
+   */
   [data-radix-portal],
-  [role="dialog"],
+  [role="dialog"]:not(.orcastra-popover-content),
   .fixed.inset-0 {
     position: fixed !important;
   }
