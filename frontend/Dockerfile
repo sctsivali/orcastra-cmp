@@ -54,6 +54,17 @@ RUN \
 FROM base AS runner
 WORKDIR /app
 
+# Provenance on the artifact, matching the backend image. Without it `docker image inspect` on a
+# running frontend says nothing about which commit produced it, which is exactly the question
+# that matters when a deployed image and the working tree disagree.
+ARG APP_VERSION=latest
+ARG BUILD_COMMIT=""
+ARG BUILD_DATE=""
+LABEL org.opencontainers.image.title="orcastra-dashboard-frontend" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${BUILD_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 

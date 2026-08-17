@@ -131,6 +131,10 @@ services:
         - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
         - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
         - APP_VERSION=${APP_VERSION:-latest}
+        # Provenance, same as the backend: the version string is for humans, the commit
+        # identifies the code.
+        - BUILD_COMMIT=${BUILD_COMMIT:-}
+        - BUILD_DATE=${BUILD_DATE:-}
         - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
         - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
         # NOTE: AUTHENTIK_CLIENT_SECRET and NEXTAUTH_SECRET are injected at
