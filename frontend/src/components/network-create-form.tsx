@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -117,6 +117,12 @@ export function NetworkCreateForm() {
   const uplinkError =
     type === "ovn" && !uplink ? "Select an uplink network for the OVN network." : "";
 
+  // important: `submitting` is React state, so it only reaches `canSubmit` on the next render.
+  // Two clicks inside one tick both pass the disabled check and both fire a create, which is
+  // two networks on the cluster. The ref is claimed synchronously, before any await, so the
+  // second click has something to lose against. Same guard as instance-create-form.tsx.
+  const submitInFlightRef = useRef(false);
+
   const canSubmit =
     !!node &&
     nameValid &&
@@ -127,6 +133,8 @@ export function NetworkCreateForm() {
     !isReadOnly;
 
   const submit = async () => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     setError(null);
     setSubmitting(true);
     try {
@@ -151,6 +159,7 @@ export function NetworkCreateForm() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create network");
     } finally {
+      submitInFlightRef.current = false;
       setSubmitting(false);
     }
   };
