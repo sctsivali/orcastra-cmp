@@ -410,6 +410,29 @@ async def initiate_renewal(
                     logger.info(f"Auto-renewal successful for {cluster_id}")
             except Exception as e:
                 logger.warning(f"Auto-renewal failed for {cluster_id}: {e}")
+
+            # important: a certificate can be valid and still untrusted, which is the state every
+            # cluster lands in after its trust entry is replaced or dropped on the LXD side. The
+            # branch above authenticates with the very certificate the cluster is rejecting, so it
+            # can never succeed there, and the trust password used to be unreachable because it
+            # was only consulted when the certificate had EXPIRED. That left the dashboard
+            # structurally unable to repair the one fault it is most likely to meet.
+            if not auto_renewed and request.trust_password:
+                try:
+                    logger.info(f"Existing-cert renewal did not take for {cluster_id}; falling back to the trust password")
+                    success = cert_manager.add_trust_with_password(
+                        cluster_id=cluster_id,
+                        new_cert_pem=new_cert_data["cert"],
+                        cert_name=identity_name,
+                        trust_password=request.trust_password
+                    )
+                    if success:
+                        auto_renewed = True
+                        logger.info(f"Renewal with password successful for {cluster_id}")
+                except Exception as e:
+                    logger.warning(f"Renewal with password failed for {cluster_id}: {e}")
+
+            if not auto_renewed:
                 requires_manual = True
         else:
             # Current cert is expired

@@ -554,20 +554,24 @@ export default function CertificatesPage() {
                 </Select>
               </div>
 
-              {renewalModal.certificate?.status === CertificateStatus.EXPIRED && (
-                <div className="space-y-2">
-                  <Label>Trust Password (Optional)</Label>
-                  <Input
-                    type="password"
-                    placeholder="Enter cluster trust password"
-                    value={trustPassword}
-                    onChange={(e) => setTrustPassword(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    If not provided, you'll need to add trust manually via CLI.
-                  </p>
-                </div>
-              )}
+              {/* Offered for every renewal, not only an expired certificate. A certificate can be
+                  valid and still rejected by the cluster, which is what happens once its trust
+                  entry is replaced or dropped on the LXD side. In that state the backend cannot
+                  authenticate with the existing certificate, so the trust password is the only
+                  way to re-add trust without shell access to the host. */}
+              <div className="space-y-2">
+                <Label>Trust Password (Optional)</Label>
+                <Input
+                  type="password"
+                  placeholder="Enter cluster trust password"
+                  value={trustPassword}
+                  onChange={(e) => setTrustPassword(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Used when the cluster no longer trusts the current certificate. If not
+                  provided, you will need to add trust manually via CLI.
+                </p>
+              </div>
 
               <DialogFooter>
                 <Button

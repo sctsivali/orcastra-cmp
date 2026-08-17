@@ -159,69 +159,6 @@ class LXDCertificateManager:
             logger.error(f"Failed to retrieve certificate for {cluster_id}: {e}")
             raise LXDCertManagerError(f"Certificate retrieval failed: {str(e)}")
     
-    def add_lxd_trust(
-        self,
-        cluster_id: str,
-        cert_name: Optional[str] = None,
-        projects: Optional[list] = None,
-        restricted: bool = False
-    ) -> bool:
-        """
-        Register certificate with LXD trust store.
-        """
-        if cert_name is None:
-            from datetime import datetime
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            cert_name = f"orcastra-{timestamp}"
-        
-        try:
-            # Get cluster metadata and secrets
-            metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
-            secrets = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/secrets")
-            cert_data = self.get_cluster_certificate(cluster_id)
-            
-            endpoint = metadata["endpoint"]
-            trust_password = secrets.get("trust_password")
-            certificate = cert_data["client.crt"]
-            
-            # Extract pure base64 from PEM - LXD API expects base64-only format
-            cert_base64 = extract_cert_base64(certificate)
-            
-            # Prepare payload
-            payload = {
-                "type": "client",
-                "certificate": cert_base64,
-                "name": cert_name,
-                "restricted": restricted
-            }
-            
-            if projects:
-                payload["projects"] = projects
-            
-            # Add to LXD trust
-            url = f"{endpoint}/1.0/certificates"
-            
-            # Use trust password for authentication if available
-            auth = ("", trust_password) if trust_password else None
-            
-            response = requests.post(
-                url,
-                json=payload,
-                auth=auth,
-                verify=False,
-                timeout=10
-            )
-            
-            response.raise_for_status()
-            logger.info(f"Successfully added certificate to LXD trust for cluster {cluster_id}")
-            return True
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to add LXD trust for {cluster_id}: {e}")
-            raise LXDCertManagerError(f"LXD trust registration failed: {str(e)}")
-        except VaultClientError as e:
-            logger.error(f"Failed to retrieve data from Vault: {e}")
-            raise LXDCertManagerError(f"Vault data retrieval failed: {str(e)}")
     
     def connect_with_vault_cert(
         self, cluster_id: str, connection_manager=None, force: bool = False
