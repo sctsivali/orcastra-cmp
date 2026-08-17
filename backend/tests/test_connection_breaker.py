@@ -80,19 +80,43 @@ def test_a_failed_reconnect_trips_the_breaker_so_the_next_caller_is_free(manager
     """The property that turns an O(requests) cost into O(1) per TTL."""
     calls = {"n": 0}
 
+    # A genuine transport failure, which is the only thing that may trip the breaker. An earlier
+    # revision of this test used "no stored connection info" as the cheap failure path and so
+    # asserted the very behaviour that sealed recovery - see the test below.
+    manager._connection_info[CLUSTER] = {
+        "endpoint": "https://192.0.2.1:8443", "cert_content": "x", "key_content": "y",
+    }
+
     def _explode(*_args, **_kwargs):
         calls["n"] += 1
         raise OSError("connection refused")
 
-    # No stored connection info is the cheapest real failure path through _auto_reconnect.
+    manager._create_temp_cert_files = _explode  # type: ignore[assignment]
+    assert manager.get_client(CLUSTER) is None
+    assert health.is_tripped(CLUSTER), "a transport failure must record it"
+    assert calls["n"] == 1
+
+    assert manager.get_client(CLUSTER) is None
+    assert calls["n"] == 1, "the second caller paid a connection cost anyway"
+
+
+def test_missing_local_connection_info_must_not_trip_the_breaker(manager) -> None:
+    """Regression: tripping here sealed every door that could reopen the cluster.
+
+    ``_connection_info`` is per-process. A cluster registered after this worker booted, or one
+    whose info a previous connect error cleared, legitimately has no entry. The repair is the
+    Vault path in ``ensure_connection`` and the background healer - both of which consult this
+    same breaker. Recording a failure here made that state permanent: the TTL would expire, the
+    next ``get_client`` would re-enter ``_auto_reconnect`` and re-trip before any Vault read, so
+    a healthy cluster stayed unreachable in that worker until the process restarted.
+    """
     manager._connection_info.pop(CLUSTER, None)
 
-    assert manager.get_client(CLUSTER) is None
-    assert health.is_tripped(CLUSTER), "the first failure must record it"
-
-    manager._auto_reconnect = _explode  # type: ignore[assignment]
-    assert manager.get_client(CLUSTER) is None
-    assert calls["n"] == 0, "the second caller paid a connection cost anyway"
+    assert manager.get_client(CLUSTER) is None, "no local info still means no client"
+    assert not health.is_tripped(CLUSTER), (
+        "a missing local cache entry is not a cluster failure; tripping it locks out the Vault "
+        "reconnect that is the designed repair"
+    )
 
 
 def test_recovery_is_immediate_on_success_not_after_the_ttl(manager) -> None:

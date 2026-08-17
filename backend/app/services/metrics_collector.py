@@ -379,15 +379,18 @@ class MetricsCollector:
                                 cert_data = cert_manager.get_cluster_certificate(cluster_id)
                                 cluster_info = cert_manager.get_cluster_info(cluster_id)
                                 
-                                self._lxd_service.connection_manager.connect_with_vault_cert(
+                                healed = self._lxd_service.connection_manager.connect_with_vault_cert(
                                     cluster_id=cluster_id,
                                     endpoint=cluster_info["metadata"]["endpoint"],
                                     cert_content=cert_data["client.crt"],
                                     key_content=cert_data["client.key"],
                                     verify=False
                                 )
-                                reconnected += 1
-                                logger.info(f"Background connected cluster: {cluster_id}")
+                                # note: the breaker can refuse this and return None. Counting that
+                                # as a heal made the sweep report recoveries that never happened.
+                                if healed is not None:
+                                    reconnected += 1
+                                    logger.info(f"Background connected cluster: {cluster_id}")
                             except Exception as conn_err:
                                 # Expected for clusters without valid trust
                                 logger.debug(f"Could not connect {cluster_id}: {conn_err}")

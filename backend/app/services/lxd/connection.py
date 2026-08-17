@@ -442,8 +442,13 @@ class LXDConnectionManager:
         3. NO Vault or Redis calls here (memory only)
         """
         if cluster_id not in self._connection_info:
+            # important: do NOT trip the breaker here. An empty in-process cache is not evidence
+            # the cluster failed - it is the normal state for a cluster registered after this
+            # worker booted, or one whose info a previous connect error cleared. The repair is the
+            # Vault path in ensure_connection/the background healer, and both are gated by this
+            # same breaker, so tripping here seals the only doors that could reopen it. Genuine
+            # transport failures below still record.
             logger.debug(f"No stored connection info for {cluster_id}, cannot auto-reconnect")
-            health.record_failure(cluster_id, "no stored connection info")
             return None
         
         try:

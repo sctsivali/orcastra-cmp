@@ -214,6 +214,10 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> List[Grou
             except Exception as e:
                 logger.warning(f"Failed to reconnect to {node_name}: {e}")
                 return groups
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
+                return groups
         
         # Use recursion=1 to get full details in one call
         response = client.api.auth.groups.get(params={'recursion': '1'}, timeout=(5, 30))
@@ -316,6 +320,10 @@ async def get_group(
             except Exception as e:
                 logger.error(f"Failed to reconnect to {host}: {e}")
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
+                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
         response = client.api.auth.groups[group_name].get(timeout=(5, 30))
         
@@ -377,6 +385,10 @@ async def create_group(
                 client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
             except Exception as e:
                 logger.error(f"Failed to reconnect to {host}: {e}")
+                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
         group_data = {
@@ -465,6 +477,10 @@ async def update_group(
                 client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
             except Exception as e:
                 logger.error(f"Failed to reconnect to {host}: {e}")
+                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
         # Build update data - only include fields that were provided
@@ -681,6 +697,10 @@ async def delete_group(
             except Exception as e:
                 logger.error(f"Failed to reconnect to {host}: {e}")
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
+                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
         response = client.api.auth.groups[group_name].delete(timeout=(5, 30))
         
@@ -722,6 +742,10 @@ async def add_identity_to_group(
                 client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
             except Exception as e:
                 logger.error(f"Failed to reconnect to {host}: {e}")
+                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
         # Get current identity data
@@ -797,6 +821,10 @@ async def remove_identity_from_group(
                 client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
             except Exception as e:
                 logger.error(f"Failed to reconnect to {host}: {e}")
+                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
         # Get current identity data
@@ -879,6 +907,10 @@ async def delete_identity(
                 client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
             except Exception as e:
                 logger.error(f"Failed to reconnect to {host}: {e}")
+                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+            if client is None:
+                # the breaker can refuse the reconnect and return None; without this the
+                # next line dereferences None and the caller sees a misleading 404/500.
                 raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
         
         auth_type_lower = auth_type.lower()

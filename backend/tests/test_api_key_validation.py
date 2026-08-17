@@ -10,7 +10,8 @@ Caching an authentication decision is only safe if all of these hold, so each is
   - the cache key covers the secret as well as the id, so a wrong secret can never be served
     from a cached entry
   - revocation is immediate, not TTL-delayed, because the eviction hook is wired into the
-    revoke, delete and permission-update paths
+    revoke, delete and permission-update paths, and because it publishes a shared tombstone
+    the other uvicorn workers honour (prod runs four of them, each with its own cache)
   - revoked, inactive and expired states are re-checked on every request, including cache
     hits, so a key cannot outlive its own metadata
   - a missing key reports 401, never 404, so the endpoint does not leak which ids exist
@@ -24,6 +25,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.routers import integrations
+from app.core.cache import get_cache_manager
 from app.routers.integrations import evict_api_key_cache, validate_api_key
 
 KEY_ID = "oak_test"
@@ -45,9 +47,24 @@ def _metadata(**overrides: Any) -> Dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def _clean_cache():
-    evict_api_key_cache(KEY_ID)
+    """Reset local state directly.
+
+    Calling evict_api_key_cache here would publish a revocation tombstone into the shared cache
+    that outlives the test and makes every later one see the key as revoked.
+    """
+
+    def _reset() -> None:
+        with integrations._key_cache_lock:
+            integrations._key_cache.clear()
+            integrations._last_used_written.clear()
+        try:
+            get_cache_manager().delete(integrations._REVOKED_NS, KEY_ID)
+        except Exception:
+            pass
+
+    _reset()
     yield
-    evict_api_key_cache(KEY_ID)
+    _reset()
 
 
 class _Recorder:
@@ -157,3 +174,54 @@ async def test_degraded_vault_yields_a_bounded_503(monkeypatch) -> None:
 
     assert caught.value.status_code == 503
     assert elapsed < 2.0, f"validation waited {elapsed:.2f}s against a 0.5s cap"
+
+
+def test_revocation_reaches_the_other_workers_not_just_the_one_that_served_it(monkeypatch) -> None:
+    """Regression: the metadata cache is per-process, so a local-only eviction left a revoked
+    key usable on every worker that did not serve the revoke, for the whole TTL. With
+    WEB_CONCURRENCY=4 that is three of four requests continuing to authenticate a key the
+    operator had just killed.
+    """
+    digest = integrations._api_key_digest(KEY_ID, KEY_SECRET)
+    integrations._store_key_metadata(digest, KEY_ID, {"id": KEY_ID, "is_active": True})
+    assert integrations._cached_key_metadata(digest) is not None, "precondition: a live cache hit"
+
+    # Stand in for the shared cache as seen by a worker that never handled the revocation.
+    published: Dict[str, Any] = {}
+
+    class _SharedCache:
+        def set(self, namespace: str, key: str, value: Any, ttl: int | None = None) -> None:
+            published[(namespace, key)] = value
+
+        def get(self, namespace: str, key: str) -> Any:
+            return published.get((namespace, key))
+
+    monkeypatch.setattr(integrations, "get_cache_manager", lambda: _SharedCache())
+
+    # A different worker revokes the key: it only publishes, it cannot touch our local dict.
+    published[(integrations._REVOKED_NS, KEY_ID)] = True
+
+    assert integrations._cached_key_metadata(digest) is None, (
+        "a key revoked on another worker must stop authenticating here immediately"
+    )
+    assert digest not in integrations._key_cache, "the stale entry must be dropped, not just skipped"
+
+
+def test_a_cache_outage_cannot_break_authentication(monkeypatch) -> None:
+    """The tombstone lookup is a safety net, not a dependency: if the shared cache is down the
+    key must still validate off the local entry rather than every external request failing.
+    """
+    digest = integrations._api_key_digest(KEY_ID, KEY_SECRET)
+    integrations._store_key_metadata(digest, KEY_ID, {"id": KEY_ID, "is_active": True})
+
+    class _Broken:
+        def get(self, *_a, **_k):
+            raise RuntimeError("redis is down")
+
+        def set(self, *_a, **_k):
+            raise RuntimeError("redis is down")
+
+    monkeypatch.setattr(integrations, "get_cache_manager", lambda: _Broken())
+
+    assert integrations._cached_key_metadata(digest) is not None
+    evict_api_key_cache(KEY_ID)  # must not raise

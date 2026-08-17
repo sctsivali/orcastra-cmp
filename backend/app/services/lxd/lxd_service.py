@@ -86,13 +86,17 @@ class LXDService:
             cluster_info = self.cert_manager.get_cluster_info(cluster_id)
             cert_data = self.cert_manager.get_cluster_certificate(cluster_id)
             
-            self.connection_manager.connect_with_vault_cert(
+            connected = self.connection_manager.connect_with_vault_cert(
                 cluster_id=cluster_id,
                 endpoint=cluster_info["metadata"]["endpoint"],
                 cert_content=cert_data["client.crt"],
                 key_content=cert_data["client.key"],
                 verify=False
             )
+            # note: this returns None when the breaker refuses it. Treating that as success
+            # cleared the breaker and reported a cluster as connected that never was.
+            if connected is None:
+                return False
             logger.info(f"Lazy-connected to cluster: {cluster_id}")
             health.clear(cluster_id)
             return True

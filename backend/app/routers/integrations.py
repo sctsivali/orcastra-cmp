@@ -495,16 +495,35 @@ def _api_key_digest(key_id: str, key_secret: str) -> str:
     return hashlib.sha256(f"{key_id}:{key_secret}".encode()).hexdigest()
 
 
+# important: the metadata cache is per-process, so a revocation served by one uvicorn worker
+# would leave the key valid on the others until their own TTL expired (prod runs
+# WEB_CONCURRENCY=4). Revocations are therefore also published as a short-lived shared
+# tombstone, which every worker checks before trusting a local hit. Without Redis this falls
+# back to the per-process TTL, which is the pre-tombstone behaviour rather than a new hole.
+_REVOKED_NS = "apikey_revoked"
+
+
+def _is_revoked_elsewhere(key_id: str) -> bool:
+    try:
+        return get_cache_manager().get(_REVOKED_NS, key_id) is not None
+    except Exception:  # a cache hiccup must never break authentication
+        return False
+
+
 def _cached_key_metadata(digest: str) -> Optional[Dict[str, Any]]:
     with _key_cache_lock:
         entry = _key_cache.get(digest)
         if not entry:
             return None
-        cached_at, _key_id, metadata = entry
+        cached_at, key_id, metadata = entry
         if time.monotonic() - cached_at > API_KEY_CACHE_TTL:
             _key_cache.pop(digest, None)
             return None
-        return metadata
+    if _is_revoked_elsewhere(key_id):
+        with _key_cache_lock:
+            _key_cache.pop(digest, None)
+        return None
+    return metadata
 
 
 def _store_key_metadata(digest: str, key_id: str, metadata: Dict[str, Any]) -> None:
@@ -513,11 +532,21 @@ def _store_key_metadata(digest: str, key_id: str, metadata: Dict[str, Any]) -> N
 
 
 def evict_api_key_cache(key_id: str) -> None:
-    """Drop cached metadata for a key so revocation takes effect immediately."""
+    """Drop cached metadata for a key so revocation takes effect immediately.
+
+    Also publishes a shared tombstone so the other workers drop their copies on the next use
+    rather than honouring a revoked key until their own TTL runs out.
+    """
     with _key_cache_lock:
         for digest in [d for d, (_, kid, _m) in _key_cache.items() if kid == key_id]:
             _key_cache.pop(digest, None)
         _last_used_written.pop(key_id, None)
+    try:
+        get_cache_manager().set(
+            _REVOKED_NS, key_id, True, ttl=int(API_KEY_CACHE_TTL) + 5
+        )
+    except Exception as exc:
+        logger.warning("Could not publish API key revocation for %s: %s", key_id, exc)
 
 
 def _write_last_used_blocking(key_id: str) -> None:
