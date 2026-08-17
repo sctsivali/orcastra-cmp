@@ -282,4 +282,10 @@ def jsonable_lxd(value: Any) -> Any:
     slots = getattr(type(value), "__slots__", None)
     if slots:
         return {s: jsonable_lxd(getattr(value, s, None)) for s in slots if not s.startswith("_")}
+    # pylxd's AttributeDict is NOT a dict subclass despite the name: it is a plain object that
+    # sets each key as an attribute, so its fields live in __dict__ and nowhere else. Checking
+    # this last means a real model with slots or marshall() is preferred over its instance dict.
+    instance_dict = getattr(value, "__dict__", None)
+    if isinstance(instance_dict, dict) and instance_dict:
+        return {k: jsonable_lxd(v) for k, v in instance_dict.items() if not k.startswith("_")}
     return str(value)
