@@ -569,6 +569,12 @@ export function InstanceCreateForm() {
     !isSubmitting &&
     nameValid &&
     !!form.selectedNode &&
+    // important: the root disk device is only emitted when a pool has resolved
+    // (effectivePool below), so submitting while the pool query is still in flight
+    // dropped the root disk entirely and the instance silently got the profile's
+    // default size instead of the one just typed. Gate on the query, not on
+    // effectivePool, so a node that genuinely reports no pools behaves as before.
+    !loadingPools &&
     // Image mode needs an image; ISO mode needs an ISO. No bare blank.
     (bootFromIso ? !!form.selectedIso : !!form.selectedImage) &&
     resourcesValid &&

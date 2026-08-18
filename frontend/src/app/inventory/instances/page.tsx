@@ -59,17 +59,13 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Plus } from "lucide-react";
 import { RebuildDialog } from "@/components/rebuild-dialog";
 
-// How long a "Creating…" placeholder must live before a same-named instance in
-// the list is trusted as its resolution (guards against stale-cache races).
-// Exceeds one instance-list poll cycle (10s) so the list has refreshed first.
-const PENDING_GRACE_MS = 12000;
-
 function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
   // LXD events stream (no polling). useInstanceStream patches this query's cache.
-  const { data, isLoading, refetch, isRefetching } = useInstances(undefined, {
-    realtime: true,
-  });
+  const { data, isLoading, refetch, isRefetching, dataUpdatedAt } = useInstances(
+    undefined,
+    { realtime: true },
+  );
   const instances = (data as any)?.vms || [];
 
   // Hosts to stream from: those that currently have instances (pending-create
@@ -81,18 +77,23 @@ function InstancesContent() {
   ) as string[];
   const pendingCreates = useInstanceStream(instanceHosts);
 
-  // A placeholder is "resolved" once a matching instance is in the list and has
-  // lived past a short grace window (the stream normally removes it first; this
-  // is a fallback). The grace avoids a stale-cache race nuking it instantly.
+  // A placeholder is "resolved" once a matching instance appears in list data that
+  // landed AFTER the create was issued (the stream normally removes it first; this
+  // is the fallback). Freshness is the real guard against the stale-cache race, and
+  // it is exact where a fixed grace window was only a guess: a create invalidates
+  // the instance-list cache server-side, so any data newer than the placeholder
+  // cannot be the pre-create list. A blanket 12s wait used to sit here, which left
+  // the same instance rendered twice, once "Creating…" and once with its real
+  // status, for as long as the real row beat the stream event.
   const isResolved = (p: { host: string; name: string; createdAt: number }) =>
-    Date.now() - p.createdAt > PENDING_GRACE_MS &&
+    dataUpdatedAt > p.createdAt &&
     instances.some((i: any) => i.host === p.host && i.name === p.name);
   useEffect(() => {
     for (const p of pendingCreates) {
       if (isResolved(p)) removePendingCreate(p.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instances, pendingCreates]);
+  }, [instances, pendingCreates, dataUpdatedAt]);
   // Hide placeholders that already resolved to a real row (avoids a duplicate).
   const visiblePendingCreates = pendingCreates.filter((p) => !isResolved(p));
 
