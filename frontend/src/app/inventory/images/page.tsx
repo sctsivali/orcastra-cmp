@@ -14,6 +14,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyValue } from "@/components/ui/table-text";
+import { formatInstanceType, truncateFingerprint } from "@/lib/utils";
 import { 
   Select,
   SelectContent,
@@ -274,52 +276,34 @@ export default function ImagesPage() {
               ) : (
                 paginatedImages.map((image: any, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
-                    <TableCell className="font-mono text-xs">
-                      {image.fingerprint.substring(0, 12)}...
+                    <TableCell className="font-mono">
+                      {truncateFingerprint(image.fingerprint)}
                     </TableCell>
                     <TableCell>
                       {image.aliases && image.aliases.length > 0 && image.aliases[0] ? (
-                        <Badge variant="outline">{image.aliases[0]}</Badge>
+                        image.aliases[0]
                       ) : (
-                        <span className="text-muted-foreground text-xs">
-                          N/A
-                        </span>
+                        <TableEmptyValue label="No alias" />
                       )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{image.architecture}</Badge>
+                      {image.architecture}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{image.type}</Badge>
+                      {formatInstanceType(image.type)}
                     </TableCell>
-                    <TableCell className="text-xs">
+                    <TableCell className="whitespace-nowrap">
                       {formatSize(image.size)}
                     </TableCell>
                     {nodes.length > 0 && (
-                      <TableCell>
-                        {image.node && (
-                          <Badge variant="secondary">{image.node}</Badge>
-                        )}
-                      </TableCell>
+                      <TableCell>{image.node}</TableCell>
                     )}
                     <TableCell>
-                      <div className="flex gap-1">
-                        {image.public && (
-                          <Badge variant="default" className="text-xs">
-                            Public
-                          </Badge>
-                        )}
-                        {image.cached && (
-                          <Badge variant="outline" className="text-xs">
-                            Cached
-                          </Badge>
-                        )}
-                        {image.auto_update && (
-                          <Badge variant="outline" className="text-xs">
-                            Auto-update
-                          </Badge>
-                        )}
-                      </div>
+                      {[
+                        image.public && "Public",
+                        image.cached && "Cached",
+                        image.auto_update && "Auto-update",
+                      ].filter(Boolean).join(", ") || <TableEmptyValue label="No flags" />}
                     </TableCell>
                   </TableRow>
                 ))

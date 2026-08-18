@@ -133,3 +133,71 @@ export function formatClockTime(timestamp: number | null | undefined): string {
     return "N/A";
   }
 }
+
+// Words that keep a fixed casing instead of plain title-case (acronyms, brands, and the
+// storage/network driver names LXD reports in lowercase).
+const LABEL_ACRONYMS: Record<string, string> = {
+  zfs: "ZFS",
+  btrfs: "Btrfs",
+  ceph: "Ceph",
+  cephfs: "CephFS",
+  lvm: "LVM",
+  ovn: "OVN",
+  ovs: "OVS",
+  sriov: "SR-IOV",
+  oidc: "OIDC",
+  tls: "TLS",
+  ssh: "SSH",
+  api: "API",
+  acl: "ACL",
+  dns: "DNS",
+  ip: "IP",
+  ipam: "IPAM",
+  url: "URL",
+  iso: "ISO",
+  vm: "VM",
+  ct: "CT",
+  id: "ID",
+  cpu: "CPU",
+  gpu: "GPU",
+  nic: "NIC",
+  pci: "PCI",
+  usb: "USB",
+  tpm: "TPM",
+  spice: "SPICE",
+  vga: "VGA",
+  os: "OS",
+};
+
+// Title-case a raw enum for display ("virtual-machine" -> "Virtual Machine", "zfs" -> "ZFS").
+// Splits on -, _ and whitespace, then applies the acronym map per word. Null-safe.
+//
+// important: only for values that arrive lowercase from an API. Never pass a name a user or
+// a registry authored (instance, profile, project, image alias, cluster) through this, and
+// never pass `architecture`: "x86_64" comes back as "X86 64".
+export function formatLabel(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value)
+    .trim()
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((word) => {
+      const lower = word.toLowerCase();
+      if (LABEL_ACRONYMS[lower]) return LABEL_ACRONYMS[lower];
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
+}
+
+// Instance type display. One vocabulary for an enum the app previously spelled four ways
+// ("VM"/"Container", "VM"/"CT", "Container"/"VM", and the raw "virtual-machine").
+//
+// important: instance type always goes through this, never formatLabel, because
+// formatLabel("vm") returns "VM" via the acronym map and that is the fifth vocabulary.
+export function formatInstanceType(type: string | null | undefined): string {
+  if (!type) return "Unknown";
+  const t = type.trim().toLowerCase();
+  if (t === "virtual-machine" || t === "virtualmachine" || t === "vm") return "Virtual Machine";
+  if (t === "container" || t === "ct") return "Container";
+  return formatLabel(type);
+}

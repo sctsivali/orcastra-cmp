@@ -359,16 +359,10 @@ export default function MyKeysPage() {
                     <TableRow key={key.id}>
                       <TableCell className="font-medium">{key.name}</TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="gap-1">
-                          <Server className="h-3 w-3" />
-                          {key.node}
-                        </Badge>
+                        {key.node}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="gap-1">
-                          <FolderTree className="h-3 w-3" />
-                          {key.project}
-                        </Badge>
+                        {key.project}
                       </TableCell>
                       <TableCell>
                         <Badge
@@ -385,10 +379,10 @@ export default function MyKeysPage() {
                             : "Standard"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
+                      <TableCell className="text-muted-foreground">
                         {new Date(key.created_at).toLocaleDateString('en-GB')}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">
+                      <TableCell className="text-muted-foreground">
                         {key.expires_at
                           ? new Date(key.expires_at).toLocaleDateString('en-GB')
                           : "Never"}

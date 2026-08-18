@@ -234,6 +234,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@cd frontend && npx tsc --noEmit
 	@echo "$(COLOR_GREEN)Checking submit guards...$(COLOR_RESET)"
 	@node qa/check-submit-guards.mjs
+	@echo "$(COLOR_GREEN)Checking table typography...$(COLOR_RESET)"
+	@node qa/check-table-typography.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
 
 setup-hooks: ## Point git at the repo's hooks (run once per clone)

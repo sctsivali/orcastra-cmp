@@ -19,7 +19,7 @@ import { Badge } from "./ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { NodeStatus } from "@/types";
-import { cn } from "@/lib/utils";
+import { cn, formatLabel } from "@/lib/utils";
 
 interface NodeDetailModalProps {
   node: NodeStatus | null;
@@ -643,10 +643,9 @@ export function NodeDetailModal({
                               <div>
                                 <p className="font-semibold">{pool.name}</p>
                                 <p className="text-sm text-muted-foreground">
-                                  Driver: {pool.driver}
+                                  Driver: {formatLabel(pool.driver)}
                                 </p>
                               </div>
-                              <Badge variant="outline">{pool.driver}</Badge>
                             </div>
 
                             <div className="grid grid-cols-3 gap-2 text-sm">

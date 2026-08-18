@@ -17,6 +17,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { TableSubText } from "@/components/ui/table-text";
 import {
   Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle, DialogTrigger,
@@ -648,7 +649,7 @@ export function PolicyManagementSection() {
               </div>
             ) : (
               <div className="rounded-md border">
-                <Table>
+                <Table density="compact">
                   <TableHeader>
                     <TableRow>
                       <SortableTableHead
@@ -657,7 +658,6 @@ export function PolicyManagementSection() {
                         currentField={policySortField}
                         direction={policySortDirection}
                         onSort={handlePolicySort}
-                        className="text-xs"
                       />
                       <SortableTableHead
                         label="Organization"
@@ -665,7 +665,6 @@ export function PolicyManagementSection() {
                         currentField={policySortField}
                         direction={policySortDirection}
                         onSort={handlePolicySort}
-                        className="text-xs"
                       />
                       <SortableTableHead
                         label="Rules"
@@ -673,7 +672,6 @@ export function PolicyManagementSection() {
                         currentField={policySortField}
                         direction={policySortDirection}
                         onSort={handlePolicySort}
-                        className="text-xs"
                       />
                       <SortableTableHead
                         label="Assigned"
@@ -681,9 +679,8 @@ export function PolicyManagementSection() {
                         currentField={policySortField}
                         direction={policySortDirection}
                         onSort={handlePolicySort}
-                        className="text-xs"
                       />
-                      <TableHead className="text-xs w-[100px]">Actions</TableHead>
+                      <TableHead className="w-[100px]">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -697,33 +694,24 @@ export function PolicyManagementSection() {
                               <div className="text-sm font-medium flex items-center gap-1.5">
                                 {policy.name}
                                 {policy.is_default && (
-                                  <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-600 border-blue-500/20">
-                                    Default
-                                  </Badge>
+                                  <span className="text-muted-foreground">(default)</span>
                                 )}
                               </div>
                               {policy.description && (
-                                <p className="text-[10px] text-muted-foreground mt-0.5 truncate max-w-[250px]">
+                                <TableSubText className="mt-0.5 max-w-[250px]">
                                   {policy.description}
-                                </p>
+                                </TableSubText>
                               )}
                             </div>
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline" className="text-[10px]">
-                              <Building2 className="h-3 w-3 mr-1" />
-                              {org?.name || `ID ${policy.organization_id}`}
-                            </Badge>
+                            {org?.name || `ID ${policy.organization_id}`}
                           </TableCell>
                           <TableCell>
-                            <Badge variant="secondary" className="text-[10px]">
-                              {policy.rules?.length || 0} {(policy.rules?.length || 0) === 1 ? "rule" : "rules"}
-                            </Badge>
+                            {policy.rules?.length || 0} {(policy.rules?.length || 0) === 1 ? "rule" : "rules"}
                           </TableCell>
                           <TableCell>
-                            <Badge variant="outline" className="text-[10px]">
-                              {policy.assignments_count} {policy.assignments_count === 1 ? "user" : "users"}
-                            </Badge>
+                            {policy.assignments_count} {policy.assignments_count === 1 ? "user" : "users"}
                           </TableCell>
                           <TableCell>
                             <div className="flex gap-1">

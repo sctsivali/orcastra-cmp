@@ -196,14 +196,14 @@ export default function NetworkACLsPage() {
                     </TableCell>
                     {nodes.length > 0 && (
                       <TableCell>
-                        {acl.node && <Badge variant="secondary">{acl.node}</Badge>}
+                        {acl.node}
                       </TableCell>
                     )}
                     <TableCell>
-                      <Badge variant="outline">{acl.ingress?.length || 0} rules</Badge>
+                      {acl.ingress?.length || 0} rules
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{acl.egress?.length || 0} rules</Badge>
+                      {acl.egress?.length || 0} rules
                     </TableCell>
                     <TableCell>
                       <ClickableBadge

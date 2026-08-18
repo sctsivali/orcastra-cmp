@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { TableLink } from "@/components/ui/table-link";
+import { TableEmptyValue } from "@/components/ui/table-text";
+import { formatLabel } from "@/lib/utils";
 import {
   Dialog,
   DialogBody,
@@ -74,7 +77,7 @@ export function ClickableBadge({
   const [open, setOpen] = useState(false);
 
   if (count === 0) {
-    return <Badge variant="outline" className="flex items-center justify-center gap-1">0 {label}</Badge>;
+    return <TableEmptyValue label={`No ${label}`} />;
   }
 
   // Check if items are device objects (have name, type, config properties)
@@ -85,13 +88,9 @@ export function ClickableBadge({
 
   return (
     <>
-      <Badge
-        variant="secondary"
-        className="cursor-pointer hover:bg-secondary/80 transition-colors flex items-center justify-center gap-1"
-        onClick={() => setOpen(true)}
-      >
+      <TableLink onClick={() => setOpen(true)} aria-label={`Show ${count} ${label} for ${title}`}>
         {count} {label}
-      </Badge>
+      </TableLink>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
@@ -123,7 +122,7 @@ export function ClickableBadge({
                         </div>
                       </div>
                       <Badge variant="outline" className="text-sm">
-                        {device.type || "N/A"}
+                        {formatLabel(device.type)}
                       </Badge>
                     </div>
 

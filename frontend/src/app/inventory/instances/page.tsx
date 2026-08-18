@@ -21,7 +21,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Play, Square, RotateCw, RefreshCw, Trash2, Search, Filter, Terminal, Monitor, Loader2 } from "lucide-react";
+import { TableLink } from "@/components/ui/table-link";
+import { TableEmptyValue, TableSubText, TableEmptyRow } from "@/components/ui/table-text";
+import { formatInstanceType } from "@/lib/utils";
+import { Play, Square, RotateCw, RefreshCw, Trash2, Search, Filter, Terminal, Monitor, Loader2, Box } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
 import { TagBadge } from "@/components/tag-manager";
 import { removePendingCreate } from "@/lib/pending-creates";
@@ -477,75 +480,62 @@ function InstancesContent() {
                           : "Creating…"}
                     </Badge>
                     {p.error && (
-                      <span className="ml-2 text-xs text-destructive">{p.error}</span>
+                      <TableSubText className="text-destructive">{p.error}</TableSubText>
                     )}
                   </TableCell>
-                  <TableCell>{p.type}</TableCell>
-                  <TableCell>
-                    <Badge variant="outline">{p.host}</Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{p.project || "default"}</Badge>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground">—</TableCell>
-                  <TableCell className="text-muted-foreground">—</TableCell>
-                  <TableCell className="text-muted-foreground">—</TableCell>
+                  <TableCell>{formatInstanceType(p.type)}</TableCell>
+                  <TableCell className="whitespace-nowrap">{p.host}</TableCell>
+                  <TableCell className="whitespace-nowrap">{p.project || "default"}</TableCell>
+                  <TableCell><TableEmptyValue /></TableCell>
+                  <TableCell><TableEmptyValue /></TableCell>
+                  <TableCell><TableEmptyValue /></TableCell>
                   <TableCell />
                 </TableRow>
               ))}
               {paginatedInstances.length === 0 ? (
                 visiblePendingCreates.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
-                      No instances found
-                    </TableCell>
-                  </TableRow>
+                  <TableEmptyRow
+                    colSpan={10}
+                    icon={Box}
+                    title="No instances found"
+                    description="No instance matches the current filters."
+                  />
                 ) : null
               ) : (
                 paginatedInstances.map((instance: any) => (
                 <TableRow key={`${instance.host}-${instance.name}`}>
-                  <TableCell 
-                    className="font-medium cursor-pointer hover:text-primary hover:underline"
-                    onClick={() => handleInstanceClick(instance)}
-                  >
-                    {instance.name}
+                  <TableCell className="font-medium">
+                    <TableLink onClick={() => handleInstanceClick(instance)}>
+                      {instance.name}
+                    </TableLink>
                   </TableCell>
                   <TableCell>
                     <Badge variant={getStatusColor(instance.status)}>
                       {instance.status}
                     </Badge>
                   </TableCell>
-                  <TableCell>{instance.type}</TableCell>
+                  <TableCell>{formatInstanceType(instance.type)}</TableCell>
+                  <TableCell className="whitespace-nowrap">{instance.host}</TableCell>
+                  <TableCell className="whitespace-nowrap">{instance.project || "default"}</TableCell>
                   <TableCell>
-                    <Badge variant="outline">{instance.host}</Badge>
+                    {instance.ip_addresses.length > 0 ? (
+                      instance.ip_addresses.slice(0, 2).join(", ")
+                    ) : (
+                      <TableEmptyValue label="No IP addresses" />
+                    )}
                   </TableCell>
-                  <TableCell>
-                    <Badge variant="secondary">{instance.project || "default"}</Badge>
+                  <TableCell title={instance.profiles.join(", ")}>
+                    {instance.profiles.length > 0 ? (
+                      <>
+                        {instance.profiles.slice(0, 3).join(", ")}
+                        {instance.profiles.length > 3 && ` +${instance.profiles.length - 3}`}
+                      </>
+                    ) : (
+                      <TableEmptyValue label="No profiles" />
+                    )}
                   </TableCell>
-                  <TableCell>
-                    {instance.ip_addresses.length > 0
-                      ? instance.ip_addresses.slice(0, 2).join(", ")
-                      : "N/A"}
-                  </TableCell>
-                  <TableCell>
-                    {instance.profiles.map((profile: string) => (
-                      <Badge key={profile} variant="outline" className="mr-1">
-                        {profile}
-                      </Badge>
-                    ))}
-                  </TableCell>
-                  <TableCell>
-                    {(() => {
-                      const disk = rootDiskLabel(instance);
-                      return (
-                        <span
-                          className="whitespace-nowrap text-sm text-muted-foreground"
-                          title={disk.title}
-                        >
-                          {disk.text}
-                        </span>
-                      );
-                    })()}
+                  <TableCell className="whitespace-nowrap" title={rootDiskLabel(instance).title}>
+                    {rootDiskLabel(instance).text}
                   </TableCell>
                   <TableCell>
                     {instance.tags && instance.tags.length > 0 ? (

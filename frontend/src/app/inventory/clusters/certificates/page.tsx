@@ -389,7 +389,7 @@ export default function CertificatesPage() {
 
                   return (
                     <TableRow key={cert.cluster_id}>
-                      <TableCell className="text-sm">
+                      <TableCell>
                         <div>
                           <div className="font-medium truncate max-w-[150px]">{cert.cluster_id}</div>
                           {(cert.endpoint || cert.common_name) && (

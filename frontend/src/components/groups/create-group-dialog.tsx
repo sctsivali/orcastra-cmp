@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/tooltip";
 import { Plus, X, Loader2, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { getResourceBasePath, getValidEntitlements, getEntitlementLabel } from "@/lib/lxd-entitlements";
 import { 
   useCreateGroup, 
   useProjects, 
@@ -136,50 +137,6 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
       case "storage_pool": return loadingPools;
       default: return false;
     }
-  };
-
-  const getResourceBasePath = (entityType: string): string => {
-    const paths: Record<string, string> = {
-      project: "/1.0/projects",
-      instance: "/1.0/instances",
-      image: "/1.0/images",
-      profile: "/1.0/profiles",
-      network: "/1.0/networks",
-      storage_pool: "/1.0/storage-pools",
-      storage_volume: "/1.0/storage-volumes",
-    };
-    return paths[entityType] || "/1.0";
-  };
-
-  // Get valid entitlements for each entity type
-  const getValidEntitlements = (entityType: string): string[] => {
-    // LXD entitlements based on official documentation and testing
-    // Note: For project, can_edit requires can_view but cannot be set atomically,
-    // so we only offer operator (which includes full access) and can_view
-    const entitlementMap: Record<string, string[]> = {
-      server: ["admin"], // Only admin is valid for server
-      project: ["can_view", "operator"], // operator grants full access to resources
-      instance: ["can_view", "can_edit", "operator", "user"], // user for console/exec access
-      image: ["can_view", "can_edit"],
-      profile: ["can_view", "can_edit"],
-      network: ["can_view", "can_edit"],
-      network_acl: ["can_view", "can_edit"],
-      storage_pool: ["can_edit"], // can_view is NOT valid for storage_pool
-      storage_volume: ["can_view", "can_edit"],
-    };
-    return entitlementMap[entityType] || ["can_view", "can_edit"];
-  };
-
-  // Get display label for entitlement
-  const getEntitlementLabel = (entitlement: string): string => {
-    const labels: Record<string, string> = {
-      can_view: "Can View (Read-only)",
-      can_edit: "Can Edit (Modify)",
-      can_manage: "Can Manage (Full control)",
-      operator: "Operator (Operations)",
-      admin: "Admin (Full access)",
-    };
-    return labels[entitlement] || entitlement;
   };
 
   const handleEntityTypeChange = (value: string) => {

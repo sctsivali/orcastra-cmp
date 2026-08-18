@@ -450,23 +450,15 @@ export function UserGroupsSettings() {
                 <TableBody>
                   {sortUsers(users).map((user: UserGroupEntry) => (
                     <TableRow key={user.user_email}>
-                      <TableCell className="font-medium text-sm">
+                      <TableCell className="font-medium">
                         {user.user_email}
                       </TableCell>
                       <TableCell>{roleBadge(user.role)}</TableCell>
                       <TableCell>
                         {user.organizations?.length ? (
-                          <div className="flex gap-1.5 flex-wrap">
-                            {user.organizations.map((o) => (
-                              <Badge
-                                key={o.id}
-                                variant="outline"
-                                className="text-xs"
-                              >
-                                <Building2 className="h-3 w-3 mr-1" />
-                                {o.name}
-                              </Badge>
-                            ))}
+                          <div title={user.organizations.map((o) => o.name).join(", ")}>
+                            {user.organizations.slice(0, 3).map((o) => o.name).join(", ")}
+                            {user.organizations.length > 3 && ` +${user.organizations.length - 3}`}
                           </div>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>

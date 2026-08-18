@@ -14,6 +14,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
+import { formatLabel, formatInstanceType } from "@/lib/utils";
 import type { VMInfo, GPUCardInfo } from "@/types/api";
 
 interface MemberResources {
@@ -422,9 +423,7 @@ export function MemberResourceModal({
                             <div className="flex items-center gap-2">
                               <HardDrive className="h-4 w-4 text-muted-foreground" />
                               <span className="font-medium">{pool.name}</span>
-                              <Badge variant="outline" className="text-xs">
-                                {pool.driver}
-                              </Badge>
+                              <span className="text-muted-foreground">{formatLabel(pool.driver)}</span>
                             </div>
                             <span className="text-sm text-muted-foreground">
                               {formatBytes(pool.space_used)} / {formatBytes(pool.space_total)}
@@ -506,9 +505,9 @@ export function MemberResourceModal({
                           <Badge variant={instance.status === "Running" ? "default" : "secondary"} className="text-xs">
                             {instance.status}
                           </Badge>
-                          <Badge variant="outline" className="text-xs">
-                            {instance.type === "container" ? "Container" : "VM"}
-                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            {formatInstanceType(instance.type)}
+                          </span>
                         </div>
                         <div className="text-sm text-muted-foreground space-y-1">
                           {instance.ip_addresses && instance.ip_addresses.length > 0 && (
@@ -519,7 +518,7 @@ export function MemberResourceModal({
                           )}
                           <div className="flex items-center gap-4">
                             <span>
-                              <span className="font-medium">Type:</span> {instance.type}
+                              <span className="font-medium">Type:</span> {formatInstanceType(instance.type)}
                             </span>
                             <span>
                               <span className="font-medium">Project:</span> {instance.project || "default"}

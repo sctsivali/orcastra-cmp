@@ -14,6 +14,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyValue } from "@/components/ui/table-text";
+import { formatLabel } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -246,7 +248,7 @@ export default function IdentitiesPage() {
                 <TableBody>
                   {paginatedIdentities.map((identity: any, index: number) => (
                     <TableRow key={identity.node + "-" + identity.id + "-" + index}>
-                      <TableCell className="font-mono text-xs max-w-[200px] truncate" title={identity.id}>
+                      <TableCell className="font-mono max-w-[200px] truncate" title={identity.id}>
                         {identity.id.length > 30 
                           ? identity.id.substring(0, 15) + "..." + identity.id.substring(identity.id.length - 10)
                           : identity.id}
@@ -255,21 +257,20 @@ export default function IdentitiesPage() {
                         {identity.name || <span className="text-muted-foreground italic">N/A</span>}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{identity.type?.toUpperCase()}</Badge>
+                        {formatLabel(identity.type)}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary">{identity.node || "N/A"}</Badge>
+                        {identity.node || <TableEmptyValue label="No node" />}
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-wrap gap-1">
+                        <div title={(identity.groups ?? []).join(", ")}>
                           {identity.groups && identity.groups.length > 0 ? (
-                            identity.groups.map((group: string) => (
-                              <Badge key={group} variant="secondary" className="text-xs">
-                                {group}
-                              </Badge>
-                            ))
+                            <>
+                              {identity.groups.slice(0, 3).join(", ")}
+                              {identity.groups.length > 3 && ` +${identity.groups.length - 3}`}
+                            </>
                           ) : (
-                            <span className="text-muted-foreground text-xs italic">No groups</span>
+                            <TableEmptyValue label="No groups" />
                           )}
                         </div>
                       </TableCell>

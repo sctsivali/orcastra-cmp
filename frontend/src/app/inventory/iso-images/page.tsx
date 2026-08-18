@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -145,31 +146,27 @@ export default function IsoImagesPage() {
             </TableHeader>
             <TableBody>
               {paginated.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={4} className="text-center text-muted-foreground py-10">
-                    <Disc className="mx-auto mb-2 h-6 w-6 opacity-50" />
-                    No ISO images yet.
-                    {canUpload && " Use “Upload ISO” to add one."}
-                  </TableCell>
-                </TableRow>
+                <TableEmptyRow
+                  colSpan={4}
+                  icon={Disc}
+                  title="No ISO images yet"
+                  description={canUpload ? 'Use "Upload ISO" to add one.' : undefined}
+                />
               ) : (
                 paginated.map((v: any, idx: number) => (
                   <TableRow key={`${v.node}-${v.pool}-${v.name}-${idx}`}>
                     <TableCell className="font-medium">{v.name}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{v.pool}</Badge>
+                      {v.pool}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{v.node}</Badge>
+                      {v.node}
                     </TableCell>
                     <TableCell>
                       {v.used_by && v.used_by.length > 0 ? (
-                        <Badge variant="secondary">
-                          {v.used_by.length} instance
-                          {v.used_by.length === 1 ? "" : "s"}
-                        </Badge>
+                        `${v.used_by.length} instance${v.used_by.length === 1 ? "" : "s"}`
                       ) : (
-                        <span className="text-muted-foreground">—</span>
+                        <TableEmptyValue label="Not used" />
                       )}
                     </TableCell>
                   </TableRow>

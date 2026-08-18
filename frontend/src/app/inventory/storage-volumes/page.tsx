@@ -15,6 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatLabel } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -217,14 +218,14 @@ export default function StorageVolumesPage() {
                   <TableRow key={`${volume.node}-${volume.name}-${idx}`}>
                     <TableCell className="font-medium">{volume.name}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{volume.type}</Badge>
+                      {formatLabel(volume.type)}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{volume.content_type}</Badge>
+                      {formatLabel(volume.content_type)}
                     </TableCell>
                     {nodes.length > 0 && (
                       <TableCell>
-                        {volume.node && <Badge variant="secondary">{volume.node}</Badge>}
+                        {volume.node}
                       </TableCell>
                     )}
                     <TableCell className="text-center">

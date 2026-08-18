@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import {
   Tooltip,
   TooltipContent,
@@ -48,7 +49,7 @@ import {
   LogOut,
   ShieldAlert,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatLabel } from "@/lib/utils";
 import { getAccessToken } from "@/lib/api";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -582,7 +583,6 @@ function SessionHistoryTab() {
 
 function ActiveRow({ session }: { session: SessionData }) {
   const isGraphics = session.protocol === "spice-graphics";
-  const ProtocolIcon = isGraphics ? Monitor : Terminal;
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
   return (
@@ -594,10 +594,7 @@ function ActiveRow({ session }: { session: SessionData }) {
         </div>
       </TableCell>
       <TableCell>
-        <Badge variant="outline" className="gap-1 font-normal">
-          <ProtocolIcon className="h-3 w-3" />
-          {protocolLabel}
-        </Badge>
+        {protocolLabel}
       </TableCell>
       <TableCell>
         <Tooltip>
@@ -651,48 +648,31 @@ function ActiveRow({ session }: { session: SessionData }) {
 function HistoryRow({ log }: { log: AuditLogEntry }) {
   const isConnect = log.event_type === "connect";
   const isGraphics = log.protocol === "spice-graphics";
-  const ProtocolIcon = isGraphics ? Monitor : Terminal;
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
   return (
     <TableRow className="hover:bg-muted/50">
-      <TableCell>
-        <Badge
-          variant="secondary"
-          className={cn(
-            "gap-1",
-            isConnect
-              ? "bg-green-500/10 text-green-600 dark:text-green-400"
-              : "bg-orange-500/10 text-orange-600 dark:text-orange-400"
-          )}
-        >
-          {isConnect ? <LogIn className="h-3 w-3" /> : <LogOut className="h-3 w-3" />}
-          {log.event_type}
-        </Badge>
-      </TableCell>
+      <TableCell className="whitespace-nowrap">{formatLabel(log.event_type)}</TableCell>
       <TableCell>
         <div className="flex flex-col">
           <span className="font-medium">{log.instance_name}</span>
-          <span className="text-xs text-muted-foreground">{log.host} / {log.project}</span>
+          <TableSubText>{log.host} / {log.project}</TableSubText>
         </div>
       </TableCell>
       <TableCell>
-        <Badge variant="outline" className="gap-1 font-normal">
-          <ProtocolIcon className="h-3 w-3" />
-          {protocolLabel}
-        </Badge>
+{protocolLabel}
       </TableCell>
-      <TableCell>
-        <span className="font-mono text-sm">{formatDuration(log.duration_seconds)}</span>
+      <TableCell className="font-mono whitespace-nowrap">
+        {formatDuration(log.duration_seconds)}
       </TableCell>
       <TableCell>
         {log.download_bytes != null || log.upload_bytes != null ? (
-          <div className="flex flex-col text-xs font-mono">
-            <span className="text-green-600 dark:text-green-400">↓{formatBytes(log.download_bytes ?? 0)}</span>
-            <span className="text-blue-600 dark:text-blue-400">↑{formatBytes(log.upload_bytes ?? 0)}</span>
+          <div className="flex flex-col font-mono">
+            <span>↓{formatBytes(log.download_bytes ?? 0)}</span>
+            <span>↑{formatBytes(log.upload_bytes ?? 0)}</span>
           </div>
         ) : (
-          <span className="text-muted-foreground text-xs">—</span>
+          <TableEmptyValue label="No transfer recorded" />
         )}
       </TableCell>
       <TableCell>

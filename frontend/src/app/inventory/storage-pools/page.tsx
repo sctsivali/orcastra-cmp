@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatLabel } from "@/lib/utils";
 import { 
   Select,
   SelectContent,
@@ -243,11 +244,11 @@ export default function StoragePoolsPage() {
                     <TableRow key={`${poolKey}-${idx}`}>
                       <TableCell className="font-medium">{pool.name}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{pool.driver}</Badge>
+                        {formatLabel(pool.driver)}
                       </TableCell>
                       {nodes.length > 0 && (
                         <TableCell>
-                          {pool.node && <Badge variant="secondary">{pool.node}</Badge>}
+                          {pool.node}
                         </TableCell>
                       )}
                       <TableCell>

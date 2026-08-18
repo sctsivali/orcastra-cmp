@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyValue } from "@/components/ui/table-text";
 import { 
   Select,
   SelectContent,
@@ -186,10 +187,10 @@ export default function ProfilesPage() {
                   <TableRow key={`${profile.node}-${profile.name}`}>
                     <TableCell className="font-medium">{profile.name}</TableCell>
                     <TableCell className="max-w-xs truncate">
-                      {profile.description || "N/A"}
+                      {profile.description || <TableEmptyValue label="No description" />}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{profile.node}</Badge>
+                      {profile.node}
                     </TableCell>
                     <TableCell>
                       <ClickableBadge

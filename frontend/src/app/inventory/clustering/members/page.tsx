@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
-import { formatHypervisorType } from "@/lib/utils";
+import { formatHypervisorType, formatLabel} from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { 
   Server, 
@@ -26,6 +26,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyValue } from "@/components/ui/table-text";
 import { toast } from "@/hooks/use-toast";
 import { ClusterMember } from "@/types/api";
 import { useClusters, useClusterMembers, useMemberResources } from "@/hooks/use-lxd";
@@ -221,20 +222,9 @@ function ClusterMembersContent() {
                     <TableCell>
                       <div className="flex gap-1 flex-wrap">
                         {member.roles && member.roles.length > 0 ? (
-                          member.roles.map((role: any) => (
-                            <Badge 
-                              key={role} 
-                              variant={role === "database-leader" ? "default" : "secondary"}
-                              className="gap-1"
-                            >
-                              {role === "database-leader" || role === "database" ? (
-                                <Database className="h-3 w-3" />
-                              ) : null}
-                              {role}
-                            </Badge>
-                          ))
+                          member.roles.map((role: string) => formatLabel(role)).join(", ")
                         ) : (
-                          <span className="text-sm text-muted-foreground">—</span>
+                          <TableEmptyValue label="No roles" />
                         )}
                       </div>
                     </TableCell>
@@ -253,7 +243,7 @@ function ClusterMembersContent() {
                     </TableCell>
                     <TableCell>
                       <span className="text-sm">
-                        {member.architecture || "N/A"}
+                        {member.architecture || <TableEmptyValue label="No architecture" />}
                       </span>
                     </TableCell>
                     <TableCell>

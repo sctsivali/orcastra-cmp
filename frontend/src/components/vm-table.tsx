@@ -20,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -82,7 +83,7 @@ function StatusIndicator({ status }: { status: VMStatus }) {
       <div
         className={cn(
           "h-2 w-2 rounded-full",
-          isRunning ? "bg-emerald-500 animate-pulse" : "bg-zinc-400"
+          isRunning ? "bg-emerald-500" : "bg-zinc-400"
         )}
       />
       <Badge variant={getStatusBadgeVariant(status)}>{status}</Badge>
@@ -450,17 +451,7 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            <TableRow>
-              <TableCell
-                colSpan={5}
-                className="h-32 text-center text-muted-foreground"
-              >
-                <div className="flex flex-col items-center gap-2">
-                  <Server className="h-8 w-8 opacity-40" />
-                  <span>No virtual machines found</span>
-                </div>
-              </TableCell>
-            </TableRow>
+            <TableEmptyRow colSpan={5} icon={Server} title="No virtual machines found" />
           </TableBody>
         </Table>
       </div>
@@ -561,9 +552,7 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline" className="font-mono text-xs">
-                          {vm.host}
-                        </Badge>
+                        {vm.host}
                       </TableCell>
                       <TableCell className="text-right">
                         <VMActionButtons vm={vm} />

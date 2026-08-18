@@ -10,6 +10,7 @@ import {
   MemoryStick,
   HardDrive,
   Loader2,
+  Image as ImageIcon,
   HardDriveDownload,
   Disc,
   Gauge,
@@ -54,6 +55,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import {
   useNodeNames,
   useCreateInstance,
@@ -2124,23 +2126,25 @@ export function InstanceCreateForm() {
                   </TableHeader>
                   <TableBody>
                     {imagesLoading ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="text-center text-muted-foreground py-6">
-                          Loading images…
-                        </TableCell>
-                      </TableRow>
+                      <TableEmptyRow
+                        colSpan={7}
+                        icon={Loader2}
+                        iconClassName="animate-spin"
+                        title="Loading images"
+                      />
                     ) : filteredImageRows.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={7} className="text-center text-muted-foreground py-6">
-                          No images match the filters.
-                        </TableCell>
-                      </TableRow>
+                      <TableEmptyRow
+                        colSpan={7}
+                        icon={ImageIcon}
+                        title="No images match the filters"
+                        description="Widen the filters, or pick a different node."
+                      />
                     ) : (
                       filteredImageRows.slice(0, 500).map((row) => (
                         <TableRow key={row.key}>
                           <TableCell>{row.distribution}</TableCell>
-                          <TableCell>{row.release || "—"}</TableCell>
-                          <TableCell>{row.variant || "—"}</TableCell>
+                          <TableCell>{row.release || <TableEmptyValue label="No release" />}</TableCell>
+                          <TableCell>{row.variant || <TableEmptyValue label="No variant" />}</TableCell>
                           <TableCell>{row.type}</TableCell>
                           <TableCell>{row.alias}</TableCell>
                           <TableCell>

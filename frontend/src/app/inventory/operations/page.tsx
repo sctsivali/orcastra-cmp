@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyValue } from "@/components/ui/table-text";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,7 +37,7 @@ import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatLabel} from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
@@ -331,7 +332,7 @@ export default function OperationsPage() {
                     
                     return (
                     <TableRow key={operation.id}>
-                      <TableCell className="font-mono text-xs">
+                      <TableCell className="font-mono">
                         {operation.id.substring(0, 8)}...
                       </TableCell>
                       <TableCell>
@@ -343,7 +344,7 @@ export default function OperationsPage() {
                       </TableCell>
                       <TableCell>{operation.description || "N/A"}</TableCell>
                       <TableCell>
-                        <Badge variant="outline">{operation.node_name || "N/A"}</Badge>
+                        {operation.node_name || <TableEmptyValue label="No node" />}
                       </TableCell>
                       <TableCell>
                         <span className="text-sm">{operation.project || "default"}</span>
@@ -354,9 +355,9 @@ export default function OperationsPage() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{operation.class_name}</Badge>
+                        {formatLabel(operation.class_name)}
                       </TableCell>
-                      <TableCell className="text-sm">
+                      <TableCell>
                         {formatDateTime(operation.created_at)}
                       </TableCell>
                       <TableCell className="text-right">

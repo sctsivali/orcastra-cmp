@@ -45,7 +45,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTime, formatLabel} from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { SEVERITY_RANK } from "@/lib/sort";
@@ -428,7 +428,7 @@ function WarningsContent() {
                     onClick={() => handleShowWarningDetail(warning)}
                   >
                     <TableCell>
-                      <Badge variant="outline">{warning.type}</Badge>
+                      {formatLabel(warning.type)}
                     </TableCell>
                     <TableCell className="max-w-md truncate">
                       {warning.last_message}
@@ -443,9 +443,9 @@ function WarningsContent() {
                       <span className="font-medium">{warning.location || warning.source_node || "N/A"}</span>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{warning.count.toLocaleString()}</Badge>
+                      {warning.count.toLocaleString()}
                     </TableCell>
-                    <TableCell className="text-xs md:text-sm whitespace-nowrap">
+                    <TableCell className="whitespace-nowrap">
                       {formatDateTime(warning.last_seen_at)}
                     </TableCell>
                   </TableRow>
@@ -521,7 +521,7 @@ function WarningsContent() {
                             {warning.days_until_expiry <= 0 ? "Expired" : `${warning.days_until_expiry} days`}
                           </span>
                         </TableCell>
-                        <TableCell className="text-xs md:text-sm whitespace-nowrap">{formatDateTime(warning.expires_at)}</TableCell>
+                        <TableCell className="whitespace-nowrap">{formatDateTime(warning.expires_at)}</TableCell>
                         <TableCell>
                           <Button
                             size="sm"
@@ -591,7 +591,7 @@ function WarningsContent() {
                             {warning.severity || "critical"}
                           </Badge>
                         </TableCell>
-                        <TableCell className="max-w-xs text-xs md:text-sm">
+                        <TableCell className="max-w-xs">
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
@@ -603,7 +603,7 @@ function WarningsContent() {
                             </Tooltip>
                           </TooltipProvider>
                         </TableCell>
-                        <TableCell className="text-xs md:text-sm whitespace-nowrap">{formatDateTime(warning.checked_at)}</TableCell>
+                        <TableCell className="whitespace-nowrap">{formatDateTime(warning.checked_at)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

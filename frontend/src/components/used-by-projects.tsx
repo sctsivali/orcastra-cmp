@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { Badge } from "./ui/badge";
+import { TableLink } from "./ui/table-link";
+import { TableEmptyValue } from "./ui/table-text";
 import { LoadingLottieSmall } from "./loading-lottie";
 import {
   Dialog,
@@ -61,19 +63,17 @@ export function UsedByProjects({ usedBy, resourceName }: UsedByProjectsProps) {
   const uniqueProjects = projectUsages.length;
 
   if (usedBy.length === 0) {
-    return <span className="text-muted-foreground text-xs">None</span>;
+    return <TableEmptyValue label="No projects" />;
   }
 
   return (
     <>
-      <button
+      <TableLink
         onClick={() => setIsOpen(true)}
-        className="inline-flex items-center gap-1 hover:underline focus:outline-none"
+        aria-label={`Show projects using ${resourceName}`}
       >
-        <Badge variant="secondary">
-          {`${uniqueProjects || usedBy.length} project${(uniqueProjects || usedBy.length) !== 1 ? 's' : ''}`}
-        </Badge>
-      </button>
+        {`${uniqueProjects || usedBy.length} project${(uniqueProjects || usedBy.length) !== 1 ? "s" : ""}`}
+      </TableLink>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">

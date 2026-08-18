@@ -14,6 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatLabel } from "@/lib/utils";
 import { 
   Select,
   SelectContent,
@@ -253,9 +254,7 @@ export default function IPAMPage() {
                       {alloc.address}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={alloc.type === "instance" ? "default" : "secondary"}>
-                        {alloc.type}
-                      </Badge>
+                      {formatLabel(alloc.type)}
                     </TableCell>
                     <TableCell className="font-medium">
                       {alloc.used_by}
@@ -268,13 +267,13 @@ export default function IPAMPage() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{alloc.network}</Badge>
+                      {alloc.network}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{alloc.node}</Badge>
+                      {alloc.node}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{alloc.project || 'default'}</Badge>
+                      {alloc.project || 'default'}
                     </TableCell>
                   </TableRow>
                 ))

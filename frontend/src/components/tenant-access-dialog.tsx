@@ -1024,7 +1024,7 @@ function AssignedPolicyCard({
       {/* expanded rules */}
       {expanded && rules.length > 0 && (
         <div className="border-t">
-          <Table>
+          <Table density="compact">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <SortableTableHead
@@ -1033,7 +1033,6 @@ function AssignedPolicyCard({
                   currentField={ruleSortField}
                   direction={ruleSortDirection}
                   onSort={handleRuleSort}
-                  className="text-[10px] h-7 px-3"
                 />
                 <SortableTableHead
                   label="Project"
@@ -1041,7 +1040,6 @@ function AssignedPolicyCard({
                   currentField={ruleSortField}
                   direction={ruleSortDirection}
                   onSort={handleRuleSort}
-                  className="text-[10px] h-7 px-3"
                 />
                 <SortableTableHead
                   label="Instance"
@@ -1049,7 +1047,6 @@ function AssignedPolicyCard({
                   currentField={ruleSortField}
                   direction={ruleSortDirection}
                   onSort={handleRuleSort}
-                  className="text-[10px] h-7 px-3"
                 />
                 <SortableTableHead
                   label="Permissions"
@@ -1057,27 +1054,26 @@ function AssignedPolicyCard({
                   currentField={ruleSortField}
                   direction={ruleSortDirection}
                   onSort={handleRuleSort}
-                  className="text-[10px] h-7 px-3"
                 />
               </TableRow>
             </TableHeader>
             <TableBody>
               {sortRules(rules).map((r, idx) => (
                 <TableRow key={idx} className="hover:bg-muted/30">
-                  <TableCell className="text-xs px-3 py-1.5">
+                  <TableCell>
                     {r.cluster_id === "*" ? (
-                      <span className="text-muted-foreground italic">All Clusters</span>
+                      <span className="text-muted-foreground ">All Clusters</span>
                     ) : (
                       clusters.find(c => c.cluster_id === r.cluster_id)?.display_name || r.cluster_id
                     )}
                   </TableCell>
-                  <TableCell className="text-xs px-3 py-1.5">
-                    {r.project_name === "*" ? <span className="text-muted-foreground italic">All</span> : r.project_name}
+                  <TableCell>
+                    {r.project_name === "*" ? <span className="text-muted-foreground ">All</span> : r.project_name}
                   </TableCell>
-                  <TableCell className="text-xs px-3 py-1.5">
-                    {r.instance_name === "*" ? <span className="text-muted-foreground italic">All</span> : r.instance_name}
+                  <TableCell>
+                    {r.instance_name === "*" ? <span className="text-muted-foreground ">All</span> : r.instance_name}
                   </TableCell>
-                  <TableCell className="px-3 py-1.5">
+                  <TableCell>
                     <PermissionBadges permissions={r.permissions} />
                   </TableCell>
                 </TableRow>
@@ -1151,7 +1147,7 @@ function EffectivePermissionsSection({
 
       {expanded && (
         <div className="rounded-lg border overflow-hidden">
-          <Table>
+          <Table density="compact">
             <TableHeader>
               <TableRow className="hover:bg-transparent bg-muted/30">
                 <SortableTableHead
@@ -1160,7 +1156,6 @@ function EffectivePermissionsSection({
                   currentField={effectiveSortField}
                   direction={effectiveSortDirection}
                   onSort={handleEffectiveSort}
-                  className="text-[10px] h-7 px-3"
                 />
                 <SortableTableHead
                   label="Project"
@@ -1168,7 +1163,6 @@ function EffectivePermissionsSection({
                   currentField={effectiveSortField}
                   direction={effectiveSortDirection}
                   onSort={handleEffectiveSort}
-                  className="text-[10px] h-7 px-3"
                 />
                 <SortableTableHead
                   label="Instance"
@@ -1176,7 +1170,6 @@ function EffectivePermissionsSection({
                   currentField={effectiveSortField}
                   direction={effectiveSortDirection}
                   onSort={handleEffectiveSort}
-                  className="text-[10px] h-7 px-3"
                 />
                 <SortableTableHead
                   label="Permissions"
@@ -1184,7 +1177,6 @@ function EffectivePermissionsSection({
                   currentField={effectiveSortField}
                   direction={effectiveSortDirection}
                   onSort={handleEffectiveSort}
-                  className="text-[10px] h-7 px-3"
                 />
                 <SortableTableHead
                   label="Source Policy"
@@ -1192,31 +1184,30 @@ function EffectivePermissionsSection({
                   currentField={effectiveSortField}
                   direction={effectiveSortDirection}
                   onSort={handleEffectiveSort}
-                  className="text-[10px] h-7 px-3"
                 />
               </TableRow>
             </TableHeader>
             <TableBody>
               {sortEffectiveRules(rules).map((r, idx) => (
                 <TableRow key={idx} className="hover:bg-muted/20">
-                  <TableCell className="text-xs px-3 py-1.5 font-medium">
+                  <TableCell className="font-medium">
                     {r.cluster_id === "*" ? (
-                      <span className="text-muted-foreground italic">All Clusters</span>
+                      <span className="text-muted-foreground ">All Clusters</span>
                     ) : (
                       clusters.find(c => c.cluster_id === r.cluster_id)?.display_name || r.cluster_id
                     )}
                   </TableCell>
-                  <TableCell className="text-xs px-3 py-1.5">
-                    {r.project_name === "*" ? <span className="text-muted-foreground italic">All</span> : r.project_name}
+                  <TableCell>
+                    {r.project_name === "*" ? <span className="text-muted-foreground ">All</span> : r.project_name}
                   </TableCell>
-                  <TableCell className="text-xs px-3 py-1.5">
-                    {r.instance_name === "*" ? <span className="text-muted-foreground italic">All</span> : r.instance_name}
+                  <TableCell>
+                    {r.instance_name === "*" ? <span className="text-muted-foreground ">All</span> : r.instance_name}
                   </TableCell>
-                  <TableCell className="px-3 py-1.5">
+                  <TableCell>
                     <PermissionBadges permissions={r.permissions} />
                   </TableCell>
-                  <TableCell className="text-xs px-3 py-1.5">
-                    <Badge variant="outline" className="text-[10px]">{r.policy_name}</Badge>
+                  <TableCell>
+                    {r.policy_name}
                   </TableCell>
                 </TableRow>
               ))}

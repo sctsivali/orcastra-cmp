@@ -21,6 +21,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableLink } from "@/components/ui/table-link";
+import { getEntitlementLabel } from "@/lib/lxd-entitlements";
+import { TableEmptyValue } from "@/components/ui/table-text";
+import { formatLabel } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -307,25 +311,17 @@ export default function GroupsPage() {
                       {group.description || <span className="text-muted-foreground italic">No description</span>}
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{group.node || "N/A"}</Badge>
+                      {group.node || <TableEmptyValue label="No node" />}
                     </TableCell>
                     <TableCell className="text-center">
-                      <Badge 
-                        variant="secondary" 
-                        className="cursor-pointer hover:bg-secondary/80 transition-colors"
-                        onClick={() => handleShowIdentities(group)}
-                      >
+                      <TableLink onClick={() => handleShowIdentities(group)}>
                         {((group.identities?.tls?.length || 0) + (group.identities?.oidc?.length || 0))} members
-                      </Badge>
+                      </TableLink>
                     </TableCell>
                     <TableCell className="text-center">
-                      <Badge 
-                        variant="outline"
-                        className="cursor-pointer hover:bg-accent transition-colors"
-                        onClick={() => handleShowPermissions(group)}
-                      >
+                      <TableLink onClick={() => handleShowPermissions(group)}>
                         {group.permissions?.length || 0} permissions
-                      </Badge>
+                      </TableLink>
                     </TableCell>
                     <TableCell className="text-right">
                       <DropdownMenu>
@@ -497,13 +493,13 @@ export default function GroupsPage() {
                   {permSortItems(selectedGroup.permissions).map((permission: any, index: number) => (
                     <TableRow key={index}>
                       <TableCell>
-                        <Badge variant="outline">{permission.entity_type || "N/A"}</Badge>
+                        {formatLabel(permission.entity_type)}
                       </TableCell>
-                      <TableCell className="font-mono text-xs max-w-md truncate">
+                      <TableCell className="font-mono max-w-md truncate">
                         {permission.url || "N/A"}
                       </TableCell>
                       <TableCell>
-                        <Badge variant="secondary">{permission.entitlement || "N/A"}</Badge>
+                        {getEntitlementLabel(permission.entitlement)}
                       </TableCell>
                     </TableRow>
                   ))}

@@ -15,6 +15,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { formatLabel } from "@/lib/utils";
+import { TableLink } from "@/components/ui/table-link";
 import {
   Select,
   SelectContent,
@@ -268,22 +270,19 @@ export default function NetworksPage() {
                   
                   return (
                     <TableRow key={`${network.node}-${network.name}-${idx}`}>
-                      <TableCell
-                        className="font-medium cursor-pointer hover:text-primary hover:underline"
-                        onClick={() =>
-                          router.push(
-                            `/inventory/networks/${encodeURIComponent(network.name)}?host=${encodeURIComponent(network.node)}`,
-                          )
-                        }
-                      >
-                        {network.name}
+                      <TableCell className="font-medium">
+                        <TableLink
+                          href={`/inventory/networks/${encodeURIComponent(network.name)}?host=${encodeURIComponent(network.node)}`}
+                        >
+                          {network.name}
+                        </TableLink>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{network.type}</Badge>
+                        {formatLabel(network.type)}
                       </TableCell>
                       {nodes.length > 0 && (
                         <TableCell>
-                          {network.node && <Badge variant="secondary">{network.node}</Badge>}
+                          {network.node}
                         </TableCell>
                       )}
                       <TableCell>
@@ -299,9 +298,9 @@ export default function NetworksPage() {
                       </TableCell>
                       <TableCell>
                         {network.managed ? (
-                          <Badge variant="default">Yes</Badge>
+                          <>Yes</>
                         ) : (
-                          <Badge variant="outline">No</Badge>
+                          <>No</>
                         )}
                       </TableCell>
                       <TableCell className="text-center">
