@@ -58,7 +58,7 @@ import {
   useNodeNames,
   useCreateInstance,
   useImagesByHost,
-  useStoragePools,
+  useStoragePoolList,
   useProjects,
   useRemoteImages,
   useStorageVolumes,
@@ -230,9 +230,11 @@ export function InstanceCreateForm() {
     ]),
   );
 
-  const { data: poolsResp, isLoading: loadingPools } = useStoragePools(
-    form.selectedNode,
-  );
+  const {
+    data: poolsResp,
+    isLoading: loadingPools,
+    isError: poolsFailed,
+  } = useStoragePoolList(form.selectedNode);
   const poolOptions = (
     ((poolsResp as unknown as StoragePoolListResponse | undefined)?.pools ??
       []) as StoragePoolInfo[]
@@ -648,16 +650,16 @@ export function InstanceCreateForm() {
 
     // important: devices.root is only built when a pool has resolved, and LXD rejects a create
     // whose root disk carries a size but no pool (verified against a live cluster). Submitting
-    // before the pool query answered therefore either dropped the requested size silently or
-    // produced a create that reported success and never materialised. Refuse it here rather
-    // than in `canSubmit`: useStoragePools also fans out to resources-all across every
-    // cluster, so gating the button on it left Create dead for many seconds on a fleet with
-    // unreachable nodes.
+    // before the pool list answered therefore either dropped the requested size silently or
+    // produced a create that reported success and never materialised. Refused here rather than
+    // on the button, so the operator gets a message instead of a control that looks broken.
     if (!effectivePool) {
       setError(
         loadingPools
           ? "Still loading storage pools for this node. Try again in a moment."
-          : "No storage pool is available on this node, so the root disk cannot be sized.",
+          : poolsFailed
+            ? "Could not load storage pools for this node, so the root disk cannot be sized. Retry in a moment."
+            : "No storage pool is available on this node, so the root disk cannot be sized.",
       );
       submitInFlightRef.current = false;
       return;

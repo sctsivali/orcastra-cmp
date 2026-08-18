@@ -804,6 +804,22 @@ export function useIPAM(host?: string) {
 }
 
 // Storage Pools Hooks
+// The pool LIST for one node, without the fleet-wide resources call.
+//
+// important: `useStoragePools` resolves the per-node list and `resources-all` in one
+// Promise.all, so a slow or failing fan-out across every cluster takes the pool list down with
+// it, and TanStack reports that error state identically to "this node has no pools". The create
+// form builds `devices.root` from the resolved pool, so it read an unrelated cluster's timeout
+// as "no storage here" and refused a create it could have made. Anything that only needs the
+// list should use this; the storage-pools page still uses the combined hook for its usage bars.
+export function useStoragePoolList(host?: string) {
+  return useQuery({
+    queryKey: ["storagePoolList", host],
+    queryFn: () => api.storagePools.list(host),
+    ...SEMI_STATIC_DATA_CONFIG,
+  });
+}
+
 export function useStoragePools(host?: string) {
   return useQuery({
     queryKey: ["storagePools", host],
