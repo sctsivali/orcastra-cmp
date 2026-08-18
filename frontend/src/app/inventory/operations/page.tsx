@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -35,14 +34,14 @@ import { useOperations } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
-import { usePermissions } from "@/hooks/use-permissions";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { formatDateTime } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function OperationsPage() {
-  const router = useRouter();
-  const { isPartner } = usePermissions();
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
   const { data, isLoading, refetch, isRefetching } = useOperations();
   const operations = useMemo(() => (data as any)?.operations || [], [data]);
   const nodes = (data as any)?.nodes || [];
@@ -58,12 +57,6 @@ export default function OperationsPage() {
     instanceName?: string;
   }>({ open: false, operationId: "", host: "", description: "" });
 
-  // redirect if not Partner+
-  useEffect(() => {
-    if (!isPartner) {
-      router.replace("/");
-    }
-  }, [isPartner, router]);
 
   // Sorting. Instance accessor mirrors the per-row derivation (instance_name, else
   // extract from a websocket console op's resources, else empty).
@@ -94,6 +87,7 @@ export default function OperationsPage() {
   );
   const sortedOperations = useMemo(() => sortItems(operations), [operations, sortItems]);
 
+  if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
   const getStatusColor = (status: string) => {

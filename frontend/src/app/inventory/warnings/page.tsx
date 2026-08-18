@@ -43,7 +43,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { usePermissions } from "@/hooks/use-permissions";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { formatDateTime } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -730,15 +731,9 @@ function WarningsContent() {
 // Main page component with Suspense wrapper
 export default function WarningsPage() {
   const router = useRouter();
-  const { isPartner } = usePermissions();
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 
-  // redirect if not Partner+
-  useEffect(() => {
-    if (!isPartner) {
-      router.replace("/");
-    }
-  }, [isPartner, router]);
-
+  if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
   return (

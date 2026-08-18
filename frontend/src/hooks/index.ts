@@ -5,3 +5,4 @@ export * from "./use-read-only-mode";
 export * from "./use-loading-progress";
 export * from "./use-terminal";
 export * from "./use-permissions";
+export * from "./use-require-role";

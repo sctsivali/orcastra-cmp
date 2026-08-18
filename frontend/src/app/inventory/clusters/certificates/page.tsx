@@ -59,7 +59,8 @@ import {
   useCancelPendingCert,
 } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import { usePermissions } from "@/hooks/use-permissions";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { formatDate } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -117,7 +118,7 @@ export default function CertificatesPage() {
   const { data, isLoading, refetch, isRefetching } = useCertificates();
   const certificates = data?.certificates || [];
   const { isReadOnly } = useReadOnlyMode();
-  const { isPartner } = usePermissions();
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 
   // Renewal modal state
   const [renewalModal, setRenewalModal] = React.useState<{
@@ -161,13 +162,7 @@ export default function CertificatesPage() {
   }), []);
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "expires");
 
-  // redirect if not Partner+
-  React.useEffect(() => {
-    if (!isPartner) {
-      router.replace("/");
-    }
-  }, [isPartner, router]);
-
+  if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
   const handleRenewClick = (cert: CertificateInfo) => {

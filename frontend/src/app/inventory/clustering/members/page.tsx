@@ -30,7 +30,8 @@ import { toast } from "@/hooks/use-toast";
 import { ClusterMember } from "@/types/api";
 import { useClusters, useClusterMembers, useMemberResources } from "@/hooks/use-lxd";
 import { MemberResourceModal } from "@/components/member-resource-modal";
-import { usePermissions } from "@/hooks/use-permissions";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
@@ -286,15 +287,9 @@ function ClusterMembersContent() {
 
 export default function ClusterMembersPage() {
   const router = useRouter();
-  const { isPartner } = usePermissions();
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 
-  // redirect if not Partner+
-  React.useEffect(() => {
-    if (!isPartner) {
-      router.replace("/");
-    }
-  }, [isPartner, router]);
-
+  if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
   return (

@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +23,8 @@ import { ServerInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useServerInfo } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import { usePermissions } from "@/hooks/use-permissions";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 
 function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
   const [open, setOpen] = useState(false);
@@ -95,19 +95,12 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
 }
 
 export default function ServerPage() {
-  const router = useRouter();
-  const { isPartner } = usePermissions();
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
   const { data, isLoading, refetch, isRefetching } = useServerInfo();
   const servers = (data as any)?.servers || [];
   const { toast } = useToast();
 
-  // redirect if not Partner+
-  useEffect(() => {
-    if (!isPartner) {
-      router.replace("/");
-    }
-  }, [isPartner, router]);
-
+  if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
   if (isLoading) {

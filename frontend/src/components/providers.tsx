@@ -19,7 +19,17 @@ function QueryInvalidationBridge() {
   const queryClient = useQueryClient();
   React.useEffect(() => {
     onTokenRefreshed(() => {
-      queryClient.invalidateQueries();
+      // important: only the queries that actually failed under the old token.
+      // A bare invalidateQueries() refetches the entire cache on every rotation,
+      // which fires N concurrent requests, reads to the operator as a page
+      // reload, and manufactures the 401 burst that used to redirect them away.
+      queryClient.invalidateQueries({
+        predicate: (query) =>
+          query.state.status === "error" &&
+          query.state.error instanceof APIError &&
+          query.state.error.status === 401,
+        refetchType: "active",
+      });
     });
   }, [queryClient]);
   return null;

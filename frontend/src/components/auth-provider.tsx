@@ -15,7 +15,7 @@
 
 import { SessionProvider, useSession, signIn } from "next-auth/react";
 import { ReactNode, useEffect, useRef, useState, useCallback } from "react";
-import { setAccessToken, reset401Counter, onSessionRefreshNeeded } from "@/lib/api";
+import { setAccessToken, reset401Counter, onSessionRefreshNeeded, onAuthFailure } from "@/lib/api";
 
 // Session refresh interval (seconds) - refresh token before it expires.
 // Authentik default access token lifetime is ~5 min, so refresh every 4 min.
@@ -37,6 +37,8 @@ function TokenSync({ children }: { children: ReactNode }) {
   const [tokenReady, setTokenReady] = useState(false);
   const [authError, setAuthError] = useState(false);
   const retryCountRef = useRef(0);
+  const wasAuthenticatedRef = useRef(false);
+  const signOutConfirmedRef = useRef(false);
 
   // Register session refresh callback so api.ts can trigger re-auth on 401
   useEffect(() => {
@@ -49,6 +51,12 @@ function TokenSync({ children }: { children: ReactNode }) {
     };
     onSessionRefreshNeeded(refreshFn);
   }, [updateSession]);
+
+  // api.ts no longer redirects on repeated 401s - it asks for the banner instead,
+  // so the operator keeps the page they were on and can re-auth from there.
+  useEffect(() => {
+    onAuthFailure(() => setAuthError(true));
+  }, []);
 
   useEffect(() => {
     if (status === "authenticated" && session?.accessToken) {
@@ -69,15 +77,34 @@ function TokenSync({ children }: { children: ReactNode }) {
 
       // Successful token - reset counters
       retryCountRef.current = 0;
+      wasAuthenticatedRef.current = true;
+      signOutConfirmedRef.current = false;
       setAuthError(false);
       setAccessToken(session.accessToken);
       reset401Counter();
       setTokenReady(true);
     } else if (status === "unauthenticated") {
+      // important: next-auth's fetchData() returns null on ANY failure, including a
+      // transient network error, and SessionProvider commits that null verdict. Once
+      // it does, _getSession short-circuits on the null session and the refetch poll
+      // is gated behind it, so the tab stays wedged as signed-out until a reload.
+      // A laptop waking before its wifi is enough to trigger it. Confirm once before
+      // believing an unauthenticated verdict we did not previously hold.
+      if (wasAuthenticatedRef.current && !signOutConfirmedRef.current) {
+        signOutConfirmedRef.current = true;
+        void (async () => {
+          const confirmed = await updateSession().catch(() => null);
+          if (!confirmed) {
+            setAccessToken(null);
+            setTokenReady(true);
+          }
+        })();
+        return;
+      }
       setAccessToken(null);
       setTokenReady(true); // resolved - no token needed
     }
-  }, [session, status]);
+  }, [session, status, updateSession]);
 
   // don't render children (or React Query hooks) until token is set
   if (!tokenReady) {
@@ -108,7 +135,15 @@ interface AuthProviderProps {
 
 export function AuthProvider({ children }: AuthProviderProps) {
   return (
-    <SessionProvider refetchInterval={SESSION_REFRESH_INTERVAL_S}>
+    <SessionProvider
+      refetchInterval={SESSION_REFRESH_INTERVAL_S}
+      // the 4-minute poll already keeps the token inside Authentik's ~5-minute
+      // lifetime. Refetching on tab focus adds nothing and is actively harmful:
+      // it is the entry point to the null-session wedge described in TokenSync.
+      refetchOnWindowFocus={false}
+      // and do not poll while offline, for the same reason
+      refetchWhenOffline={false}
+    >
       <TokenSync>{children}</TokenSync>
     </SessionProvider>
   );

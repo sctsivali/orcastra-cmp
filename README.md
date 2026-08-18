@@ -1,3 +1,13 @@
+```
+   ____                       __              /\
+  / __ \______________ ______/ /__________ _ / /\               /\
+ / / / / ___/ ___/ __ `/ ___/ __/ ___/ __ `/ \/  \             /  \___
+/ /_/ / /  / /__/ /_/ (__  ) /_/ /  / /_/ /   \   \___________/       \___
+\____/_/   \___/\__,_/____/\__/_/   \__,_/     \                       o  \
+                                                \___                ___   /
+                                                    \______________/   \_/
+```
+
 # Orcastra Dashboard
 
 [![Release](https://img.shields.io/badge/Release-v1.0.0--RC2-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases/tag/v1.0.0-RC2)

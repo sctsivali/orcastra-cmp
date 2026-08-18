@@ -95,17 +95,27 @@ export function getAccessToken(): string | null {
 }
 
 /**
- * 401 redirect guard - prevents redirect loops during token refresh.
- * On first 401, triggers a session refresh. Only redirects after
- * multiple consecutive 401s with a cooldown (true session death).
+ * 401 recovery. Two rules make this survive an operator returning from AFK:
+ *
+ * important: never navigate. A hard redirect here throws the operator off the
+ * page they were on and loses all in-memory state (open consoles included, via
+ * the beforeunload kill-all-sessions beacon). Auth death is announced to the UI,
+ * which already renders a re-auth banner, so the current route is preserved.
+ *
+ * important: a burst of parallel requests failing under one expired token is a
+ * single failure, not N. The counter only advances when a request fails again
+ * with a token we have already refreshed past, so ten concurrent queries hitting
+ * one stale token count once.
  */
-let _401Count = 0;
-let _401RedirectPending = false;
-const _401_THRESHOLD = 5; // require 5 consecutive 401s before hard redirect
-const _401_RESET_MS = 8000; // reset counter after 8s of no 401s
+let _refreshAttempts = 0;
+let _authFailureAnnounced = false;
+const _MAX_REFRESH_ATTEMPTS = 3; // refreshes that failed to clear 401s before we prompt
+const _401_RESET_MS = 8000; // forget the failure streak after 8s of quiet
 let _401ResetTimer: ReturnType<typeof setTimeout> | null = null;
+let _tokenAtLastFailure: string | null = null;
 let _sessionRefreshFn: (() => Promise<void>) | null = null;
 let _sessionRefreshInFlight = false;
+let _onAuthFailure: (() => void) | null = null;
 
 /**
  * Register a callback for requesting a session refresh (called by auth-provider).
@@ -116,16 +126,31 @@ export function onSessionRefreshNeeded(fn: () => Promise<void>) {
   _sessionRefreshFn = fn;
 }
 
+/**
+ * Register a callback fired when repeated session refreshes fail to clear 401s.
+ * auth-provider uses it to raise the existing re-auth banner in place.
+ */
+export function onAuthFailure(fn: () => void) {
+  _onAuthFailure = fn;
+}
+
 function handle401() {
-  if (_401RedirectPending) return false; // already redirecting
-  _401Count++;
+  if (_authFailureAnnounced) return false;
 
-  // Reset counter after a quiet period
+  // only a 401 under a token we have not already refreshed past is new information
+  const isNewFailure = _accessToken !== _tokenAtLastFailure;
+  if (isNewFailure) _tokenAtLastFailure = _accessToken;
+
   if (_401ResetTimer) clearTimeout(_401ResetTimer);
-  _401ResetTimer = setTimeout(() => { _401Count = 0; }, _401_RESET_MS);
+  _401ResetTimer = setTimeout(reset401Counter, _401_RESET_MS);
 
-  // First few 401s: try to refresh the session token silently
-  if (_401Count <= 2 && _sessionRefreshFn && !_sessionRefreshInFlight) {
+  if (
+    isNewFailure &&
+    _refreshAttempts < _MAX_REFRESH_ATTEMPTS &&
+    _sessionRefreshFn &&
+    !_sessionRefreshInFlight
+  ) {
+    _refreshAttempts++;
     _sessionRefreshInFlight = true;
     _sessionRefreshFn().finally(() => {
       _sessionRefreshInFlight = false;
@@ -133,18 +158,21 @@ function handle401() {
     return true; // signal: refresh triggered, caller may retry
   }
 
-  if (_401Count >= _401_THRESHOLD) {
-    _401RedirectPending = true;
-    console.warn(`Session expired (${_401Count} consecutive 401s) — redirecting to login`);
-    window.location.href = '/api/auth/signin';
+  if (_refreshAttempts >= _MAX_REFRESH_ATTEMPTS) {
+    _authFailureAnnounced = true;
+    console.warn(
+      `[Auth] ${_refreshAttempts} session refreshes did not clear 401s — prompting re-auth in place`
+    );
+    _onAuthFailure?.();
   }
   return false;
 }
 
-/** Reset 401 counter on successful token set (called by auth-provider). */
+/** Reset the 401 failure streak on a successful token set (called by auth-provider). */
 export function reset401Counter() {
-  _401Count = 0;
-  _401RedirectPending = false;
+  _refreshAttempts = 0;
+  _authFailureAnnounced = false;
+  _tokenAtLastFailure = null;
 }
 
 // Timeout wrapper for fetch with AbortController

@@ -62,7 +62,10 @@ export const SEMI_STATIC_DATA_CONFIG = {
 export const DYNAMIC_DATA_CONFIG = {
   staleTime: 30 * 1000, // 30 seconds
   gcTime: 2 * 60 * 1000, // 2 minutes
-  refetchOnWindowFocus: true, // Refetch when tab becomes active
+  // note: no refetch on tab focus. Returning from AFK would fire every query at
+  // once under a possibly-expired token. Freshness comes from refetchInterval,
+  // which resumes on its own once the tab is visible again.
+  refetchOnWindowFocus: false,
   refetchOnMount: true, // Fetch on mount to ensure data is loaded
   refetchOnReconnect: true,
   retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 1),
@@ -79,7 +82,7 @@ export const REALTIME_DATA_CONFIG = {
   gcTime: 1 * 60 * 1000, // 1 minute
   refetchInterval: 60 * 1000, // Auto-refetch every 60 seconds (reduced from 30s)
   refetchIntervalInBackground: false, // Stop polling when tab is hidden
-  refetchOnWindowFocus: true,
+  refetchOnWindowFocus: false, // see DYNAMIC_DATA_CONFIG
   refetchOnMount: true,
   refetchOnReconnect: true,
   retry: (failureCount: number, error: unknown) => shouldRetry(failureCount, error, 1),

@@ -146,6 +146,10 @@ function mergeWithDefaults(data: Partial<PersonalizationSettings>): Personalizat
 
 export function PersonalizationProvider({ children }: { children: React.ReactNode }) {
   const { data: session, status } = useSession();
+  // note: next-auth builds a fresh session object on every refresh, so depending on
+  // `session` itself tears down and rebuilds the org-pref timer and listener below
+  // on each one. The token is the only part those effects actually read.
+  const sessionAccessToken = (session as any)?.accessToken as string | undefined;
   // Initialize from cookie hint for instant render (prevents FOUC for colors/branding)
   const [settings, setSettings] = React.useState<PersonalizationSettings>(
     () => readPersonalizationCookie() ?? DEFAULT_PERSONALIZATION
@@ -678,9 +682,8 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
   // Seed the version ref on initial load so subsequent polls have a baseline
   React.useEffect(() => {
     if (!shouldPollOrgPrefs) return;
-    const token = (session as any)?.accessToken;
     // Fire-and-forget: just records the current version
-    checkOrgPrefsVersion(token);
+    checkOrgPrefsVersion(sessionAccessToken);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldPollOrgPrefs]);
 
@@ -689,15 +692,14 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     if (!shouldPollOrgPrefs) return;
 
     const intervalId = setInterval(async () => {
-      const token = (session as any)?.accessToken;
-      const changed = await checkOrgPrefsVersion(token);
+      const changed = await checkOrgPrefsVersion(sessionAccessToken);
       if (changed) {
         await refreshSettings();
       }
     }, ORG_PREF_POLL_INTERVAL_MS);
 
     return () => clearInterval(intervalId);
-  }, [shouldPollOrgPrefs, checkOrgPrefsVersion, refreshSettings, session]);
+  }, [shouldPollOrgPrefs, checkOrgPrefsVersion, refreshSettings, sessionAccessToken]);
 
   // Visibility-based refresh: when user switches back to the tab, check immediately
   React.useEffect(() => {
@@ -705,8 +707,7 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
 
     const handleVisibilityChange = async () => {
       if (document.visibilityState !== "visible") return;
-      const token = (session as any)?.accessToken;
-      const changed = await checkOrgPrefsVersion(token);
+      const changed = await checkOrgPrefsVersion(sessionAccessToken);
       if (changed) {
         await refreshSettings();
       }
@@ -714,7 +715,7 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
 
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, [shouldPollOrgPrefs, checkOrgPrefsVersion, refreshSettings, session]);
+  }, [shouldPollOrgPrefs, checkOrgPrefsVersion, refreshSettings, sessionAccessToken]);
 
   const value: PersonalizationContextType = {
     settings,

@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   ChevronLeft,
   ChevronRight,
@@ -303,22 +303,23 @@ function ConsoleMenuItem() {
 
 export function Sidebar({ className }: SidebarProps) {
   const { sidebarCollapsed: isCollapsed, setSidebarCollapsed: setIsCollapsed, sidebarOpen, setSidebarOpen } = useLayout();
-  const [techExpanded, setTechExpanded] = useState(false);
-  const [hardwareExpanded, setHardwareExpanded] = useState(false);
-  const [softwareExpanded, setSoftwareExpanded] = useState(false);
-  const [inventoryExpanded, setInventoryExpanded] = useState(false);
+  const pathname = usePathname();
+  const router = useRouter();
+  // open the submenu you are standing in, on first paint. usePathname() is available
+  // during SSR in the App Router, so seeding from it is hydration-safe.
+  const [inventoryExpanded, setInventoryExpanded] = useState(
+    () => pathname?.startsWith("/inventory") ?? false
+  );
   const [selectedMerchant, setSelectedMerchant] =
     useState<MerchantInfo | null>(null);
   const { theme, setTheme } = useTheme();
   const { settings } = usePersonalization();
   const currentLogo = useCurrentLogo(theme);
   const { isAdmin, isPartner, isTenant } = usePermissions();
-  
-  const pathname = usePathname();
 
-  // Auto-expand inventory on mobile if on inventory page
+  // keep it open when navigating deeper into /inventory, at any viewport
   useEffect(() => {
-    if (pathname?.startsWith("/inventory") && window.innerWidth < 1024) {
+    if (pathname?.startsWith("/inventory")) {
       setInventoryExpanded(true);
     }
   }, [pathname]);
@@ -558,8 +559,11 @@ export function Sidebar({ className }: SidebarProps) {
                   )}
                   onClick={() => {
                     if (isCollapsed && window.innerWidth >= 1024) {
-                      // On large screens with collapsed sidebar, go to link
-                      window.location.href = "/inventory";
+                      // important: soft nav. A document navigation here fires
+                      // beforeunload, and the console page beacons kill-all-sessions
+                      // on unload, so this used to kill the operator's live consoles.
+                      router.push("/inventory");
+                      handleLinkClick();
                     } else {
                       // Otherwise toggle dropdown
                       setInventoryExpanded(!inventoryExpanded);

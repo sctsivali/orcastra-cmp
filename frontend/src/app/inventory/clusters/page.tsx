@@ -52,7 +52,8 @@ import { useClusters, useCheckClusterAuth, useDeleteCluster, useRegenerateCert }
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { ClusterLocationDialog } from "@/components/cluster-location-dialog";
-import { usePermissions } from "@/hooks/use-permissions";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { copyText } from "@/lib/clipboard";
 
 const statusConfig = {
@@ -99,7 +100,7 @@ export default function ClustersPage() {
   const [deleteConfirmText, setDeleteConfirmText] = React.useState("");
   const [locationModal, setLocationModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const { isReadOnly } = useReadOnlyMode();
-  const { isPartner } = usePermissions();
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
   const checkClusterAuth = useCheckClusterAuth();
   const deleteCluster = useDeleteCluster();
   const regenerateCert = useRegenerateCert();
@@ -113,13 +114,7 @@ export default function ClustersPage() {
   }), []);
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "cluster");
 
-  // redirect if not Partner+
-  React.useEffect(() => {
-    if (!isPartner) {
-      router.replace("/");
-    }
-  }, [isPartner, router]);
-
+  if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
   const handleCheckAuth = async (clusterId: string) => {

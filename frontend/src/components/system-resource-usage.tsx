@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { REALTIME_DATA_CONFIG } from "@/lib/query-config";
 import {
   SystemResourceUsage,
   ContainerInfo,
@@ -484,7 +483,6 @@ export function SystemResourceUsagePanel() {
     queryKey: ["systemResourceUsage"],
     queryFn: api.system.getResourceUsage,
     refetchInterval: refreshInterval, // Always auto-refresh every 5 seconds
-    refetchOnWindowFocus: true,
     staleTime: 3000,
     gcTime: 60000,
   });

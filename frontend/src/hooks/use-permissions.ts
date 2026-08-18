@@ -23,8 +23,10 @@ import {
 } from "@/types/rbac";
 
 export interface UsePermissionsResult {
-  /** Session still loading */
+  /** No permission answer available yet (first load only, not a background refresh) */
   isLoading: boolean;
+  /** Session resolved and the user is signed in - a denial is only meaningful when true */
+  isAuthenticated: boolean;
   /** Resolved roles */
   roles: Role[];
   /** Highest-privilege role */
@@ -47,7 +49,12 @@ export interface UsePermissionsResult {
 
 export function usePermissions(): UsePermissionsResult {
   const { data: session, status } = useSession();
-  const isLoading = status === "loading";
+  // important: useSession().update() flips status back to "loading" while keeping the
+  // existing session data. Treating that as "loading" makes every PermissionGuard
+  // unmount and remount its children on each silent token refresh. We only lack an
+  // answer when there is no session to read roles from.
+  const isLoading = status === "loading" && !session;
+  const isAuthenticated = status === "authenticated";
 
   const groups: string[] = useMemo(() => {
     return (session?.user as any)?.groups ?? [];
@@ -69,6 +76,7 @@ export function usePermissions(): UsePermissionsResult {
 
   return {
     isLoading,
+    isAuthenticated,
     roles,
     highestRole,
     permissions,

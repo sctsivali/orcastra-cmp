@@ -61,7 +61,6 @@ export function useTenantAccess(): UseTenantAccessResult {
     queryFn: () => api.tenantAccess.myAccess(),
     enabled: !isPartner && !permLoading,
     staleTime: 60_000, // cache for 1 min
-    refetchOnWindowFocus: true,
   });
 
   const access = data?.access || [];
