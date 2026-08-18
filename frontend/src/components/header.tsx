@@ -32,6 +32,7 @@ export function Header() {
               variant="ghost"
               size="icon"
               className="md:hidden"
+              aria-label="Open sidebar"
               onClick={() => setSidebarOpen(true)}
             >
               <Menu className="h-5 w-5" />

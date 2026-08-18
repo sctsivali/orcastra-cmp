@@ -7,7 +7,7 @@ export * from "./node-status";
 export * from "./node-detail-modal";
 export * from "./stats-overview";
 export * from "./instance-monitoring-modal";
-export * from "./sidebar";
+export * from "./sidebar/sidebar";
 export * from "./theme-provider";
 export * from "./layout-provider";
 export * from "./personalization-provider";

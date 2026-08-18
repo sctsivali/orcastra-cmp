@@ -3,7 +3,7 @@
 import * as React from "react";
 import dynamic from "next/dynamic";
 import { Header } from "./header";
-import { Sidebar } from "./sidebar";
+import { Sidebar } from "./sidebar/sidebar";
 import { useLayout } from "./layout-provider";
 import { usePersonalization } from "./personalization-provider";
 import { cn } from "@/lib/utils";
@@ -64,7 +64,9 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       {!isFullPageTerminalOrConsole && <Sidebar />}
       <div
         className={cn(
-          "flex flex-1 flex-col transition-all duration-300",
+          // Scope the transition to margin. transition-all lerps every animatable property,
+          // which makes a personalization sidebar background fade on every collapse.
+          "flex flex-1 flex-col transition-[margin] duration-200 ease-out motion-reduce:transition-none",
           // Prevent content from affecting sidebar positioning
           "overflow-x-hidden",
           // On full-page views, no margin. Otherwise apply sidebar margins
