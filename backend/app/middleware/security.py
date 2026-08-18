@@ -9,7 +9,7 @@ import base64
 import json
 import os
 import time
-from typing import Iterable
+from typing import Iterable, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -36,6 +36,35 @@ def apply_security_headers(response: Response) -> Response:
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
     return response
 
+
+
+def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
+    """
+    Count one hit against a counter shared by every worker.
+
+    Returns True to allow, False to reject, and None when Redis cannot answer, which
+    tells the caller to fall back rather than guess.
+
+    important: fail open, never closed. A limiter that rejects when its store is
+    unreachable turns a Redis outage into a total product outage, which is a far worse
+    failure than briefly allowing more forced refreshes than intended.
+    """
+    if limit <= 0:
+        return True
+    try:
+        from app.core.cache import get_cache_manager
+
+        client = get_cache_manager().redis_client
+        if client is None:
+            return None
+        bucket = f"orcastra:ratelimit:{key}"
+        count = client.incr(bucket)
+        if count == 1:
+            client.expire(bucket, window_seconds)
+        return int(count) <= limit
+    except Exception as exc:  # noqa: BLE001 - any store failure must fall back, not block
+        logger.warning("Shared rate limit unavailable, falling back to in-memory: %s", exc)
+        return None
 
 
 def _per_worker_share(limit: int) -> int:
@@ -186,11 +215,25 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
 
         limit_keys = self._rate_limit_keys(client_ip, request)
         now = time.time()
+        window = self.settings.rate_limit_window_seconds
         for key, limit in limit_keys:
+            # important: the bypass budget is meant to be a deployment-wide figure, and
+            # the in-memory limiter cannot be one because each worker keeps its own
+            # counters. Redis is already a hard dependency, so the shared counter lives
+            # there and the configured number means what it says.
+            if key.startswith("fresh:"):
+                shared = _shared_allow(key, limit, window)
+                if shared is not None:
+                    if not shared:
+                        return True
+                    continue
+                # Redis unavailable: fall back to the in-memory counter, divided so the
+                # aggregate across workers still approximates the configured figure.
+                limit = _per_worker_share(limit)
             if not self.limiter.allow(
                 key=key,
                 limit=limit,
-                window_seconds=self.settings.rate_limit_window_seconds,
+                window_seconds=window,
                 now=now,
             ):
                 return True
@@ -209,9 +252,7 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
         # container, so every operator shares a client IP and an IP-keyed budget
         # would let one person's refreshes throttle the whole tenancy.
         if _wants_fresh(request):
-            yield f"fresh:{_rate_limit_subject(request, client_ip)}", _per_worker_share(
-                self.settings.rate_limit_fresh_requests
-            )
+            yield f"fresh:{_rate_limit_subject(request, client_ip)}", self.settings.rate_limit_fresh_requests
 
     def _blocked_response(self, request: Request, decision: SecurityDecision) -> Response:
         headers = {"X-Orcastra-Security-Action": decision.reason}
