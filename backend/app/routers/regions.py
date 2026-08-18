@@ -23,7 +23,8 @@ from app.models.schemas import (
 logger = logging.getLogger(__name__)
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_cluster_filter, get_tenant_acl
-from app.core.single_flight import rebuild_lock, release_lock
+import time
+from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
 from app.core.tenant_visibility import tenant_acl_has_permission
 
 router = APIRouter(
@@ -188,10 +189,19 @@ async def get_regions_overview(
     # (15-45s cold), so N simultaneous fresh requests would launch N fan-outs at
     # the same hardware. The second arrival waits, then reads the first's result.
     _lock_key = f"regions:overview:{cache_key}"
+    _arrived_at = time.monotonic()
     _lock = rebuild_lock(_lock_key)
     try:
         async with _lock:
-            rebuilt = cache.get("api_responses", cache_key)
+            # important: only accept an entry someone rebuilt AFTER we arrived. Reading
+            # the cache unconditionally here made fresh=true return the very cached body
+            # it was asked to bypass, because the admin key is kept warm by the metrics
+            # collector and is therefore almost never absent.
+            rebuilt = (
+                cache.get("api_responses", cache_key)
+                if rebuilt_since(_lock_key, _arrived_at)
+                else None
+            )
             if rebuilt is not None:
                 logger.debug("Regions overview was rebuilt by a concurrent request")
                 return RegionsOverviewResponse(**rebuilt)
@@ -442,6 +452,7 @@ async def get_regions_overview(
                 raise HTTPException(status_code=500, detail=str(e))
 
     finally:
+        mark_rebuilt(_lock_key)
         release_lock(_lock_key)
 
 

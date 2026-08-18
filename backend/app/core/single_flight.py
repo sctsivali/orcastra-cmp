@@ -12,11 +12,13 @@ concurrent rebuilds instead of one per request, which is the bound that matters.
 """
 
 import asyncio
+import time
 from typing import Dict
 
 
 _locks: Dict[str, asyncio.Lock] = {}
 _waiters: Dict[str, int] = {}
+_last_rebuild: Dict[str, float] = {}
 
 
 def rebuild_lock(key: str) -> asyncio.Lock:
@@ -43,3 +45,20 @@ def release_lock(key: str) -> None:
         _locks.pop(key, None)
     else:
         _waiters[key] = remaining
+
+
+def mark_rebuilt(key: str) -> None:
+    """Record that a rebuild for `key` finished just now."""
+    _last_rebuild[key] = time.monotonic()
+
+
+def rebuilt_since(key: str, arrived_at: float) -> bool:
+    """
+    True when someone finished rebuilding `key` after `arrived_at`.
+
+    important: this is what lets a forced refresh tell "another request just did
+    the work I was about to do" apart from "there is a warm entry from before I
+    arrived". Without the distinction a bypass returns the very cache it was
+    asked to skip, which on a prewarmed key means it never rebuilds at all.
+    """
+    return _last_rebuild.get(key, 0.0) > arrived_at

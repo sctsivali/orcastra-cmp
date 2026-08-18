@@ -73,6 +73,19 @@ class ScopedKeyInvalidationTests(unittest.TestCase):
         self.assertNotIn(target, manager.redis_client.store)
         self.assertIn(other, manager.redis_client.store, "invalidating one cluster wiped another")
 
+    def test_a_sibling_cluster_sharing_a_prefix_survives(self):
+        """nuc2 and nuc22 are different clusters. The first glob written here matched both."""
+        target = "orcastra:api_responses:cluster_members:list:host=nuc2:scope=all"
+        sibling = "orcastra:api_responses:cluster_members:list:host=nuc22:scope=all"
+        suffixed = "orcastra:api_responses:cluster_members:list:host=nuc2-prod:scope=all"
+        manager = self._manager_with(target, sibling, suffixed)
+
+        manager.invalidate_cluster_cache("nuc2")
+
+        self.assertNotIn(target, manager.redis_client.store)
+        self.assertIn(sibling, manager.redis_client.store, "invalidating nuc2 also wiped nuc22")
+        self.assertIn(suffixed, manager.redis_client.store, "invalidating nuc2 also wiped nuc2-prod")
+
     def test_exact_match_pattern_would_not_have_matched(self):
         """Pins the mechanism, so a future edit that drops the * fails loudly here."""
         key = "orcastra:api_responses:cluster_members:list:host=nuc2:scope=all"

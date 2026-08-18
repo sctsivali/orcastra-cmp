@@ -200,13 +200,6 @@ class MetricsCollector:
                 self._fetch_vms
             )
             
-            # Pre-warm nodes cache
-            await self._prewarm_single_cache(
-                cache,
-                get_scope_cache_key("nodes:status:all"),
-                self._fetch_nodes
-            )
-            
             # Pre-warm regions cache (slowest endpoint, 15-45s cold)
             await self._prewarm_single_cache(
                 cache,
@@ -268,11 +261,13 @@ class MetricsCollector:
         )
         return response.model_dump()
     
-    async def _fetch_nodes(self):
-        """Fetch nodes status for cache warming."""
-        nodes = self._lxd_service.connection_manager.get_node_names()
-        # Return basic structure - the actual nodes endpoint will fill in details
-        return {"nodes": nodes, "count": len(nodes)}
+    # note: there is deliberately no nodes prewarm. It used to write
+    # {"nodes": [<names>], "count": N} to a key nobody read, so the shape mismatch
+    # against NodesStatusResponse was invisible. Once the keys were corrected to
+    # carry the scope suffix the two collided and GET /nodes returned 500 for the
+    # rest of the TTL. Warming it properly means replicating the handler's Vault
+    # cluster merge, which is not worth duplicating; get_node_names() never did
+    # the expensive work anyway, so nothing is lost by leaving this cold.
     
     async def _fetch_regions(self):
         """Fetch regions overview for cache warming."""
