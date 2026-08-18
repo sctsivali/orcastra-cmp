@@ -60,6 +60,15 @@ class Settings(BaseSettings):
         alias="RATE_LIMIT_SUBNET_REQUESTS",
         description="Number of requests allowed per minute per IPv4 /24 or IPv6 /64 subnet"
     )
+    rate_limit_fresh_requests: int = Field(
+        default=12,
+        alias="RATE_LIMIT_FRESH_REQUESTS",
+        description=(
+            "Requests per window per authenticated subject that may force a cache bypass "
+            "(?fresh=true). Far lower than the general limit because each one triggers a "
+            "real fan-out to every cluster in scope instead of a cache read."
+        )
+    )
     rate_limit_window_seconds: int = Field(
         default=60,
         alias="RATE_LIMIT_WINDOW_SECONDS",

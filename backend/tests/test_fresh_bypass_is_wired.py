@@ -229,3 +229,60 @@ class DegradedFanOutTests(unittest.TestCase):
             [],
             f"image list cached without checking any node answered: {unguarded}",
         )
+
+
+class BypassBudgetTests(unittest.TestCase):
+    """The bypass needs its own budget, and it cannot be keyed on the client IP.
+
+    Every browser reaches the API through the Next.js rewrite proxy, so the socket
+    address the middleware sees is one container for the whole tenancy. Observed in the
+    access log: 429s attributed to a single client ip across a dozen paths and several
+    users. An IP-keyed budget for a forced fan-out would therefore let one operator's
+    refreshes throttle everyone else, which is a worse failure than the one it prevents.
+    """
+
+    def _keys(self, query: str, auth: str | None = None):
+        from starlette.requests import Request
+
+        from app.middleware.security import RequestSecurityMiddleware
+
+        headers = [(b"authorization", auth.encode())] if auth else []
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/v1/instances",
+            "query_string": query.encode(),
+            "headers": headers,
+        }
+        mw = RequestSecurityMiddleware.__new__(RequestSecurityMiddleware)
+        from app.core.config import get_settings
+
+        mw.settings = get_settings()
+        return list(mw._rate_limit_keys("10.0.0.1", Request(scope)))
+
+    def test_a_plain_read_gets_no_bypass_bucket(self):
+        keys = [k for k, _ in self._keys("host=nuc2")]
+        self.assertFalse([k for k in keys if k.startswith("fresh:")])
+
+    def test_a_forced_read_gets_its_own_smaller_bucket(self):
+        entries = self._keys("host=nuc2&fresh=true")
+        fresh = [(k, limit) for k, limit in entries if k.startswith("fresh:")]
+        self.assertEqual(len(fresh), 1, "a bypass must be budgeted separately")
+        _, limit = fresh[0]
+        general = next(lim for k, lim in entries if k.startswith("ip:"))
+        self.assertLess(limit, general, "the bypass budget must be smaller than the general one")
+
+    def test_two_operators_behind_one_proxy_do_not_share_a_bypass_bucket(self):
+        # unsigned tokens: the middleware reads the claim to pick a counter, never to authorise
+        import base64
+        import json as _json
+
+        def token(sub):
+            def seg(d):
+                return base64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
+
+            return f"Bearer {seg({'alg': 'none'})}.{seg({'sub': sub})}.x"
+
+        a = [k for k, _ in self._keys("fresh=true", token("alice@example.com")) if k.startswith("fresh:")]
+        b = [k for k, _ in self._keys("fresh=true", token("bob@example.com")) if k.startswith("fresh:")]
+        self.assertNotEqual(a, b, "same proxy IP, different operators, must not share a budget")

@@ -600,7 +600,10 @@ class GeoLocation(BaseModel):
 
 class ClusterRegisterRequest(BaseModel):
     """Request to register a new LXD cluster."""
-    cluster_id: str = Field(..., min_length=1, max_length=63, description="Unique cluster identifier")
+    cluster_id: str = Field(..., min_length=1, max_length=63,
+        # important: the id is interpolated into Vault paths and into a Redis glob,
+        # so "*" here would wipe every org's cached cluster-member list.
+        pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$", description="Unique cluster identifier")
     display_name: str = Field(..., min_length=1, description="Human-readable display name for the node")
     endpoint: str = Field(..., min_length=1, description="LXD API endpoint (ex;, https://192.168.10.187:8443)")
     zone: Optional[str] = Field(None, description="Geographical or logical zone (legacy, use location instead)")
