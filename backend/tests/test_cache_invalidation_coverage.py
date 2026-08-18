@@ -130,3 +130,26 @@ class CacheInvalidationCoverageTest(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+def test_instance_lifecycle_clears_the_storage_volume_list() -> None:
+    """LXD backs every instance with a root volume of type `virtual-machine`, so a create or a
+    delete changes the storage volume list even though no volume endpoint was called. Leaving
+    it cached served the pre-create list for its full 180s TTL, which is how a round trip that
+    had genuinely created a VM could not find its root disk.
+    """
+    from app.core.cache import CacheManager
+
+    cleared: list[str] = []
+
+    mgr = CacheManager.__new__(CacheManager)
+    mgr.delete_pattern = lambda ns, pattern: cleared.append(pattern)  # type: ignore[method-assign]
+
+    CacheManager.invalidate_instance_cache(mgr)
+
+    assert "storage_volumes:*" in cleared, (
+        "an instance create or delete changes the volume list; leaving it cached hides the "
+        f"instance's own root disk. cleared={cleared}"
+    )
+    for expected in ("instances:*", "vms:*", "monitoring:*"):
+        assert expected in cleared, f"{expected} must still be cleared; cleared={cleared}"

@@ -569,12 +569,6 @@ export function InstanceCreateForm() {
     !isSubmitting &&
     nameValid &&
     !!form.selectedNode &&
-    // important: the root disk device is only emitted when a pool has resolved
-    // (effectivePool below), so submitting while the pool query is still in flight
-    // dropped the root disk entirely and the instance silently got the profile's
-    // default size instead of the one just typed. Gate on the query, not on
-    // effectivePool, so a node that genuinely reports no pools behaves as before.
-    !loadingPools &&
     // Image mode needs an image; ISO mode needs an ISO. No bare blank.
     (bootFromIso ? !!form.selectedIso : !!form.selectedImage) &&
     resourcesValid &&
@@ -648,6 +642,23 @@ export function InstanceCreateForm() {
 
     if (!resourcesValid) {
       setError("CPU, Memory and Storage must be positive whole numbers.");
+      submitInFlightRef.current = false;
+      return;
+    }
+
+    // important: devices.root is only built when a pool has resolved, and LXD rejects a create
+    // whose root disk carries a size but no pool (verified against a live cluster). Submitting
+    // before the pool query answered therefore either dropped the requested size silently or
+    // produced a create that reported success and never materialised. Refuse it here rather
+    // than in `canSubmit`: useStoragePools also fans out to resources-all across every
+    // cluster, so gating the button on it left Create dead for many seconds on a fleet with
+    // unreachable nodes.
+    if (!effectivePool) {
+      setError(
+        loadingPools
+          ? "Still loading storage pools for this node. Try again in a moment."
+          : "No storage pool is available on this node, so the root disk cannot be sized.",
+      );
       submitInFlightRef.current = false;
       return;
     }

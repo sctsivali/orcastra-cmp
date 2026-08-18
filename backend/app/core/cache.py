@@ -380,11 +380,18 @@ class CacheManager:
         logger.info(f"Invalidated cluster list cache{f' for {cluster_id}' if cluster_id else ' (all)'}")
 
     def invalidate_instance_cache(self):
-        """Invalidate cached instance, VM, and monitoring responses."""
+        """Invalidate cached responses an instance lifecycle change makes stale.
+
+        Storage volumes belong here even though no volume endpoint was called: LXD backs each
+        instance with a root volume of type `virtual-machine`, so a create or delete changes the
+        volume list too. Without this the volume list served that change from cache for its full
+        180s TTL, long enough to create an instance and not find its disk.
+        """
         self.delete_pattern("api_responses", "instances:*")
         self.delete_pattern("api_responses", "vms:*")
         self.delete_pattern("api_responses", "monitoring:*")
-        logger.info("Cleared instance, VM, and monitoring caches")
+        self.delete_pattern("api_responses", "storage_volumes:*")
+        logger.info("Cleared instance, VM, monitoring, and storage volume caches")
 
     def invalidate_resource_cache(self, *kinds: str):
         """Drop the cached list responses for the named resource kinds.
