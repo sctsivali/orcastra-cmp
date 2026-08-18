@@ -52,7 +52,7 @@ interface PoolResources {
 }
 
 export default function StoragePoolsPage() {
-  const { data, isLoading, refetch, isRefetching } = useStoragePools();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStoragePools();
   const pools = (data as any)?.pools || [];
   const poolResources = (data as any)?.resources || {};
   
@@ -146,10 +146,9 @@ export default function StoragePoolsPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh storage pools"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

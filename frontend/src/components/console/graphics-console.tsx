@@ -14,6 +14,7 @@ import { useConsoleStore } from "@/lib/console-store";
 import { Loader2, AlertCircle, Monitor, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useManualRefresh } from "@/hooks/use-manual-refresh";
 
 interface GraphicsConsoleProps {
   consoleId: string;
@@ -655,6 +656,13 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
       setTimeout(() => connect(), 200);
     }, [connect, disconnect]);
 
+    // important: guarded. Both overlay buttons below call this, and repeated
+    // clicks used to stack disconnect/connect cycles on top of each other.
+    const { pending: reconnectPending, run: runReconnect } = useManualRefresh(
+      reconnect,
+      { errorTitle: "Reconnect failed" },
+    );
+
     // Helper to send key via SPICE input channel using scancodes
     // This directly sends to the SPICE connection, bypassing DOM events
     const sendSpiceKey = useCallback((keyCode: number, press: boolean = true, release: boolean = true) => {
@@ -1025,8 +1033,20 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black/95 z-10">
             <AlertCircle className="h-8 w-8 text-red-400" />
             <p className="text-sm text-white/70">{errorMessage || 'Connection failed'}</p>
-            <Button variant="outline" size="sm" onClick={reconnect} className="text-white border-white/30 hover:bg-white/10">
-              <RefreshCw className="h-4 w-4 mr-2" />
+            <Button
+              aria-busy={reconnectPending}
+              variant="outline"
+              size="sm"
+              disabled={reconnectPending}
+              onClick={() => void runReconnect()}
+              className="text-white border-white/30 hover:bg-white/10"
+            >
+              <RefreshCw
+                className={cn(
+                  "h-4 w-4 mr-2",
+                  reconnectPending && "animate-spin motion-reduce:animate-none",
+                )}
+              />
               Reconnect
             </Button>
           </div>
@@ -1054,8 +1074,20 @@ export const GraphicsConsole = forwardRef<GraphicsConsoleHandle, GraphicsConsole
               <WifiOff className="h-4 w-4 text-white/50 absolute -top-1 -right-1" />
             </div>
             <p className="text-sm text-white/70">Disconnected from {instanceName}</p>
-            <Button variant="outline" size="sm" onClick={reconnect} className="text-white border-white/30 hover:bg-white/10">
-              <RefreshCw className="h-4 w-4 mr-2" />
+            <Button
+              aria-busy={reconnectPending}
+              variant="outline"
+              size="sm"
+              disabled={reconnectPending}
+              onClick={() => void runReconnect()}
+              className="text-white border-white/30 hover:bg-white/10"
+            >
+              <RefreshCw
+                className={cn(
+                  "h-4 w-4 mr-2",
+                  reconnectPending && "animate-spin motion-reduce:animate-none",
+                )}
+              />
               Reconnect
             </Button>
           </div>

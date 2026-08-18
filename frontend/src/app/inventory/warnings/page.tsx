@@ -60,8 +60,8 @@ const toTime = (v: string | null | undefined): number | null => {
 function WarningsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { data, isLoading, refetch, isRefetching } = useWarnings();
-  const { data: systemWarnings, isLoading: isLoadingSystem, refetch: refetchSystem, isRefetching: isRefetchingSystem } = useSystemWarnings();
+  const { data, isLoading, refreshNow, dataUpdatedAt } = useWarnings();
+  const { data: systemWarnings, isLoading: isLoadingSystem, refreshNow: refreshSystemWarnings } = useSystemWarnings();
   const allWarnings = useMemo(() => (data as any)?.warnings || [], [data]);
 
   // Certificate and node warnings from system warnings
@@ -223,10 +223,10 @@ function WarningsContent() {
     return <LoadingLottiePage />;
   }
   
-  const handleRefreshAll = () => {
-    void Promise.all([refetch(), refetchSystem()]);
-  };
-  const isRefreshingWarnings = isRefetching || isRefetchingSystem;
+  // important: awaited, not fire-and-forget. The previous `void Promise.all(...)`
+  // discarded both the completion and any failure, so a refresh against a dead
+  // backend was indistinguishable from a successful one.
+  const handleRefreshAll = () => Promise.all([refreshNow(), refreshSystemWarnings()]);
 
   return (
     <div className="p-4 md:p-8 space-y-4 md:space-y-6">
@@ -240,10 +240,9 @@ function WarningsContent() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefreshingWarnings}
-          isRefreshing={isRefreshingWarnings}
           label="Refresh warnings"
-          onClick={handleRefreshAll}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={handleRefreshAll}
         />
       </div>
 

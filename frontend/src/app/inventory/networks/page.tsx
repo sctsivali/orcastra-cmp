@@ -46,7 +46,7 @@ interface NetworkInfo {
 }
 
 export default function NetworksPage() {
-  const { data, isLoading, refetch, isRefetching } = useNetworks();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNetworks();
   const networks = (data as any)?.networks || [];
 
   const router = useRouter();
@@ -143,10 +143,9 @@ export default function NetworksPage() {
         </div>
         <div className="flex items-center gap-2">
           <RefreshButton
-            disabled={isRefetching}
-            isRefreshing={isRefetching}
             label="Refresh networks"
-            onClick={() => refetch()}
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshNow}
           />
           {/* Only Partner+ can create; the create page enforces this too. */}
           {canCreateNetwork && (

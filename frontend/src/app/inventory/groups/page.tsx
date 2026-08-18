@@ -59,7 +59,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function GroupsPage() {
-  const { data, isLoading, refetch, isRefetching } = useGroups();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useGroups();
   const groups = (data as any)?.groups || [];
   const nodes = (data as any)?.nodes || [];
   const { toast } = useToast();
@@ -220,10 +220,9 @@ export default function GroupsPage() {
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <RefreshButton
-            disabled={isRefetching}
-            isRefreshing={isRefetching}
             label="Refresh groups"
-            onClick={() => refetch()}
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshNow}
           />
           <Button 
             onClick={() => setCreateDialogOpen(true)} 

@@ -27,7 +27,7 @@ import { Role } from "@/types/rbac";
 import { Search, UploadCloud, Disc } from "lucide-react";
 
 export default function IsoImagesPage() {
-  const { data, isLoading, refetch, isRefetching } = useStorageVolumes();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStorageVolumes();
   const allVolumes = (data as any)?.volumes || [];
   // ISOs are custom storage volumes with content-type "iso".
   const isos = useMemo(
@@ -91,10 +91,9 @@ export default function IsoImagesPage() {
         </div>
         <div className="flex items-center gap-2">
           <RefreshButton
-            disabled={isRefetching}
-            isRefreshing={isRefetching}
             label="Refresh ISO images"
-            onClick={() => refetch()}
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshNow}
           />
           {/* Partner+ only; the upload endpoint requires Partner. */}
           {canUpload && (

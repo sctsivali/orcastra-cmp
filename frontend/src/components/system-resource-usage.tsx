@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { api } from "@/lib/api";
 import {
   SystemResourceUsage,
@@ -479,9 +479,9 @@ export function SystemResourceUsagePanel() {
   const [previousNetwork, setPreviousNetwork] = useState<NetworkInterfaceInfo[] | null>(null);
   const [refreshInterval] = useState(5000); // 5 seconds auto-refresh
 
-  const { data, isLoading, isFetching, isError, error, refetch, dataUpdatedAt } = useQuery({
+  const { data, isLoading, isError, error, refreshNow, dataUpdatedAt } = useRefreshableQuery({
     queryKey: ["systemResourceUsage"],
-    queryFn: api.system.getResourceUsage,
+    queryFn: () => api.system.getResourceUsage(),
     refetchInterval: refreshInterval, // Always auto-refresh every 5 seconds
     staleTime: 3000,
     gcTime: 60000,
@@ -498,19 +498,6 @@ export function SystemResourceUsagePanel() {
     }
   }, [data?.network, refreshInterval]);
 
-  const handleRefresh = useCallback(() => {
-    refetch();
-  }, [refetch]);
-
-  // Format time with colons (HH:MM:SS)
-  const lastUpdated = dataUpdatedAt
-    ? new Date(dataUpdatedAt).toLocaleTimeString('en-GB', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      })
-    : null;
 
   if (isLoading) {
     return (
@@ -542,7 +529,7 @@ export function SystemResourceUsagePanel() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Button onClick={handleRefresh} variant="outline">
+          <Button onClick={() => void refreshNow()} variant="outline">
             <RefreshCw className="h-4 w-4 mr-2" />
             Retry
           </Button>
@@ -568,16 +555,10 @@ export function SystemResourceUsagePanel() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {lastUpdated && (
-            <span className="text-xs text-muted-foreground">
-              Updated: {lastUpdated}
-            </span>
-          )}
           <RefreshButton
-            disabled={isFetching}
-            isRefreshing={isFetching}
             label="Refresh host resources"
-            onClick={handleRefresh}
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshNow}
           />
         </div>
       </div>

@@ -17,3 +17,4 @@ export * from "./popover";
 export * from "./scroll-area";
 export * from "./clickable-badge";
 export * from "./data-table-pagination";
+export * from "./refresh-button";

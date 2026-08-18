@@ -42,7 +42,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function OperationsPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
-  const { data, isLoading, refetch, isRefetching } = useOperations();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useOperations();
   const operations = useMemo(() => (data as any)?.operations || [], [data]);
   const nodes = (data as any)?.nodes || [];
   
@@ -241,10 +241,9 @@ export default function OperationsPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh operations"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

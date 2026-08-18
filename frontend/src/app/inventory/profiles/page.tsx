@@ -32,7 +32,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function ProfilesPage() {
-  const { data, isLoading, refetch, isRefetching } = useProfiles();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useProfiles();
   const profiles = (data as any)?.profiles || [];
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -112,10 +112,9 @@ export default function ProfilesPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh profiles"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

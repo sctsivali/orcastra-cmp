@@ -959,9 +959,9 @@ export default function MonitoringContent() {
   const { 
     data: dashboardData, 
     isLoading: dashboardLoading, 
-    isFetching: dashboardFetching,
     error: dashboardError,
     refetch: refetchDashboard,
+    refreshNow: refreshDashboard,
     dataUpdatedAt,
   } = useMonitoringDashboard(!isPaused, wsConnected ? 0 : refreshInterval);
   
@@ -1680,7 +1680,6 @@ export default function MonitoringContent() {
   }, [chartData, selectedNode, nodeNames, visibleNodes]);
 
   // Last updated time
-  const lastUpdated = dataUpdatedAt ? format(new Date(dataUpdatedAt), "HH:mm:ss") : null;
 
   // Instance distribution for pie chart - uses filteredStats to respect node selection
   const instanceDistribution = useMemo(() => {
@@ -1707,7 +1706,7 @@ export default function MonitoringContent() {
             <p className="text-muted-foreground mt-2">
               {dashboardError instanceof Error ? dashboardError.message : "Unknown error"}
             </p>
-            <Button onClick={() => refetchDashboard()} className="mt-4">
+            <Button onClick={() => void refreshDashboard()} className="mt-4">
               <RefreshCw className="h-4 w-4 mr-2" />
               Retry
             </Button>
@@ -1731,11 +1730,6 @@ export default function MonitoringContent() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {lastUpdated && (
-            <span className="text-xs text-muted-foreground">
-              Updated: {lastUpdated}
-            </span>
-          )}
           <UITooltip>
             <TooltipTrigger asChild>
               <Button 
@@ -1749,10 +1743,9 @@ export default function MonitoringContent() {
             <TooltipContent>{isPaused ? "Resume" : "Pause"} updates</TooltipContent>
           </UITooltip>
           <RefreshButton
-            disabled={dashboardFetching}
-            isRefreshing={dashboardFetching}
             label="Refresh monitoring"
-            onClick={() => refetchDashboard()}
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshDashboard}
           />
           {/* Node Selection - at the end (rightmost) */}
           <Select value={selectedNode} onValueChange={setSelectedNode}>

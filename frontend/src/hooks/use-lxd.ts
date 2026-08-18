@@ -3,6 +3,7 @@
  */
 
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { 
@@ -216,14 +217,14 @@ export function useInstanceMetrics(
 
 // Images Hooks
 export function useImages(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: host ? queryKeys.imagesByHost(host) : queryKeys.images,
-    queryFn: async () => {
+    queryFn: async ({ fresh }) => {
       if (host) {
         const result = await imageAPI.listByHost(host);
         return [result]; // Normalize to array
       }
-      return imageAPI.listAll();
+      return imageAPI.listAll({ fresh });
     },
     // Always enabled - fetches all images when host is undefined, or filtered when host is provided
     ...SEMI_STATIC_DATA_CONFIG,
@@ -240,9 +241,9 @@ export function useImagesByHost(host: string) {
 }
 
 export function useRemoteImages() {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["remoteImages", "all"],
-    queryFn: () => imageAPI.listRemote(),
+    queryFn: ({ fresh }) => imageAPI.listRemote({ fresh }),
     // Remote catalog changes ~daily and the backend caches it for 1h.
     staleTime: 1000 * 60 * 30,
     gcTime: 1000 * 60 * 60,
@@ -252,9 +253,9 @@ export function useRemoteImages() {
 
 // Nodes Hooks
 export function useNodesStatus() {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: queryKeys.nodes,
-    queryFn: () => nodeAPI.status(),
+    queryFn: ({ fresh }) => nodeAPI.status({ fresh }),
     refetchInterval: 3600000, // Check node status every 1 hour (3600 seconds)
     staleTime: 60000, // Consider data stale after 1 minute
     retry: 3,
@@ -766,9 +767,9 @@ export function useHealth() {
 
 // Warnings Hooks
 export function useWarnings(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["warnings", host],
-    queryFn: () => api.warnings.list(host),
+    queryFn: ({ fresh }) => api.warnings.list(host, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
     refetchInterval: 60000, // Check warnings every minute
   });
@@ -776,9 +777,9 @@ export function useWarnings(host?: string) {
 
 // Operations Hooks
 export function useOperations(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["operations", host],
-    queryFn: () => api.operations.list(host),
+    queryFn: ({ fresh }) => api.operations.list(host, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
     refetchInterval: 15000, // Poll every 15s (balanced freshness vs load)
     refetchIntervalInBackground: false,
@@ -796,9 +797,9 @@ export function useOperation(id: string, host: string) {
 
 // IPAM Hooks
 export function useIPAM(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["ipam", host],
-    queryFn: () => api.ipam.list(host),
+    queryFn: ({ fresh }) => api.ipam.list(host, { fresh }),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -821,12 +822,12 @@ export function useStoragePoolList(host?: string) {
 }
 
 export function useStoragePools(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["storagePools", host],
-    queryFn: async () => {
+    queryFn: async ({ fresh }) => {
       const [poolsData, resourcesData] = await Promise.all([
-        api.storagePools.list(host) as Promise<Record<string, unknown>>,
-        api.storagePools.getResourcesAll() as Promise<Record<string, unknown> | null>,
+        api.storagePools.list(host, { fresh }) as Promise<Record<string, unknown>>,
+        api.storagePools.getResourcesAll({ fresh }) as Promise<Record<string, unknown> | null>,
       ]);
       return {
         ...poolsData,
@@ -881,9 +882,9 @@ export function useDeleteStoragePool() {
 
 // Storage Volumes Hooks
 export function useStorageVolumes(pool?: string, host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["storageVolumes", pool, host],
-    queryFn: () => api.storageVolumes.list(host, pool),
+    queryFn: ({ fresh }) => api.storageVolumes.list(host, pool, { fresh }),
     // Always enabled - fetches all volumes when pool/host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -923,9 +924,9 @@ export function useDeleteStorageVolume() {
 
 // Networks Hooks
 export function useNetworks(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["networks", host],
-    queryFn: () => api.networks.list(host),
+    queryFn: ({ fresh }) => api.networks.list(host, { fresh }),
     // Always enabled - fetches all networks when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -974,9 +975,9 @@ export function useDeleteNetwork() {
 
 // Network ACLs Hooks
 export function useNetworkACLs(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["networkACLs", host],
-    queryFn: () => api.networkACLs.list(host),
+    queryFn: ({ fresh }) => api.networkACLs.list(host, { fresh }),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1015,9 +1016,9 @@ export function useDeleteNetworkACL() {
 
 // Profiles Hooks
 export function useProfiles(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["profiles", host],
-    queryFn: () => api.profiles.list(host),
+    queryFn: ({ fresh }) => api.profiles.list(host, { fresh }),
     // Always enabled - fetches all profiles when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1057,9 +1058,10 @@ export function useDeleteProfile() {
 
 // Instances Hooks (alternative to VMs for LXD terminology)
 export function useInstances(host?: string, opts?: { realtime?: boolean }) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["instances", host],
-    queryFn: () => api.instances.list(host),
+    queryFn: ({ fresh }) =>
+      api.instances.list(host, undefined, undefined, undefined, undefined, { fresh }),
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
     // Default: poll so newly-created instances and status transitions show
@@ -1145,9 +1147,9 @@ export function useDeleteInstance() {
 
 // Server Info Hooks
 export function useServerInfo(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["serverInfo", host],
-    queryFn: () => api.server.list(host),
+    queryFn: ({ fresh }) => api.server.list(host, { fresh }),
     ...STATIC_DATA_CONFIG,
   });
 }
@@ -1163,9 +1165,9 @@ export function useServerResources(host: string) {
 
 // Identities Hooks
 export function useIdentities(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["identities", host],
-    queryFn: () => api.identities.list(host),
+    queryFn: ({ fresh }) => api.identities.list(host, { fresh }),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1194,9 +1196,9 @@ export function useDeleteIdentity() {
 
 // Groups Hooks
 export function useGroups(host?: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["groups", host],
-    queryFn: () => api.groups.list(host),
+    queryFn: ({ fresh }) => api.groups.list(host, { fresh }),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -1283,9 +1285,9 @@ export function useDeleteGroup() {
 
 // Cluster Members Hooks
 export function useClusterMembers(node: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["clusterMembers", node],
-    queryFn: () => api.clusterMembers.list(node),
+    queryFn: ({ fresh }) => api.clusterMembers.list(node, { fresh }),
     enabled: !!node,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1312,9 +1314,9 @@ export function useMemberResources(node: string, memberName: string) {
 
 // Clusters Hooks
 export function useClusters(fresh: boolean = false) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["clusters", { fresh }],
-    queryFn: () => api.clusters.list(fresh),
+    queryFn: ({ fresh: manual }) => api.clusters.list(fresh || manual),
     ...SEMI_STATIC_DATA_CONFIG,
     staleTime: 0, // Always consider stale to ensure fresh data after deletion
     refetchOnMount: 'always', // Always refetch on mount to ensure fresh data after registration/deletion
@@ -1441,9 +1443,9 @@ export function useFacilitySuggestions() {
 
 export function useMonitoringDashboard(enabled: boolean = true, refetchInterval: number = 10000) {
   const scopeKey = useMonitoringScopeKey();
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["monitoring", "dashboard", scopeKey],
-    queryFn: () => api.monitoring.getDashboard(),
+    queryFn: ({ fresh }) => api.monitoring.getDashboard({ fresh }),
     enabled,
     refetchInterval: refetchInterval > 0 ? refetchInterval : false, // 0 = disabled (WS push active)
     staleTime: 5000, // Consider fresh for 5 seconds to avoid redundant fetches
@@ -1543,9 +1545,9 @@ export function useMonitoringNetwork(enabled: boolean = true) {
 // ========== Certificate Management Hooks ==========
 
 export function useCertificates() {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["certificates"],
-    queryFn: () => api.certificates.list(),
+    queryFn: ({ fresh }) => api.certificates.list({ fresh }),
     refetchInterval: 60000, // Refresh every minute
     staleTime: 30000,
   });
@@ -1604,7 +1606,7 @@ export function useCancelPendingCert() {
 }
 
 export function useSystemWarnings() {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["systemWarnings"],
     queryFn: () => api.certificates.getSystemWarnings(),
     refetchInterval: 60000, // Refresh every minute
@@ -1614,9 +1616,9 @@ export function useSystemWarnings() {
 
 // Regions Hooks
 export function useRegionsOverview() {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["regions", "overview"],
-    queryFn: () => api.regions.getOverview(),
+    queryFn: ({ fresh }) => api.regions.getOverview({ fresh }),
     refetchInterval: 120000, // Refresh every 2 minutes
     staleTime: 60000, // Data considered fresh for 1 minute
   });

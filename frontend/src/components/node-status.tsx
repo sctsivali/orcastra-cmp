@@ -404,12 +404,14 @@ function LoadingSkeleton() {
 }
 
 interface NodeStatusCardsProps {
-  onRefresh?: () => void;
-  isRefreshing?: boolean;
+  /** Refresh the whole overview instead of just this section. Must reject on failure. */
+  onRefresh?: () => Promise<unknown> | unknown;
+  /** Timestamp of the data the parent refreshed, when onRefresh is supplied. */
+  lastUpdatedAt?: number | null;
 }
 
-export function NodeStatusCards({ onRefresh, isRefreshing = false }: NodeStatusCardsProps) {
-  const { data, isLoading, refetch } = useNodesStatus();
+export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsProps) {
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNodesStatus();
   const [selectedNode, setSelectedNode] = useState<NodeStatus | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
@@ -467,10 +469,9 @@ export function NodeStatusCards({ onRefresh, isRefreshing = false }: NodeStatusC
             )}
           </div>
           <RefreshButton
-            disabled={isRefreshing}
-            isRefreshing={isRefreshing}
             label="Refresh overview"
-            onClick={onRefresh ?? (() => refetch())}
+            lastUpdatedAt={onRefresh ? lastUpdatedAt : dataUpdatedAt}
+            onRefresh={onRefresh ?? refreshNow}
           />
         </div>
 

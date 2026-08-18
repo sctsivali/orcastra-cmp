@@ -96,7 +96,7 @@ function ConfigItemsBadge({ config }: { config: Record<string, any> }) {
 
 export default function ServerPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
-  const { data, isLoading, refetch, isRefetching } = useServerInfo();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
   const servers = (data as any)?.servers || [];
   const { toast } = useToast();
 
@@ -119,10 +119,9 @@ export default function ServerPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh server information"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

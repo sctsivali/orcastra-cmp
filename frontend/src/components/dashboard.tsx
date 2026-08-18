@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { LoadingLottieMediumEnhanced, LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
+import { useRelativeTime } from "@/hooks/use-relative-time";
 import { StatsOverview } from "@/components/stats-overview";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { TagManager, TagFilter } from "@/components/tag-manager";
@@ -71,7 +72,7 @@ interface ProjectsSectionProps {
   vmsData: VMInfo[];
   projectInstanceCounts: Map<string, number>;
   refetch: () => void;
-  lastUpdated: string | null;
+  lastUpdatedAt: number | null;
 }
 
 interface ProjectCardProps {
@@ -1071,7 +1072,8 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
   );
 }
 
-function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstanceCounts, refetch, lastUpdated }: ProjectsSectionProps) {
+function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstanceCounts, refetch, lastUpdatedAt }: ProjectsSectionProps) {
+  const lastUpdated = useRelativeTime(lastUpdatedAt);
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = React.useState("");
   const [selectedTags, setSelectedTags] = React.useState<string[]>([]);
@@ -1195,9 +1197,9 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
           <h2 className="text-lg font-semibold">Projects</h2>
-          {lastUpdated && (
+          {!!lastUpdatedAt && (
             <p className="text-xs text-muted-foreground">
-              Last updated: {lastUpdated}
+              Updated {lastUpdated}
             </p>
           )}
         </div>
@@ -1461,52 +1463,28 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
 }
 
 export function Dashboard() {
-  const { data: vmsData, isLoading: vmsLoading, refetch, isRefetching, dataUpdatedAt } = useInstances();
-  const { data: projectsData, isLoading: projectsLoading, isRefetching: projectsRefetching } = useAllProjects();
-  const { data: clustersData, isLoading: clustersLoading, isRefetching: clustersRefetching } = useClusters();
+  const { data: vmsData, isLoading: vmsLoading, refetch, dataUpdatedAt } = useInstances();
+  const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
+  const { data: clustersData, isLoading: clustersLoading } = useClusters();
   const queryClient = useQueryClient();
-  const [isOverviewRefreshing, setIsOverviewRefreshing] = React.useState(false);
 
   // pre-fetch alarm & node data in parallel with primary queries (eliminates waterfall)
-  const { data: warningsData, isRefetching: warningsRefetching } = useWarnings();
-  const { data: systemWarnings, isRefetching: systemWarningsRefetching } = useSystemWarnings();
+  const { data: warningsData } = useWarnings();
+  const { data: systemWarnings } = useSystemWarnings();
 
+  // note: no success toast. The refresh control reports its own outcome inline
+  // (spinner, tick, "Updated just now"), and a toast here would evict whatever
+  // the operator was actually reading, since TOAST_LIMIT is 1.
   const handleOverviewRefresh = React.useCallback(async () => {
-    setIsOverviewRefreshing(true);
-    try {
-      await Promise.all([
-        refetch(),
-        queryClient.refetchQueries({ queryKey: queryKeys.allProjects, type: "active" }),
-        queryClient.refetchQueries({ queryKey: ["clusters"], type: "active" }),
-        queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: "active" }),
-        queryClient.refetchQueries({ queryKey: ["warnings"], type: "active" }),
-        queryClient.refetchQueries({ queryKey: ["systemWarnings"], type: "active" }),
-      ]);
-
-      toast({
-        title: "Overview refreshed",
-        description: "Dashboard data is up to date.",
-        variant: "success",
-      });
-    } catch (error) {
-      toast({
-        title: "Refresh failed",
-        description: error instanceof Error ? error.message : "Unable to refresh dashboard data.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsOverviewRefreshing(false);
-    }
+    await Promise.all([
+      refetch({ throwOnError: true }),
+      queryClient.refetchQueries({ queryKey: queryKeys.allProjects, type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["clusters"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: queryKeys.nodes, type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["warnings"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["systemWarnings"], type: "active" }),
+    ]);
   }, [queryClient, refetch]);
-
-  const lastUpdated = dataUpdatedAt
-    ? new Date(dataUpdatedAt).toLocaleTimeString('en-GB', {
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      })
-    : null;
 
   // calculate instance count per project
   const projectInstanceCounts = new Map<string, number>();
@@ -1516,13 +1494,6 @@ export function Dashboard() {
   });
 
   const isPrimaryLoading = vmsLoading || projectsLoading || clustersLoading;
-  const isRefreshingOverview = isOverviewRefreshing
-    || isRefetching
-    || projectsRefetching
-    || clustersRefetching
-    || warningsRefetching
-    || systemWarningsRefetching;
-
   // important: never hard-block the dashboard forever on a slow/stuck query.
   // After a grace period, surface a retry panel instead of an infinite 95%
   // loader (the backend now responds fast; this is a defensive safety net).
@@ -1553,7 +1524,7 @@ export function Dashboard() {
         <Button
           onClick={() => {
             setLoaderTimedOut(false);
-            handleOverviewRefresh();
+            void handleOverviewRefresh();
           }}
         >
           <RotateCw className="mr-2 h-4 w-4" />
@@ -1572,7 +1543,7 @@ export function Dashboard() {
       <AlarmStatistics prefetchedWarnings={warningsData} prefetchedSystemWarnings={systemWarnings} />
 
       {/* Nodes Status */}
-      <NodeStatusCards onRefresh={handleOverviewRefresh} isRefreshing={isRefreshingOverview} />
+      <NodeStatusCards lastUpdatedAt={dataUpdatedAt} onRefresh={handleOverviewRefresh} />
 
       {/* Projects Overview */}
       <ProjectsSection 
@@ -1581,7 +1552,7 @@ export function Dashboard() {
         vmsData={vmsData?.vms || []}
         projectInstanceCounts={projectInstanceCounts}
         refetch={refetch}
-        lastUpdated={lastUpdated}
+        lastUpdatedAt={dataUpdatedAt}
       />
     </div>
   );

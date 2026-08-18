@@ -208,17 +208,30 @@ async function fetchWithTimeout(
  */
 const _inflightGets = new Map<string, Promise<unknown>>();
 
+export interface FetchAPIOptions {
+  /**
+   * Issue this request even if an identical GET is already in flight.
+   *
+   * important: set for anything a person explicitly asked for. Sharing a
+   * promise with a poll that started before the click means the click never
+   * reaches the server and the data that lands predates it, which is exactly
+   * what made refresh buttons look broken.
+   */
+  force?: boolean;
+}
+
 async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {},
   timeoutMs: number = 45000,
   _isRetry: boolean = false,
+  fetchOptions: FetchAPIOptions = {},
 ): Promise<T> {
   const url = `${API_BASE_URL}${API_PREFIX}${endpoint}`;
   const method = (options.method || "GET").toUpperCase();
 
   // Deduplicate concurrent GET requests to the same endpoint
-  if (method === "GET" && !_isRetry) {
+  if (method === "GET" && !_isRetry && !fetchOptions.force) {
     const existing = _inflightGets.get(endpoint);
     if (existing) {
       return existing as Promise<T>;
@@ -227,13 +240,57 @@ async function fetchAPI<T>(
 
   const request = _fetchAPIInternal<T>(endpoint, url, options, timeoutMs, _isRetry);
 
-  // Track in-flight GET requests for deduplication
+  // Track in-flight GET requests for deduplication. A forced request still
+  // registers, so a poll firing mid-refresh joins the fresher request.
   if (method === "GET") {
     _inflightGets.set(endpoint, request);
-    request.finally(() => _inflightGets.delete(endpoint));
+    request.finally(() => {
+      // only clear our own entry - a forced request may have replaced it
+      if (_inflightGets.get(endpoint) === request) {
+        _inflightGets.delete(endpoint);
+      }
+    });
   }
 
   return request;
+}
+
+/**
+ * Query-string suffix for a manual refresh.
+ *
+ * Manual clicks bypass the backend response cache; background polling does not.
+ * A poll is high-frequency and low-intent, and making every open tab bypass the
+ * cache would turn routine polling into a fan-out storm against live clusters.
+ */
+export function freshParam(endpoint: string, fresh?: boolean): string {
+  if (!fresh) return endpoint;
+  return endpoint.includes("?") ? `${endpoint}&fresh=true` : `${endpoint}?fresh=true`;
+}
+
+/** Options accepted by the read methods that back a refresh control. */
+export interface ReadOptions {
+  /** Bypass the backend response cache. Only ever set by a user action. */
+  fresh?: boolean;
+}
+
+// Endpoints that fan out across every cluster. Cached they are fast; forced
+// fresh they are genuinely slow (/regions is 15-45s cold), and the default 45s
+// budget turns that into a coin flip between an answer and a false timeout.
+const HEAVY_FRESH_TIMEOUT_MS = 90000;
+
+/** GET helper for the read paths behind a refresh button. */
+function fetchRead<T>(
+  endpoint: string,
+  opts: ReadOptions = {},
+  timeoutMs?: number,
+): Promise<T> {
+  const target = freshParam(endpoint, opts.fresh);
+  return fetchAPI<T>(target, {}, timeoutMs, false, { force: opts.fresh === true });
+}
+
+/** As fetchRead, but with the extended budget the fan-out endpoints need. */
+function fetchHeavyRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T> {
+  return fetchRead<T>(endpoint, opts, opts.fresh ? HEAVY_FRESH_TIMEOUT_MS : undefined);
 }
 
 async function _fetchAPIInternal<T>(
@@ -334,6 +391,7 @@ export const vmAPI = {
     status?: string,
     offset?: number,
     limit?: number,
+    opts: ReadOptions = {},
   ): Promise<VMListResponse> => {
     const params = new URLSearchParams();
     if (host) params.append("host", host);
@@ -343,8 +401,8 @@ export const vmAPI = {
     
     const queryString = params.toString();
     const endpoint = queryString ? `/vms?${queryString}` : "/vms";
-    
-    return fetchAPI<VMListResponse>(endpoint);
+
+    return fetchRead<VMListResponse>(endpoint, opts);
   },
 
   get: async (name: string, host: string): Promise<VMInfo> => {
@@ -421,25 +479,25 @@ export const vmAPI = {
 
 // Image Operations
 export const imageAPI = {
-  listAll: async (): Promise<ImageListResponse[]> => {
-    return fetchAPI<ImageListResponse[]>("/images");
+  listAll: async (opts: ReadOptions = {}): Promise<ImageListResponse[]> => {
+    return fetchRead<ImageListResponse[]>("/images", opts);
   },
 
   listByHost: async (host: string): Promise<ImageListResponse> => {
     return fetchAPI<ImageListResponse>(`/images/${host}`);
   },
 
-  listRemote: async (): Promise<RemoteImageListResponse> => {
+  listRemote: async (opts: ReadOptions = {}): Promise<RemoteImageListResponse> => {
     // The aggregated catalog can take ~30s on a cold cache (Ubuntu remote is
     // ~17 MB); allow a longer timeout than the 45s default.
-    return fetchAPI<RemoteImageListResponse>("/images/remote", {}, 120000);
+    return fetchRead<RemoteImageListResponse>("/images/remote", opts, 120000);
   },
 };
 
 // Node Operations
 export const nodeAPI = {
-  status: async (): Promise<NodesStatusResponse> => {
-    return fetchAPI<NodesStatusResponse>("/nodes");
+  status: async (opts: ReadOptions = {}): Promise<NodesStatusResponse> => {
+    return fetchHeavyRead<NodesStatusResponse>("/nodes", opts);
   },
 
   names: async (): Promise<string[]> => {
@@ -490,8 +548,8 @@ export const nodeAPI = {
 
 // Project Operations
 export const projectAPI = {
-  listAll: async (): Promise<ProjectListResponse[]> => {
-    return fetchAPI<ProjectListResponse[]>("/projects");
+  listAll: async (opts: ReadOptions = {}): Promise<ProjectListResponse[]> => {
+    return fetchRead<ProjectListResponse[]>("/projects", opts);
   },
 
   list: async (host: string): Promise<ProjectListResponse> => {
@@ -905,7 +963,7 @@ export const instanceAPI = {
     );
   },
 
-  list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number): Promise<VMListResponse> => {
+  list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number, opts: ReadOptions = {}): Promise<VMListResponse> => {
     const params = new URLSearchParams();
     if (host) params.append("host", host);
     if (status) params.append("status", status);
@@ -915,8 +973,8 @@ export const instanceAPI = {
     
     const queryString = params.toString();
     const endpoint = queryString ? `/instances?${queryString}` : "/instances";
-    
-    return fetchAPI<VMListResponse>(endpoint);
+
+    return fetchRead<VMListResponse>(endpoint, opts);
   },
 
   get: async (name: string, host: string): Promise<VMInfo> => {
@@ -930,9 +988,9 @@ export const instanceAPI = {
 
 // Profile Operations
 export const profileAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/profiles?host=${encodeURIComponent(host)}` : "/profiles";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (name: string, host: string) => {
@@ -962,9 +1020,9 @@ export const profileAPI = {
 
 // Network Operations
 export const networkAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/networks?host=${encodeURIComponent(host)}` : "/networks";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (name: string, host: string) => {
@@ -998,9 +1056,9 @@ export const networkAPI = {
 
 // Network ACL Operations
 export const networkACLAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/network-acls?host=${encodeURIComponent(host)}` : "/network-acls";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (name: string, host: string) => {
@@ -1030,9 +1088,9 @@ export const networkACLAPI = {
 
 // Storage Pool Operations
 export const storagePoolAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/storage/pools?host=${encodeURIComponent(host)}` : "/storage/pools";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (name: string, host: string) => {
@@ -1043,8 +1101,8 @@ export const storagePoolAPI = {
     return fetchAPI(`/storage/pools/${name}/resources?host=${encodeURIComponent(host)}`);
   },
 
-  getResourcesAll: async () => {
-    return fetchAPI("/storage/pools/resources-all");
+  getResourcesAll: async (opts: ReadOptions = {}) => {
+    return fetchHeavyRead("/storage/pools/resources-all", opts);
   },
 
   create: async (data: any, host: string) => {
@@ -1070,15 +1128,15 @@ export const storagePoolAPI = {
 
 // Storage Volume Operations
 export const storageVolumeAPI = {
-  list: async (host?: string, pool?: string) => {
+  list: async (host?: string, pool?: string, opts: ReadOptions = {}) => {
     const params = new URLSearchParams();
     if (host) params.append("host", host);
     if (pool) params.append("pool", pool);
     
     const queryString = params.toString();
     const endpoint = queryString ? `/storage/volumes?${queryString}` : "/storage/volumes";
-    
-    return fetchAPI(endpoint);
+
+    return fetchRead(endpoint, opts);
   },
 
   get: async (volumeType: string, name: string, host: string, pool: string) => {
@@ -1326,9 +1384,9 @@ export const imageUploadAPI = {
 
 // Operation Operations
 export const operationAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/operations?host=${encodeURIComponent(host)}` : "/operations";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (id: string, host: string) => {
@@ -1353,9 +1411,9 @@ export const operationAPI = {
 
 // Warning Operations
 export const warningAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/warnings?host=${encodeURIComponent(host)}` : "/warnings";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (uuid: string, host: string) => {
@@ -1371,9 +1429,9 @@ export const warningAPI = {
 
 // Server Operations
 export const serverAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/server?host=${encodeURIComponent(host)}` : "/server";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (nodeName: string) => {
@@ -1394,9 +1452,9 @@ export const serverAPI = {
 
 // Identity Operations
 export const identityAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/identities?host=${encodeURIComponent(host)}` : "/identities";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (id: string, host: string) => {
@@ -1413,9 +1471,9 @@ export const identityAPI = {
 
 // Group Operations
 export const groupAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/groups?host=${encodeURIComponent(host)}` : "/groups";
-    return fetchAPI(endpoint);
+    return fetchRead(endpoint, opts);
   },
 
   get: async (name: string, host: string) => {
@@ -1476,8 +1534,7 @@ export const clusterAPI = {
   },
 
   list: async (fresh: boolean = false): Promise<ClusterListResponse> => {
-    const endpoint = fresh ? "/clusters?fresh=true" : "/clusters";
-    return fetchAPI<ClusterListResponse>(endpoint);
+    return fetchRead<ClusterListResponse>("/clusters", { fresh });
   },
 
   get: async (clusterId: string): Promise<ClusterInfo> => {
@@ -1516,21 +1573,21 @@ export const clusterAPI = {
 
 // IPAM API
 export const ipamAPI = {
-  list: async (host?: string) => {
+  list: async (host?: string, opts: ReadOptions = {}) => {
     const url = host ? `/ipam?host=${encodeURIComponent(host)}` : "/ipam";
-    return fetchAPI(url);
+    return fetchRead(url, opts);
   },
 };
 
 // My Keys API
 export const myKeysAPI = {
-  list: async (statusFilter?: string, search?: string) => {
+  list: async (statusFilter?: string, search?: string, opts: ReadOptions = {}) => {
     let url = "/my-keys";
     const params = new URLSearchParams();
     if (statusFilter) params.append("status_filter", statusFilter);
     if (search) params.append("search", search);
     if (params.toString()) url += `?${params.toString()}`;
-    return fetchAPI(url);
+    return fetchRead(url, opts);
   },
 
   create: async (request: any) => {
@@ -1576,8 +1633,8 @@ import type {
 } from "@/types";
 
 export const monitoringAPI = {
-  getDashboard: async (): Promise<MonitoringDashboardResponse> => {
-    return fetchAPI<MonitoringDashboardResponse>("/monitoring/dashboard");
+  getDashboard: async (opts: ReadOptions = {}): Promise<MonitoringDashboardResponse> => {
+    return fetchRead<MonitoringDashboardResponse>("/monitoring/dashboard", opts);
   },
 
   getNodeMetrics: async (nodeName: string): Promise<ClusterMonitoringMetrics> => {
@@ -1595,8 +1652,8 @@ export const monitoringAPI = {
 
 // Certificate Management API
 export const certificateAPI = {
-  list: async (): Promise<CertificateListResponse> => {
-    return fetchAPI<CertificateListResponse>("/certificates");
+  list: async (opts: ReadOptions = {}): Promise<CertificateListResponse> => {
+    return fetchRead<CertificateListResponse>("/certificates", opts);
   },
 
   get: async (clusterId: string): Promise<CertificateInfo> => {
@@ -1649,8 +1706,8 @@ import type {
 
 export const integrationsAPI = {
   // API Key Management
-  listAPIKeys: async (): Promise<APIKeyListResponse> => {
-    return fetchAPI<APIKeyListResponse>("/integrations/api-keys");
+  listAPIKeys: async (opts: ReadOptions = {}): Promise<APIKeyListResponse> => {
+    return fetchRead<APIKeyListResponse>("/integrations/api-keys", opts);
   },
 
   getAPIKey: async (keyId: string): Promise<APIKeyInfo> => {
@@ -1723,8 +1780,8 @@ export const integrationsAPI = {
 import { RegionsOverviewResponse, RegionSummary } from "@/types/api";
 
 const regionsAPI = {
-  getOverview: async () => {
-    return fetchAPI<RegionsOverviewResponse>("/regions");
+  getOverview: async (opts: ReadOptions = {}) => {
+    return fetchHeavyRead<RegionsOverviewResponse>("/regions", opts);
   },
   getRegion: async (regionId: string) => {
     return fetchAPI<RegionSummary>(`/regions/${encodeURIComponent(regionId)}`);
@@ -1802,17 +1859,18 @@ export const api = {
   regions: regionsAPI,
   breakGlass: breakGlassAPI,
   clusterMembers: {
-    list: async (node: string) => {
-      return fetchAPI<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`);
+    list: async (node: string, opts: ReadOptions = {}) => {
+      return fetchRead<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`, opts);
     },
     get: async (node: string, memberName: string) => {
       return fetchAPI<ClusterMember>(
         `/cluster-members/${encodeURIComponent(memberName)}?node=${encodeURIComponent(node)}`
       );
     },
-    getResources: async (node: string, memberName: string) => {
-      return fetchAPI<MemberResources>(
-        `/cluster-members/${encodeURIComponent(memberName)}/resources?node=${encodeURIComponent(node)}`
+    getResources: async (node: string, memberName: string, opts: ReadOptions = {}) => {
+      return fetchHeavyRead<MemberResources>(
+        `/cluster-members/${encodeURIComponent(memberName)}/resources?node=${encodeURIComponent(node)}`,
+        opts,
       );
     },
   },

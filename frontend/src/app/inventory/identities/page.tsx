@@ -48,7 +48,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function IdentitiesPage() {
-  const { data, isLoading, refetch, isRefetching } = useIdentities();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useIdentities();
   const identities = (data as any)?.identities || [];
   const { toast } = useToast();
   const deleteIdentityMutation = useDeleteIdentity();
@@ -169,10 +169,9 @@ export default function IdentitiesPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh identities"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

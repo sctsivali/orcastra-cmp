@@ -146,11 +146,13 @@ export function ConsoleWindow({
     }
   };
 
-  // Fetch capabilities on mount
-  useEffect(() => {
+  // Fetch capabilities on mount, and again when the operator retries.
+  // important: retry re-runs this fetch. It used to call window.location.reload(),
+  // which in a multi-window console manager tore down every other live console
+  // and terminal session to recover one failed panel.
+  const fetchCapabilities = useCallback(async () => {
     if (!consoleInstance) return;
-
-    const fetchCapabilities = async () => {
+    {
       setLoading(true);
       setError(null);
 
@@ -194,10 +196,12 @@ export function ConsoleWindow({
       } finally {
         setLoading(false);
       }
-    };
-
-    fetchCapabilities();
+    }
   }, [consoleInstance?.instanceName, consoleInstance?.host, consoleInstance?.project, consoleId, setCapabilities, updateInstanceStatus]);
+
+  useEffect(() => {
+    void fetchCapabilities();
+  }, [fetchCapabilities]);
 
   // Handle resize
   const onResize = useCallback(
@@ -595,7 +599,7 @@ export function ConsoleWindow({
           <div className="flex flex-col items-center gap-4">
             <AlertCircle className="h-8 w-8 text-destructive" />
             <p className="text-sm text-muted-foreground">{error}</p>
-            <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+            <Button variant="outline" size="sm" onClick={() => void fetchCapabilities()}>
               Retry
             </Button>
           </div>

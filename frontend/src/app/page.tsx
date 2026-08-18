@@ -21,7 +21,7 @@ export default function HomePage() {
   // use canonical query keys so cache is shared with dashboard/inventory pages
   const { data: nodesData, isLoading: isLoadingNodes } = useQuery({
     queryKey: queryKeys.nodes,
-    queryFn: api.nodes.status,
+    queryFn: () => api.nodes.status(),
     ...STATIC_DATA_CONFIG, // Nodes status rarely changes, use static config
   });
 

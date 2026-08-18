@@ -16,7 +16,6 @@ import {
   ExternalLink,
   Copy,
   Search,
-  RefreshCw,
   LayoutGrid,
   Terminal as TerminalIcon,
   Server,

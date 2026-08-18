@@ -41,7 +41,7 @@ interface ACLInfo {
 }
 
 export default function NetworkACLsPage() {
-  const { data, isLoading, refetch, isRefetching } = useNetworkACLs();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNetworkACLs();
   const acls = (data as any)?.acls || [];
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -117,10 +117,9 @@ export default function NetworkACLsPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh network ACLs"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

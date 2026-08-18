@@ -16,7 +16,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { AlertTriangle, ArrowLeft, RefreshCw, Loader2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, LogIn, Loader2 } from "lucide-react";
 import Link from "next/link";
 
 // Error details mapping
@@ -92,8 +92,8 @@ function ErrorContent() {
           <div className="flex flex-col gap-3">
             <Link href="/auth/signin" className="w-full">
               <Button className="w-full" size="lg">
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Try Again
+                <LogIn className="mr-2 h-4 w-4" />
+                Back to sign in
               </Button>
             </Link>
 

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ShieldAlert, Loader2 } from "lucide-react";
 import { api, type BreakGlassGrant } from "@/lib/api";
+import { toast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -34,6 +35,18 @@ export function BreakGlassPanel() {
     try {
       await api.breakGlass.revokeGrant(id);
       await refetch();
+      toast({
+        title: "Grant revoked",
+        description: "Access ended immediately. The grant stays on the audit trail.",
+        variant: "success",
+      });
+    } catch (error) {
+      toast({
+        title: "Revoke failed",
+        description:
+          error instanceof Error ? error.message : "The grant is still active. Please try again.",
+        variant: "destructive",
+      });
     } finally {
       setRevoking(null);
     }

@@ -86,7 +86,7 @@ function rootDiskLabel(instance: any): { text: string; title: string } {
 function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
   // LXD events stream (no polling). useInstanceStream patches this query's cache.
-  const { data, isLoading, refetch, isRefetching, dataUpdatedAt } = useInstances(
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useInstances(
     undefined,
     { realtime: true },
   );
@@ -366,10 +366,9 @@ function InstancesContent() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh instances"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

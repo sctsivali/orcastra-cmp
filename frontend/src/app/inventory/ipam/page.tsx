@@ -38,7 +38,7 @@ interface IPAMAllocation {
 }
 
 export default function IPAMPage() {
-  const { data, isLoading, refetch, isRefetching } = useIPAM();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useIPAM();
   const allocations = (data as any)?.allocations || [];
   const nodes = (data as any)?.nodes || [];
   
@@ -130,10 +130,9 @@ export default function IPAMPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh IP allocations"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

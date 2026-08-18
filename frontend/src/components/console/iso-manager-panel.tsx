@@ -102,7 +102,6 @@ export function ISOManagerPanel({
   const [error, setError] = useState<string | null>(null);
   const [confirmEject, setConfirmEject] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [refreshingISOs, setRefreshingISOs] = useState(false);
 
   const { setAttachedISO } = useConsoleStore();
 
@@ -152,25 +151,29 @@ export function ISOManagerPanel({
         setAvailableISOs(data.isos || []);
       }
     } catch (err) {
+      // important: rethrow. Swallowing this made a failed fetch render as an
+      // empty ISO library, which reads as "this pool has no ISOs".
       console.error('Error fetching ISOs:', err);
+      throw err;
     }
   }, [host]);
 
+  const loadPanel = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await Promise.all([fetchAttachedISO(), fetchAvailableISOs()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load');
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchAttachedISO, fetchAvailableISOs]);
+
   // Initial load
   useEffect(() => {
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        await Promise.all([fetchAttachedISO(), fetchAvailableISOs()]);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load');
-      } finally {
-        setLoading(false);
-      }
-    };
-    load();
-  }, [fetchAttachedISO, fetchAvailableISOs]);
+    void loadPanel();
+  }, [loadPanel]);
 
   // Change the boot priority of the already-attached ISO. Re-attaching the same
   // volume patches the existing device in place (attach_iso does an add/update),
@@ -312,15 +315,6 @@ export function ISOManagerPanel({
     iso.pool.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleRefreshISOs = useCallback(async () => {
-    setRefreshingISOs(true);
-    try {
-      await fetchAvailableISOs();
-    } finally {
-      setRefreshingISOs(false);
-    }
-  }, [fetchAvailableISOs]);
-
   if (loading) {
     return (
       <div className={cn("flex items-center justify-center h-full", className)}>
@@ -334,7 +328,7 @@ export function ISOManagerPanel({
       <div className={cn("flex flex-col items-center justify-center h-full gap-4", className)}>
         <AlertCircle className="h-8 w-8 text-destructive" />
         <p className="text-sm text-muted-foreground">{error}</p>
-        <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+        <Button variant="outline" size="sm" onClick={() => void loadPanel()}>
           <RefreshCw className="h-4 w-4 mr-2" />
           Retry
         </Button>
@@ -410,10 +404,8 @@ export function ISOManagerPanel({
             <h3 className="text-sm font-medium">Available ISOs</h3>
             <RefreshButton
               className="h-8 w-8"
-              disabled={refreshingISOs}
-              isRefreshing={refreshingISOs}
               label="Refresh ISOs"
-              onClick={handleRefreshISOs}
+              onRefresh={fetchAvailableISOs}
               variant="ghost"
             />
           </div>

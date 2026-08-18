@@ -139,7 +139,7 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
 export default function TechnologiesPage() {
   const { data: nodesResponse, isLoading } = useQuery<{ nodes: NodeStatus[]; all_connected: boolean }>({
     queryKey: ["nodes"],
-    queryFn: api.nodes.status,
+    queryFn: () => api.nodes.status(),
   });
   
   const nodes = nodesResponse?.nodes || [];

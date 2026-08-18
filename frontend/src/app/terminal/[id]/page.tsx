@@ -48,6 +48,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useManualRefresh } from "@/hooks/use-manual-refresh";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { ConsoleResourceBar } from "@/components/console/resource-bar";
 import "@xterm/xterm/css/xterm.css";
@@ -272,6 +273,14 @@ function TerminalContent() {
     }
     connect();
   }, [connect]);
+
+  // important: guard the reconnect. It closes the socket and opens a new one, so
+  // a rapid double-click tore the session down twice and raced the rebuild. The
+  // guard also gives the icon-only button the pending state it never had.
+  const { pending: reconnectPending, run: runReconnect } = useManualRefresh(
+    handleReconnect,
+    { errorTitle: "Reconnect failed" },
+  );
 
   // Execute instance operation
   const executeOperation = useCallback(async (operation: OperationType) => {
@@ -595,12 +604,20 @@ function TerminalContent() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  aria-busy={reconnectPending}
+                  aria-label="Reconnect"
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-gray-400 hover:text-white"
-                  onClick={handleReconnect}
+                  disabled={reconnectPending}
+                  onClick={() => void runReconnect()}
                 >
-                  <RefreshCw className="h-4 w-4" />
+                  <RefreshCw
+                    className={cn(
+                      "h-4 w-4",
+                      reconnectPending && "animate-spin motion-reduce:animate-none",
+                    )}
+                  />
                 </Button>
               </TooltipTrigger>
               <TooltipContent>Reconnect</TooltipContent>

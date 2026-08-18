@@ -441,7 +441,7 @@ export function Sidebar({ className }: SidebarProps) {
       queryClient.prefetchQuery({ queryKey: ["regions", "overview"], queryFn: () => api.regions.getOverview(), staleTime: 60_000 });
     },
     "/": () => {
-      queryClient.prefetchQuery({ queryKey: queryKeys.nodes, queryFn: api.nodes.status, staleTime: 10_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.nodes, queryFn: () => api.nodes.status(), staleTime: 10_000 });
       queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
     },
   }), [queryClient]);

@@ -313,7 +313,7 @@ function RegionCard({
 
 // Main Regions Page Component
 export function RegionsPage() {
-  const { data, isLoading, error, refetch, isRefetching } = useRegionsOverview();
+  const { data, isLoading, error, refetch, refreshNow, dataUpdatedAt } = useRegionsOverview();
   const [searchQuery, setSearchQuery] = React.useState("");
   const [continentFilter, setContinentFilter] = React.useState<string>("all");
   const [expandedRegions, setExpandedRegions] = React.useState<Set<string>>(new Set());
@@ -418,10 +418,9 @@ export function RegionsPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh regions"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

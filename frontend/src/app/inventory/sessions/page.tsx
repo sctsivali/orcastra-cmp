@@ -225,21 +225,23 @@ function ActiveSessionsTab() {
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
       setSessions(await res.json());
       setLastRefresh(new Date());
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch sessions");
+      throw err;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchSessions(true); }, [fetchSessions]);
+  useEffect(() => { void fetchSessions(true).catch(() => {}); }, [fetchSessions]);
 
   useEffect(() => {
     if (!autoRefresh) {
       if (pollRef.current) clearInterval(pollRef.current);
       return;
     }
-    pollRef.current = setInterval(() => fetchSessions(false), 5000);
+    pollRef.current = setInterval(() => void fetchSessions(false).catch(() => {}), 5000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [autoRefresh, fetchSessions]);
 
@@ -306,27 +308,41 @@ function ActiveSessionsTab() {
             </div>
             <div className="flex items-center gap-2">
               <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Filter..." />
-              {lastRefresh && (
-                <span className="text-xs text-muted-foreground whitespace-nowrap">
-                  {formatTime(lastRefresh)}
-                </span>
-              )}
               <Button
                 variant={autoRefresh ? "default" : "outline"}
                 size="sm"
                 onClick={() => setAutoRefresh(!autoRefresh)}
                 className="gap-1.5"
+                aria-pressed={autoRefresh}
               >
-                <RefreshCw className={cn("h-3.5 w-3.5", autoRefresh && "animate-spin")} />
+                <span
+                  className={cn(
+                    "h-1.5 w-1.5 rounded-full bg-current",
+                    autoRefresh ? "animate-pulse motion-reduce:animate-none" : "opacity-50",
+                  )}
+                />
                 {autoRefresh ? "Live" : "Paused"}
               </Button>
+              <RefreshButton
+                label="Refresh active sessions"
+                lastUpdatedAt={lastRefresh ? lastRefresh.getTime() : null}
+                onRefresh={() => fetchSessions(false)}
+              />
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {error ? (
+          {/* important: only replace the table when there is nothing to show. A
+              5s poll that blips would otherwise wipe rows we still hold. */}
+          {error && sessions.length > 0 && (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+              <WifiOff className="h-3.5 w-3.5 shrink-0 text-warning" />
+              <span className="text-foreground">Showing the last known data. {error}</span>
+            </div>
+          )}
+          {error && sessions.length === 0 ? (
             <EmptyState icon={WifiOff} message={error}>
-              <Button variant="outline" size="sm" onClick={() => fetchSessions(true)}>Retry</Button>
+              <Button variant="outline" size="sm" onClick={() => void fetchSessions(true).catch(() => {})}>Retry</Button>
             </EmptyState>
           ) : loading && sessions.length === 0 ? (
             <EmptyState icon={Loader2} message="Loading sessions..." iconClass="animate-spin" />
@@ -369,6 +385,7 @@ function SessionHistoryTab() {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -402,14 +419,17 @@ function SessionHistoryTab() {
       });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
       setLogs(await res.json());
+      setLastRefresh(new Date());
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch session history");
+      throw err;
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { fetchLogs(true); }, [fetchLogs]);
+  useEffect(() => { void fetchLogs(true).catch(() => {}); }, [fetchLogs]);
 
   const filtered = useMemo(() => {
     if (!searchTerm) return logs;
@@ -493,20 +513,24 @@ function SessionHistoryTab() {
             <div className="flex items-center gap-2">
               <SearchInput value={searchTerm} onChange={(v) => { setSearchTerm(v); setCurrentPage(1); }} placeholder="Filter..." />
               <RefreshButton
-                className="h-9 w-9"
-                disabled={loading}
                 iconClassName="h-3.5 w-3.5"
-                isRefreshing={loading}
                 label="Refresh session history"
-                onClick={() => fetchLogs(true)}
+                lastUpdatedAt={lastRefresh ? lastRefresh.getTime() : null}
+                onRefresh={() => fetchLogs(false)}
               />
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          {error ? (
+          {error && logs.length > 0 && (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+              <WifiOff className="h-3.5 w-3.5 shrink-0 text-warning" />
+              <span className="text-foreground">Showing the last known data. {error}</span>
+            </div>
+          )}
+          {error && logs.length === 0 ? (
             <EmptyState icon={WifiOff} message={error}>
-              <Button variant="outline" size="sm" onClick={() => fetchLogs(true)}>Retry</Button>
+              <Button variant="outline" size="sm" onClick={() => void fetchLogs(true).catch(() => {})}>Retry</Button>
             </EmptyState>
           ) : loading && logs.length === 0 ? (
             <EmptyState icon={Loader2} message="Loading history..." iconClass="animate-spin" />

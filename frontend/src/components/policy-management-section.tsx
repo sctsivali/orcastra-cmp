@@ -6,7 +6,6 @@ import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { RefreshButton } from "@/components/ui/refresh-button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -474,11 +473,7 @@ function PolicyEditorDialog({
 // Main Exported Component
 // ============================================
 
-interface PolicyManagementSectionProps {
-  showRefresh?: boolean;
-}
-
-export function PolicyManagementSection({ showRefresh = true }: PolicyManagementSectionProps) {
+export function PolicyManagementSection() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -491,8 +486,6 @@ export function PolicyManagementSection({ showRefresh = true }: PolicyManagement
   const {
     data: policiesData,
     isLoading: policiesLoading,
-    isFetching: policiesFetching,
-    refetch: refetchPolicies,
   } = useQuery({
     queryKey: ["tenant-access-policies"],
     queryFn: () => api.tenantAccess.listPolicies(),
@@ -620,16 +613,6 @@ export function PolicyManagementSection({ showRefresh = true }: PolicyManagement
               </CardDescription>
             </div>
             <div className="flex gap-2">
-              {showRefresh && (
-                <RefreshButton
-                  className="h-7 w-7"
-                  disabled={policiesFetching}
-                  iconClassName="h-3.5 w-3.5"
-                  isRefreshing={policiesFetching}
-                  label="Refresh access policies"
-                  onClick={() => refetchPolicies()}
-                />
-              )}
               <Button size="sm" onClick={() => setCreateOpen(true)} className="h-7 text-xs">
                 <Plus className="h-3.5 w-3.5 mr-1" />
                 Create Policy

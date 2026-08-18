@@ -51,6 +51,7 @@ import {
 import { cn } from "@/lib/utils";
 import { InstanceStatus, useConsoleStore } from "@/lib/console-store";
 import { toast } from "@/hooks/use-toast";
+import { useManualRefresh } from "@/hooks/use-manual-refresh";
 import { API_URL, getAccessToken } from "@/lib/api";
 
 interface ConsoleToolbarProps {
@@ -124,6 +125,13 @@ export function ConsoleToolbar({
   onReconnect,
 }: ConsoleToolbarProps) {
   const updateInstanceStatus = useConsoleStore(s => s.updateInstanceStatus);
+  // important: a reconnect tears down and rebuilds the WebSocket. Without a guard
+  // a double-click (or the old onClick + onTouchEnd pair on touch devices) did
+  // that twice in a row and left the session racing itself.
+  const { pending: reconnectPending, run: runReconnect } = useManualRefresh(
+    () => onReconnect?.(),
+    { errorTitle: "Reconnect failed" },
+  );
   const [loading, setLoading] = useState<OperationType | null>(null);
   const [spamming, setSpamming] = useState(false);
   const [rebuildOpen, setRebuildOpen] = useState(false);
@@ -522,13 +530,20 @@ export function ConsoleToolbar({
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
+                  aria-busy={reconnectPending}
+                  aria-label="Reconnect to console"
                   variant="ghost"
                   size="sm"
                   className="h-8 px-2 min-h-[32px] touch-manipulation active:scale-95 text-xs gap-1"
-                  onClick={onReconnect}
-                  onTouchEnd={(e) => { e.preventDefault(); onReconnect(); }}
+                  disabled={reconnectPending}
+                  onClick={() => void runReconnect()}
                 >
-                  <RotateCcw className="h-3.5 w-3.5" />
+                  <RotateCcw
+                    className={cn(
+                      "h-3.5 w-3.5",
+                      reconnectPending && "animate-spin motion-reduce:animate-none",
+                    )}
+                  />
                   Reconnect
                 </Button>
               </TooltipTrigger>

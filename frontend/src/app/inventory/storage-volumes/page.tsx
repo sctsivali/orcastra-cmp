@@ -40,7 +40,7 @@ interface VolumeInfo {
 }
 
 export default function StorageVolumesPage() {
-  const { data, isLoading, refetch, isRefetching } = useStorageVolumes();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStorageVolumes();
   const volumes = (data as any)?.volumes || [];
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -125,10 +125,9 @@ export default function StorageVolumesPage() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh storage volumes"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 

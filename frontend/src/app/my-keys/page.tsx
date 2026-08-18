@@ -57,6 +57,7 @@ import {
   ChevronLeft,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -86,10 +87,11 @@ export default function MyKeysPage() {
     data: keysData,
     isLoading,
     refetch,
-    isRefetching,
-  } = useQuery({
+    refreshNow,
+    dataUpdatedAt,
+  } = useRefreshableQuery({
     queryKey: ["my-keys", activeTab, searchQuery],
-    queryFn: () => api.myKeys.list(activeTab, searchQuery),
+    queryFn: ({ fresh }) => api.myKeys.list(activeTab, searchQuery, { fresh }),
   });
 
   const keys = useMemo(() => (keysData as any)?.keys || [], [keysData]);
@@ -246,10 +248,9 @@ export default function MyKeysPage() {
         </div>
         <div className="flex gap-2 shrink-0">
           <RefreshButton
-            disabled={isRefetching}
-            isRefreshing={isRefetching}
             label="Refresh keys"
-            onClick={() => refetch()}
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshNow}
           />
           <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
             <DialogTrigger asChild>

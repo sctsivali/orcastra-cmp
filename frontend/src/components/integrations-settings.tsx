@@ -18,6 +18,7 @@ import {
   CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { IntegrationClusterAccessList } from "@/components/integration-cluster-access-list";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -342,10 +343,11 @@ export function IntegrationsSettings() {
     isLoading: keysLoading,
     error: keysError,
     refetch: refetchKeys,
-    isRefetching,
-  } = useQuery({
+    refreshNow: refreshKeys,
+    dataUpdatedAt: keysUpdatedAt,
+  } = useRefreshableQuery({
     queryKey: ["integrations", "api-keys"],
-    queryFn: () => api.integrations.listAPIKeys(),
+    queryFn: ({ fresh }) => api.integrations.listAPIKeys({ fresh }),
     enabled: mounted,
     staleTime: 30000,
     retry: (failureCount, error) => {
@@ -480,10 +482,9 @@ export function IntegrationsSettings() {
         </div>
         <div className="flex gap-2">
           <RefreshButton
-            disabled={isRefetching}
-            isRefreshing={isRefetching}
             label="Refresh API keys"
-            onClick={() => refetchKeys()}
+            lastUpdatedAt={keysUpdatedAt}
+            onRefresh={refreshKeys}
           />
           <CreateAPIKeyDialog
             clusters={clusters}

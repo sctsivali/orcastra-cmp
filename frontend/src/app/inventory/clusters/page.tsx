@@ -91,7 +91,7 @@ const statusConfig = {
 
 export default function ClustersPage() {
   const router = useRouter();
-  const { data, isLoading, refetch, isRefetching } = useClusters();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useClusters();
   const clusters = (data as any)?.clusters || [];
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
   const [regenerateModal, setRegenerateModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
@@ -410,10 +410,9 @@ EOF`}
               </CardDescription>
             </div>
             <RefreshButton
-              disabled={isRefetching}
-              isRefreshing={isRefetching}
               label="Refresh clusters"
-              onClick={() => refetch()}
+              lastUpdatedAt={dataUpdatedAt}
+              onRefresh={refreshNow}
             />
           </div>
         </CardHeader>

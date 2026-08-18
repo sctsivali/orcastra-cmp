@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useIsFetching, useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
   CardContent,
@@ -94,10 +94,6 @@ function roleBadge(role: string) {
 
 export function UserGroupsSettings() {
   const queryClient = useQueryClient();
-  const policiesFetching = useIsFetching({ queryKey: ["tenant-access-policies"] });
-  const integrationOrgsFetching = useIsFetching({ queryKey: ["integration-organizations"] });
-  const organizationsFetching = useIsFetching({ queryKey: ["organizations"] });
-  const clustersFetching = useIsFetching({ queryKey: ["clusters"] });
   const [assignOpen, setAssignOpen] = useState(false);
   const [deleteEmail, setDeleteEmail] = useState<string | null>(null);
   const [accessEmail, setAccessEmail] = useState<string | null>(null);
@@ -128,9 +124,9 @@ export function UserGroupsSettings() {
   const {
     data: users,
     isLoading: usersLoading,
-    isFetching: usersFetching,
     error: usersError,
     refetch: refetchUsers,
+    dataUpdatedAt: usersUpdatedAt,
   } = useQuery({
     queryKey: ["user-groups"],
     queryFn: () => api.userGroups.list(),
@@ -143,7 +139,7 @@ export function UserGroupsSettings() {
   });
 
   // fetch identity provider sync status
-  const { data: syncStatus, refetch: refetchSync, isFetching: syncStatusFetching } = useQuery({
+  const { data: syncStatus, refetch: refetchSync } = useQuery({
     queryKey: ["user-groups-sync-status"],
     queryFn: () => api.userGroups.syncStatus(),
     refetchInterval: 30000, // check every 30s
@@ -176,14 +172,6 @@ export function UserGroupsSettings() {
 
   // org is required for partner/tenant roles
   const orgRequired = role === "partner" || role === "tenant";
-  const isRefreshingAll =
-    usersFetching ||
-    syncStatusFetching ||
-    policiesFetching > 0 ||
-    integrationOrgsFetching > 0 ||
-    organizationsFetching > 0 ||
-    clustersFetching > 0;
-
   // simple email regex (RFC 5322 simplified)
   const isValidEmail = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
 
@@ -198,28 +186,17 @@ export function UserGroupsSettings() {
     });
   }
 
+  // note: failures propagate to the refresh control, which reports them. Success
+  // is reported inline by the same control rather than by a toast.
   async function handleRefreshAll() {
-    try {
-      await Promise.all([
-        refetchSync(),
-        refetchUsers(),
-        queryClient.refetchQueries({ queryKey: ["tenant-access-policies"], type: "active" }),
-        queryClient.refetchQueries({ queryKey: ["integration-organizations"], type: "active" }),
-        queryClient.refetchQueries({ queryKey: ["organizations"], type: "active" }),
-        queryClient.refetchQueries({ queryKey: ["clusters"], type: "active" }),
-      ]);
-
-      toast({
-        title: "User access refreshed",
-        description: "Sync status, policies, users, and organizations are up to date.",
-      });
-    } catch (error) {
-      toast({
-        title: "Refresh failed",
-        description: error instanceof Error ? error.message : "Unable to refresh user access data.",
-        variant: "destructive",
-      });
-    }
+    await Promise.all([
+      refetchSync({ throwOnError: true }),
+      refetchUsers({ throwOnError: true }),
+      queryClient.refetchQueries({ queryKey: ["tenant-access-policies"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["integration-organizations"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["organizations"], type: "active" }),
+      queryClient.refetchQueries({ queryKey: ["clusters"], type: "active" }),
+    ]);
   }
 
   // helper: open access dialog for a tenant user
@@ -238,10 +215,9 @@ export function UserGroupsSettings() {
           </p>
         </div>
         <RefreshButton
-          disabled={isRefreshingAll}
-          isRefreshing={isRefreshingAll}
           label="Refresh user groups, policies, and sync status"
-          onClick={handleRefreshAll}
+          lastUpdatedAt={usersUpdatedAt}
+          onRefresh={handleRefreshAll}
         />
       </div>
 
@@ -290,7 +266,7 @@ export function UserGroupsSettings() {
       </Card>
 
       {/* Access Policies Management */}
-      <PolicyManagementSection showRefresh={false} />
+      <PolicyManagementSection />
 
       {/* User Groups Table */}
       <Card>

@@ -53,7 +53,7 @@ interface ImageInfo {
 }
 
 export default function ImagesPage() {
-  const { data: imagesByHost = [], isLoading, refetch, isRefetching } = useImages();
+  const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt } = useImages();
   
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
@@ -162,10 +162,9 @@ export default function ImagesPage() {
         </div>
         <div className="flex items-center gap-2">
           <RefreshButton
-            disabled={isRefetching}
-            isRefreshing={isRefetching}
             label="Refresh images"
-            onClick={() => refetch()}
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshNow}
           />
           {/* Partner+ only; the upload endpoint requires Partner. */}
           {canUpload && (

@@ -115,7 +115,7 @@ function getDaysDisplay(days: number | null | undefined): string {
 
 export default function CertificatesPage() {
   const router = useRouter();
-  const { data, isLoading, refetch, isRefetching } = useCertificates();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useCertificates();
   const certificates = data?.certificates || [];
   const { isReadOnly } = useReadOnlyMode();
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
@@ -307,10 +307,9 @@ export default function CertificatesPage() {
           </div>
         </div>
         <RefreshButton
-          disabled={isRefetching}
-          isRefreshing={isRefetching}
           label="Refresh certificates"
-          onClick={() => refetch()}
+          lastUpdatedAt={dataUpdatedAt}
+          onRefresh={refreshNow}
         />
       </div>
 
