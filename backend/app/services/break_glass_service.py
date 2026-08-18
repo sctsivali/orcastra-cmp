@@ -10,6 +10,7 @@ Single source of truth so the router and the enforcement gate share one liveness
 a grant is live iff ``revoked_at IS NULL AND expires_at > now()`` (status is advisory).
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -211,3 +212,39 @@ async def list_grants(
         # empty set -> match nothing (a sentinel keeps the IN clause valid)
         stmt = stmt.where(BreakGlassGrant.cluster_id.in_(cluster_filter or {"__none__"}))
     return list((await db.execute(stmt)).scalars().all())
+
+
+async def watch_grant_while_open(
+    grant_id: int, websocket, poll_seconds: float = 20.0
+) -> None:
+    """Close ``websocket`` once the grant that authorized it stops being active.
+
+    important: console and terminal sockets authorize once, at connect, and then stay open for
+    as long as the operator keeps the tab. A one-minute grant therefore bought an unbounded
+    session, and revoking a grant did nothing to a session already running, which is the case
+    revocation exists for. This re-reads the row on a timer and closes the socket the moment it
+    is no longer active.
+
+    Runs as a background task; it must never raise into the session it is watching.
+    """
+    from app.core.database import async_session_maker
+
+    try:
+        while True:
+            await asyncio.sleep(poll_seconds)
+            try:
+                async with async_session_maker() as db:
+                    grant = await db.get(BreakGlassGrant, grant_id)
+                    still_valid = grant is not None and effective_status(grant) == "active"
+            except Exception as exc:  # noqa: BLE001 - a lookup failure must not kill the session
+                logger.warning("Break-glass watchdog could not re-read grant %s: %s", grant_id, exc)
+                continue
+            if not still_valid:
+                logger.info("Break-glass grant %s no longer active; closing session", grant_id)
+                try:
+                    await websocket.close(code=1008, reason="break_glass_expired")
+                except Exception:  # noqa: BLE001 - already gone
+                    pass
+                return
+    except asyncio.CancelledError:
+        raise

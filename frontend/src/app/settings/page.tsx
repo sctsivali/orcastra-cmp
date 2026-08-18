@@ -20,7 +20,7 @@ import { Role } from "@/types/rbac";
 export default function SettingsPage() {
   const router = useRouter();
   const queryClient = useQueryClient();
-  const { isPartner, roles } = usePermissions();
+  const { isAdmin, isPartner, roles } = usePermissions();
   const managesOrganizationBranding = roles.includes(Role.PARTNER);
   const [isClearing, setIsClearing] = useState(false);
   const [cleared, setCleared] = useState(false);
@@ -146,7 +146,10 @@ export default function SettingsPage() {
             </Card>
             )}
 
-            {/* Cache Management Card */}
+            {/* Cache Management Card. Admin-only: POST /system/cache/clear carries
+                require_admin(), so offering it to anyone else produced a control that reports
+                success on a request the server refused with 403. */}
+            {isAdmin && (
             <Card>
               <CardHeader>
                 <CardTitle>
@@ -188,6 +191,7 @@ export default function SettingsPage() {
                 </div>
               </CardContent>
             </Card>
+            )}
           </div>
         </TabsContent>
 

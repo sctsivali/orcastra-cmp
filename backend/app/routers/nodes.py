@@ -265,6 +265,7 @@ async def update_node(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update node metadata (display name)."""
+    verify_cluster_access(node_name)
     from fastapi import HTTPException
     from app.core.node_metadata import get_node_metadata_store
     
@@ -373,6 +374,7 @@ async def invalidate_node_cache(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Invalidate all cache entries for a specific node."""
+    verify_cluster_access(node_name)
     from fastapi import HTTPException
     
     try:

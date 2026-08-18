@@ -27,7 +27,7 @@ from websockets import State as WebSocketState
 from websockets.exceptions import ConnectionClosed
 
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
-from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
+from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws, verify_cluster_access
 from app.services.console_service import get_console_service
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
@@ -238,6 +238,8 @@ async def list_active_tracked_sessions(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """List active sessions scoped to the authenticated user (data minimization / GDPR)."""
+    if host:
+        verify_cluster_access(host)
     tracker = get_session_tracker()
     sessions = tracker.get_active_sessions(
         instance_name=instance_name,
@@ -333,6 +335,7 @@ async def get_capabilities(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get console capabilities for an instance."""
+    verify_cluster_access(host)
     console_service = get_console_service()
     
     caps, error = await console_service.get_instance_capabilities(
@@ -440,6 +443,7 @@ async def get_startup_order(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get startup order for instances."""
+    verify_cluster_access(host)
     console_service = get_console_service()
     
     entries, error = await console_service.get_startup_order(
@@ -471,6 +475,7 @@ async def update_startup_order(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update startup order for instances."""
+    verify_cluster_access(host)
     console_service = get_console_service()
     
     updates = [u.model_dump(exclude_none=True) for u in request.updates]
@@ -499,6 +504,7 @@ async def list_isos(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """List available ISO files."""
+    verify_cluster_access(host)
     console_service = get_console_service()
     
     isos, error = await console_service.get_available_isos(host=host)
@@ -526,6 +532,7 @@ async def get_attached_iso(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get attached ISO for an instance."""
+    verify_cluster_access(host)
     console_service = get_console_service()
     
     attached, error = await console_service.get_instance_iso(
@@ -566,6 +573,7 @@ async def attach_iso(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Attach an ISO to an instance."""
+    verify_cluster_access(host)
     console_service = get_console_service()
     
     success, message = await console_service.attach_iso(
@@ -600,6 +608,7 @@ async def eject_iso(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Eject an ISO from an instance."""
+    verify_cluster_access(host)
     console_service = get_console_service()
     
     success, message = await console_service.eject_iso(
@@ -636,6 +645,7 @@ async def check_active_sessions(
     Returns list of active console sessions that might conflict.
     Useful for warning users before opening a new console.
     """
+    verify_cluster_access(host)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -704,6 +714,7 @@ async def kill_all_sessions(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill all active console sessions for an instance."""
+    verify_cluster_access(host)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -765,6 +776,7 @@ async def kill_active_session(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill an active console session by cancelling the operation."""
+    verify_cluster_access(host)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -1229,6 +1241,17 @@ async def console_websocket(
         break_glass_grant_id=_bg_grant_id,
     )
     
-    await proxy.run()
+    # A break-glass session must not outlive the grant that authorized it: the gate
+    # above runs once, at connect. The watchdog closes the socket when the grant
+    # expires or is revoked mid-session.
+    _bg_watch = None
+    if _bg_grant_id:
+        from app.services.break_glass_service import watch_grant_while_open
+        _bg_watch = asyncio.create_task(watch_grant_while_open(_bg_grant_id, websocket))
+    try:
+        await proxy.run()
+    finally:
+        if _bg_watch:
+            _bg_watch.cancel()
     
     logger.info(f"Console WebSocket closed: {instance_name}@{host}")

@@ -195,6 +195,7 @@ async def create_network_acl(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new network ACL."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -271,6 +272,7 @@ async def update_network_acl(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a network ACL."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -322,6 +324,7 @@ async def delete_network_acl(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a network ACL."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         response = client.api.delete(f'/1.0/network-acls/{acl_name}')

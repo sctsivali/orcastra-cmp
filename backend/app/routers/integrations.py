@@ -860,6 +860,18 @@ async def _upsert_synced_organizations(
             )).scalar_one_or_none()
             if not existing:
                 continue
+            # important: `api_key_id` records which key synced an org, and the upsert wrote it
+            # without ever reading it, so any valid key could claim and rewrite an org another
+            # integration owned, including its members' roles. A key may only update what it
+            # already owns, or an org not yet claimed by one.
+            if existing.api_key_id and existing.api_key_id != api_key_id:
+                logger.warning(
+                    "Refusing sync of organization %s (external_id=%s): owned by api key %s, "
+                    "caller is %s",
+                    existing.slug, org_data.id, existing.api_key_id, api_key_id,
+                )
+                handled.add(org_data.id)
+                continue
             existing.name = org_data.name
             existing.slug = org_data.slug
             existing.description = org_data.description
@@ -984,6 +996,16 @@ async def _upsert_synced_members(
             )).scalar_one_or_none()
             if not org:
                 logger.warning(f"Org not found for external_id={m.organization_id}, skipping member {m.email}")
+                continue
+            # important: the org is resolved purely from the caller-supplied external id, so a
+            # key that owns nothing could name another integration's org and rewrite its
+            # members, which pushes a global Authentik role change for those emails. Same
+            # ownership rule as the organisation upsert above.
+            if org.api_key_id and org.api_key_id != api_key_id:
+                logger.warning(
+                    "Refusing member sync into organization %s: owned by api key %s, caller is %s",
+                    org.slug, org.api_key_id, api_key_id,
+                )
                 continue
 
             if m.action == "remove":
@@ -2628,6 +2650,17 @@ async def sync_policies_from_external(
             org = result.scalar_one_or_none()
 
             if not org:
+                errors.append(f"Organization with external_id '{sync_policy.org_external_id}' not found")
+                continue
+            # important: the target org comes straight from the body, and this endpoint writes
+            # tenant access policies, which are authorization data. Without binding the key to
+            # the org, any valid key could write policies into another integration's tenants.
+            # Reported as not-found so a caller cannot probe which external ids exist.
+            if org.api_key_id and org.api_key_id != api_key_id:
+                logger.warning(
+                    "Refusing policy sync into organization %s: owned by api key %s, caller is %s",
+                    org.slug, org.api_key_id, api_key_id,
+                )
                 errors.append(f"Organization with external_id '{sync_policy.org_external_id}' not found")
                 continue
 

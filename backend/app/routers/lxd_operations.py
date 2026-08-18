@@ -179,6 +179,7 @@ async def get_operation(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific operation."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         operation = client.operations.get(operation_id)
@@ -214,6 +215,7 @@ async def cancel_operation(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Cancel an operation."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         # pylxd Operation objects don't have a cancel() method;
@@ -242,6 +244,7 @@ async def wait_operation(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Wait for an operation to complete."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         operation = client.operations.get(operation_id)

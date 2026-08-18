@@ -555,7 +555,18 @@ async def terminal_websocket(
         break_glass_grant_id=_bg_grant_id,
     )
     
-    await proxy.run()
+    # A break-glass session must not outlive the grant that authorized it: the gate
+    # above runs once, at connect. The watchdog closes the socket when the grant
+    # expires or is revoked mid-session.
+    _bg_watch = None
+    if _bg_grant_id:
+        from app.services.break_glass_service import watch_grant_while_open
+        _bg_watch = asyncio.create_task(watch_grant_while_open(_bg_grant_id, websocket))
+    try:
+        await proxy.run()
+    finally:
+        if _bg_watch:
+            _bg_watch.cancel()
 
 
 @router.get(

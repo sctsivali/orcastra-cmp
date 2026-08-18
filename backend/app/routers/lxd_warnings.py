@@ -207,6 +207,7 @@ async def delete_warning(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a warning."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         response = client.api.warnings[warning_uuid].delete(timeout=(5, 30))

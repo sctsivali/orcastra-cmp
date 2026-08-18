@@ -241,6 +241,7 @@ async def update_server_config(
     _rbac: AuthenticatedUser = Depends(require_admin()),
 ):
     """Update server configuration."""
+    verify_cluster_access(node_name)
     try:
         client = lxd_service.connection_manager.get_client(node_name)
         # Update config using PUT method
