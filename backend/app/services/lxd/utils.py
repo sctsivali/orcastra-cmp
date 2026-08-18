@@ -184,6 +184,10 @@ class InstanceWrapper:
         self.description = data.get('description', '')
         self.type = data.get('type', 'container')
         self.config = data.get('config', {})
+        # note: carried through so a root disk size chosen at create time is readable back.
+        # The LXD instance payload always includes both; missing means an older LXD.
+        self.devices = data.get('devices', {})
+        self.expanded_devices = data.get('expanded_devices', {})
         self.profiles = data.get('profiles', [])
     
     def start(self, wait=True):

@@ -42,15 +42,38 @@ def test_an_instance_with_no_overrides_reports_an_empty_map_not_null() -> None:
     assert jsonable_lxd(None) is None
 
 
-def test_the_builder_populates_both_maps() -> None:
-    """Guards the wiring, so removing either line fails here rather than in the browser."""
+def test_every_build_path_carries_devices() -> None:
+    """Three separate paths build an instance response, and the first fix only covered one.
+
+    `_instance_to_vm_info` serves start/stop and the pylxd-model path; a second builder inside
+    `list_all_vms` constructs VMInfo straight from the raw LXD payload; and the detail endpoint
+    goes through `InstanceWrapper`, which copies a fixed set of fields and silently dropped
+    anything not on that list. Miss one and the field reads as null or {} on exactly the surface
+    an operator uses, which is how the first attempt shipped looking correct and returning
+    nothing.
+    """
     import inspect
 
     from app.services.lxd import instance as instance_module
+    from app.services.lxd import utils as utils_module
 
-    src = inspect.getsource(instance_module._InstanceManagerBase._instance_to_vm_info) \
-        if hasattr(instance_module, "_InstanceManagerBase") else inspect.getsource(instance_module)
-    assert "devices=jsonable_lxd(" in src, "devices must be populated in _instance_to_vm_info"
-    assert "expanded_devices=jsonable_lxd(" in src, (
-        "expanded_devices must be populated in _instance_to_vm_info"
+    inst_src = inspect.getsource(instance_module)
+    assert "devices=jsonable_lxd(" in inst_src, "the pylxd-model builder must populate devices"
+    assert "expanded_devices=jsonable_lxd(" in inst_src, (
+        "the pylxd-model builder must populate expanded_devices"
+    )
+    assert "devices=instance_data.get('devices')" in inst_src, (
+        "the list builder constructs VMInfo from the raw payload and must pass devices too"
+    )
+    assert "expanded_devices=instance_data.get('expanded_devices')" in inst_src, (
+        "the list builder must pass expanded_devices too"
+    )
+
+    wrapper_src = inspect.getsource(utils_module.InstanceWrapper.__init__)
+    assert "self.devices" in wrapper_src, (
+        "InstanceWrapper copies a fixed field list; devices must be on it or the detail "
+        "endpoint returns an empty map"
+    )
+    assert "self.expanded_devices" in wrapper_src, (
+        "InstanceWrapper must carry expanded_devices as well"
     )

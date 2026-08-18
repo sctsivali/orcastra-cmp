@@ -429,6 +429,8 @@ class InstanceManager:
                                 type=instance_data.get('type', 'container'),
                                 resources=None,
                                 config=config_data,
+                                devices=instance_data.get('devices') or {},
+                                expanded_devices=instance_data.get('expanded_devices') or {},
                                 profiles=instance_data.get('profiles', []),
                                 tags=tags,
                                 project=project_name,
