@@ -7,7 +7,7 @@ import logging
 from typing import List
 
 from app.models.schemas import ImageInfo
-from .exceptions import LXDOperationError
+from .exceptions import LXDConnectionError, LXDOperationError
 from .connection import LXDConnectionManager
 
 logger = logging.getLogger(__name__)
@@ -44,8 +44,11 @@ class ImageManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
+                # important: returning [] here is what made a dead cluster look like a
+                # cluster with no images. The router above cannot label what it cannot
+                # see, and the single-host endpoint already turns this into a 503.
                 logger.warning(f"Could not connect to {host} for images")
-                return []
+                raise LXDConnectionError(f"Could not connect to {host}")
             images = []
             
             for image in client.images.all():
@@ -64,6 +67,8 @@ class ImageManager:
             
             return images
             
+        except LXDConnectionError:
+            raise
         except Exception as e:
             logger.error(f"Error listing images from {host}: {e}")
             raise LXDOperationError(f"Failed to list images: {str(e)}")

@@ -16,6 +16,7 @@ update.
 """
 
 import ast
+import pathlib
 import unittest
 from pathlib import Path
 
@@ -511,4 +512,69 @@ class FailureIsLabelledTests(unittest.TestCase):
                 offenders.append(f"{filename}: never records a failed node")
             if "unreachable_nodes=unreachable_nodes" not in source:
                 offenders.append(f"{filename}: records failures but never returns them")
+        self.assertEqual(offenders, [])
+
+
+class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
+    """A service method that returns empty when it cannot connect blinds every caller.
+
+    This is the bug class that survived two fixes. The router was taught to label an
+    unreachable host, and the label never appeared, because one layer down
+    `list_images` did `if client is None: return []`. The router saw a successful empty
+    result and had nothing to label. Against the real fleet, fourteen dead clusters all
+    reported reachable=True with zero images.
+
+    The rule is narrow and checkable: inside the LXD service layer, discovering that
+    there is no client is a failure and must be raised. Callers can decide how to present
+    it; they cannot invent information the service threw away.
+    """
+
+    SERVICES = pathlib.Path(__file__).resolve().parents[1] / "app" / "services" / "lxd"
+
+    EXEMPT = {
+        # Returns (items, connected) where the second element IS the reachability signal,
+        # which is how instances and VMs report connected_nodes to their routers.
+        "_fetch_instances_for_node",
+    }
+
+    def test_no_service_method_returns_empty_when_it_cannot_connect(self):
+        offenders = []
+        for path in sorted(self.SERVICES.glob("*.py")):
+            tree = ast.parse(path.read_text())
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                if fn.name in self.EXEMPT:
+                    continue
+                for node in ast.walk(fn):
+                    # `if client is None:` and variants
+                    if not isinstance(node, ast.If):
+                        continue
+                    test = node.test
+                    is_none_check = (
+                        isinstance(test, ast.Compare)
+                        and isinstance(test.ops[0], ast.Is)
+                        and isinstance(test.comparators[0], ast.Constant)
+                        and test.comparators[0].value is None
+                        and isinstance(test.left, ast.Name)
+                        and "client" in test.left.id
+                    )
+                    if not is_none_check:
+                        continue
+                    for stmt in node.body:
+                        if not isinstance(stmt, ast.Return):
+                            continue
+                        value = stmt.value
+                        empty = (
+                            value is None
+                            or (isinstance(value, ast.List) and not value.elts)
+                            or (isinstance(value, ast.Dict) and not value.keys)
+                            or (isinstance(value, ast.Constant) and value.value in (None, ""))
+                        )
+                        if empty:
+                            offenders.append(
+                                f"{path.name}:{stmt.lineno} {fn.name} returns empty when it "
+                                "cannot connect, so its caller cannot tell an outage from a "
+                                "genuinely empty result"
+                            )
         self.assertEqual(offenders, [])
