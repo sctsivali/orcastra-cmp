@@ -286,3 +286,229 @@ class BypassBudgetTests(unittest.TestCase):
         a = [k for k, _ in self._keys("fresh=true", token("alice@example.com")) if k.startswith("fresh:")]
         b = [k for k, _ in self._keys("fresh=true", token("bob@example.com")) if k.startswith("fresh:")]
         self.assertNotEqual(a, b, "same proxy IP, different operators, must not share a budget")
+
+
+class SingleFlightDecoratorTests(unittest.TestCase):
+    """The decorator must stay invisible to FastAPI's parameter resolution.
+
+    FastAPI builds query parameters, dependencies and the response model from
+    inspect.signature of the registered callable. A wrapper that loses the signature
+    silently turns every parameter into an unfilled positional argument, and the failure
+    surfaces as a 500 at request time rather than at import, so a structural test is the
+    only cheap guard.
+    """
+
+    def test_signature_survives_the_wrapper(self):
+        import asyncio
+        import inspect
+
+        from app.core.single_flight import single_flight_on_fresh
+
+        @single_flight_on_fresh("probe")
+        async def handler(host: str = "nuc2", fresh: bool = False) -> str:
+            return f"{host}:{fresh}"
+
+        params = inspect.signature(handler).parameters
+        self.assertIn("host", params, "the wrapper hid a query parameter from FastAPI")
+        self.assertIn("fresh", params)
+        self.assertEqual(params["fresh"].default, False)
+
+        # and it must still be callable both ways
+        self.assertEqual(asyncio.run(handler(host="a", fresh=False)), "a:False")
+        self.assertEqual(asyncio.run(handler(host="a", fresh=True)), "a:True")
+
+    def test_a_plain_read_never_takes_the_lock(self):
+        import asyncio
+
+        from app.core import single_flight
+
+        @single_flight.single_flight_on_fresh("probe")
+        async def handler(fresh: bool = False) -> str:
+            return "ok"
+
+        before = dict(single_flight._locks)
+        asyncio.run(handler(fresh=False))
+        self.assertEqual(
+            single_flight._locks, before, "a cached read must not serialise behind a rebuild"
+        )
+
+    def test_every_decorated_handler_is_registered_below_the_route(self):
+        """The decorator must sit under @router.get, or FastAPI registers the undecorated
+        function and the serialisation never runs."""
+        offenders = []
+        for path in sorted(ROUTERS.glob("*.py")):
+            lines = path.read_text().split("\n")
+            for i, line in enumerate(lines):
+                if not line.startswith("@single_flight_on_fresh"):
+                    continue
+                after = next((l for l in lines[i + 1:] if l.strip()), "")
+                if not after.startswith(("async def", "def")):
+                    offenders.append(f"{path.name}:{i + 1} is not directly above its handler")
+                before = next((l for l in reversed(lines[:i]) if l.strip()), "")
+                if before.strip() not in (")", "@router.get"):
+                    offenders.append(f"{path.name}:{i + 1} is not under a route decorator")
+        self.assertEqual(offenders, [])
+
+
+class SharedBypassCounterTests(unittest.TestCase):
+    """The shared counter must limit when Redis answers and must not block when it does not.
+
+    A rate limiter that fails closed converts a Redis outage into a total product outage.
+    That is strictly worse than the thing it protects against, so the fallback direction is
+    the property worth pinning.
+    """
+
+    def _with_redis(self, client):
+        import app.middleware.security as security
+
+        class _Manager:
+            redis_client = client
+
+        return security, _Manager()
+
+    def test_it_limits_once_the_budget_is_spent(self):
+        counts = {}
+
+        class FakeRedis:
+            def incr(self, key):
+                counts[key] = counts.get(key, 0) + 1
+                return counts[key]
+
+            def expire(self, key, seconds):
+                return True
+
+        security, manager = self._with_redis(FakeRedis())
+        import app.core.cache as cache_mod
+
+        original = cache_mod.get_cache_manager
+        cache_mod.get_cache_manager = lambda: manager
+        try:
+            verdicts = [security._shared_allow("fresh:alice", 3, 60) for _ in range(5)]
+        finally:
+            cache_mod.get_cache_manager = original
+
+        self.assertEqual(verdicts, [True, True, True, False, False])
+
+    def test_two_subjects_do_not_share_a_counter(self):
+        counts = {}
+
+        class FakeRedis:
+            def incr(self, key):
+                counts[key] = counts.get(key, 0) + 1
+                return counts[key]
+
+            def expire(self, key, seconds):
+                return True
+
+        security, manager = self._with_redis(FakeRedis())
+        import app.core.cache as cache_mod
+
+        original = cache_mod.get_cache_manager
+        cache_mod.get_cache_manager = lambda: manager
+        try:
+            for _ in range(3):
+                security._shared_allow("fresh:alice", 3, 60)
+            bob = security._shared_allow("fresh:bob", 3, 60)
+        finally:
+            cache_mod.get_cache_manager = original
+
+        self.assertTrue(bob, "alice spending her budget must not limit bob")
+
+    def test_it_falls_back_rather_than_blocking_when_redis_is_down(self):
+        class BrokenRedis:
+            def incr(self, key):
+                raise ConnectionError("redis is down")
+
+        security, manager = self._with_redis(BrokenRedis())
+        import app.core.cache as cache_mod
+
+        original = cache_mod.get_cache_manager
+        cache_mod.get_cache_manager = lambda: manager
+        try:
+            verdict = security._shared_allow("fresh:alice", 3, 60)
+        finally:
+            cache_mod.get_cache_manager = original
+
+        self.assertIsNone(
+            verdict,
+            "a store failure must return None so the caller falls back, never False",
+        )
+
+    def test_it_falls_back_when_redis_is_absent(self):
+        security, manager = self._with_redis(None)
+        import app.core.cache as cache_mod
+
+        original = cache_mod.get_cache_manager
+        cache_mod.get_cache_manager = lambda: manager
+        try:
+            self.assertIsNone(security._shared_allow("fresh:alice", 3, 60))
+        finally:
+            cache_mod.get_cache_manager = original
+
+
+class FailureIsLabelledTests(unittest.TestCase):
+    """A failed host must be labelled, not merely excluded from the cache.
+
+    The earlier guard only proved a degraded fan-out was not cached. That passed while the
+    guard was inert: images.py caught its own per-node failure and returned a valid empty
+    response, so the "did anyone answer" counter never reached zero and the false empty was
+    cached anyway. Structural presence is not behaviour. This asserts the label instead.
+    """
+
+    PER_HOST = {
+        "images.py": "ImageListResponse",
+        "projects.py": "ProjectListResponse",
+    }
+
+    def test_per_host_failures_construct_an_unreachable_entry(self):
+        offenders = []
+        for filename, cls in self.PER_HOST.items():
+            tree = ast.parse((ROUTERS / filename).read_text())
+            constructions = [
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == cls
+            ]
+            labelled = [
+                call
+                for call in constructions
+                if any(kw.arg == "reachable" for kw in call.keywords)
+            ]
+            if not labelled:
+                offenders.append(f"{filename}: no {cls} is ever constructed with reachable=")
+            # every construction inside an exception handler must carry the label
+            for handler in [n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)]:
+                for call in ast.walk(handler):
+                    if (
+                        isinstance(call, ast.Call)
+                        and isinstance(call.func, ast.Name)
+                        and call.func.id == cls
+                        and not any(kw.arg == "reachable" for kw in call.keywords)
+                    ):
+                        offenders.append(
+                            f"{filename}:{call.lineno} builds {cls} in an except block "
+                            "without saying the host was unreachable"
+                        )
+        self.assertEqual(offenders, [])
+
+    def test_flattening_handlers_report_which_nodes_were_lost(self):
+        """Category B returns one flat list, so the only way to name a failed node is a
+        top-level field. A handler that drops the name reports an outage as an empty list."""
+        expected = {
+            "profiles.py", "network_acls.py", "lxd_operations.py", "lxd_warnings.py",
+            "storage_pools.py", "storage_volumes.py", "permissions.py", "ipam.py",
+            "lxd_server.py",
+        }
+        offenders = []
+        for filename in sorted(expected):
+            source = (ROUTERS / filename).read_text()
+            if "unreachable_nodes" not in source:
+                offenders.append(f"{filename}: no unreachable_nodes anywhere")
+                continue
+            if "unreachable_nodes.append(" not in source:
+                offenders.append(f"{filename}: never records a failed node")
+            if "unreachable_nodes=unreachable_nodes" not in source:
+                offenders.append(f"{filename}: records failures but never returns them")
+        self.assertEqual(offenders, [])

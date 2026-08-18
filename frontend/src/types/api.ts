@@ -189,6 +189,10 @@ export interface ImageListResponse {
   host: string;
   images: ImageInfo[];
   total: number;
+  /** False when this host could not be reached, so an empty list is not "it has none". */
+  reachable?: boolean;
+  /** Why the host could not be reached, when it could not. */
+  error?: string | null;
 }
 
 // GPU DRM (Direct Rendering Manager) Info
@@ -356,6 +360,10 @@ export interface ProjectListResponse {
   host: string;
   projects: ProjectInfo[];
   total: number;
+  /** False when this host could not be reached, so an empty list is not "it has none". */
+  reachable?: boolean;
+  /** Why the host could not be reached, when it could not. */
+  error?: string | null;
 }
 
 // Project Create Request

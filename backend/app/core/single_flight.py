@@ -12,8 +12,12 @@ concurrent rebuilds instead of one per request, which is the bound that matters.
 """
 
 import asyncio
+import functools
+import logging
 import time
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 
 _locks: Dict[str, asyncio.Lock] = {}
@@ -62,3 +66,56 @@ def rebuilt_since(key: str, arrived_at: float) -> bool:
     asked to skip, which on a prewarmed key means it never rebuilds at all.
     """
     return _last_rebuild.get(key, 0.0) > arrived_at
+
+
+def single_flight_on_fresh(key_prefix: str):
+    """
+    Serialise forced rebuilds of one endpoint, per scope, so N simultaneous bypasses
+    cost one fan-out instead of N.
+
+    The rate limit bounds a single operator; it does nothing about ten operators
+    clicking refresh at the same moment, which on these endpoints means ten parallel
+    fan-outs across every cluster in scope.
+
+    important: the waiter re-runs the same handler with fresh=False rather than
+    duplicating its logic. By the time it holds the lock the leader has populated the
+    cache, so a normal cached read returns the freshly rebuilt body. If the leader
+    failed and wrote nothing, the waiter simply takes the ordinary cache-miss path.
+
+    note: the signature is preserved through functools.wraps, and FastAPI resolves
+    parameters with inspect.signature, which follows __wrapped__. The decorated
+    handler keeps its query parameters, dependencies and response model.
+    """
+
+    def decorator(handler):
+        @functools.wraps(handler)
+        async def wrapper(*args, **kwargs):
+            if not kwargs.get("fresh"):
+                return await handler(*args, **kwargs)
+
+            from app.core.org_scope import get_scope_cache_key
+
+            # only the scalar arguments distinguish one caller's rebuild from another's;
+            # dependencies like the LXD service are shared and must not enter the key
+            parts = [
+                f"{name}={value}"
+                for name, value in sorted(kwargs.items())
+                if name != "fresh" and isinstance(value, (str, int, bool, type(None)))
+            ]
+            key = get_scope_cache_key(f"{key_prefix}:" + ":".join(parts))
+
+            arrived_at = time.monotonic()
+            lock = rebuild_lock(key)
+            try:
+                async with lock:
+                    if rebuilt_since(key, arrived_at):
+                        logger.debug("Serving %s from a concurrent rebuild", key)
+                        return await handler(*args, **{**kwargs, "fresh": False})
+                    return await handler(*args, **kwargs)
+            finally:
+                mark_rebuilt(key)
+                release_lock(key)
+
+        return wrapper
+
+    return decorator

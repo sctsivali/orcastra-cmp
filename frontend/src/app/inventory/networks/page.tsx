@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
@@ -24,7 +25,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Plus, AlertTriangle } from "lucide-react";
+import { Search, Plus } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useNetworks } from "@/hooks/use-lxd";
 import { Button } from "@/components/ui/button";
@@ -163,19 +164,7 @@ export default function NetworksPage() {
         </div>
       </div>
 
-      {unreachableNodes.length > 0 && (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
-          <div>
-            <span className="font-medium">
-              Could not reach {unreachableNodes.length} node
-              {unreachableNodes.length === 1 ? "" : "s"}:
-            </span>{" "}
-            {unreachableNodes.join(", ")}. Their networks are not shown, so this
-            list may be incomplete.
-          </div>
-        </div>
-      )}
+      <UnreachableNodesBanner noun="networks" nodes={unreachableNodes} />
 
       <Card>
         <CardContent className="pt-6">

@@ -23,6 +23,7 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
+from app.core.single_flight import single_flight_on_fresh
 from app.core.cache import get_cache_manager
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
@@ -155,11 +156,19 @@ async def _fetch_images_for_node(lxd_service: LXDService, node_name: str) -> Ima
             total=len(images),
         )
     except Exception as e:
+        # important: this except, not the gather below, is the path a dead cluster takes.
+        # The connection breaker short-circuits before any network call, list_images
+        # raises, and this returns a perfectly valid empty response. Labelling it is the
+        # whole point: an unlabelled empty host is indistinguishable from a host with no
+        # images, which is what made the create form say "no images available" for a
+        # cluster that was simply down.
         logger.warning(f"Could not list images from {node_name}: {e}")
         return ImageListResponse(
             host=node_name,
             images=[],
             total=0,
+            reachable=False,
+            error=str(e) or e.__class__.__name__,
         )
 
 
@@ -197,7 +206,16 @@ def _filter_images_for_tenant(
             for fingerprint in host_fingerprints
         )
     ]
-    return ImageListResponse(host=response.host, images=images, total=len(images))
+    # important: carry reachability through the tenant filter. Rebuilding the model
+    # without it would drop the label for scoped users only, so admins would see an
+    # unreachable host correctly and tenants would see it as empty.
+    return ImageListResponse(
+        host=response.host,
+        images=images,
+        total=len(images),
+        reachable=response.reachable,
+        error=response.error,
+    )
 
 
 @router.get(
@@ -210,6 +228,7 @@ def _filter_images_for_tenant(
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
+@single_flight_on_fresh("images:list")
 async def list_all_images(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -240,15 +259,22 @@ async def list_all_images(
                 host=node_names[i] if i < len(node_names) else "unknown",
                 images=[],
                 total=0,
+                reachable=False,
+                error=str(result) or result.__class__.__name__,
             ))
         else:
-            answered += 1
+            # important: count hosts that actually answered, not calls that returned.
+            # _fetch_images_for_node catches its own failures, so every call "returns"
+            # and an earlier version of this counter never reached zero, which made the
+            # do-not-cache-an-outage guard below structurally present and inert.
+            if result.reachable:
+                answered += 1
             response.append(_filter_images_for_tenant(result, allowed_images))
 
-    # important: a node that failed is rendered above as a node with zero images,
-    # which is indistinguishable from a node that genuinely has none. Caching that
-    # for 180s pins the lie, and a forced refresh during an outage would replace a
-    # good catalog with it. If nothing answered, do not remember the result.
+    # important: a node that failed now carries reachable=False, so a caller can tell it
+    # apart from a node with no images. Caching a fleet where nothing answered would
+    # still pin an outage for 180s, and a forced refresh during one would replace a good
+    # catalog with it, so that case is still not remembered.
     # note: a partial failure is still cached, so one dead cluster does not make
     # every request pay the full fan-out. That host reads as empty until the TTL
     # expires, which is a known gap: the response shape has no per-host reachability

@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -37,6 +38,9 @@ export default function ProfilesPage() {
   const profiles = (data as any)?.profiles || [];
   
   const [searchQuery, setSearchQuery] = useState("");
+  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
+  // than let an outage read as an empty list.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
   const [filterNode, setFilterNode] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -118,6 +122,8 @@ export default function ProfilesPage() {
           onRefresh={refreshNow}
         />
       </div>
+
+      <UnreachableNodesBanner noun="profiles" nodes={unreachableNodes} />
 
       {/* Search and Filters */}
       <Card>

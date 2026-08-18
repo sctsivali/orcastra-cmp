@@ -46,6 +46,13 @@ class ServerListResponse(BaseModel):
     """Response for listing server info."""
     servers: List[ServerInfo] = Field(..., description="List of server information")
     total: int = Field(..., description="Total number of servers")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Nodes that could not be reached. Their entries are missing from this list, "
+            "so an unreachable node is distinguishable from one that has none."
+        ),
+    )
 
 
 def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Optional[ServerInfo]:
@@ -88,6 +95,7 @@ def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Opti
         )
     except Exception as e:
         logger.error(f"Error getting server info from {node_name}: {e}")
+        raise
         return None
 
 
@@ -117,15 +125,20 @@ async def list_servers(
         
         # Filter out None and exceptions
         all_servers = []
-        for result in results:
+        unreachable_nodes: List[str] = []
+        # important: a node that failed must be named, not dropped. Flattening its failure
+        # into "no rows" is what let an outage read as an empty inventory.
+        for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, ServerInfo):
                 all_servers.append(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching server info: {result}")
+                unreachable_nodes.append(node_name)
         
         return ServerListResponse(
             servers=all_servers,
-            total=len(all_servers)
+            total=len(all_servers),
+            unreachable_nodes=unreachable_nodes,
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

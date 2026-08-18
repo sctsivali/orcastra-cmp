@@ -21,3 +21,4 @@ export * from "./refresh-button";
 export * from "./empty-state";
 export * from "./table-text";
 export * from "./table-link";
+export * from "./unreachable-nodes-banner";

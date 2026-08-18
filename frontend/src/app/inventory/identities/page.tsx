@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +54,9 @@ export default function IdentitiesPage() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useIdentities();
   const identities = (data as any)?.identities || [];
   const { toast } = useToast();
+  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
+  // than let an outage read as an empty list.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
   const deleteIdentityMutation = useDeleteIdentity();
   const { isReadOnly } = useReadOnlyMode();
   
@@ -176,6 +180,8 @@ export default function IdentitiesPage() {
           onRefresh={refreshNow}
         />
       </div>
+
+      <UnreachableNodesBanner noun="identities" nodes={unreachableNodes} />
 
       <Card>
         <CardHeader>

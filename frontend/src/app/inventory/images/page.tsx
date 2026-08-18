@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -56,6 +57,16 @@ interface ImageInfo {
 
 export default function ImagesPage() {
   const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt } = useImages();
+
+  // A host that did not answer is returned with an empty image list, so without this it
+  // is indistinguishable from a host that genuinely has no images.
+  const unreachableNodes = useMemo(
+    () =>
+      (imagesByHost as ImageListResponse[])
+        .filter((host) => host.reachable === false)
+        .map((host) => host.host),
+    [imagesByHost],
+  );
   
   const [searchQuery, setSearchQuery] = useState("");
   const [filterNode, setFilterNode] = useState<string>("all");
@@ -95,7 +106,13 @@ export default function ImagesPage() {
   }, [imagesByHost]);
 
   const nodes = useMemo(() => {
-    const nodeSet = new Set((imagesByHost as ImageListResponse[]).map((h) => h.host));
+    // note: an unreachable host is excluded. Offering it as a filter that can only ever
+    // yield an empty table reads as "this host has no images".
+    const nodeSet = new Set(
+      (imagesByHost as ImageListResponse[])
+        .filter((h) => h.reachable !== false)
+        .map((h) => h.host),
+    );
     return Array.from(nodeSet).sort();
   }, [imagesByHost]);
 
@@ -181,6 +198,8 @@ export default function ImagesPage() {
           )}
         </div>
       </div>
+
+      <UnreachableNodesBanner noun="images" nodes={unreachableNodes} />
 
       <Card>
         <CardContent className="pt-6">
@@ -270,7 +289,9 @@ export default function ImagesPage() {
                     colSpan={7}
                     className="text-center text-muted-foreground"
                   >
-                    No images found
+                    {unreachableNodes.length > 0 && allImages.length === 0
+                      ? "No images to show: none of the nodes could be reached."
+                      : "No images found"}
                   </TableCell>
                 </TableRow>
               ) : (

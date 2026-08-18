@@ -12,6 +12,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from pydantic import BaseModel, Field
+from app.core.single_flight import single_flight_on_fresh
 from app.core.cache import get_cache_manager
 from app.core.config import get_settings
 from app.models.schemas import (
@@ -276,6 +277,7 @@ Additional endpoint for cluster members resources
     summary="Get member resources",
     description="Get resource information (CPU, RAM, GPU, storage) for a specific cluster member.",
 )
+@single_flight_on_fresh("member_resources")
 async def get_member_resources(
     member_name: str,
     node: str = Query(..., description="Node name to query"),

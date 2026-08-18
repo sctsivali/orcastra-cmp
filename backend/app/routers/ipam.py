@@ -47,6 +47,13 @@ class IPAMListResponse(BaseModel):
     total: int = Field(..., description="Total number of allocations")
     allocations: List[IPAMAllocation] = Field(..., description="List of IP allocations")
     nodes: List[str] = Field(..., description="List of nodes")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Nodes that could not be reached. Their entries are missing from this list, "
+            "so an unreachable node is distinguishable from one that has none."
+        ),
+    )
 
 
 def _fetch_ipam_for_node(
@@ -67,6 +74,7 @@ def _fetch_ipam_for_node(
             project_names = [p.name for p in projects]
         except Exception as e:
             logger.error(f"Could not get projects for {node_name}: {e}")
+            raise
             project_names = ['default']
 
         for project_name in project_names:
@@ -163,11 +171,15 @@ async def list_ipam_allocations(
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_allocations: List[IPAMAllocation] = []
-        for result in results:
+        unreachable_nodes: List[str] = []
+        # important: a node that failed must be named, not dropped. Flattening its failure
+        # into "no rows" is what let an outage read as an empty inventory.
+        for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_allocations.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"IPAM node query failed: {result}")
+                unreachable_nodes.append(node_name)
 
         all_allocations = [
             allocation for allocation in all_allocations
@@ -183,6 +195,7 @@ async def list_ipam_allocations(
             total=len(all_allocations),
             allocations=all_allocations,
             nodes=lxd_service.connection_manager.get_node_names(),
+            unreachable_nodes=unreachable_nodes,
         )
 
         # cache for 120 seconds

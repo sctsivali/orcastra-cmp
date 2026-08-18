@@ -22,6 +22,7 @@ from app.services.lxd_service import (
     get_lxd_service,
     LXDOperationError,
 )
+from app.core.single_flight import single_flight_on_fresh
 from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
@@ -49,6 +50,7 @@ _node_executor = ThreadPoolExecutor(max_workers=10)
         200: {"description": "Node status retrieved successfully"},
     }
 )
+@single_flight_on_fresh("nodes:status")
 async def get_nodes_status(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,

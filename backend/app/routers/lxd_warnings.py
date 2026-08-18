@@ -49,6 +49,13 @@ class WarningListResponse(BaseModel):
     total: int = Field(..., description="Total number of warnings")
     warnings: List[WarningInfo] = Field(..., description="List of warnings")
     nodes: List[str] = Field(..., description="List of nodes")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Nodes that could not be reached. Their entries are missing from this list, "
+            "so an unreachable node is distinguishable from one that has none."
+        ),
+    )
 
 
 def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[WarningInfo]:
@@ -84,6 +91,7 @@ def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[Wa
                     ))
                 except Exception as e:
                     logger.error(f"Error parsing warning data on {node_name}: {e}")
+                    raise
         elif response.status_code == 404:
             logger.debug(f"Warnings endpoint not available on {node_name} (404 - older LXD version?)")
         else:
@@ -119,11 +127,15 @@ async def list_warnings(
         
         # Flatten results
         all_warnings = []
-        for result in results:
+        unreachable_nodes: List[str] = []
+        # important: a node that failed must be named, not dropped. Flattening its failure
+        # into "no rows" is what let an outage read as an empty inventory.
+        for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_warnings.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching warnings: {result}")
+                unreachable_nodes.append(node_name)
 
         all_warnings = [
             warning for warning in all_warnings
@@ -133,7 +145,8 @@ async def list_warnings(
         return WarningListResponse(
             total=len(all_warnings),
             warnings=all_warnings,
-            nodes=lxd_service.connection_manager.get_node_names()
+            nodes=lxd_service.connection_manager.get_node_names(),
+            unreachable_nodes=unreachable_nodes,
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

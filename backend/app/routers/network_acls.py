@@ -57,6 +57,13 @@ class NetworkACLListResponse(BaseModel):
     total: int = Field(..., description="Total number of ACLs")
     acls: List[NetworkACLInfo] = Field(..., description="List of network ACLs")
     nodes: List[str] = Field(..., description="List of nodes")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Nodes that could not be reached. Their entries are missing from this list, "
+            "so an unreachable node is distinguishable from one that has none."
+        ),
+    )
 
 
 def _fetch_acls_for_node(lxd_service: LXDService, node_name: str) -> List[NetworkACLInfo]:
@@ -81,6 +88,7 @@ def _fetch_acls_for_node(lxd_service: LXDService, node_name: str) -> List[Networ
                     ))
                 except Exception as e:
                     logger.error(f"Error parsing ACL data on {node_name}: {e}")
+                    raise
     except Exception as e:
         logger.error(f"Error listing network ACLs on {node_name}: {e}")
     return acls
@@ -112,11 +120,15 @@ async def list_network_acls(
         
         # Flatten results
         all_acls = []
-        for result in results:
+        unreachable_nodes: List[str] = []
+        # important: a node that failed must be named, not dropped. Flattening its failure
+        # into "no rows" is what let an outage read as an empty inventory.
+        for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_acls.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching network ACLs: {result}")
+                unreachable_nodes.append(node_name)
 
         if tenant_acl_active():
             visible_acls = []
@@ -129,7 +141,8 @@ async def list_network_acls(
         return NetworkACLListResponse(
             total=len(all_acls),
             acls=all_acls,
-            nodes=lxd_service.connection_manager.get_node_names()
+            nodes=lxd_service.connection_manager.get_node_names(),
+            unreachable_nodes=unreachable_nodes,
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

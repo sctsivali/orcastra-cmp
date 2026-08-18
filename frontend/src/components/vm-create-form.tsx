@@ -69,11 +69,16 @@ function ImageSelector({
 }) {
   const { data: imagesData, isLoading } = useImages();
 
-  const hostImages = React.useMemo(() => {
-    if (!imagesData || !host) return [];
-    const hostData = (imagesData as ImageListResponse[]).find((h) => h.host === host);
-    return hostData?.images || [];
+  const hostEntry = React.useMemo(() => {
+    if (!imagesData || !host) return undefined;
+    return (imagesData as ImageListResponse[]).find((h) => h.host === host);
   }, [imagesData, host]);
+
+  const hostImages = hostEntry?.images || [];
+  // important: a host that did not answer comes back with an empty image list. Telling the
+  // operator it has no images is how they conclude the cluster is fine and the catalog is
+  // empty, when the cluster is simply down.
+  const hostUnreachable = hostEntry?.reachable === false;
 
   if (!host) {
     return (
@@ -104,7 +109,9 @@ function ImageSelector({
       <SelectContent>
         {hostImages.length === 0 ? (
           <div className="p-4 text-center text-sm text-muted-foreground">
-            No images available on this host
+            {hostUnreachable
+              ? `Could not reach ${host}, so its images cannot be listed`
+              : "No images available on this host"}
           </div>
         ) : (
           hostImages.map((image) => (

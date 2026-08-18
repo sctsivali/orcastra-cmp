@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -44,6 +45,9 @@ export default function IPAMPage() {
   const nodes = (data as any)?.nodes || [];
   
   const [searchQuery, setSearchQuery] = useState("");
+  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
+  // than let an outage read as an empty list.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterNetwork, setFilterNetwork] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
@@ -136,6 +140,8 @@ export default function IPAMPage() {
           onRefresh={refreshNow}
         />
       </div>
+
+      <UnreachableNodesBanner noun="IP allocations" nodes={unreachableNodes} />
 
       <Card>
         <CardContent className="pt-6">

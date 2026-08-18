@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,9 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 export default function OperationsPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useOperations();
+  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
+  // than let an outage read as an empty list.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
   const operations = useMemo(() => (data as any)?.operations || [], [data]);
   const nodes = (data as any)?.nodes || [];
   
@@ -298,6 +302,8 @@ export default function OperationsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <UnreachableNodesBanner noun="operations" nodes={unreachableNodes} />
 
       <Card>
         <CardHeader>

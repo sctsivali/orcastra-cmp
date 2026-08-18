@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -45,6 +46,9 @@ export default function StorageVolumesPage() {
   const volumes = (data as any)?.volumes || [];
   
   const [searchQuery, setSearchQuery] = useState("");
+  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
+  // than let an outage read as an empty list.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
   const [filterNode, setFilterNode] = useState<string>("all");
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -131,6 +135,8 @@ export default function StorageVolumesPage() {
           onRefresh={refreshNow}
         />
       </div>
+
+      <UnreachableNodesBanner noun="storage volumes" nodes={unreachableNodes} />
 
       <Card>
         <CardContent className="pt-6">

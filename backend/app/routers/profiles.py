@@ -10,6 +10,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import (
+    LXDConnectionError,
     LXDService,
     get_lxd_service,
 )
@@ -56,6 +57,13 @@ class ProfileListResponse(BaseModel):
     total: int = Field(..., description="Total number of profiles")
     profiles: List[ProfileInfo] = Field(..., description="List of profiles")
     nodes: List[str] = Field(..., description="List of nodes")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Nodes that could not be reached. Their entries are missing from this list, "
+            "so an unreachable node is distinguishable from one that has none."
+        ),
+    )
 
 
 def _fetch_profiles_for_node(lxd_service: LXDService, node_name: str) -> List[ProfileInfo]:
@@ -64,8 +72,9 @@ def _fetch_profiles_for_node(lxd_service: LXDService, node_name: str) -> List[Pr
     try:
         client = lxd_service.get_client_with_reconnect(node_name)
         if client is None:
-            logger.warning(f"Could not connect to {node_name}, skipping for profiles list")
-            return profiles_list
+            # important: unreachable is not empty. Returning a bare list here
+            # made a dead node indistinguishable from one with nothing.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
         profiles = client.profiles.all()
         for profile in profiles:
             profiles_list.append(ProfileInfo(
@@ -78,6 +87,7 @@ def _fetch_profiles_for_node(lxd_service: LXDService, node_name: str) -> List[Pr
             ))
     except Exception as e:
         logger.error(f"Error listing profiles on {node_name}: {e}")
+        raise
     return profiles_list
 
 
@@ -117,11 +127,15 @@ async def list_profiles(
         
         # Flatten results
         all_profiles = []
-        for result in results:
+        unreachable_nodes: List[str] = []
+        # important: a node that failed must be named, not dropped. Flattening its failure
+        # into "no rows" is what let an outage read as an empty inventory.
+        for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_profiles.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching profiles: {result}")
+                unreachable_nodes.append(node_name)
 
         if tenant_acl_active():
             visible_profiles = []
@@ -135,7 +149,8 @@ async def list_profiles(
         response = ProfileListResponse(
             total=len(all_profiles),
             profiles=all_profiles,
-            nodes=lxd_service.connection_manager.get_node_names()
+            nodes=lxd_service.connection_manager.get_node_names(),
+            unreachable_nodes=unreachable_nodes,
         )
         
         # Cache as dict for 120 seconds

@@ -103,8 +103,17 @@ async def list_all_projects(
                     total=len(projects),
                 )
             except Exception as e:
+                # important: return the host, labelled, rather than None. Dropping it made
+                # an unreachable cluster vanish from the response entirely, so the dashboard
+                # project count silently fell with nothing to explain it.
                 logger.warning(f"Could not list projects from {host}: {e}")
-                return None
+                return ProjectListResponse(
+                    host=host,
+                    projects=[],
+                    total=0,
+                    reachable=False,
+                    error=str(e) or e.__class__.__name__,
+                )
         
         # Fetch from all nodes in parallel
         results = await asyncio.gather(
@@ -114,8 +123,11 @@ async def list_all_projects(
         
         # Filter valid results
         all_projects = []
-        for result in results:
+        answered = 0
+        for index, result in enumerate(results):
             if isinstance(result, ProjectListResponse):
+                if result.reachable:
+                    answered += 1
                 # apply tenant ACL filtering per host
                 allowed_names = filter_projects_by_acl(result.host, [p.name for p in result.projects])
                 filtered = [p for p in result.projects if p.name in allowed_names]
@@ -123,14 +135,26 @@ async def list_all_projects(
                     host=result.host,
                     projects=filtered,
                     total=len(filtered),
+                    reachable=result.reachable,
+                    error=result.error,
                 ))
             elif isinstance(result, Exception):
                 logger.warning(f"Project fetch error: {result}")
-        
-        # Cache for 30 seconds (short TTL - ACL-filtered data)
-        cache_data = [proj.model_dump() for proj in all_projects]
-        cache.set("api_responses", cache_key, cache_data, ttl=30)
-        logger.debug("Cached projects list for 30 seconds")
+                all_projects.append(ProjectListResponse(
+                    host=node_names[index] if index < len(node_names) else "unknown",
+                    projects=[],
+                    total=0,
+                    reachable=False,
+                    error=str(result) or result.__class__.__name__,
+                ))
+
+        # important: an outage must not be remembered as the answer. See instances.py.
+        if answered:
+            cache_data = [proj.model_dump() for proj in all_projects]
+            cache.set("api_responses", cache_key, cache_data, ttl=30)
+            logger.debug("Cached projects list for 30 seconds")
+        else:
+            logger.warning("Not caching projects list: no node answered")
         
         return all_projects
         

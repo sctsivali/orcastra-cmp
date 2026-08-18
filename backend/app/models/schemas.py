@@ -250,6 +250,17 @@ class ImageListResponse(BaseModel):
     host: str
     images: List[ImageInfo]
     total: int
+    reachable: bool = Field(
+        default=True,
+        description=(
+            "False when this host could not be reached. Without it an empty list is "
+            "indistinguishable from a host that never answered, which is how an outage "
+            "reads as 'this host has nothing'."
+        ),
+    )
+    error: Optional[str] = Field(
+        default=None, description="Why the host could not be reached, when it could not."
+    )
 
 
 class GpuCardInfo(BaseModel):
@@ -505,6 +516,17 @@ class ProjectListResponse(BaseModel):
     host: str
     projects: List[ProjectInfo]
     total: int
+    reachable: bool = Field(
+        default=True,
+        description=(
+            "False when this host could not be reached. Without it an empty list is "
+            "indistinguishable from a host that never answered, which is how an outage "
+            "reads as 'this host has nothing'."
+        ),
+    )
+    error: Optional[str] = Field(
+        default=None, description="Why the host could not be reached, when it could not."
+    )
 
 
 class ProjectCreateRequest(BaseModel):

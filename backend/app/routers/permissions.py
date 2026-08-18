@@ -68,6 +68,13 @@ class IdentityListResponse(BaseModel):
     total: int = Field(..., description="Total number of identities")
     identities: List[IdentityInfo] = Field(..., description="List of identities")
     nodes: List[str] = Field(..., description="List of nodes")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Nodes that could not be reached. Their entries are missing from this list, "
+            "so an unreachable node is distinguishable from one that has none."
+        ),
+    )
 
 
 class GroupListResponse(BaseModel):
@@ -75,6 +82,13 @@ class GroupListResponse(BaseModel):
     total: int = Field(..., description="Total number of groups")
     groups: List[GroupInfo] = Field(..., description="List of groups")
     nodes: List[str] = Field(..., description="List of nodes")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Nodes that could not be reached. Their entries are missing from this list, "
+            "so an unreachable node is distinguishable from one that has none."
+        ),
+    )
 
 
 class IdentityAddRequest(BaseModel):
@@ -119,6 +133,7 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> List[
                     ))
                 except Exception as e:
                     logger.error(f"Error parsing identity data: {e}")
+                    raise
         else:
             logger.warning(f"Got status {response.status_code} for identities on {node_name}")
     except Exception as e:
@@ -153,16 +168,21 @@ async def list_identities(
         
         # Flatten results
         all_identities = []
-        for result in results:
+        unreachable_nodes: List[str] = []
+        # important: a node that failed must be named, not dropped. Flattening its failure
+        # into "no rows" is what let an outage read as an empty inventory.
+        for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_identities.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching identities: {result}")
+                unreachable_nodes.append(node_name)
         
         return IdentityListResponse(
             total=len(all_identities),
             identities=all_identities,
-            nodes=lxd_service.connection_manager.get_node_names()
+            nodes=lxd_service.connection_manager.get_node_names(),
+            unreachable_nodes=unreachable_nodes,
         )
     except Exception as e:
         logger.error(f"Error listing identities: {e}")
@@ -252,6 +272,7 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> List[Grou
                     ))
                 except Exception as e:
                     logger.error(f"Error parsing group data: {e}")
+                    raise
         else:
             logger.warning(f"Got status {response.status_code} for groups on {node_name}")
     except Exception as e:
@@ -286,16 +307,21 @@ async def list_groups(
         
         # Flatten results
         all_groups = []
-        for result in results:
+        unreachable_nodes: List[str] = []
+        # important: a node that failed must be named, not dropped. Flattening its failure
+        # into "no rows" is what let an outage read as an empty inventory.
+        for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_groups.extend(result)
             elif isinstance(result, Exception):
                 logger.error(f"Error fetching groups: {result}")
+                unreachable_nodes.append(node_name)
         
         return GroupListResponse(
             total=len(all_groups),
             groups=all_groups,
-            nodes=lxd_service.connection_manager.get_node_names()
+            nodes=lxd_service.connection_manager.get_node_names(),
+            unreachable_nodes=unreachable_nodes,
         )
     except Exception as e:
         logger.error(f"Error listing groups: {e}")
