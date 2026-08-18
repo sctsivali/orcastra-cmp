@@ -25,24 +25,47 @@ export interface UseRequireRoleResult {
   isResolved: boolean;
 }
 
+/** Build a sign-in URL that carries where the operator actually was. */
+function signInWithReturnPath(): string {
+  if (typeof window === "undefined") return "/auth/signin";
+  const url = new URL("/auth/signin", window.location.origin);
+  url.searchParams.set("callbackUrl", window.location.href);
+  return url.pathname + url.search;
+}
+
 export function useRequireRole(role: Role, redirectTo: string = "/"): UseRequireRoleResult {
   const router = useRouter();
   const { hasRole, isLoading, isAuthenticated } = usePermissions();
 
   const allowed = hasRole(role);
-  // important: renderability and redirectability are different questions. We can
+
+  // Three states, not two. "Still loading" and "signed out" both fail an
+  // isAuthenticated check but need opposite handling, and collapsing them leaves
+  // a signed-out operator on a permanently blank page: no loader, no content, no
+  // redirect, because the role check quietly returns false for an empty session.
+  const isSignedOut = !isLoading && !isAuthenticated;
+
+  // important: renderability and redirectability are different questions. We
   // render as soon as roles are readable, which stays true through a background
   // session refresh - gating render on isAuthenticated would blank the page every
   // time useSession().update() briefly flips status back to "loading".
-  const isResolved = !isLoading;
+  const isResolved = !isLoading && !isSignedOut;
 
   useEffect(() => {
-    // ...but only ever redirect on a denial we positively know: authenticated,
+    if (isSignedOut) {
+      // The session is genuinely gone (auth-provider already confirmed it once
+      // before clearing). Send them to sign-in carrying the current URL, so
+      // silent SSO returns them to this page rather than to the home page. That
+      // return path is the whole point of this change.
+      router.replace(signInWithReturnPath());
+      return;
+    }
+    // Otherwise only redirect on a denial we positively know: authenticated,
     // and the role genuinely absent.
     if (isAuthenticated && !allowed) {
       router.replace(redirectTo);
     }
-  }, [isAuthenticated, allowed, redirectTo, router]);
+  }, [isSignedOut, isAuthenticated, allowed, redirectTo, router]);
 
   return { allowed, isResolved };
 }

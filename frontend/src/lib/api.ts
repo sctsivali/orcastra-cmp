@@ -112,7 +112,11 @@ let _authFailureAnnounced = false;
 const _MAX_REFRESH_ATTEMPTS = 3; // refreshes that failed to clear 401s before we prompt
 const _401_RESET_MS = 8000; // forget the failure streak after 8s of quiet
 let _401ResetTimer: ReturnType<typeof setTimeout> | null = null;
-let _tokenAtLastFailure: string | null = null;
+// important: undefined, not null. null is a legitimate _accessToken value (the
+// token has been cleared), so a null sentinel would make a 401 under a cleared
+// token compare equal and read as "already seen", silently skipping both the
+// refresh attempt and the re-auth banner.
+let _tokenAtLastFailure: string | null | undefined = undefined;
 let _sessionRefreshFn: (() => Promise<void>) | null = null;
 let _sessionRefreshInFlight = false;
 let _onAuthFailure: (() => void) | null = null;
@@ -172,7 +176,7 @@ function handle401() {
 export function reset401Counter() {
   _refreshAttempts = 0;
   _authFailureAnnounced = false;
-  _tokenAtLastFailure = null;
+  _tokenAtLastFailure = undefined;
 }
 
 // Timeout wrapper for fetch with AbortController
