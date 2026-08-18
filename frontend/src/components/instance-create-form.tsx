@@ -246,7 +246,10 @@ export function InstanceCreateForm() {
   // --- Additional disk devices ------------------------------------------------
   const [disks, setDisks] = useState<DiskDevice[]>([]);
   // All custom volumes on the node (filtered per-row by pool).
-  const { data: volumesResp } = useStorageVolumes(undefined, form.selectedNode);
+  const { data: volumesResp, isLoading: loadingVolumes } = useStorageVolumes(
+    undefined,
+    form.selectedNode,
+  );
   const customVolumes = (
     ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
       []) as StorageVolumeInfo[]
@@ -1126,7 +1129,7 @@ export function InstanceCreateForm() {
                     <Disc className="h-4 w-4" />
                     Boot ISO *
                   </Label>
-                  {isoOptions.length > 0 ? (
+                  {isoOptions.length > 0 || loadingVolumes || !form.selectedNode ? (
                     <>
                       <SearchableSelect
                         value={
@@ -1147,11 +1150,15 @@ export function InstanceCreateForm() {
                         }}
                         options={isoOptions}
                         placeholder={
-                          form.selectedNode ? "Select an ISO" : "Select a node first"
+                          !form.selectedNode
+                            ? "Select a node first"
+                            : loadingVolumes
+                              ? "Loading ISOs…"
+                              : "Select an ISO"
                         }
                         searchPlaceholder="Search ISOs..."
                         emptyText="No ISOs found."
-                        disabled={!form.selectedNode}
+                        disabled={!form.selectedNode || loadingVolumes}
                       />
                       <p className="text-xs text-muted-foreground">
                         The VM boots this ISO on an empty {form.storageValue.trim()}
