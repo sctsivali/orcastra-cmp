@@ -28,7 +28,12 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
-from app.core.org_scope import org_scope_dependency, get_scope_cache_key
+from app.core.org_scope import (
+    org_scope_dependency,
+    get_scope_cache_key,
+    verify_cluster_access,
+    get_current_allowed_clusters,
+)
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
@@ -247,6 +252,29 @@ def create_pfx(cert_pem: bytes, key_pem: bytes, password: str = "") -> bytes:
     return pfx_data
 
 
+def _authorize_key(vault_client, key_id: str) -> Dict[str, Any]:
+    """Return a key's metadata only if the caller may reach the cluster it belongs to.
+
+    important: a key here is a real LXD client certificate with a private key, and an
+    ``auth_level`` of "admin" provisions it server-scope on that node. Nothing tied these
+    records to the caller: the router gate is ``require_tenant()``, which every authenticated
+    user satisfies, so any user could name any key id. The cluster is the boundary that already
+    governs every other resource, so it governs these too.
+    """
+    try:
+        metadata = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")
+    except Exception:
+        metadata = None
+    if not metadata:
+        # Same shape as a genuinely missing key, so an out-of-scope id cannot be distinguished
+        # from a non-existent one by probing.
+        raise HTTPException(status_code=404, detail="Key not found")
+    node = metadata.get("node")
+    if node:
+        verify_cluster_access(node)
+    return metadata
+
+
 @router.post(
     "",
     response_model=KeyInfo,
@@ -260,8 +288,11 @@ async def create_key(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Generate a new TLS identity key."""
+    # A key is provisioned into a specific node's LXD trust store, so the node is the boundary.
+    verify_cluster_access(request.node)
+
     vault_client = get_vault_keys_client()
-    
+
     try:
         # Generate unique key ID
         key_id = f"key_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{request.name.lower().replace(' ', '_')[:20]}"
@@ -569,6 +600,17 @@ async def list_keys(
             cache.set("api_responses", cache_key, keys_metadata, ttl=180)
         else:
             keys_metadata = cached_data
+
+        # important: Vault holds every key in the fleet, and the cache key is scoped but the
+        # DATA was not, so a scoped cache entry was still filled from an unfiltered read. Each
+        # key belongs to a cluster, so the caller's cluster set is the filter. `None` means an
+        # unrestricted context (admin, dev mode, background task) and keeps everything.
+        allowed = get_current_allowed_clusters()
+        if allowed is not None:
+            keys_metadata = [
+                k for k in keys_metadata
+                if not k.get("node") or k.get("node") in allowed
+            ]
         
         # Process keys and check expiration
         now = datetime.utcnow()
@@ -641,10 +683,16 @@ async def list_keys(
     summary="Download PFX file",
     description="Download the PFX certificate file for a key from Vault.",
 )
-async def download_key(key_id: str):
+async def download_key(
+    key_id: str,
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
     """Download PFX file for a key."""
     vault_client = get_vault_keys_client()
-    
+
+    # important: this streams a private key. Authorize before reading it, not after.
+    _authorize_key(vault_client, key_id)
+
     try:
         # Get certificate and key from Vault
         cert_pem, key_pem = get_key_from_vault(vault_client, key_id)
@@ -685,7 +733,9 @@ async def delete_key(
 ):
     """Delete a key."""
     vault_client = get_vault_keys_client()
-    
+
+    _authorize_key(vault_client, key_id)
+
     try:
         # Get metadata from Vault
         key_meta = vault_client.vault_read(f"secret/data/{VAULT_KEYS_PATH}/{key_id}/metadata")

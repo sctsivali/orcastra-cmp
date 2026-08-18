@@ -283,8 +283,19 @@ async def get_current_user(
         return None
 
     if not settings.authentik_issuer:
-        logger.warning("AUTH_ENABLED=true but AUTHENTIK_ISSUER not configured - bypassing auth")
-        return None
+        # important: this used to return None, and every RBAC dependency reads None as dev mode
+        # and fabricates a full Admin. A single missing or misspelled AUTHENTIK_ISSUER therefore
+        # turned an auth-enabled deployment into an open one for unauthenticated callers. A
+        # deployment that asks for auth and cannot verify it must refuse, not wave people
+        # through; 503 says the fault is the server's configuration, not the caller's token.
+        logger.error(
+            "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing every request "
+            "until it is set, rather than serving them unauthenticated"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is enabled but not configured on this server",
+        )
 
     if not credentials:
         raise HTTPException(

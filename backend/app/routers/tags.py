@@ -20,7 +20,7 @@ import logging
 
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.tag_service import TagService
 from app.services.lxd_service import get_lxd_service
 from app.models.schemas import (
@@ -241,6 +241,8 @@ async def get_resource_tags(
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
     """Get tags for a resource."""
+    if host:
+        verify_cluster_access(host)
     if resource_type not in ["node", "project", "instance"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -273,6 +275,8 @@ async def set_resource_tags(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Set (replace) all tags for a resource."""
+    if host:
+        verify_cluster_access(host)
     if resource_type not in ["node", "project", "instance"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -307,6 +311,8 @@ async def add_resource_tags(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Add tags to a resource."""
+    if host:
+        verify_cluster_access(host)
     if resource_type not in ["node", "project", "instance"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -341,6 +347,8 @@ async def remove_resource_tag(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Remove a single tag from a resource."""
+    if host:
+        verify_cluster_access(host)
     if resource_type not in ["node", "project", "instance"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -377,6 +385,7 @@ async def update_instance_tags_legacy(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for an instance (legacy endpoint)."""
+    verify_cluster_access(host)
     return await tag_service.set_resource_tags(
         resource_type="instance",
         resource_id=instance_name,
@@ -402,6 +411,7 @@ async def update_project_tags_legacy(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for a project (legacy endpoint)."""
+    verify_cluster_access(host)
     return await tag_service.set_resource_tags(
         resource_type="project",
         resource_id=project_name,
@@ -425,6 +435,7 @@ async def update_node_tags_legacy(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for a node (legacy endpoint)."""
+    verify_cluster_access(node_name)
     return await tag_service.set_resource_tags(
         resource_type="node",
         resource_id=node_name,
@@ -445,6 +456,7 @@ async def get_instance_tags_legacy(
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
     """Get tags for an instance (legacy endpoint)."""
+    verify_cluster_access(host)
     return await tag_service.get_resource_tags(
         resource_type="instance",
         resource_id=instance_name,
@@ -518,6 +530,8 @@ async def import_from_lxd(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Import tags from LXD."""
+    if host:
+        verify_cluster_access(host)
     if resource_type not in ["node", "project", "instance"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

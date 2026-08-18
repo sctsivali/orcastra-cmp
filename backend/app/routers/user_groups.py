@@ -185,6 +185,24 @@ async def assign_user_role(
                 detail="You can only assign tenants to organizations you own",
             )
 
+        # important: the checks above validate the ORGANISATION but said nothing about the
+        # TARGET. A partner could name an admin's email with role="tenant" in an org they own,
+        # and the Authentik push below strips that user's role_admin globally. A partner may
+        # only move someone who is not already an admin or another partner. An unknown answer
+        # is refused rather than assumed empty, so an Authentik outage cannot be used as the
+        # opening.
+        current_groups = await get_authentik_sync().get_user_role_groups(body.user_email)
+        if current_groups is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Cannot verify the target user's current role right now; try again later",
+            )
+        if current_groups & {"role_admin", "role_partner"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only an admin can change the role of an admin or a partner",
+            )
+
     # admin role doesn't require org assignment
     if body.role in ("partner", "tenant") and not body.organization_id:
         raise HTTPException(

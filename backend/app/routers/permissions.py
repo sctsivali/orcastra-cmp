@@ -14,7 +14,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_partner
-from app.core.org_scope import org_scope_dependency
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 
@@ -138,6 +138,8 @@ async def list_identities(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all identities."""
+    if host:
+        verify_cluster_access(host)
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
@@ -179,6 +181,7 @@ async def get_identity(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific identity."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         response = client.api.get(f'/1.0/auth/identities/{identity_id}')
@@ -268,6 +271,8 @@ async def list_groups(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """List all groups."""
+    if host:
+        verify_cluster_access(host)
     try:
         nodes_to_query = [host] if host else lxd_service.connection_manager.get_node_names()
         
@@ -309,6 +314,7 @@ async def get_group(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific group."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -375,6 +381,7 @@ async def create_group(
     _: None = Depends(check_read_only_mode),
 ):
     """Create a new group."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -465,6 +472,7 @@ async def update_group(
     LXD requires the project permission to exist BEFORE the nested permission can be validated.
     This endpoint handles this by applying project permissions first, then nested permissions.
     """
+    verify_cluster_access(host)
     import asyncio
     
     try:
@@ -686,6 +694,7 @@ async def delete_group(
     _: None = Depends(check_read_only_mode),
 ):
     """Delete a group."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -732,6 +741,7 @@ async def add_identity_to_group(
     _: None = Depends(check_read_only_mode),
 ):
     """Add an identity to a group by updating the identity's groups list."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -811,6 +821,7 @@ async def remove_identity_from_group(
     _: None = Depends(check_read_only_mode),
 ):
     """Remove an identity from a group by updating the identity's groups list."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         
@@ -897,6 +908,7 @@ async def delete_identity(
     _: None = Depends(check_read_only_mode),
 ):
     """Delete an identity from the LXD server."""
+    verify_cluster_access(host)
     try:
         client = lxd_service.connection_manager.get_client(host)
         

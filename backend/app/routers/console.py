@@ -369,8 +369,11 @@ async def create_console_session(
     # are no-ops for admin/partner (allowed=None / acl=None) and enforce for tenants.
     from app.core.org_scope import verify_cluster_access, verify_tenant_permission
     from app.core.config import get_settings
+    # important: cluster membership is the organisation boundary and is enforced unconditionally,
+    # as it is on every other router. Only the per-project ACL stays behind the flag, which is
+    # off by default until every active project carries a policy.
+    verify_cluster_access(host)
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_cluster_access(host)
         verify_tenant_permission(host, project, instance_name, "console")
     # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
     # active grant (raises 403 break_glass_required otherwise). In-scope self-service and
@@ -1156,6 +1159,24 @@ async def console_websocket(
 
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
+
+    # important: the REST console path checks this and the WebSocket did not, so the same
+    # session opened over a socket skipped the organisation boundary entirely. Closing rather
+    # than raising, since HTTPException is meaningless once the socket is being negotiated.
+    try:
+        from app.core.org_scope import verify_cluster_access, verify_tenant_permission
+        from app.core.config import get_settings
+
+        verify_cluster_access(host)
+        if get_settings().tenant_perm_enforcement_enabled:
+            verify_tenant_permission(host, project, instance_name, "console")
+    except HTTPException as exc:
+        await websocket.close(code=1008, reason="forbidden")
+        logger.warning(
+            "Console WS blocked (%s): %s@%s user=%s",
+            exc.detail, instance_name, host, getattr(user, "email", "?"),
+        )
+        return
 
     # Break-glass gate (defense in depth - a client can hit the WS directly). An admin
     # reaching a tenant cluster they do not own must hold an active grant; otherwise close.

@@ -108,6 +108,33 @@ class AuthentikSyncService:
     # Public API
     # ------------------------------------------------------------------
 
+    async def get_user_role_groups(self, user_email: str) -> Optional[set[str]]:
+        """Role groups a user currently holds, or None when Authentik cannot answer.
+
+        important: callers use this to refuse a privilege change they are not entitled to make,
+        so `None` means "unknown" and must NOT be read as "holds nothing". Returning an empty
+        set for an unreachable Authentik would let a caller demote an admin during an outage.
+        """
+        if not self.enabled:
+            return None
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=15.0) as client:
+                user_pk = await self._find_user_pk(client, user_email)
+                if not user_pk:
+                    return set()
+                resp = await client.get(
+                    f"{self.api_url}/core/users/{user_pk}/",
+                    headers=self._headers(),
+                )
+                if resp.status_code != 200:
+                    return None
+                groups = resp.json().get("groups_obj") or []
+                names = {g.get("name", "") for g in groups if isinstance(g, dict)}
+                return {n for n in names if n in ROLE_GROUPS}
+        except Exception as e:  # noqa: BLE001 - unknown, not empty
+            logger.warning("Could not read Authentik groups for %s: %s", user_email, e)
+            return None
+
     async def sync_user_role(self, user_email: str, target_role: str) -> bool:
         """
         Set user's Authentik groups to match the target role.

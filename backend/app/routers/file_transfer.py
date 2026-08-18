@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import get_lxd_service, LXDService, LXDConnectionError
 from app.core.dependencies import check_read_only_mode, require_partner
-from app.core.org_scope import org_scope_dependency
+from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
@@ -116,6 +116,7 @@ async def push_file_to_instance(
     - Max file size: 100 MB
     - Instance must be running
     """
+    verify_cluster_access(host)
     # Read file content with size check
     file_data = await file.read()
     if len(file_data) > MAX_UPLOAD_SIZE:

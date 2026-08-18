@@ -71,10 +71,17 @@ def _to_response(g: BreakGlassGrant) -> GrantResponse:
 @router.get("/check", dependencies=[Depends(org_scope_dependency)], summary="Pre-flight: is a break-glass grant needed for a cluster?")
 async def check_access(
     cluster_id: str,
-    user: AuthenticatedUser = Depends(require_tenant()),
+    user: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
-    """Non-mutating: lets the UI prompt for a grant before opening console/terminal."""
+    """Non-mutating: lets the UI prompt for a grant before opening console/terminal.
+
+    important: Admin-gated to match `create_grant` below. Break-glass is an admin mechanism,
+    and the response names the organisation that owns an arbitrary cluster, so under
+    `require_tenant()` any authenticated user could map the whole fleet to its owners. The UI
+    fails this check open (`break-glass-store.ts:38-41`) and relies on the connect-time gate,
+    so a non-admin getting 403 here loses nothing it was entitled to.
+    """
     return await break_glass_service.inspect_access(user, cluster_id, db)
 
 

@@ -7,6 +7,7 @@ Supports integration with Orcahub and other external applications (soon with Orc
 import asyncio
 import secrets
 import hashlib
+from urllib.parse import unquote
 import hmac
 import logging
 import threading
@@ -1322,6 +1323,29 @@ async def create_api_key(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
+    """Return an API key's metadata only if it overlaps the caller's clusters.
+
+    important: `list_api_keys` already filters by `cluster_permissions` overlap, but every
+    single-key handler took `key_id` straight from the path and looked it up in Vault with no
+    such check. A caller who learned any key id could read its permissions and user mappings,
+    or revoke and delete it, across organisations. The overlap rule here is the same one the
+    list endpoint uses, so the two surfaces agree.
+    """
+    metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="API key not found")
+    allowed = get_current_allowed_clusters()
+    if allowed is not None:
+        perms = metadata.get("cluster_permissions", []) or []
+        key_clusters = {p.get("cluster_id", "") for p in perms if isinstance(p, dict)}
+        if not (key_clusters & allowed):
+            # Same shape as a missing key, so an out-of-scope id cannot be probed apart from a
+            # non-existent one.
+            raise HTTPException(status_code=404, detail="API key not found")
+    return metadata
+
+
 @router.get(
     "/api-keys",
     response_model=APIKeyListResponse,
@@ -1399,6 +1423,7 @@ async def list_api_keys():
 )
 async def get_api_key(key_id: str):
     """Get API key details."""
+    _authorize_api_key(get_vault_integrations_client(), key_id)
     vault_client = get_vault_integrations_client()
     
     try:
@@ -1427,6 +1452,21 @@ async def update_api_key_permissions(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update API key cluster permissions."""
+    _authorize_api_key(get_vault_integrations_client(), key_id)
+
+    # important: creation validates the requested clusters against the caller's own set
+    # (see create_api_key), and this path did not, so a partner could create a key scoped to
+    # their cluster and then widen it to the whole fleet in a second call. Same rule, both doors.
+    allowed = get_current_allowed_clusters()
+    if allowed is not None:
+        requested = {p.cluster_id for p in permissions}
+        invalid = requested - allowed
+        if invalid:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
+            )
+
     vault_client = get_vault_integrations_client()
     
     try:
@@ -1469,6 +1509,7 @@ async def revoke_api_key(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Revoke an API key (immediate revocation)."""
+    _authorize_api_key(get_vault_integrations_client(), key_id)
     vault_client = get_vault_integrations_client()
     
     try:
@@ -1516,6 +1557,7 @@ async def delete_api_key(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete an API key permanently."""
+    _authorize_api_key(get_vault_integrations_client(), key_id)
     vault_client = get_vault_integrations_client()
     
     try:
@@ -1556,6 +1598,7 @@ async def add_user_mapping(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Add or update a user mapping for an API key."""
+    _authorize_api_key(get_vault_integrations_client(), key_id)
     vault_client = get_vault_integrations_client()
     
     try:
@@ -1596,6 +1639,7 @@ async def add_user_mapping(
 )
 async def list_user_mappings(key_id: str):
     """List all user mappings for an API key."""
+    _authorize_api_key(get_vault_integrations_client(), key_id)
     vault_client = get_vault_integrations_client()
     
     try:
@@ -2013,7 +2057,11 @@ async def raw_proxy(
             for param in query_string.split("&"):
                 if "=" in param:
                     key, value = param.split("=", 1)
-                    query_params[key] = value
+                    # important: compare on the DECODED key. The raw split leaves "%70roject"
+                    # distinct from "project", so the pop below missed it while LXD's own HTTP
+                    # layer decoded it and honoured the smuggled project. Normalising here means
+                    # one spelling reaches the check.
+                    query_params[unquote(key)] = value
 
         # important: `project` is authorised above from request.project, so a copy of it
         # inside `path` is not the caller's to set. Dropping it closes a scope bypass: a key

@@ -347,6 +347,10 @@ async def check_cluster_authentication(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Check cluster authentication status."""
+    # important: the body names an arbitrary cluster, and the handler then connects to it with
+    # the Vault-stored certificate and writes the result back to that cluster's metadata. Without
+    # this a partner could probe and mutate clusters belonging to other organisations.
+    verify_cluster_access(request.cluster_id)
     try:
         cluster_id = request.cluster_id
         
