@@ -109,7 +109,10 @@ def single_flight_on_fresh(key_prefix: str):
             try:
                 async with lock:
                     if rebuilt_since(key, arrived_at):
-                        logger.debug("Serving %s from a concurrent rebuild", key)
+                        # note: INFO on purpose. It only fires when forced refreshes
+                        # actually collide, so it is rare, and when it does fire it is
+                        # the only evidence that the collapse is working.
+                        logger.info("Serving %s from a concurrent rebuild", key)
                         return await handler(*args, **{**kwargs, "fresh": False})
                     return await handler(*args, **kwargs)
             finally:
