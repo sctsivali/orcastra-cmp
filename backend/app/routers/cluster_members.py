@@ -77,13 +77,14 @@ def parse_gpu_cards(
 async def list_cluster_members(
     node: str = Query(..., description="Node name to query for cluster members"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all cluster members for a given node."""
     verify_cluster_access(node)
     # Try cache first (30 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"cluster_members:list:host={node}")
-    cached_data = cache.get("api_responses", cache_key)
+    cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached cluster members for host={node}")
         # Reconstruct Pydantic model from cached dict
@@ -279,6 +280,7 @@ async def get_member_resources(
     member_name: str,
     node: str = Query(..., description="Node name to query"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """Get resource information for a specific cluster member."""
     verify_cluster_access(node)
@@ -288,7 +290,7 @@ async def get_member_resources(
     
     # Check cache first
     cache_key = get_scope_cache_key(f"member_resources:{node}:{member_name}")
-    cached_resources = cache.get("lxd_resources", cache_key)
+    cached_resources = None if fresh else cache.get("lxd_resources", cache_key)
     if cached_resources is not None:
         logger.info(f"Cache HIT for member resources: {node}/{member_name}")
         return MemberResources(**cached_resources)

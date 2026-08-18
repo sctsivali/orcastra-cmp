@@ -585,6 +585,7 @@ async def create_key(
 async def list_keys(
     status_filter: Optional[str] = Query(None, description="Filter by status: active, expired, or all"),
     search: Optional[str] = Query(None, description="Search by name, project, or node"),
+    fresh: bool = False,
 ):
     """List all keys from Vault."""
     vault_client = get_vault_keys_client()
@@ -593,7 +594,7 @@ async def list_keys(
         # Try cache first
         cache = get_cache_manager()
         cache_key = get_scope_cache_key("my_keys:list")
-        cached_data = cache.get("api_responses", cache_key)
+        cached_data = None if fresh else cache.get("api_responses", cache_key)
         
         if cached_data is None:
             keys_metadata = list_keys_from_vault(vault_client)

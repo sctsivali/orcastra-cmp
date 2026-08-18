@@ -23,6 +23,7 @@ from app.models.schemas import (
 logger = logging.getLogger(__name__)
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_cluster_filter, get_tenant_acl
+from app.core.single_flight import rebuild_lock, release_lock
 from app.core.tenant_visibility import tenant_acl_has_permission
 
 router = APIRouter(
@@ -169,6 +170,7 @@ def aggregate_hardware_info(nodes_hardware: List[ExtendedHardwareInfo]) -> Exten
 )
 async def get_regions_overview(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """Get regions overview with aggregated hardware data. Clusters are queried in parallel."""
     cache = get_cache_manager()
@@ -176,255 +178,272 @@ async def get_regions_overview(
     
     # Check cache first (2 minute TTL)
     cache_key = get_scope_cache_key("regions:overview")
-    cached_data = cache.get("api_responses", cache_key)
+    cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug("Returning cached regions overview")
         return RegionsOverviewResponse(**cached_data)
     
-    logger.info("Building regions overview from cluster data...")
-    
-    # Get all registered clusters from Vault
+    # important: serialise cold rebuilds per scope. A manual refresh bypasses the
+    # response cache on purpose, and this endpoint fans out over every cluster
+    # (15-45s cold), so N simultaneous fresh requests would launch N fan-outs at
+    # the same hardware. The second arrival waits, then reads the first's result.
+    _lock_key = f"regions:overview:{cache_key}"
+    _lock = rebuild_lock(_lock_key)
     try:
-        from app.core.vault_client import get_vault_client
-        from app.services.lxd_cert_manager import LXDCertificateManager
-        
-        vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
-        cert_manager = LXDCertificateManager(
-            vault_client=vault_client,
-            clusters_path=settings.vault_clusters_path
-        )
-        
-        # Get org-scoped cluster list
-        cluster_ids = apply_cluster_filter(cert_manager.list_clusters())
+        async with _lock:
+            rebuilt = cache.get("api_responses", cache_key)
+            if rebuilt is not None:
+                logger.debug("Regions overview was rebuilt by a concurrent request")
+                return RegionsOverviewResponse(**rebuilt)
 
-        if not cluster_ids:
-            response = RegionsOverviewResponse(
-                regions=[], total_nodes=0, total_instances=0,
-                total_cpu=0, total_memory=0, total_storage=0, total_gpu=0,
-            )
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
-            return response
-
-        tenant_acl = get_tenant_acl()
-
-        # process single cluster (runs in thread pool for parallelism)
-        def _process_cluster(cluster_id: str) -> Optional[Tuple[str, Dict, RegionNodeInfo, int, int]]:
-            """Fetch metadata + resources for one cluster. Returns (region_id, region_data, node_info, inst_count, inst_running) or None."""
+            logger.info("Building regions overview from cluster data...")
+    
+            # Get all registered clusters from Vault
             try:
-                cluster_info = cert_manager.get_cluster_info(cluster_id)
-                metadata = cluster_info.get("metadata", {})
-                location_data = metadata.get("location", {})
+                from app.core.vault_client import get_vault_client
+                from app.services.lxd_cert_manager import LXDCertificateManager
+        
+                vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
+                cert_manager = LXDCertificateManager(
+                    vault_client=vault_client,
+                    clusters_path=settings.vault_clusters_path
+                )
+        
+                # Get org-scoped cluster list
+                cluster_ids = apply_cluster_filter(cert_manager.list_clusters())
+
+                if not cluster_ids:
+                    response = RegionsOverviewResponse(
+                        regions=[], total_nodes=0, total_instances=0,
+                        total_cpu=0, total_memory=0, total_storage=0, total_gpu=0,
+                    )
+                    cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                    return response
+
+                tenant_acl = get_tenant_acl()
+
+                # process single cluster (runs in thread pool for parallelism)
+                def _process_cluster(cluster_id: str) -> Optional[Tuple[str, Dict, RegionNodeInfo, int, int]]:
+                    """Fetch metadata + resources for one cluster. Returns (region_id, region_data, node_info, inst_count, inst_running) or None."""
+                    try:
+                        cluster_info = cert_manager.get_cluster_info(cluster_id)
+                        metadata = cluster_info.get("metadata", {})
+                        location_data = metadata.get("location", {})
                 
-                if not location_data or not location_data.get("region_id"):
-                    region_id = "unknown"
-                    region_data = {
-                        "region_id": "unknown", "region_name": "Unknown Location",
-                        "country_code": "XX", "country_name": "Unknown",
-                        "city": "Unknown", "latitude": 0, "longitude": 0, "continent": "XX",
-                    }
-                else:
-                    region_id = location_data.get("region_id")
-                    region_data = location_data
+                        if not location_data or not location_data.get("region_id"):
+                            region_id = "unknown"
+                            region_data = {
+                                "region_id": "unknown", "region_name": "Unknown Location",
+                                "country_code": "XX", "country_name": "Unknown",
+                                "city": "Unknown", "latitude": 0, "longitude": 0, "continent": "XX",
+                            }
+                        else:
+                            region_id = location_data.get("region_id")
+                            region_data = location_data
                 
-                status = ClusterStatus.PENDING
-                node_type = metadata.get("type", "LXD")
-                node_hardware = ExtendedHardwareInfo()
-                instance_count = 0
-                instance_running = 0
+                        status = ClusterStatus.PENDING
+                        node_type = metadata.get("type", "LXD")
+                        node_hardware = ExtendedHardwareInfo()
+                        instance_count = 0
+                        instance_running = 0
                 
-                try:
-                    client = lxd_service.connection_manager.get_client(cluster_id)
-                    if client is None:
                         try:
-                            cert_data = cert_manager.get_cluster_certificate(cluster_id)
-                            client = lxd_service.connection_manager.connect_with_vault_cert(
-                                cluster_id=cluster_id,
-                                endpoint=metadata.get("endpoint", ""),
-                                cert_content=cert_data["client.crt"],
-                                key_content=cert_data["client.key"],
-                                verify=False,
-                            )
-                        except Exception:
-                            pass
+                            client = lxd_service.connection_manager.get_client(cluster_id)
+                            if client is None:
+                                try:
+                                    cert_data = cert_manager.get_cluster_certificate(cluster_id)
+                                    client = lxd_service.connection_manager.connect_with_vault_cert(
+                                        cluster_id=cluster_id,
+                                        endpoint=metadata.get("endpoint", ""),
+                                        cert_content=cert_data["client.crt"],
+                                        key_content=cert_data["client.key"],
+                                        verify=False,
+                                    )
+                                except Exception:
+                                    pass
                     
-                    if client:
-                        status = ClusterStatus.ONLINE
-                        try:
-                            resources = client.resources
-                            cpu_info = resources.get("cpu", {})
-                            cpu_total = cpu_info.get("total", 0)
-                            cpu_sockets = len(cpu_info.get("sockets", []))
-                            cpu_architecture = cpu_info.get("architecture", "x86_64")
-                            cpu_vendor = get_cpu_vendor_from_info(cpu_info)
-                            cpu_model = get_cpu_model_from_info(cpu_info)
+                            if client:
+                                status = ClusterStatus.ONLINE
+                                try:
+                                    resources = client.resources
+                                    cpu_info = resources.get("cpu", {})
+                                    cpu_total = cpu_info.get("total", 0)
+                                    cpu_sockets = len(cpu_info.get("sockets", []))
+                                    cpu_architecture = cpu_info.get("architecture", "x86_64")
+                                    cpu_vendor = get_cpu_vendor_from_info(cpu_info)
+                                    cpu_model = get_cpu_model_from_info(cpu_info)
                             
-                            memory_info = resources.get("memory", {})
-                            memory_total = memory_info.get("total", 0)
-                            memory_used = memory_info.get("used", 0)
+                                    memory_info = resources.get("memory", {})
+                                    memory_total = memory_info.get("total", 0)
+                                    memory_used = memory_info.get("used", 0)
                             
-                            gpu_info = resources.get("gpu", {})
-                            gpu_cards = gpu_info.get("cards", [])
-                            gpu_total = len(gpu_cards)
-                            gpu_vendors: Set[str] = set()
-                            gpu_models: Set[str] = set()
-                            for card in gpu_cards:
-                                vendor = card.get("vendor", "")
-                                product = card.get("product", "")
-                                if vendor:
-                                    if "nvidia" in vendor.lower():
-                                        gpu_vendors.add("NVIDIA")
-                                    elif "amd" in vendor.lower():
-                                        gpu_vendors.add("AMD")
-                                    elif "intel" in vendor.lower():
-                                        gpu_vendors.add("Intel")
-                                    else:
-                                        gpu_vendors.add(vendor)
-                                if product:
-                                    gpu_models.add(product)
+                                    gpu_info = resources.get("gpu", {})
+                                    gpu_cards = gpu_info.get("cards", [])
+                                    gpu_total = len(gpu_cards)
+                                    gpu_vendors: Set[str] = set()
+                                    gpu_models: Set[str] = set()
+                                    for card in gpu_cards:
+                                        vendor = card.get("vendor", "")
+                                        product = card.get("product", "")
+                                        if vendor:
+                                            if "nvidia" in vendor.lower():
+                                                gpu_vendors.add("NVIDIA")
+                                            elif "amd" in vendor.lower():
+                                                gpu_vendors.add("AMD")
+                                            elif "intel" in vendor.lower():
+                                                gpu_vendors.add("Intel")
+                                            else:
+                                                gpu_vendors.add(vendor)
+                                        if product:
+                                            gpu_models.add(product)
                             
-                            disk_info = resources.get("storage", {})
-                            storage_types = get_storage_types_from_disks(disk_info)
+                                    disk_info = resources.get("storage", {})
+                                    storage_types = get_storage_types_from_disks(disk_info)
                             
-                            storage_total = 0
-                            storage_used = 0
-                            storage_drivers: Set[str] = set()
-                            try:
-                                pools = client.storage_pools.all()
-                                for pool in pools:
-                                    storage_drivers.add(pool.driver)
+                                    storage_total = 0
+                                    storage_used = 0
+                                    storage_drivers: Set[str] = set()
                                     try:
-                                        pool_resources = client.api.storage_pools[pool.name].resources.get()
-                                        pool_data = pool_resources.json().get("metadata", {})
-                                        space = pool_data.get("space", {})
-                                        storage_total += space.get("total", 0)
-                                        storage_used += space.get("used", 0)
+                                        pools = client.storage_pools.all()
+                                        for pool in pools:
+                                            storage_drivers.add(pool.driver)
+                                            try:
+                                                pool_resources = client.api.storage_pools[pool.name].resources.get()
+                                                pool_data = pool_resources.json().get("metadata", {})
+                                                space = pool_data.get("space", {})
+                                                storage_total += space.get("total", 0)
+                                                storage_used += space.get("used", 0)
+                                            except Exception:
+                                                pass
                                     except Exception:
                                         pass
-                            except Exception:
-                                pass
                             
-                            try:
-                                instances = client.instances.all()
-                                visible_instances = [
-                                    instance for instance in instances
-                                    if tenant_acl_has_permission(
-                                        tenant_acl,
-                                        cluster_id,
-                                        getattr(instance, "project", "default") or "default",
-                                        instance.name,
-                                        "view",
+                                    try:
+                                        instances = client.instances.all()
+                                        visible_instances = [
+                                            instance for instance in instances
+                                            if tenant_acl_has_permission(
+                                                tenant_acl,
+                                                cluster_id,
+                                                getattr(instance, "project", "default") or "default",
+                                                instance.name,
+                                                "view",
+                                            )
+                                        ]
+                                        instance_count = len(visible_instances)
+                                        instance_running = sum(
+                                            1 for instance in visible_instances
+                                            if instance.status == "Running"
+                                        )
+                                    except Exception:
+                                        pass
+                            
+                                    network_info = resources.get("network", {})
+                                    network_cards = network_info.get("cards", [])
+                                    network_interfaces = [
+                                        card.get("ports", [{}])[0].get("id", "")
+                                        for card in network_cards if card.get("ports")
+                                    ]
+                            
+                                    node_hardware = ExtendedHardwareInfo(
+                                        cpu_total=cpu_total, cpu_sockets=cpu_sockets,
+                                        cpu_architecture=cpu_architecture, cpu_vendor=cpu_vendor, cpu_model=cpu_model,
+                                        memory_total=memory_total, memory_used=memory_used,
+                                        gpu_total=gpu_total, gpu_vendors=list(gpu_vendors), gpu_models=list(gpu_models),
+                                        storage_total=storage_total, storage_used=storage_used,
+                                        storage_types=storage_types, storage_drivers=list(storage_drivers),
+                                        network_interfaces=network_interfaces,
                                     )
-                                ]
-                                instance_count = len(visible_instances)
-                                instance_running = sum(
-                                    1 for instance in visible_instances
-                                    if instance.status == "Running"
-                                )
-                            except Exception:
-                                pass
-                            
-                            network_info = resources.get("network", {})
-                            network_cards = network_info.get("cards", [])
-                            network_interfaces = [
-                                card.get("ports", [{}])[0].get("id", "")
-                                for card in network_cards if card.get("ports")
-                            ]
-                            
-                            node_hardware = ExtendedHardwareInfo(
-                                cpu_total=cpu_total, cpu_sockets=cpu_sockets,
-                                cpu_architecture=cpu_architecture, cpu_vendor=cpu_vendor, cpu_model=cpu_model,
-                                memory_total=memory_total, memory_used=memory_used,
-                                gpu_total=gpu_total, gpu_vendors=list(gpu_vendors), gpu_models=list(gpu_models),
-                                storage_total=storage_total, storage_used=storage_used,
-                                storage_types=storage_types, storage_drivers=list(storage_drivers),
-                                network_interfaces=network_interfaces,
-                            )
+                                except Exception as e:
+                                    logger.warning(f"Could not get resources for {cluster_id}: {e}")
+                            else:
+                                status = ClusterStatus.OFFLINE
                         except Exception as e:
-                            logger.warning(f"Could not get resources for {cluster_id}: {e}")
-                    else:
-                        status = ClusterStatus.OFFLINE
-                except Exception as e:
-                    logger.debug(f"Could not connect to cluster {cluster_id}: {e}")
-                    status = ClusterStatus.OFFLINE
+                            logger.debug(f"Could not connect to cluster {cluster_id}: {e}")
+                            status = ClusterStatus.OFFLINE
                 
-                node_info = RegionNodeInfo(
-                    cluster_id=cluster_id,
-                    display_name=metadata.get("display_name", cluster_id),
-                    status=status, node_type=node_type, hardware=node_hardware,
+                        node_info = RegionNodeInfo(
+                            cluster_id=cluster_id,
+                            display_name=metadata.get("display_name", cluster_id),
+                            status=status, node_type=node_type, hardware=node_hardware,
+                        )
+                        return (region_id, region_data, node_info, instance_count, instance_running)
+                    except Exception as e:
+                        logger.warning(f"Error processing cluster {cluster_id}: {e}")
+                        return None
+        
+                # run all cluster introspections in parallel
+                loop = asyncio.get_event_loop()
+                executor = ThreadPoolExecutor(max_workers=min(len(cluster_ids), 10))
+                tasks = [loop.run_in_executor(executor, _process_cluster, cid) for cid in cluster_ids]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                executor.shutdown(wait=False)
+        
+                regions_map: Dict[str, RegionSummary] = {}
+                total_nodes = 0
+                total_instances = 0
+                total_cpu = 0
+                total_memory = 0
+                total_storage = 0
+                total_gpu = 0
+        
+                for result in results:
+                    if isinstance(result, Exception) or result is None:
+                        continue
+                    region_id, region_data, node_info, instance_count, instance_running = result
+            
+                    if region_id not in regions_map:
+                        regions_map[region_id] = RegionSummary(
+                            region_id=region_data.get("region_id", "unknown"),
+                            region_name=region_data.get("region_name", "Unknown"),
+                            country_code=region_data.get("country_code", "XX"),
+                            country_name=region_data.get("country_name", "Unknown"),
+                            city=region_data.get("city", "Unknown"),
+                            latitude=region_data.get("latitude", 0),
+                            longitude=region_data.get("longitude", 0),
+                            continent=region_data.get("continent", "XX"),
+                            facility_name=region_data.get("facility_name"),
+                            facility_provider=region_data.get("facility_provider"),
+                            node_count=0, instance_count=0, instance_running=0,
+                            hardware=ExtendedHardwareInfo(), nodes=[],
+                        )
+            
+                    region = regions_map[region_id]
+                    region.nodes.append(node_info)
+                    region.node_count += 1
+                    region.instance_count += instance_count
+                    region.instance_running += instance_running
+            
+                    total_nodes += 1
+                    total_instances += instance_count
+                    total_cpu += node_info.hardware.cpu_total
+                    total_memory += node_info.hardware.memory_total
+                    total_storage += node_info.hardware.storage_total
+                    total_gpu += node_info.hardware.gpu_total
+        
+                # aggregate hardware per region
+                for region in regions_map.values():
+                    region.hardware = aggregate_hardware_info([n.hardware for n in region.nodes])
+        
+                response = RegionsOverviewResponse(
+                    regions=list(regions_map.values()),
+                    total_nodes=total_nodes, total_instances=total_instances,
+                    total_cpu=total_cpu, total_memory=total_memory,
+                    total_storage=total_storage, total_gpu=total_gpu,
                 )
-                return (region_id, region_data, node_info, instance_count, instance_running)
+        
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                logger.info(f"Built regions overview: {len(regions_map)} regions, {total_nodes} nodes")
+        
+                return response
+        
             except Exception as e:
-                logger.warning(f"Error processing cluster {cluster_id}: {e}")
-                return None
-        
-        # run all cluster introspections in parallel
-        loop = asyncio.get_event_loop()
-        executor = ThreadPoolExecutor(max_workers=min(len(cluster_ids), 10))
-        tasks = [loop.run_in_executor(executor, _process_cluster, cid) for cid in cluster_ids]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        executor.shutdown(wait=False)
-        
-        regions_map: Dict[str, RegionSummary] = {}
-        total_nodes = 0
-        total_instances = 0
-        total_cpu = 0
-        total_memory = 0
-        total_storage = 0
-        total_gpu = 0
-        
-        for result in results:
-            if isinstance(result, Exception) or result is None:
-                continue
-            region_id, region_data, node_info, instance_count, instance_running = result
-            
-            if region_id not in regions_map:
-                regions_map[region_id] = RegionSummary(
-                    region_id=region_data.get("region_id", "unknown"),
-                    region_name=region_data.get("region_name", "Unknown"),
-                    country_code=region_data.get("country_code", "XX"),
-                    country_name=region_data.get("country_name", "Unknown"),
-                    city=region_data.get("city", "Unknown"),
-                    latitude=region_data.get("latitude", 0),
-                    longitude=region_data.get("longitude", 0),
-                    continent=region_data.get("continent", "XX"),
-                    facility_name=region_data.get("facility_name"),
-                    facility_provider=region_data.get("facility_provider"),
-                    node_count=0, instance_count=0, instance_running=0,
-                    hardware=ExtendedHardwareInfo(), nodes=[],
-                )
-            
-            region = regions_map[region_id]
-            region.nodes.append(node_info)
-            region.node_count += 1
-            region.instance_count += instance_count
-            region.instance_running += instance_running
-            
-            total_nodes += 1
-            total_instances += instance_count
-            total_cpu += node_info.hardware.cpu_total
-            total_memory += node_info.hardware.memory_total
-            total_storage += node_info.hardware.storage_total
-            total_gpu += node_info.hardware.gpu_total
-        
-        # aggregate hardware per region
-        for region in regions_map.values():
-            region.hardware = aggregate_hardware_info([n.hardware for n in region.nodes])
-        
-        response = RegionsOverviewResponse(
-            regions=list(regions_map.values()),
-            total_nodes=total_nodes, total_instances=total_instances,
-            total_cpu=total_cpu, total_memory=total_memory,
-            total_storage=total_storage, total_gpu=total_gpu,
-        )
-        
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
-        logger.info(f"Built regions overview: {len(regions_map)} regions, {total_nodes} nodes")
-        
-        return response
-        
-    except Exception as e:
-        logger.error(f"Error building regions overview: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+                logger.error(f"Error building regions overview: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        release_lock(_lock_key)
+
 
 
 @router.get(

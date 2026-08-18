@@ -367,7 +367,13 @@ class CacheManager:
             self.delete("vault", f"secret/data/clusters/{cluster_id}/secrets")
             self.delete("vault", f"secret/data/clusters/{cluster_id}/certs")
             # Clear cluster member cache for this specific cluster
-            self.delete_pattern("api_responses", f"cluster_members:list:host={cluster_id}")
+            # important: trailing * is load-bearing. Redis KEYS treats a pattern
+            # without it as an exact match, but the real key carries a
+            # ":scope=..." suffix from get_scope_cache_key(), so this deleted
+            # nothing from Redis while the memory branch (prefix match) passed.
+            # get() treats Redis as authoritative, so the stale entry was served
+            # for the full TTL after a cluster changed.
+            self.delete_pattern("api_responses", f"cluster_members:list:host={cluster_id}*")
             logger.info(f"Cleared cache for specific cluster {cluster_id}")
 
         # Always clear list caches to force fresh fetch

@@ -105,6 +105,7 @@ def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> List[Stora
 async def list_storage_pools(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all storage pools."""
     if host:
@@ -112,7 +113,7 @@ async def list_storage_pools(
     # Try cache first (60 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"storage_pools:list:host={host}")
-    cached_data = cache.get("api_responses", cache_key)
+    cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached storage pools for host={host}")
         return StoragePoolListResponse(**cached_data)
@@ -164,12 +165,13 @@ async def list_storage_pools(
 )
 async def get_all_storage_pool_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """Get resources for all storage pools on all nodes."""
     try:
         cache = get_cache_manager()
         cache_key = get_scope_cache_key("storage_pool_resources:all")
-        cached = cache.get("api_responses", cache_key)
+        cached = None if fresh else cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
 
@@ -422,12 +424,13 @@ async def delete_storage_pool(
 # wrong one.
 async def get_all_storage_pool_resources_legacy_path(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """Get storage pool resources for all pools."""
     try:
         cache = get_cache_manager()
         cache_key = get_scope_cache_key("storage_pool_resources:all_v2")
-        cached = cache.get("api_responses", cache_key)
+        cached = None if fresh else cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
 

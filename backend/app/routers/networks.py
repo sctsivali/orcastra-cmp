@@ -226,6 +226,7 @@ def _fetch_networks_for_node(
 async def list_networks(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all networks."""
     if host:
@@ -233,7 +234,7 @@ async def list_networks(
     # Try cache first (60 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"networks:list:host={host}")
-    cached_data = cache.get("api_responses", cache_key)
+    cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached networks for host={host}")
         # Reconstruct Pydantic model from cached dict

@@ -138,6 +138,7 @@ async def list_ipam_allocations(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     network: Optional[str] = Query(None, description="Filter by specific network"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all IPAM allocations. Nodes are queried in parallel with caching."""
     if host:
@@ -145,7 +146,7 @@ async def list_ipam_allocations(
     # check cache first (120s TTL)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"ipam:list:host={host}:network={network}")
-    cached = cache.get("api_responses", cache_key)
+    cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         logger.debug(f"Returning cached IPAM data for {cache_key}")
         return IPAMListResponse(**cached)

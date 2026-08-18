@@ -71,6 +71,7 @@ async def list_vms(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(0, ge=0, le=1000, description="Page size (0 = return all)"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all VMs across all LXD nodes with optional filtering."""
     if host:
@@ -78,7 +79,7 @@ async def list_vms(
     # Try cache first (30 second cache for VM list)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"vms:list:host={host}:status={status}:o={offset}:l={limit}")
-    cached_response = cache.get("api_responses", cache_key)
+    cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug(f"Returning cached VMs list for {cache_key}")
         # Reconstruct from cached dict
@@ -153,9 +154,15 @@ async def list_vms(
             has_more=(offset + limit < len(filtered_vms)) if limit > 0 else False,
         )
         
-        # Cache for 120 seconds (TTL)
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug(f"Cached VMs list for 120 seconds: {cache_key}")
+        # important: see instances.py. A fan-out where no cluster answered still
+        # returns 200 with an empty list, and caching that pins emptiness for the
+        # full TTL. Worse on a forced refresh, which would overwrite data the
+        # operator could still see with the result of an outage.
+        if connected_nodes:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+            logger.debug(f"Cached VMs list for 180 seconds: {cache_key}")
+        else:
+            logger.warning("Not caching VMs list: no cluster answered")
         
         return response
         

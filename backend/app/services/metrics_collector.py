@@ -178,41 +178,46 @@ class MetricsCollector:
         """
         try:
             from app.core.cache import get_cache_manager
+            # important: prewarm keys must be built the same way the endpoints
+            # build theirs. Without get_scope_cache_key() they lacked the
+            # ":scope=all" suffix, so nothing ever read them and every request
+            # after a TTL expiry still paid the full cold cost.
+            from app.core.org_scope import get_scope_cache_key
             
             cache = get_cache_manager()
             
             # Pre-warm instances cache (most critical for dashboard)
             await self._prewarm_single_cache(
                 cache,
-                "instances:list:host=None:status=None:type=None",
+                get_scope_cache_key("instances:list:host=None:status=None:type=None:o=0:l=0"),
                 self._fetch_instances
             )
             
             # Pre-warm VMs cache (VM-only view) - key: vms:list:host=None:status=None
             await self._prewarm_single_cache(
                 cache,
-                "vms:list:host=None:status=None",
+                get_scope_cache_key("vms:list:host=None:status=None:o=0:l=0"),
                 self._fetch_vms
             )
             
             # Pre-warm nodes cache
             await self._prewarm_single_cache(
                 cache,
-                "nodes:status",
+                get_scope_cache_key("nodes:status:all"),
                 self._fetch_nodes
             )
             
             # Pre-warm regions cache (slowest endpoint, 15-45s cold)
             await self._prewarm_single_cache(
                 cache,
-                "regions:overview",
+                get_scope_cache_key("regions:overview"),
                 self._fetch_regions
             )
             
             # Pre-warm storage pool resources cache
             await self._prewarm_single_cache(
                 cache,
-                "storage_pool_resources:all",
+                get_scope_cache_key("storage_pool_resources:all"),
                 self._fetch_storage_pool_resources
             )
             

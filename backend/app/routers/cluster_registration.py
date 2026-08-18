@@ -652,6 +652,7 @@ async def list_clusters(
 )
 async def get_facility_suggestions(
     cert_manager: LXDCertificateManager = Depends(get_cert_manager),
+    fresh: bool = False,
 ):
     """Get unique facility suggestions from all registered clusters."""
     from app.core.cache import get_cache_manager
@@ -660,7 +661,7 @@ async def get_facility_suggestions(
     cache_key = get_scope_cache_key("clusters:facilities")
     
     if cache:
-        cached = cache.get("api_responses", cache_key)
+        cached = None if fresh else cache.get("api_responses", cache_key)
         if cached is not None:
             return cached
     

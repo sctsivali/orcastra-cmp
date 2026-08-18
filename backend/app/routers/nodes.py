@@ -51,13 +51,14 @@ _node_executor = ThreadPoolExecutor(max_workers=10)
 )
 async def get_nodes_status(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """Get status of all LXD nodes including Vault-registered clusters."""
     
     # Try to get from cache first (180 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key("nodes:status:all")
-    cached_response = cache.get("api_responses", cache_key)
+    cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached nodes status")
         return NodesStatusResponse(**cached_response)

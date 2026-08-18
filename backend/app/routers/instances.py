@@ -84,6 +84,7 @@ async def list_instances(
     offset: int = Query(0, ge=0, description="Pagination offset"),
     limit: int = Query(0, ge=0, le=1000, description="Page size (0 = return all)"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all instances across all nodes with optional filters."""
     if host:
@@ -91,7 +92,7 @@ async def list_instances(
     # Try cache first (scope+ACL aware, 30s TTL)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"instances:list:host={host}:status={status}:type={instance_type}:o={offset}:l={limit}")
-    cached_response = cache.get("api_responses", cache_key)
+    cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug(f"Returning cached instances list for {cache_key}")
         return VMListResponse(**cached_response)
@@ -131,9 +132,16 @@ async def list_instances(
             has_more=(offset + limit < len(all_vms)) if limit > 0 else False,
         )
         
-        # Cache for 30 seconds (short TTL - ACL-filtered data)
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
-        logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
+        # important: do not remember an answer nobody gave. When every cluster is
+        # unreachable the connection breaker short-circuits the fan-out and this
+        # endpoint still returns 200 with an empty list, so caching it would pin
+        # emptiness for the whole TTL and, on a forced refresh, overwrite good
+        # data the operator could still see. No node answered means no result.
+        if connected_nodes:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+            logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
+        else:
+            logger.warning("Not caching instances list: no cluster answered")
         
         return response
     except LXDConnectionError as e:

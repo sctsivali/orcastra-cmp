@@ -77,12 +77,13 @@ def _parse_size_to_bytes(size_str: str) -> int:
 )
 async def list_all_projects(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all projects across all LXD nodes."""
     # Try cache first (180 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key("projects:list:all")
-    cached_response = cache.get("api_responses", cache_key)
+    cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached projects list")
         return [ProjectListResponse(**item) for item in cached_response]

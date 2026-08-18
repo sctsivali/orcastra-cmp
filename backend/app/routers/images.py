@@ -212,12 +212,13 @@ def _filter_images_for_tenant(
 )
 async def list_all_images(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all images from all LXD nodes."""
     # Try cache first (60 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key("images:list:all")
-    cached_data = cache.get("api_responses", cache_key)
+    cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug("Returning cached images list")
         # Reconstruct Pydantic models from cached dict
@@ -231,6 +232,7 @@ async def list_all_images(
     
     # Filter out exceptions
     response = []
+    answered = 0
     for i, result in enumerate(results):
         if isinstance(result, Exception):
             logger.error(f"Error fetching images from node: {result}")
@@ -240,12 +242,23 @@ async def list_all_images(
                 total=0,
             ))
         else:
+            answered += 1
             response.append(_filter_images_for_tenant(result, allowed_images))
-    
-    # Cache as dict for 120 seconds
+
+    # important: a node that failed is rendered above as a node with zero images,
+    # which is indistinguishable from a node that genuinely has none. Caching that
+    # for 180s pins the lie, and a forced refresh during an outage would replace a
+    # good catalog with it. If nothing answered, do not remember the result.
+    # note: a partial failure is still cached, so one dead cluster does not make
+    # every request pay the full fan-out. That host reads as empty until the TTL
+    # expires, which is a known gap: the response shape has no per-host reachability
+    # field to say otherwise.
     cache_data = [item.model_dump() for item in response]
-    cache.set("api_responses", cache_key, cache_data, ttl=180)
-    logger.debug("Cached images list for 120 seconds")
+    if answered:
+        cache.set("api_responses", cache_key, cache_data, ttl=180)
+        logger.debug("Cached images list for 180 seconds")
+    else:
+        logger.warning("Not caching images list: no node answered")
     
     return response
 
@@ -262,11 +275,11 @@ async def list_all_images(
         200: {"description": "Remote images listed successfully"},
     }
 )
-async def list_remote_images():
+async def list_remote_images(fresh: bool = False):
     """Browse the aggregated remote image catalogs (cached 1h)."""
     cache = get_cache_manager()
     cache_key = "images:remote:all"
-    images = cache.get("api_responses", cache_key)
+    images = None if fresh else cache.get("api_responses", cache_key)
     if images is None:
         # Cold cache: each remote has its own 15s/90s urllib timeouts, so bound
         # the whole fetch and fall back to an empty (uncached) result so the

@@ -105,6 +105,7 @@ async def list_storage_volumes(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     pool: Optional[str] = Query(None, description="Filter by storage pool"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all storage volumes."""
     if host:
@@ -112,7 +113,7 @@ async def list_storage_volumes(
     # Try cache first (30 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"storage_volumes:list:host={host}:pool={pool}")
-    cached_data = cache.get("api_responses", cache_key)
+    cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached storage volumes for host={host}, pool={pool}")
         # Reconstruct Pydantic model from cached dict

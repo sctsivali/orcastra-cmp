@@ -811,9 +811,18 @@ async def get_monitoring_dashboard(
         
         logger.debug(f"Monitoring dashboard collected in {elapsed_time*1000:.0f}ms")
         
-        # Cache the response for subsequent requests (per-scope)
-        _dashboard_cache[scope_key] = response.model_dump()
-        _dashboard_cache_times[scope_key] = time.time()
+        # important: a dashboard built while no cluster answered is all zeros, and
+        # zeros on a monitoring surface read as a healthy idle fleet rather than an
+        # unreachable one. Caching that pins the misreading for the TTL, and a
+        # fresh=true bypass would let an operator replace real data with it. Leaving
+        # the previous entry in place means they keep seeing stale-but-true numbers
+        # and the next request retries.
+        if connected_nodes:
+            _dashboard_cache[scope_key] = response.model_dump()
+            _dashboard_cache_times[scope_key] = time.time()
+        else:
+            _dashboard_cache_times.pop(scope_key, None)
+            logger.warning("Not caching monitoring dashboard: no cluster answered")
         
         return response
         
@@ -836,6 +845,7 @@ async def get_monitoring_dashboard(
 async def get_node_metrics(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """Get detailed metrics for a specific node. Cached for 30 seconds."""
     verify_cluster_access(node_name)
@@ -843,7 +853,7 @@ async def get_node_metrics(
     # check cache first
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"monitoring:node:{node_name}")
-    cached = cache.get("api_responses", cache_key)
+    cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         return ClusterMonitoringMetrics(**cached)
 
@@ -1028,17 +1038,18 @@ async def get_metrics_history(
 )
 async def get_network_metrics(
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """Get aggregated network metrics. Cached for 30 seconds."""
     # check cache first
     cache = get_cache_manager()
     cache_key = get_scope_cache_key("monitoring:network")
-    cached = cache.get("api_responses", cache_key)
+    cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         return NetworkMetrics(**cached)
 
     try:
-        all_vms, _ = await lxd_service.list_all_vms()
+        all_vms, connected_nodes = await lxd_service.list_all_vms()
         
         total_rx = 0
         total_tx = 0
@@ -1083,8 +1094,14 @@ async def get_network_metrics(
             timestamp=datetime.now(timezone.utc),
         )
         
-        # cache for 30 seconds
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+        # important: zeros from an unreachable fleet are worse than an empty list.
+        # An empty inventory looks broken, but "0 traffic, 0 packets" on a
+        # monitoring surface reads as a healthy idle cluster. Do not cache a
+        # total nobody reported.
+        if connected_nodes:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+        else:
+            logger.warning("Not caching network metrics: no cluster answered")
         return response
         
     except Exception as e:

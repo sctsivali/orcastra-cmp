@@ -90,6 +90,7 @@ def _fetch_profiles_for_node(lxd_service: LXDService, node_name: str) -> List[Pr
 async def list_profiles(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
     """List all profiles."""
     if host:
@@ -97,7 +98,7 @@ async def list_profiles(
     # Try cache first (60 second cache)
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(f"profiles:list:host={host}")
-    cached_data = cache.get("api_responses", cache_key)
+    cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug(f"Returning cached profiles for host={host}")
         # Reconstruct Pydantic model from cached dict

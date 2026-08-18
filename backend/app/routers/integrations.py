@@ -1374,7 +1374,7 @@ def _authorize_api_key(vault_client, key_id: str) -> Dict[str, Any]:
     summary="List all API keys",
     description="Get a list of all API keys for external integrations.",
 )
-async def list_api_keys():
+async def list_api_keys(fresh: bool = False):
     """List API keys visible to the current user (admin sees all, others see org-scoped)."""
     vault_client = get_vault_integrations_client()
     
@@ -1382,7 +1382,7 @@ async def list_api_keys():
         # Scoped cache key so each org gets its own cached list
         cache = get_cache_manager()
         cache_key = get_scope_cache_key("integrations:api_keys:list")
-        cached_data = cache.get("api_responses", cache_key)
+        cached_data = None if fresh else cache.get("api_responses", cache_key)
         
         if cached_data is None:
             all_metadata = list_api_keys_from_vault(vault_client)

@@ -113,10 +113,15 @@ async def clear_cache(
             cache.delete_pattern(namespace, "*")
             return {"message": f"Cleared cache for namespace: {namespace}"}
         else:
-            # Clear all namespaces
-            for ns in ["vault", "vault_list", "lxd_data"]:
+            # important: this list has to be the namespaces actually in use.
+            # It previously named "lxd_data", which no code writes to, and
+            # omitted "api_responses", which is where every cached list
+            # response lives, so the one manual cache-clear lever in the
+            # product did not clear the thing operators were clearing it for.
+            cleared = ["api_responses", "lxd_resources", "monitoring_history", "tags", "vault", "vault_list"]
+            for ns in cleared:
                 cache.delete_pattern(ns, "*")
-            return {"message": "Cleared all caches"}
+            return {"message": "Cleared all caches", "namespaces": cleared}
     except Exception as e:
         return {
             "error": str(e)
