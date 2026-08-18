@@ -69,6 +69,20 @@ class VMInfo(BaseModel):
     type: str = Field(default="virtual-machine", description="Instance type")
     resources: Optional[ResourceUsage] = Field(None, description="Resource usage stats")
     config: Optional[Dict[str, str]] = Field(None, description="VM configuration")
+    devices: Optional[Dict[str, Dict[str, str]]] = Field(
+        None,
+        description=(
+            "Devices set on the instance itself, which is where a root disk size chosen at "
+            "create time is stored. Empty when every device comes from a profile."
+        ),
+    )
+    expanded_devices: Optional[Dict[str, Dict[str, str]]] = Field(
+        None,
+        description=(
+            "Devices after profile expansion: what LXD actually applies. Read the effective "
+            "root disk from here, since an instance that overrides nothing still has one."
+        ),
+    )
     profiles: List[str] = Field(default_factory=list, description="Applied profiles")
     tags: List[str] = Field(default_factory=list, description="Instance tags for organization and filtering")
     

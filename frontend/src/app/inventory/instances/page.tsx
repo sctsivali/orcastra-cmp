@@ -59,6 +59,30 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Plus } from "lucide-react";
 import { RebuildDialog } from "@/components/rebuild-dialog";
 
+// The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
+// instance's own device; an instance that overrode nothing still has one through its profile,
+// and in that case LXD reports no size because the pool default applies.
+function rootDiskLabel(instance: any): { text: string; title: string } {
+  const own = instance?.devices?.root;
+  const effective = instance?.expanded_devices?.root ?? own;
+  if (!effective) return { text: "—", title: "No root disk device reported by LXD" };
+  const size = String(effective.size ?? "").trim();
+  const pool = String(effective.pool ?? "").trim();
+  if (!size) {
+    return {
+      text: pool ? `pool default (${pool})` : "pool default",
+      title: "No explicit size on the root disk, so the storage pool default applies",
+    };
+  }
+  const overridden = Boolean(own?.size);
+  return {
+    text: size,
+    title: overridden
+      ? `Set on this instance${pool ? `, pool ${pool}` : ""}`
+      : `Inherited from a profile${pool ? `, pool ${pool}` : ""}`,
+  };
+}
+
 function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
   // LXD events stream (no polling). useInstanceStream patches this query's cache.
@@ -430,6 +454,7 @@ function InstancesContent() {
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <TableHead>Root disk</TableHead>
                 <TableHead>Tags</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -509,6 +534,19 @@ function InstancesContent() {
                         {profile}
                       </Badge>
                     ))}
+                  </TableCell>
+                  <TableCell>
+                    {(() => {
+                      const disk = rootDiskLabel(instance);
+                      return (
+                        <span
+                          className="whitespace-nowrap text-sm text-muted-foreground"
+                          title={disk.title}
+                        >
+                          {disk.text}
+                        </span>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell>
                     {instance.tags && instance.tags.length > 0 ? (

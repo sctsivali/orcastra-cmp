@@ -59,6 +59,13 @@ export interface VMInfo {
   type: string;
   resources: ResourceUsage | null;
   config: Record<string, string> | null;
+  // Devices set on the instance itself. A root disk sized at create time lands here.
+  // Optional because a client may be talking to a backend older than 1.0.0-RC4, which did not
+  // return either field.
+  devices?: Record<string, Record<string, string>> | null;
+  // Devices after profile expansion: what LXD actually applies. Read the effective root disk
+  // from here, since an instance that overrides nothing still has one.
+  expanded_devices?: Record<string, Record<string, string>> | null;
   profiles: string[];
   tags: string[];
 }

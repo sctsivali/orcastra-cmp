@@ -13,7 +13,12 @@ from app.models.schemas import VMInfo
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError, LXDSnapshotExistsError
-from .utils import parse_vm_status, extract_ip_addresses, find_instance_in_projects
+from .utils import (
+    parse_vm_status,
+    extract_ip_addresses,
+    find_instance_in_projects,
+    jsonable_lxd,
+)
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
 from .audit import audit_operation
@@ -261,6 +266,8 @@ class InstanceManager:
             type=instance.type,
             resources=self.resource_manager.get_resource_usage(instance),
             config=dict(instance.config) if instance.config else None,
+            devices=jsonable_lxd(getattr(instance, "devices", None)) or {},
+            expanded_devices=jsonable_lxd(getattr(instance, "expanded_devices", None)) or {},
             profiles=list(instance.profiles) if instance.profiles else [],
             tags=tags,
         )
