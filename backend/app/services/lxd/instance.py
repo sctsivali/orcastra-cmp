@@ -1049,6 +1049,16 @@ class InstanceManager:
                 self._bg_tasks.add(task)
                 task.add_done_callback(self._bg_tasks.discard)
 
+            else:
+                # A create without auto-start had nobody watching its operation, so an
+                # asynchronous failure was silent. Watch it too, holding the same strong
+                # reference the branch above does so the loop cannot collect it mid-run.
+                watch = asyncio.create_task(
+                    self._watch_create_operation(create_client, name, operation_id, host, project)
+                )
+                self._bg_tasks.add(watch)
+                watch.add_done_callback(self._bg_tasks.discard)
+
             return operation_id
 
         except ClientConnectionFailed as e:
@@ -1057,6 +1067,42 @@ class InstanceManager:
             raise LXDConnectionError(f"Failed to reach {host}: {e}")
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
+
+    async def _watch_create_operation(self, client, name: str, operation_id: Optional[str],
+                                      host: str, project: str) -> None:
+        """Background: record whether the create operation LXD queued actually succeeded.
+
+        important: the POST returns as soon as LXD accepts the request, and only synchronous
+        validation errors reach the caller. Anything that fails while the operation RUNS, an
+        image that is not on the host being the common one, left the API reporting success with
+        an operation id and the audit trail recording result=success for an instance that never
+        existed. The events stream shows it to whoever has the page open; this makes it visible
+        to everyone else, including the audit trail.
+        """
+        if not operation_id:
+            return
+        try:
+            await asyncio.to_thread(client.operations.wait_for_operation, operation_id)
+        except Exception as e:
+            logger.error(
+                f"Create operation failed for {name} on {host} (project={project}): {e}"
+            )
+            try:
+                from app.services.activity_logger import get_activity_logger
+                get_activity_logger().log_activity(
+                    action="instance.create",
+                    target_type="instance",
+                    target_id=name,
+                    target_host=host,
+                    result="failure",
+                    error_code="LXD_OPERATION_FAILED",
+                    error_message=str(e),
+                    details={"project": project, "operation_id": operation_id},
+                )
+            except Exception:  # noqa: BLE001 - never let bookkeeping break the sweep
+                pass
+            return
+        logger.info(f"Create operation completed for {name} on {host} (project={project})")
 
     async def _finalize_and_start(self, client, name: str, operation_id: Optional[str],
                                   host: str, project: str) -> None:
