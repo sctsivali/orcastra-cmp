@@ -35,7 +35,7 @@ const SESSION_REFRESH_INTERVAL_S = 4 * 60;
 function TokenSync({ children }: { children: ReactNode }) {
   const { data: session, status, update: updateSession } = useSession();
   const [tokenReady, setTokenReady] = useState(false);
-  const [authError, setAuthError] = useState(false);
+  const [authError, setAuthError] = useState<null | "idp-unreachable" | "signed-out">(null);
   const retryCountRef = useRef(0);
   const wasAuthenticatedRef = useRef(false);
   const signOutConfirmedRef = useRef(false);
@@ -55,7 +55,7 @@ function TokenSync({ children }: { children: ReactNode }) {
   // api.ts no longer redirects on repeated 401s - it asks for the banner instead,
   // so the operator keeps the page they were on and can re-auth from there.
   useEffect(() => {
-    onAuthFailure(() => setAuthError(true));
+    onAuthFailure(() => setAuthError("idp-unreachable"));
   }, []);
 
   useEffect(() => {
@@ -68,7 +68,7 @@ function TokenSync({ children }: { children: ReactNode }) {
         // Let them continue with the stale token; show an error banner instead.
         // API calls may 401, but the 401 handler has a threshold before redirect.
         console.warn("[Auth] Token refresh failed — using stale token");
-        setAuthError(true);
+        setAuthError("idp-unreachable");
         setAccessToken(session.accessToken); // stale but non-null
         reset401Counter(); // prevent 401 cascade while we show the banner
         setTokenReady(true);
@@ -79,7 +79,7 @@ function TokenSync({ children }: { children: ReactNode }) {
       retryCountRef.current = 0;
       wasAuthenticatedRef.current = true;
       signOutConfirmedRef.current = false;
-      setAuthError(false);
+      setAuthError(null);
       setAccessToken(session.accessToken);
       reset401Counter();
       setTokenReady(true);
@@ -97,6 +97,11 @@ function TokenSync({ children }: { children: ReactNode }) {
           if (!confirmed) {
             setAccessToken(null);
             setTokenReady(true);
+            // important: announce it here. A role-guarded page renders nothing
+            // once the session is gone, so none of its queries mount, nothing
+            // 401s, and handle401 never runs. Without this the operator gets a
+            // blank content area with no explanation and no way back.
+            setAuthError("signed-out");
           }
         })();
         return;
@@ -115,7 +120,11 @@ function TokenSync({ children }: { children: ReactNode }) {
     <>
       {authError && (
         <div className="fixed top-0 inset-x-0 z-[100] bg-destructive/90 text-destructive-foreground px-4 py-2.5 text-sm flex items-center justify-center gap-3">
-          <span>Authentication service is unreachable. Some features may not work.</span>
+          <span>
+            {authError === "signed-out"
+              ? "Your session has ended. Sign in again to continue."
+              : "Authentication service is unreachable. Some features may not work."}
+          </span>
           <button
             onClick={() => signIn("authentik")}
             className="underline font-medium hover:opacity-80"
