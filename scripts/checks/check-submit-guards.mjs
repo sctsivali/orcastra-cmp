@@ -11,7 +11,7 @@
 // click, and network-create-form was caught by a Playwright assertion doing the same. Six forms
 // now carry the guard; this stops the seventh shipping without one.
 //
-// Run: node qa/check-submit-guards.mjs [repo-root]
+// Run: node scripts/checks/check-submit-guards.mjs [repo-root]
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 // Defaults to the repo this file lives in, so CI needs no argument and a local run needs no
 // absolute path.
-const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..');
+const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const srcRoot = join(root, 'frontend', 'src');
 
 // Forms whose submit path is guarded somewhere other than the component, with the reason.

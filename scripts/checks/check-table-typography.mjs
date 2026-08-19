@@ -11,12 +11,12 @@
  * Cells whose className is a template literal or a cn(...) call are skipped and counted,
  * so the blind spot is visible rather than silently zero.
  *
- * Modelled on qa/check-submit-guards.mjs.
+ * Modelled on scripts/checks/check-submit-guards.mjs.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const ROOT = new URL("../frontend/src", import.meta.url).pathname;
+const ROOT = new URL("../../frontend/src", import.meta.url).pathname;
 
 const ALLOWED = new Set([
   "font-medium",   // identifier column only

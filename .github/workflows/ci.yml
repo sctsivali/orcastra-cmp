@@ -99,14 +99,14 @@ jobs:
       # Pure filesystem AST walk over frontend/src, no install needed. Catches a mutation form
       # shipping without a synchronous double-submit guard.
       - name: Submit guards
-        run: node qa/check-submit-guards.mjs .
+        run: node scripts/checks/check-submit-guards.mjs .
       # Same shape: no install, no browser. Both were only run by make test-frontend, so a pull
       # request could land a table off the shared type scale, or a page dropping the
       # unreachable-cluster banner, without either guard ever firing.
       - name: Table typography
-        run: node qa/check-table-typography.mjs .
+        run: node scripts/checks/check-table-typography.mjs .
       - name: Unreachable-cluster banners
-        run: node qa/check-unreachable-banner.mjs .
+        run: node scripts/checks/check-unreachable-banner.mjs .
 
   commit-format:
     name: Conventional commits

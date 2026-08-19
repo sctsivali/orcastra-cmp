@@ -10,13 +10,13 @@
 // half: every router that reports the field must map to a page, and every mapped page must render
 // UnreachableNodesBanner. A new router with no entry here fails rather than passing silently.
 //
-// Run: node qa/check-unreachable-banner.mjs [repo-root]
+// Run: node scripts/checks/check-unreachable-banner.mjs [repo-root]
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..');
+const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const routersDir = join(root, 'backend', 'app', 'routers');
 const appDir = join(root, 'frontend', 'src', 'app');
 
