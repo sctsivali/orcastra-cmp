@@ -25,20 +25,29 @@ export interface UseRequireRoleResult {
   isResolved: boolean;
 }
 
+
 export function useRequireRole(role: Role, redirectTo: string = "/"): UseRequireRoleResult {
   const router = useRouter();
   const { hasRole, isLoading, isAuthenticated } = usePermissions();
 
   const allowed = hasRole(role);
-  // important: renderability and redirectability are different questions. We can
+
+  // important: renderability and redirectability are different questions. We
   // render as soon as roles are readable, which stays true through a background
   // session refresh - gating render on isAuthenticated would blank the page every
   // time useSession().update() briefly flips status back to "loading".
   const isResolved = !isLoading;
 
   useEffect(() => {
-    // ...but only ever redirect on a denial we positively know: authenticated,
-    // and the role genuinely absent.
+    // Only redirect on a denial we positively know: authenticated, and the role
+    // genuinely absent.
+    //
+    // important: a session that momentarily reads as unauthenticated must NOT
+    // navigate. A 401 storm makes useSession().update() produce exactly that
+    // reading, and redirecting on it lands the operator on the home page, which
+    // is the bug this whole change exists to remove. A genuinely dead session is
+    // surfaced in place instead, by the re-auth banner that api.ts raises through
+    // onAuthFailure.
     if (isAuthenticated && !allowed) {
       router.replace(redirectTo);
     }

@@ -15,7 +15,7 @@
 
 import { SessionProvider, useSession, signIn } from "next-auth/react";
 import { ReactNode, useEffect, useRef, useState, useCallback } from "react";
-import { setAccessToken, reset401Counter, onSessionRefreshNeeded, onAuthFailure } from "@/lib/api";
+import { setAccessToken, onSessionRefreshNeeded, onAuthFailure, onAuthRecovered } from "@/lib/api";
 
 // Session refresh interval (seconds) - refresh token before it expires.
 // Authentik default access token lifetime is ~5 min, so refresh every 4 min.
@@ -56,6 +56,8 @@ function TokenSync({ children }: { children: ReactNode }) {
   // so the operator keeps the page they were on and can re-auth from there.
   useEffect(() => {
     onAuthFailure(() => setAuthError(true));
+    // cleared only when a request actually succeeds, never by an effect re-running
+    onAuthRecovered(() => setAuthError(false));
   }, []);
 
   useEffect(() => {
@@ -70,7 +72,6 @@ function TokenSync({ children }: { children: ReactNode }) {
         console.warn("[Auth] Token refresh failed — using stale token");
         setAuthError(true);
         setAccessToken(session.accessToken); // stale but non-null
-        reset401Counter(); // prevent 401 cascade while we show the banner
         setTokenReady(true);
         return;
       }
@@ -79,9 +80,7 @@ function TokenSync({ children }: { children: ReactNode }) {
       retryCountRef.current = 0;
       wasAuthenticatedRef.current = true;
       signOutConfirmedRef.current = false;
-      setAuthError(false);
       setAccessToken(session.accessToken);
-      reset401Counter();
       setTokenReady(true);
     } else if (status === "unauthenticated") {
       // important: next-auth's fetchData() returns null on ANY failure, including a
@@ -115,7 +114,7 @@ function TokenSync({ children }: { children: ReactNode }) {
     <>
       {authError && (
         <div className="fixed top-0 inset-x-0 z-[100] bg-destructive/90 text-destructive-foreground px-4 py-2.5 text-sm flex items-center justify-center gap-3">
-          <span>Authentication service is unreachable. Some features may not work.</span>
+          <span>Your session could not be refreshed. Sign in again to continue.</span>
           <button
             onClick={() => signIn("authentik")}
             className="underline font-medium hover:opacity-80"

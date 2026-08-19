@@ -95,84 +95,82 @@ export function getAccessToken(): string | null {
 }
 
 /**
- * 401 recovery. Two rules make this survive an operator returning from AFK:
+ * 401 recovery, as two states rather than a count.
  *
- * important: never navigate. A hard redirect here throws the operator off the
- * page they were on and loses all in-memory state (open consoles included, via
- * the beforeunload kill-all-sessions beacon). Auth death is announced to the UI,
- * which already renders a re-auth banner, so the current route is preserved.
+ * important: never navigate. A hard redirect here throws the operator off the page
+ * they were on and loses all in-memory state, open consoles included via the
+ * beforeunload kill-all-sessions beacon. Auth death is announced to the UI, which
+ * renders a re-auth prompt in place, so the current route survives.
  *
- * important: a burst of parallel requests failing under one expired token is a
- * single failure, not N. The counter only advances when a request fails again
- * with a token we have already refreshed past, so ten concurrent queries hitting
- * one stale token count once.
+ * important: no counter and no time window. Counting attempts inside a sliding
+ * window cannot work here: real polls are 10 to 60 seconds apart, so any window
+ * short enough to bound a burst is also short enough to reset between two genuine
+ * failures, and the prompt becomes unreachable. The question is not "how many
+ * 401s" but "did refreshing help", which is one bit: once a refresh has completed
+ * and a request still comes back 401, refreshing is not the answer and the
+ * operator has to be told. Parallel bursts are collapsed by the in-flight flag,
+ * not by arithmetic.
  */
-let _refreshAttempts = 0;
+let _refreshCompleted = false; // a session refresh finished since the last success
 let _authFailureAnnounced = false;
-const _MAX_REFRESH_ATTEMPTS = 3; // refreshes that failed to clear 401s before we prompt
-const _401_RESET_MS = 8000; // forget the failure streak after 8s of quiet
-let _401ResetTimer: ReturnType<typeof setTimeout> | null = null;
-let _tokenAtLastFailure: string | null = null;
 let _sessionRefreshFn: (() => Promise<void>) | null = null;
 let _sessionRefreshInFlight = false;
 let _onAuthFailure: (() => void) | null = null;
+let _onAuthRecovered: (() => void) | null = null;
 
 /**
  * Register a callback for requesting a session refresh (called by auth-provider).
  * When the API layer sees a 401, it calls this to trigger useSession().update()
- * instead of immediately redirecting.
+ * instead of redirecting.
  */
 export function onSessionRefreshNeeded(fn: () => Promise<void>) {
   _sessionRefreshFn = fn;
 }
 
-/**
- * Register a callback fired when repeated session refreshes fail to clear 401s.
- * auth-provider uses it to raise the existing re-auth banner in place.
- */
+/** Fired when refreshing the session has failed to clear 401s. */
 export function onAuthFailure(fn: () => void) {
   _onAuthFailure = fn;
+}
+
+/** Fired when requests start working again, so the UI can drop the prompt. */
+export function onAuthRecovered(fn: () => void) {
+  _onAuthRecovered = fn;
 }
 
 function handle401() {
   if (_authFailureAnnounced) return false;
 
-  // only a 401 under a token we have not already refreshed past is new information
-  const isNewFailure = _accessToken !== _tokenAtLastFailure;
-  if (isNewFailure) _tokenAtLastFailure = _accessToken;
+  // a refresh is already running: this request is part of the same burst
+  if (_sessionRefreshInFlight) return false;
 
-  if (_401ResetTimer) clearTimeout(_401ResetTimer);
-  _401ResetTimer = setTimeout(reset401Counter, _401_RESET_MS);
-
-  if (
-    isNewFailure &&
-    _refreshAttempts < _MAX_REFRESH_ATTEMPTS &&
-    _sessionRefreshFn &&
-    !_sessionRefreshInFlight
-  ) {
-    _refreshAttempts++;
+  if (!_refreshCompleted && _sessionRefreshFn) {
     _sessionRefreshInFlight = true;
     _sessionRefreshFn().finally(() => {
       _sessionRefreshInFlight = false;
+      // whatever the outcome, we have now tried. A further 401 means it did not help.
+      _refreshCompleted = true;
     });
     return true; // signal: refresh triggered, caller may retry
   }
 
-  if (_refreshAttempts >= _MAX_REFRESH_ATTEMPTS) {
-    _authFailureAnnounced = true;
-    console.warn(
-      `[Auth] ${_refreshAttempts} session refreshes did not clear 401s — prompting re-auth in place`
-    );
-    _onAuthFailure?.();
-  }
+  // a refresh has completed and requests are still refused
+  _authFailureAnnounced = true;
+  console.warn("[Auth] a session refresh did not clear 401s — prompting re-auth in place");
+  _onAuthFailure?.();
   return false;
 }
 
-/** Reset the 401 failure streak on a successful token set (called by auth-provider). */
+/**
+ * Clear the auth-failure state. The only correct trigger is a request actually
+ * succeeding: not a timer, and not a React effect re-running. auth-provider's
+ * effect re-fires whenever useSession() rebuilds its memo, which update() does on
+ * every refresh, so resetting from there erased the very state being tracked.
+ */
 export function reset401Counter() {
-  _refreshAttempts = 0;
+  const wasAnnounced = _authFailureAnnounced;
+  _refreshCompleted = false;
   _authFailureAnnounced = false;
-  _tokenAtLastFailure = null;
+  if (wasAnnounced) _onAuthRecovered?.();
 }
 
 // Timeout wrapper for fetch with AbortController
@@ -361,6 +359,11 @@ async function _fetchAPIInternal<T>(
       }
 
       throw new APIError(errorMessage, response.status, errorDetail);
+    }
+
+    // a request got through, so whatever was failing has cleared
+    if (_refreshCompleted || _authFailureAnnounced) {
+      reset401Counter();
     }
 
     // handle 204 No Content (no body to parse)
