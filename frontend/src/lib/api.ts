@@ -112,11 +112,6 @@ let _authFailureAnnounced = false;
 const _MAX_REFRESH_ATTEMPTS = 3; // refreshes that failed to clear 401s before we prompt
 const _401_RESET_MS = 8000; // forget the failure streak after 8s of quiet
 let _401ResetTimer: ReturnType<typeof setTimeout> | null = null;
-// important: undefined, not null. null is a legitimate _accessToken value (the
-// token has been cleared), so a null sentinel would make a 401 under a cleared
-// token compare equal and read as "already seen", silently skipping both the
-// refresh attempt and the re-auth banner.
-let _tokenAtLastFailure: string | null | undefined = undefined;
 let _sessionRefreshFn: (() => Promise<void>) | null = null;
 let _sessionRefreshInFlight = false;
 let _onAuthFailure: (() => void) | null = null;
@@ -141,15 +136,16 @@ export function onAuthFailure(fn: () => void) {
 function handle401() {
   if (_authFailureAnnounced) return false;
 
-  // only a 401 under a token we have not already refreshed past is new information
-  const isNewFailure = _accessToken !== _tokenAtLastFailure;
-  if (isNewFailure) _tokenAtLastFailure = _accessToken;
-
   if (_401ResetTimer) clearTimeout(_401ResetTimer);
   _401ResetTimer = setTimeout(reset401Counter, _401_RESET_MS);
 
+  // important: _sessionRefreshInFlight is what collapses a parallel burst. Ten
+  // concurrent requests failing under one stale token find a refresh already
+  // running and cost a single attempt between them. Do NOT gate this on comparing
+  // the token instead: once the token is cleared it stops changing, every later
+  // 401 reads as "already seen", and the attempt counter stalls so the re-auth
+  // banner can never fire.
   if (
-    isNewFailure &&
     _refreshAttempts < _MAX_REFRESH_ATTEMPTS &&
     _sessionRefreshFn &&
     !_sessionRefreshInFlight
@@ -176,7 +172,6 @@ function handle401() {
 export function reset401Counter() {
   _refreshAttempts = 0;
   _authFailureAnnounced = false;
-  _tokenAtLastFailure = undefined;
 }
 
 // Timeout wrapper for fetch with AbortController

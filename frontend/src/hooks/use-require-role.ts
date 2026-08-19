@@ -25,13 +25,6 @@ export interface UseRequireRoleResult {
   isResolved: boolean;
 }
 
-/** Build a sign-in URL that carries where the operator actually was. */
-function signInWithReturnPath(): string {
-  if (typeof window === "undefined") return "/auth/signin";
-  const url = new URL("/auth/signin", window.location.origin);
-  url.searchParams.set("callbackUrl", window.location.href);
-  return url.pathname + url.search;
-}
 
 export function useRequireRole(role: Role, redirectTo: string = "/"): UseRequireRoleResult {
   const router = useRouter();
@@ -39,33 +32,26 @@ export function useRequireRole(role: Role, redirectTo: string = "/"): UseRequire
 
   const allowed = hasRole(role);
 
-  // Three states, not two. "Still loading" and "signed out" both fail an
-  // isAuthenticated check but need opposite handling, and collapsing them leaves
-  // a signed-out operator on a permanently blank page: no loader, no content, no
-  // redirect, because the role check quietly returns false for an empty session.
-  const isSignedOut = !isLoading && !isAuthenticated;
-
   // important: renderability and redirectability are different questions. We
   // render as soon as roles are readable, which stays true through a background
   // session refresh - gating render on isAuthenticated would blank the page every
   // time useSession().update() briefly flips status back to "loading".
-  const isResolved = !isLoading && !isSignedOut;
+  const isResolved = !isLoading;
 
   useEffect(() => {
-    if (isSignedOut) {
-      // The session is genuinely gone (auth-provider already confirmed it once
-      // before clearing). Send them to sign-in carrying the current URL, so
-      // silent SSO returns them to this page rather than to the home page. That
-      // return path is the whole point of this change.
-      router.replace(signInWithReturnPath());
-      return;
-    }
-    // Otherwise only redirect on a denial we positively know: authenticated,
-    // and the role genuinely absent.
+    // Only redirect on a denial we positively know: authenticated, and the role
+    // genuinely absent.
+    //
+    // important: a session that momentarily reads as unauthenticated must NOT
+    // navigate. A 401 storm makes useSession().update() produce exactly that
+    // reading, and redirecting on it lands the operator on the home page, which
+    // is the bug this whole change exists to remove. A genuinely dead session is
+    // surfaced in place instead, by the re-auth banner that api.ts raises through
+    // onAuthFailure.
     if (isAuthenticated && !allowed) {
       router.replace(redirectTo);
     }
-  }, [isSignedOut, isAuthenticated, allowed, redirectTo, router]);
+  }, [isAuthenticated, allowed, redirectTo, router]);
 
   return { allowed, isResolved };
 }
