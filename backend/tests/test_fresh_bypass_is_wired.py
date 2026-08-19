@@ -777,3 +777,147 @@ class UnreachableIsNotTheSameAsErroringTests(unittest.TestCase):
                             "reports a healthy node as unreachable"
                         )
         self.assertEqual(offenders, [])
+
+
+class NeverQueriedNodesAreNamedTests(unittest.TestCase):
+    """A fan-out asks connection_manager.get_node_names(), which is only the nodes holding a
+    live client. Everything Vault has registered beyond that is never queried at all, so a
+    handler that fills unreachable_nodes from failed tasks alone reports an empty fleet as a
+    healthy one. networks.py shipped without this seeding while nine sibling routers had it,
+    and no test could see the difference because each router was only ever read on its own."""
+
+    # two idioms subtract from the same scoped fleet: the wrappers subtract the nodes they
+    # asked, instances/vms subtract the nodes that answered. Match the shared prefix so a
+    # router with no seeding at all still fails.
+    SEED = "set(lxd_service.get_node_names()) - set("
+
+    def _routers_reporting_unreachable(self):
+        return sorted(
+            path.name
+            for path in ROUTERS.glob("*.py")
+            if "unreachable_nodes" in path.read_text()
+        )
+
+    def test_every_router_that_reports_unreachable_seeds_the_never_queried(self):
+        offenders = [
+            filename
+            for filename in self._routers_reporting_unreachable()
+            if self.SEED not in (ROUTERS / filename).read_text()
+        ]
+        self.assertEqual(
+            offenders,
+            [],
+            "these routers name only the nodes that failed, so a cluster with no live client "
+            "is reported as absent rather than unreachable",
+        )
+
+    def test_the_scan_actually_covers_something(self):
+        """A scan over an empty set passes for the wrong reason."""
+        self.assertGreaterEqual(len(self._routers_reporting_unreachable()), 10)
+        self.assertIn("networks.py", self._routers_reporting_unreachable())
+
+
+class CachedPayloadsWrittenBeforeTheFieldStillParseTests(unittest.TestCase):
+    """Every list handler reconstructs its model from a cached dict. A payload written by the
+    previous build has none of the reachability fields, so making one of them required would
+    raise ValidationError on every cached read until each TTL expired, which on a rolling
+    deploy is an outage rather than a stale banner. Most of these wrappers are declared inside
+    their router rather than in schemas.py, so this scans both."""
+
+    # "error" alone is too broad: ErrorResponse.error is a required message and has nothing to
+    # do with reachability, so it is only checked on a model that also carries "reachable".
+    ALWAYS = ("unreachable_nodes", "reachable")
+
+    def _declarations(self):
+        """Yield (where, field, source_line) for every reachability field declaration."""
+        sources = [("schemas.py", (ROUTERS.parent / "models" / "schemas.py").read_text())]
+        sources += [(path.name, path.read_text()) for path in sorted(ROUTERS.glob("*.py"))]
+        for where, source in sources:
+            tree = ast.parse(source)
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ClassDef):
+                    continue
+                declared = {
+                    stmt.target.id: stmt
+                    for stmt in node.body
+                    if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+                }
+                names = [n for n in self.ALWAYS if n in declared]
+                if "reachable" in declared and "error" in declared:
+                    names.append("error")
+                for field in names:
+                    yield f"{where}:{node.name}.{field}", declared[field]
+
+    def test_no_reachability_field_is_required(self):
+        offenders = []
+        checked = 0
+        for where, stmt in self._declarations():
+            checked += 1
+            if stmt.value is None:
+                offenders.append(f"{where} (bare annotation)")
+                continue
+            call = stmt.value
+            if isinstance(call, ast.Call) and getattr(call.func, "id", "") == "Field":
+                positional_default = bool(call.args) and not (
+                    isinstance(call.args[0], ast.Constant) and call.args[0].value is Ellipsis
+                )
+                keyword_default = any(
+                    kw.arg in ("default", "default_factory") for kw in call.keywords
+                )
+                if not (positional_default or keyword_default):
+                    offenders.append(f"{where} (Field(...) with no default)")
+        self.assertEqual(
+            offenders,
+            [],
+            "a cached payload written before this field existed would fail to parse",
+        )
+        # a scan over nothing passes for the wrong reason
+        self.assertGreaterEqual(checked, 12)
+
+
+class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
+    """The prewarm writes the payload the endpoint later serves, so any field the endpoint sets
+    must be set here too. Leaving unreachable_nodes to its model default wrote an empty list into
+    the cache, and every unforced read reported a healthy fleet while fourteen clusters were down.
+    The forced path was correct throughout, which is why the endpoint tests all passed. The same
+    shape mismatch previously made GET /nodes answer 500 for a whole TTL."""
+
+    def _models_declaring(self, field):
+        source = (ROUTERS.parent / "models" / "schemas.py").read_text()
+        tree = ast.parse(source)
+        return {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            and any(
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id == field
+                for stmt in node.body
+            )
+        }
+
+    def test_prewarm_passes_unreachable_nodes_to_every_model_that_has_it(self):
+        collector = ROUTERS.parent / "services" / "metrics_collector.py"
+        models = self._models_declaring("unreachable_nodes")
+        self.assertIn("VMListResponse", models, "fixture is wrong, not the code")
+
+        offenders = []
+        constructed = 0
+        for node in ast.walk(ast.parse(collector.read_text())):
+            if not isinstance(node, ast.Call):
+                continue
+            name = getattr(node.func, "id", None)
+            if name not in models:
+                continue
+            constructed += 1
+            if not any(kw.arg == "unreachable_nodes" for kw in node.keywords):
+                offenders.append(f"{name} at metrics_collector.py:{node.lineno}")
+        self.assertEqual(
+            offenders,
+            [],
+            "a prewarm builds this model without unreachable_nodes, so the cached payload "
+            "reports a healthy fleet and the banner never appears on an unforced read",
+        )
+        # a scan over nothing passes for the wrong reason
+        self.assertGreaterEqual(constructed, 2)

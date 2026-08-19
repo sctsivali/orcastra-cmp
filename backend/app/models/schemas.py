@@ -97,6 +97,10 @@ class VMListResponse(BaseModel):
     total: int = Field(..., description="Total number of VMs (before pagination)")
     vms: List[VMInfo] = Field(..., description="List of VMs")
     nodes: List[str] = Field(..., description="List of connected node names")
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description="Registered clusters that did not answer, so their instances are absent",
+    )
     lxd_count: int = Field(0, description="Number of LXD nodes online")
     microcloud_count: int = Field(0, description="Number of MicroCloud nodes online")
     incus_count: int = Field(0, description="Number of Incus nodes online")

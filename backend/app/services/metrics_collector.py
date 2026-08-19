@@ -8,7 +8,7 @@ import asyncio
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import List, Optional
 import threading
 
 from app.core.blocking import BlockingTimeout, run_blocking
@@ -237,6 +237,16 @@ class MetricsCollector:
         except Exception as e:
             logger.debug(f"Pre-warm failed for {cache_key}: {e}")
     
+    def _unreachable(self, connected_nodes: List[str]) -> List[str]:
+        """Registered clusters that did not answer this sweep.
+
+        important: a prewarm writes the payload the endpoint later serves, so any field the
+        endpoint fills must be filled here too. Leaving this to the model default wrote an
+        empty list into the cache, and every unforced read then reported a healthy fleet
+        while fourteen clusters were down. The same shape mismatch took out GET /nodes.
+        """
+        return sorted(set(self._lxd_service.get_node_names()) - set(connected_nodes))
+
     async def _fetch_instances(self):
         """Fetch instances data for cache warming."""
         from app.models.schemas import VMListResponse
@@ -244,7 +254,8 @@ class MetricsCollector:
         response = VMListResponse(
             total=len(all_vms),
             vms=all_vms,
-            nodes=connected_nodes
+            nodes=connected_nodes,
+            unreachable_nodes=self._unreachable(connected_nodes),
         )
         return response.model_dump()
     
@@ -257,7 +268,8 @@ class MetricsCollector:
         response = VMListResponse(
             total=len(vms_only),
             vms=vms_only,
-            nodes=connected_nodes
+            nodes=connected_nodes,
+            unreachable_nodes=self._unreachable(connected_nodes),
         )
         return response.model_dump()
     

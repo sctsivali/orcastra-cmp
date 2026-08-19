@@ -125,10 +125,18 @@ async def list_instances(
             )
         ]
         
+        # important: connected_nodes is what answered, not what exists. Both it and
+        # get_node_names() pass through apply_cluster_filter, so the difference is the
+        # registered clusters this operator can see that stayed silent. Without it the
+        # list just gets shorter and nothing says why.
+        unreachable_nodes = (
+            [] if host else sorted(set(lxd_service.get_node_names()) - set(connected_nodes))
+        )
         response = VMListResponse(
             total=len(all_vms),
             vms=all_vms[offset:offset + limit] if limit > 0 else all_vms,
             nodes=connected_nodes,
+            unreachable_nodes=unreachable_nodes,
             offset=offset,
             limit=limit,
             has_more=(offset + limit < len(all_vms)) if limit > 0 else False,

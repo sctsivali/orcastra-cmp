@@ -259,7 +259,14 @@ async def list_networks(
         # Flatten results, tracking nodes we could not reach so an unreachable
         # cluster isn't silently reported as "0 networks".
         all_networks = []
-        unreachable_nodes: List[str] = []
+        # important: two different things make a node absent, and both must be named.
+        # A node can fail during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while
+        # the fleet is whatever Vault has registered. Reporting only the first kind left a
+        # dead cluster silently missing rather than merely empty.
+        unreachable_nodes: List[str] = (
+            [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+        )
         for result in results:
             if isinstance(result, tuple):
                 node_name, networks = result
