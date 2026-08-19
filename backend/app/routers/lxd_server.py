@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -60,6 +61,11 @@ def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Opti
     """Fetch server info for a single node - runs in thread pool."""
     try:
         client = lxd_service.connection_manager.get_client(node_name)
+        if client is None:
+            # important: unreachable is not empty. Without this the next line
+            # raises AttributeError on None, which the generic handler below
+            # turns into a partial result and the node is never named.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
         # Get server info from host_info property
         server_data = client.host_info
         
@@ -94,9 +100,13 @@ def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Opti
             environment=server_data.get('environment', {}),
             public=server_data.get('public', False)
         )
-    except Exception as e:
-        logger.error(f"Error getting server info from {node_name}: {e}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
         raise
+    except Exception as e:
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error getting server info from {node_name}: {e}")
         return None
 
 

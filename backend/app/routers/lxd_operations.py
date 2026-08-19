@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -66,6 +67,11 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
     operations = []
     try:
         client = lxd_service.connection_manager.get_client(node_name)
+        if client is None:
+            # important: unreachable is not empty. Without this the next line
+            # raises AttributeError on None, which the generic handler below
+            # turns into a partial result and the node is never named.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
         # Use recursion=1 to get full operation details
         response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
         if response.status_code == 200:
@@ -109,9 +115,13 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
                         project=project,
                         instance_name=instance_name,
                     ))
-                except Exception as e:
-                    logger.error(f"Error parsing operation data on {node_name}: {e}")
+                except LXDConnectionError:
+                    # a missing client IS unreachability: let it through
                     raise
+                except Exception as e:
+                    # important: not unreachability. See networks.py: an item
+                    # vanishing mid-listing must not condemn the whole node.
+                    logger.warning(f"Error parsing operation data on {node_name}: {e}")
         else:
             logger.warning(f"Got status {response.status_code} for operations on {node_name}")
     except Exception as e:

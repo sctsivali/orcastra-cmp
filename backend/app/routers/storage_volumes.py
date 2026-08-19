@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -76,6 +77,9 @@ def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter
     volumes_list = []
     try:
         client = lxd_service.connection_manager.get_client(node_name)
+        if client is None:
+            # important: unreachable is not empty. See the sibling routers.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
         # Get all storage pools
         pools = client.storage_pools.all()
         
@@ -96,9 +100,13 @@ def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter
                         content_type=getattr(volume, 'content_type', ''),
                         node=node_name
                     ))
-            except Exception as e:
-                logger.error(f"Error listing volumes in pool {storage_pool.name}: {e}")
+            except LXDConnectionError:
+                # a missing client IS unreachability: let it through
                 raise
+            except Exception as e:
+                # important: not unreachability. See networks.py: an item
+                # vanishing mid-listing must not condemn the whole node.
+                logger.warning(f"Error listing volumes in pool {storage_pool.name}: {e}")
     except Exception as e:
         logger.error(f"Error listing storage volumes on {node_name}: {e}")
     return volumes_list

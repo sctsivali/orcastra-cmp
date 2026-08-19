@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -132,9 +133,13 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> List[
                         groups=groups_list,
                         node=node_name
                     ))
-                except Exception as e:
-                    logger.error(f"Error parsing identity data: {e}")
+                except LXDConnectionError:
+                    # a missing client IS unreachability: let it through
                     raise
+                except Exception as e:
+                    # important: not unreachability. See networks.py: an item
+                    # vanishing mid-listing must not condemn the whole node.
+                    logger.warning(f"Error parsing identity data: {e}")
         else:
             logger.warning(f"Got status {response.status_code} for identities on {node_name}")
     except Exception as e:
@@ -244,9 +249,10 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> List[Grou
                 logger.warning(f"Failed to reconnect to {node_name}: {e}")
                 return groups
             if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                return groups
+                # important: unreachable is not empty. Returning a bare collection
+                # here leaves the caller nothing to label, which is how a dead
+                # cluster read as a cluster with nothing.
+                raise LXDConnectionError(f"Could not connect to {node_name}")
         
         # Use recursion=1 to get full details in one call
         response = client.api.auth.groups.get(params={'recursion': '1'}, timeout=(5, 30))
@@ -276,9 +282,13 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> List[Grou
                         permissions=permissions_list,
                         node=node_name  # Include node information
                     ))
-                except Exception as e:
-                    logger.error(f"Error parsing group data: {e}")
+                except LXDConnectionError:
+                    # a missing client IS unreachability: let it through
                     raise
+                except Exception as e:
+                    # important: not unreachability. See networks.py: an item
+                    # vanishing mid-listing must not condemn the whole node.
+                    logger.warning(f"Error parsing group data: {e}")
         else:
             logger.warning(f"Got status {response.status_code} for groups on {node_name}")
     except Exception as e:

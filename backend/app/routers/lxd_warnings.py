@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -64,6 +65,11 @@ def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[Wa
     warnings = []
     try:
         client = lxd_service.connection_manager.get_client(node_name)
+        if client is None:
+            # important: unreachable is not empty. Without this the next line
+            # raises AttributeError on None, which the generic handler below
+            # turns into a partial result and the node is never named.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
         # Use recursion=1 to get full details in one call
         response = client.api.warnings.get(params={'recursion': '1'}, timeout=(5, 30))
         if response.status_code == 200:
@@ -90,9 +96,13 @@ def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[Wa
                         severity=warning_detail.get('severity', ''),
                         status=warning_detail.get('status', '')
                     ))
-                except Exception as e:
-                    logger.error(f"Error parsing warning data on {node_name}: {e}")
+                except LXDConnectionError:
+                    # a missing client IS unreachability: let it through
                     raise
+                except Exception as e:
+                    # important: not unreachability. See networks.py: an item
+                    # vanishing mid-listing must not condemn the whole node.
+                    logger.warning(f"Error parsing warning data on {node_name}: {e}")
         elif response.status_code == 404:
             logger.debug(f"Warnings endpoint not available on {node_name} (404 - older LXD version?)")
         else:

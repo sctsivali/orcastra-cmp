@@ -85,9 +85,13 @@ def _fetch_profiles_for_node(lxd_service: LXDService, node_name: str) -> List[Pr
                 used_by=profile.used_by or [],
                 node=node_name
             ))
-    except Exception as e:
-        logger.error(f"Error listing profiles on {node_name}: {e}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
         raise
+    except Exception as e:
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing profiles on {node_name}: {e}")
     return profiles_list
 
 

@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -72,6 +73,11 @@ def _fetch_acls_for_node(lxd_service: LXDService, node_name: str) -> List[Networ
     acls = []
     try:
         client = lxd_service.connection_manager.get_client(node_name)
+        if client is None:
+            # important: unreachable is not empty. Without this the next line
+            # raises AttributeError on None, which the generic handler below
+            # turns into a partial result and the node is never named.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
         # Get ACLs via API with recursion=1 to get full details in one call
         response = client.api.get('/1.0/network-acls?recursion=1')
         if response.status_code == 200:
@@ -87,9 +93,13 @@ def _fetch_acls_for_node(lxd_service: LXDService, node_name: str) -> List[Networ
                         used_by=acl_data.get('used_by', []),
                         node=node_name
                     ))
-                except Exception as e:
-                    logger.error(f"Error parsing ACL data on {node_name}: {e}")
+                except LXDConnectionError:
+                    # a missing client IS unreachability: let it through
                     raise
+                except Exception as e:
+                    # important: not unreachability. See networks.py: an item
+                    # vanishing mid-listing must not condemn the whole node.
+                    logger.warning(f"Error parsing ACL data on {node_name}: {e}")
     except Exception as e:
         logger.error(f"Error listing network ACLs on {node_name}: {e}")
     return acls

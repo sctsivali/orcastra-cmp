@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -66,15 +67,22 @@ def _fetch_ipam_for_node(
     try:
         client = lxd_service.connection_manager.get_client(node_name)
         if client is None:
-            return allocations
+            # important: unreachable is not empty. Returning a bare collection
+            # here leaves the caller nothing to label, which is how a dead
+            # cluster read as a cluster with nothing.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
 
         # get project names
         try:
             projects = client.projects.all()
             project_names = [p.name for p in projects]
-        except Exception as e:
-            logger.error(f"Could not get projects for {node_name}: {e}")
+        except LXDConnectionError:
+            # a missing client IS unreachability: let it through
             raise
+        except Exception as e:
+            # important: not unreachability. See networks.py: an item
+            # vanishing mid-listing must not condemn the whole node.
+            logger.warning(f"Could not get projects for {node_name}: {e}")
             project_names = ['default']
 
         for project_name in project_names:

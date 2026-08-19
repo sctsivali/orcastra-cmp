@@ -725,3 +725,55 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
         )
         self.assertEqual(stale, [], f"typed exemptions naming functions that do not exist: {stale}")
 
+
+
+class UnreachableIsNotTheSameAsErroringTests(unittest.TestCase):
+    """A node that erred mid-listing must not be reported as a node that is down.
+
+    Reproduced live: deleting a network while another request listed them raised
+    "Network not found", the helper treated any exception as unreachability, and a healthy
+    node came back with zero networks and a banner saying it could not be reached. The
+    forced-refresh path made this easy to hit, because it lists for real on every click
+    instead of serving cache.
+
+    So the two conditions get two answers. No client means unreachable and must raise, and
+    must pass through the generic handler untouched. Anything else that goes wrong while
+    listing is partial data: log it, return what was collected, do not condemn the node.
+    """
+
+    HELPERS = [
+        "profiles.py", "network_acls.py", "lxd_operations.py", "lxd_warnings.py",
+        "storage_pools.py", "storage_volumes.py", "permissions.py", "ipam.py",
+        "lxd_server.py",
+    ]
+
+    def test_a_missing_client_raises_and_is_not_swallowed(self):
+        offenders = []
+        for filename in self.HELPERS:
+            source = (ROUTERS / filename).read_text()
+            if "raise LXDConnectionError" not in source:
+                offenders.append(f"{filename}: a missing client does not raise, so the caller "
+                                 "cannot tell the node was unreachable")
+            if "except LXDConnectionError" not in source:
+                offenders.append(f"{filename}: the generic handler swallows the unreachable "
+                                 "signal it was supposed to let through")
+        self.assertEqual(offenders, [])
+
+    def test_a_listing_error_does_not_re_raise(self):
+        """The generic handler must not re-raise: that is what turned a transient item
+        failure into 'this whole node is down'."""
+        offenders = []
+        for filename in self.HELPERS + ["networks.py"]:
+            tree = ast.parse((ROUTERS / filename).read_text())
+            for handler in [n for n in ast.walk(tree) if isinstance(n, ast.ExceptHandler)]:
+                # only the broad handler; a named LXDConnectionError passthrough is correct
+                name = getattr(handler.type, "id", None)
+                if name != "Exception":
+                    continue
+                for stmt in handler.body:
+                    if isinstance(stmt, ast.Raise) and stmt.exc is None:
+                        offenders.append(
+                            f"{filename}:{stmt.lineno} re-raises any listing error, which "
+                            "reports a healthy node as unreachable"
+                        )
+        self.assertEqual(offenders, [])

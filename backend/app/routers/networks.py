@@ -212,8 +212,13 @@ def _fetch_networks_for_node(
                 node=node_name
             ))
     except Exception as e:
-        logger.error(f"Error listing networks on {node_name}: {e}")
-        return node_name, None
+        # important: an error while listing is not the same as an unreachable node, and
+        # conflating them is user-visible. A network disappearing mid-iteration raises
+        # "Network not found", and treating that as unreachability wiped every network on a
+        # healthy node and told the operator the node was down. Reproduced by listing while
+        # a network was being deleted. Report what was collected instead.
+        logger.warning(f"Partial network listing on {node_name}: {e}")
+        return node_name, networks_list
     return node_name, networks_list
 
 

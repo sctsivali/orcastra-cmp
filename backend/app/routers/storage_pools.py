@@ -101,9 +101,13 @@ def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> List[Stora
                 status=getattr(pool, 'status', ''),
                 node=node_name
             ))
-    except Exception as e:
-        logger.error(f"Error listing storage pools on {node_name}: {e}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
         raise
+    except Exception as e:
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing storage pools on {node_name}: {e}")
     return pools_list
 
 
