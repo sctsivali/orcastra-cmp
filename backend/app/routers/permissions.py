@@ -168,9 +168,14 @@ async def list_identities(
         
         # Flatten results
         all_identities = []
-        unreachable_nodes: List[str] = []
-        # important: a node that failed must be named, not dropped. Flattening its failure
-        # into "no rows" is what let an outage read as an empty inventory.
+        # important: two different things make a node absent, and both must be named.
+        # A node can fail during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while
+        # the fleet is whatever Vault has registered. Reporting only the first kind left a
+        # dead cluster silently missing rather than merely empty.
+        unreachable_nodes: List[str] = (
+            [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+        )
         for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_identities.extend(result)
@@ -307,9 +312,14 @@ async def list_groups(
         
         # Flatten results
         all_groups = []
-        unreachable_nodes: List[str] = []
-        # important: a node that failed must be named, not dropped. Flattening its failure
-        # into "no rows" is what let an outage read as an empty inventory.
+        # important: two different things make a node absent, and both must be named.
+        # A node can fail during the fan-out, or never be asked at all, because
+        # connection_manager.get_node_names() returns only nodes with a live client while
+        # the fleet is whatever Vault has registered. Reporting only the first kind left a
+        # dead cluster silently missing rather than merely empty.
+        unreachable_nodes: List[str] = (
+            [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
+        )
         for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
                 all_groups.extend(result)

@@ -512,6 +512,13 @@ class FailureIsLabelledTests(unittest.TestCase):
                 offenders.append(f"{filename}: never records a failed node")
             if "unreachable_nodes=unreachable_nodes" not in source:
                 offenders.append(f"{filename}: records failures but never returns them")
+            # a node can also be absent because it was never asked: these handlers query
+            # only nodes with a live client, so a dead cluster is skipped rather than failed
+            if "set(lxd_service.get_node_names()) - set(nodes_to_query)" not in source:
+                offenders.append(
+                    f"{filename}: reports nodes that failed but not nodes it never queried, "
+                    "so a dead cluster goes missing instead of being named"
+                )
         self.assertEqual(offenders, [])
 
 
