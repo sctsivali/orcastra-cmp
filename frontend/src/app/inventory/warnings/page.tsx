@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -63,6 +64,9 @@ function WarningsContent() {
   const { data, isLoading, refreshNow, dataUpdatedAt } = useWarnings();
   const { data: systemWarnings, isLoading: isLoadingSystem, refreshNow: refreshSystemWarnings } = useSystemWarnings();
   const allWarnings = useMemo(() => (data as any)?.warnings || [], [data]);
+  // Clusters that never answered: their warnings are absent from the list, so warn rather
+  // than showing a shorter list with nothing to explain it.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
 
   // Certificate and node warnings from system warnings
   const certWarnings = useMemo(() => systemWarnings?.certificate_warnings || [], [systemWarnings]);
@@ -245,6 +249,8 @@ function WarningsContent() {
           onRefresh={handleRefreshAll}
         />
       </div>
+
+      <UnreachableNodesBanner noun="warnings" nodes={unreachableNodes} />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">

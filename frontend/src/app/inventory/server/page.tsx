@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -98,6 +99,9 @@ export default function ServerPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
   const servers = (data as any)?.servers || [];
+  // Clusters that never answered: their server details are absent from the grid, so warn
+  // rather than showing fewer cards with nothing to explain it.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
   const { toast } = useToast();
 
   if (!isResolved) return <LoadingLottiePage />;
@@ -124,6 +128,8 @@ export default function ServerPage() {
           onRefresh={refreshNow}
         />
       </div>
+
+      <UnreachableNodesBanner noun="server details" nodes={unreachableNodes} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {servers.map((server: any) => (

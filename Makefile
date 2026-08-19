@@ -238,7 +238,7 @@ test-backend-docker: ## Run backend tests against the deployed image's dependenc
 
 # note: there is no frontend unit-test suite and package.json has no `test` script, so this
 # target used to invoke a command that could not succeed. The checks that DO exist are a
-# typecheck, a lint and the structural submit-guard check; the behavioural coverage lives in the
+# typecheck, a lint and three structural guards; the behavioural coverage lives in the
 # out-of-tree Playwright harness. CONTRIBUTING.md points here, so it has to be honest.
 test-frontend: ## Run the frontend checks that exist (typecheck + structural guards)
 	@echo "$(COLOR_GREEN)Typechecking frontend...$(COLOR_RESET)"
@@ -247,6 +247,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node qa/check-submit-guards.mjs
 	@echo "$(COLOR_GREEN)Checking table typography...$(COLOR_RESET)"
 	@node qa/check-table-typography.mjs
+	@echo "$(COLOR_GREEN)Checking unreachable-cluster banners...$(COLOR_RESET)"
+	@node qa/check-unreachable-banner.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
 
 setup-hooks: ## Point git at the repo's hooks (run once per clone)

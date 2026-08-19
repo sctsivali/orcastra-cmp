@@ -4,6 +4,7 @@ import { Suspense, useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -94,6 +95,9 @@ function InstancesContent() {
     { realtime: true },
   );
   const instances = (data as any)?.vms || [];
+  // Clusters that never answered: their instances are absent from the list, so warn
+  // rather than showing a shorter table with nothing to explain it.
+  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
 
   // Hosts to stream from: those that currently have instances (pending-create
   // hosts are added inside the hook). One LXD events WS per host keeps the list
@@ -374,6 +378,8 @@ function InstancesContent() {
           onRefresh={refreshNow}
         />
       </div>
+
+      <UnreachableNodesBanner noun="instances" nodes={unreachableNodes} />
 
       {/* Filters */}
       <Card>
