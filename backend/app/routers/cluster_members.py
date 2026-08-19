@@ -128,16 +128,12 @@ async def list_cluster_members(
                 except Exception as e:
                     logger.error(f"Failed to connect to {node} via Vault: {e}")
         
-        if client is None:
-            logger.error(f"Could not get client for node {node}")
-            return ClusterMembersResponse(
-                node=node,
-                is_clustered=False,
-                cluster_enabled=False,
-                members=[],
-                total=0
-            )
-        
+        # important: an unreachable cluster answers 503 here like everywhere else. This
+        # used to return is_clustered=False, and the members page renders that as
+        # "Not a Clustered Node", so an outage read as a configuration fact. The sibling
+        # get_member_resources has always used require_client.
+        client = require_client(client, node)
+
         # Check if clustering is enabled
         host_info = client.host_info
         environment = host_info.get("environment", {})
@@ -222,6 +218,10 @@ async def list_cluster_members(
                 total=0
             )
         
+    except HTTPException:
+        # important: let require_client's 503 through. Without this it is caught two
+        # lines later and re-raised as a 500.
+        raise
     except Exception as e:
         logger.error(f"Error getting cluster members for {node}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

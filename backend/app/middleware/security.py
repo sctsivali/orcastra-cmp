@@ -11,6 +11,7 @@ import os
 import time
 from typing import Iterable, Optional
 
+from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -87,10 +88,25 @@ def _per_worker_share(limit: int) -> int:
     return max(1, limit // max(1, workers))
 
 
+_FRESH_FLAG = TypeAdapter(bool)
+
+
 def _wants_fresh(request: Request) -> bool:
-    """True when the request asks to bypass the response cache."""
+    """True when the request asks to bypass the response cache.
+
+    important: this asks the same parser FastAPI will use on `fresh: bool = False`,
+    rather than a list of spellings. A hand-written set said {1, true, yes, on} while
+    pydantic also coerces t, T, y and Y, so `?fresh=t` bypassed the cache and yielded no
+    `fresh:` bucket at all, escaping the per-operator budget and leaving only the general
+    limit. Any divergence between the two is a hole of exactly that shape.
+    """
     value = request.query_params.get("fresh")
-    return value is not None and value.lower() in {"1", "true", "yes", "on"}
+    if value is None:
+        return False
+    try:
+        return _FRESH_FLAG.validate_python(value)
+    except ValidationError:
+        return False
 
 
 def _rate_limit_subject(request: Request, client_ip: str) -> str:

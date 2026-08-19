@@ -218,3 +218,19 @@ def test_cluster_member_detail_does_not_claim_the_member_is_missing():
         f"a dead cluster must not read as a missing member, got {r.text[:200]}"
     )
     _assert_unreachable(r, "GET /cluster-members/{host}/{name}")
+
+
+def test_cluster_member_list_does_not_claim_the_node_is_standalone():
+    """The list endpoint used to return 200 with is_clustered=False for a dead cluster.
+
+    The members page renders that as "Not a Clustered Node", so an outage read as a
+    configuration fact: the operator is told their cluster is not a cluster. Its sibling
+    detail handler has always answered 503 through require_client.
+    """
+    from app.routers import cluster_members
+
+    r = _app(cluster_members).get("/cluster-members", params={"node": HOST})
+    assert r.status_code != 200, (
+        f"a dead cluster answered 200, body {r.text[:200]}"
+    )
+    _assert_unreachable(r, "GET /cluster-members")

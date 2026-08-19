@@ -228,6 +228,7 @@ async def get_regions_overview(
                         total_cpu=0, total_memory=0, total_storage=0, total_gpu=0,
                     )
                     cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                    mark_rebuilt(_lock_key)
                     return response
 
                 tenant_acl = get_tenant_acl()
@@ -443,16 +444,19 @@ async def get_regions_overview(
                 )
         
                 cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                # important: mark only a rebuild that finished. In the finally below this
+                # also ran when the build raised, so the next waiter believed a rebuild had
+                # completed and served the cache it had asked to bypass.
+                mark_rebuilt(_lock_key)
                 logger.info(f"Built regions overview: {len(regions_map)} regions, {total_nodes} nodes")
-        
+
                 return response
-        
+
             except Exception as e:
                 logger.error(f"Error building regions overview: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
     finally:
-        mark_rebuilt(_lock_key)
         release_lock(_lock_key)
 
 

@@ -382,6 +382,37 @@ class BypassBudgetTests(unittest.TestCase):
         mw.settings = get_settings()
         return list(mw._rate_limit_keys("10.0.0.1", Request(scope)))
 
+    def test_every_spelling_the_handler_accepts_is_budgeted(self):
+        """The middleware and the handler must agree on what "fresh" means.
+
+        `fresh: bool = False` is parsed by pydantic, which coerces t, T, y and Y as well
+        as the obvious spellings. The middleware matched a hand-written set that had none
+        of them, so `?fresh=t` bypassed the response cache and yielded no `fresh:` bucket,
+        leaving a forced fan-out counted only against the general limit. Both sides are now
+        the same parser, and this pins that they stay so.
+        """
+        from pydantic import TypeAdapter, ValidationError
+
+        flag = TypeAdapter(bool)
+        candidates = [
+            "1", "true", "TRUE", "True", "t", "T", "y", "Y", "yes", "on",
+            "0", "false", "f", "n", "no", "off", "2", "", "maybe",
+        ]
+        offenders = []
+        for value in candidates:
+            try:
+                handler_sees = flag.validate_python(value)
+            except ValidationError:
+                handler_sees = False
+            budgeted = bool(
+                [k for k, _ in self._keys(f"fresh={value}") if k.startswith("fresh:")]
+            )
+            if handler_sees != budgeted:
+                offenders.append(
+                    f"fresh={value!r}: handler bypasses={handler_sees}, budgeted={budgeted}"
+                )
+        self.assertEqual(offenders, [])
+
     def test_a_plain_read_gets_no_bypass_bucket(self):
         keys = [k for k, _ in self._keys("host=nuc2")]
         self.assertFalse([k for k in keys if k.startswith("fresh:")])
@@ -453,6 +484,75 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         self.assertEqual(
             single_flight._locks, before, "a cached read must not serialise behind a rebuild"
         )
+
+    def test_a_leader_that_raised_is_not_recorded_as_a_completed_rebuild(self):
+        """A failed rebuild must not hand the next arrival a licence to read the cache.
+
+        mark_rebuilt used to sit in the finally, so a leader that answered 503 still
+        recorded a finished rebuild. The waiter behind it then took the fresh=False branch
+        and served the very cache it had asked to bypass, which on these endpoints is kept
+        warm by the metrics collector. Two operators clicking refresh at the same moment
+        during an outage got different answers, one a 503 and one a stale 200.
+
+        The follower has to arrive before the leader fails, which is the whole point:
+        sequentially the second request's arrival timestamp is already newer than the
+        mark, so it does the work either way and the defect is invisible.
+        """
+        import asyncio
+
+        from app.core import single_flight
+
+        seen = []
+
+        @single_flight.single_flight_on_fresh("probe_fail")
+        async def handler(host: str = "nuc2", fresh: bool = False) -> str:
+            seen.append(fresh)
+            await asyncio.sleep(0.02)
+            if fresh:
+                raise RuntimeError("cluster unreachable")
+            return "stale body from the cache the caller asked to skip"
+
+        async def drive():
+            return await asyncio.gather(
+                *(handler(host="nuc2", fresh=True) for _ in range(2)),
+                return_exceptions=True,
+            )
+
+        results = asyncio.run(drive())
+        self.assertTrue(
+            all(isinstance(r, RuntimeError) for r in results),
+            f"a follower was served the cache while the leader failed: {results}",
+        )
+        self.assertEqual(
+            seen,
+            [True, True],
+            "the follower took the fresh=False branch on the strength of a rebuild that "
+            f"never completed: {seen}",
+        )
+        self.assertEqual(single_flight._locks, {}, "the lock bookkeeping leaked")
+
+    def test_concurrent_forced_reads_still_collapse_into_one_rebuild(self):
+        """The counterpart: fixing the failure path must not break the success path."""
+        import asyncio
+
+        from app.core import single_flight
+
+        seen = []
+
+        @single_flight.single_flight_on_fresh("probe_chain")
+        async def handler(fresh: bool = False) -> str:
+            seen.append(fresh)
+            await asyncio.sleep(0.02)
+            return "built" if fresh else "cached"
+
+        async def drive():
+            return await asyncio.gather(*(handler(fresh=True) for _ in range(3)))
+
+        results = asyncio.run(drive())
+        self.assertEqual(len(results), 3)
+        # exactly one leader rebuilt; the other two read what it produced
+        self.assertEqual(seen.count(True), 1, f"expected one rebuild, got {seen}")
+        self.assertEqual(seen.count(False), 2)
 
     def test_every_decorated_handler_is_registered_below_the_route(self):
         """The decorator must sit under @router.get, or FastAPI registers the undecorated

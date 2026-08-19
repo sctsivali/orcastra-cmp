@@ -114,9 +114,17 @@ def single_flight_on_fresh(key_prefix: str):
                         # the only evidence that the collapse is working.
                         logger.info("Serving %s from a concurrent rebuild", key)
                         return await handler(*args, **{**kwargs, "fresh": False})
-                    return await handler(*args, **kwargs)
+                    result = await handler(*args, **kwargs)
+                    # important: only a rebuild that finished counts as one. Marking in
+                    # the finally recorded a leader that raised as a completed rebuild,
+                    # so the next waiter took the fresh=False branch and served the very
+                    # cache it had asked to bypass while the leader answered 503. Two
+                    # operators clicking refresh during an outage got different answers.
+                    # A waiter that did no work must not mark either, or the claim chains
+                    # to a third request and the bypass degrades to a cached read.
+                    mark_rebuilt(key)
+                    return result
             finally:
-                mark_rebuilt(key)
                 release_lock(key)
 
         return wrapper
