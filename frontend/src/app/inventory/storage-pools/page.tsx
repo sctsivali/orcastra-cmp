@@ -17,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import { 
   Select,
@@ -25,8 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { Search, Database } from "lucide-react";
 import { useStoragePools } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -54,7 +54,7 @@ interface PoolResources {
 }
 
 export default function StoragePoolsPage() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStoragePools();
+  const { data, isLoading, refreshNow, dataUpdatedAt } = useStoragePools();
   const pools = (data as any)?.pools || [];
   const poolResources = (data as any)?.resources || {};
   
@@ -66,7 +66,6 @@ export default function StoragePoolsPage() {
   const [filterDriver, setFilterDriver] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { toast } = useToast();
 
   const sortAccessors = useMemo(
     () => ({
@@ -236,11 +235,7 @@ export default function StoragePoolsPage() {
             </TableHeader>
             <TableBody>
               {paginatedPools.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    No storage pools found
-                  </TableCell>
-                </TableRow>
+                <TableEmptyRow colSpan={7} icon={Database} title="No storage pools found" />
               ) : (
                 paginatedPools.map((pool: any, idx: number) => {
                   const poolKey = `${pool.node}-${pool.name}`;
@@ -259,11 +254,11 @@ export default function StoragePoolsPage() {
                       )}
                       <TableCell>
                         {resources ? (
-                          <span className="text-xs">
+                          <>
                             {formatBytes(resources.space.used)} / {formatBytes(resources.space.total)}
-                          </span>
+                          </>
                         ) : (
-                          <span className="text-muted-foreground text-xs">N/A</span>
+                          <TableEmptyValue label="Usage unavailable" />
                         )}
                       </TableCell>
                       <TableCell>

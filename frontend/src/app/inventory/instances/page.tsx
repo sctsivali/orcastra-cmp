@@ -23,7 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TableLink } from "@/components/ui/table-link";
-import { TableEmptyValue, TableSubText, TableEmptyRow } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { formatInstanceType } from "@/lib/utils";
 import { Play, Square, RotateCw, RefreshCw, Trash2, Search, Filter, Terminal, Monitor, Loader2, Box } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
@@ -69,7 +69,7 @@ import { RebuildDialog } from "@/components/rebuild-dialog";
 function rootDiskLabel(instance: any): { text: string; title: string } {
   const own = instance?.devices?.root;
   const effective = instance?.expanded_devices?.root ?? own;
-  if (!effective) return { text: "—", title: "No root disk device reported by LXD" };
+  if (!effective) return { text: EMPTY_VALUE, title: "No root disk device reported by LXD" };
   const size = String(effective.size ?? "").trim();
   const pool = String(effective.pool ?? "").trim();
   if (!size) {
@@ -556,7 +556,7 @@ function InstancesContent() {
                         )}
                       </div>
                     ) : (
-                      <span className="text-muted-foreground">—</span>
+                      <TableEmptyValue label="No tags" />
                     )}
                   </TableCell>
                   <TableCell>

@@ -28,7 +28,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { cn } from "@/lib/utils";
+import { cn, formatRelativeTime } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { copyText } from "@/lib/clipboard";
 
@@ -206,22 +206,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
     }
   }, [selectedId, entries, onInsert]);
 
-  // Format timestamp
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString('en-GB');
-  };
-
   return (
     <TooltipProvider>
       <div 
@@ -356,7 +340,7 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
                         {entry.text}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        {formatTime(entry.createdAt)}
+                        {formatRelativeTime(entry.createdAt)}
                       </p>
                     </div>
                     <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">

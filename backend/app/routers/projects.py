@@ -27,6 +27,7 @@ from app.services.lxd_service import (
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl
+from app.core.single_flight import single_flight_on_fresh
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 
@@ -75,6 +76,7 @@ def _parse_size_to_bytes(size_str: str) -> int:
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
+@single_flight_on_fresh("projects:list")
 async def list_all_projects(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,

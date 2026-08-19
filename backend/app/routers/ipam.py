@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from app.services.lxd.proxy import socket_timeout_for
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, verify_cluster_access, check_tenant_permission
+from app.core.single_flight import single_flight_on_fresh
 from app.core.cache import get_cache_manager
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,7 @@ def _fetch_ipam_for_node(
     summary="List IPAM allocations",
     description="Get a list of all IP address allocations across networks.",
 )
+@single_flight_on_fresh("ipam:list")
 async def list_ipam_allocations(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     network: Optional[str] = Query(None, description="Filter by specific network"),

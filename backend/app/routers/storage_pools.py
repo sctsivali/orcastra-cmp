@@ -117,6 +117,7 @@ def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> List[Stora
     summary="List all storage pools",
     description="Get a list of all storage pools from LXD nodes.",
 )
+@single_flight_on_fresh("storage_pools:list")
 async def list_storage_pools(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -457,16 +458,17 @@ async def delete_storage_pool(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# note: renamed off get_all_storage_pool_resources, which this shared with the /resources-all
+# handler above. FastAPI registers both routes from their decorators, so both endpoints worked,
+# but the second name shadowed the first in the module and anything importing it by name got the
+# wrong one.
 @router.get(
     "-resources",
     response_model=dict,
     summary="Get all storage pool resources",
     description="Get resource usage information for all storage pools across all nodes.",
 )
-# note: renamed off get_all_storage_pool_resources, which this shared with the /resources-all
-# handler above. FastAPI registers both routes from their decorators, so both endpoints worked,
-# but the second name shadowed the first in the module and anything importing it by name got the
-# wrong one.
+@single_flight_on_fresh("storage_pool_resources:all_v2")
 async def get_all_storage_pool_resources_legacy_path(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,

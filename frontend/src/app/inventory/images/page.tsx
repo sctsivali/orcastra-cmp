@@ -15,7 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyValue } from "@/components/ui/table-text";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { formatInstanceType, truncateFingerprint } from "@/lib/utils";
 import { 
   Select,
@@ -24,9 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, UploadCloud } from "lucide-react";
+import { Search, UploadCloud, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useToast } from "@/hooks/use-toast";
 import { useImages } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { ImageListResponse } from "@/types/api";
@@ -74,7 +73,6 @@ export default function ImagesPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [uploadOpen, setUploadOpen] = useState(false);
-  const { toast } = useToast();
   const { hasRole } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
   const canUpload = hasRole(Role.PARTNER);
@@ -284,16 +282,10 @@ export default function ImagesPage() {
             </TableHeader>
             <TableBody>
               {paginatedImages.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="text-center text-muted-foreground"
-                  >
-                    {unreachableNodes.length > 0 && allImages.length === 0
-                      ? "No images to show: none of the nodes could be reached."
-                      : "No images found"}
-                  </TableCell>
-                </TableRow>
+                // note: the outage case is not repeated here. UnreachableNodesBanner above
+                // already names which nodes are missing and why; saying it twice, in two
+                // treatments, reads as two separate problems.
+                <TableEmptyRow colSpan={7} icon={ImageIcon} title="No images found" />
               ) : (
                 paginatedImages.map((image: any, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>

@@ -16,6 +16,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import { TableLink } from "@/components/ui/table-link";
 import {
@@ -25,8 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Search, Plus } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { Search, Plus, Network as NetworkIcon } from "lucide-react";
 import { useNetworks } from "@/hooks/use-lxd";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
@@ -49,7 +49,7 @@ interface NetworkInfo {
 }
 
 export default function NetworksPage() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNetworks();
+  const { data, isLoading, refreshNow, dataUpdatedAt } = useNetworks();
   const networks = (data as any)?.networks || [];
 
   const router = useRouter();
@@ -65,7 +65,6 @@ export default function NetworksPage() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { toast } = useToast();
 
   const sortAccessors = useMemo(
     () => ({
@@ -245,17 +244,13 @@ export default function NetworksPage() {
             </TableHeader>
             <TableBody>
               {paginatedNetworks.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="text-center text-muted-foreground">
-                    No networks found
-                  </TableCell>
-                </TableRow>
+                <TableEmptyRow colSpan={9} icon={NetworkIcon} title="No networks found" />
               ) : (
                 paginatedNetworks.map((network: any, idx: number) => {
                   const rawIpv4 = network.config?.["ipv4.address"];
-                  const ipv4 = (!rawIpv4 || rawIpv4 === "none") ? "N/A" : rawIpv4;
+                  const ipv4 = !rawIpv4 || rawIpv4 === "none" ? null : rawIpv4;
                   const rawIpv6 = network.config?.["ipv6.address"];
-                  const ipv6 = (!rawIpv6 || rawIpv6 === "none") ? "N/A" : rawIpv6;
+                  const ipv6 = !rawIpv6 || rawIpv6 === "none" ? null : rawIpv6;
                   
                   return (
                     <TableRow key={`${network.node}-${network.name}-${idx}`}>
@@ -274,16 +269,20 @@ export default function NetworksPage() {
                           {network.node}
                         </TableCell>
                       )}
-                      <TableCell>
-                        <code className="text-xs">{ipv4}</code>
+                      <TableCell className="font-mono">
+                        {ipv4 ?? <TableEmptyValue label="No IPv4 address" />}
+                      </TableCell>
+                      <TableCell className="font-mono">
+                        {ipv6 ?? <TableEmptyValue label="No IPv6 address" />}
                       </TableCell>
                       <TableCell>
-                        <code className="text-xs">{ipv6}</code>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={network.status === "Created" ? "default" : "secondary"}>
-                          {network.status || "N/A"}
-                        </Badge>
+                        {network.status ? (
+                          <Badge variant={network.status === "Created" ? "default" : "secondary"}>
+                            {network.status}
+                          </Badge>
+                        ) : (
+                          <TableEmptyValue label="No status" />
+                        )}
                       </TableCell>
                       <TableCell>
                         {network.managed ? (

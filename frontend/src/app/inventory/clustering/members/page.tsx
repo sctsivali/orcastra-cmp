@@ -55,7 +55,7 @@ function ClusterMembersContent() {
     );
   }, [clustersData]);
   
-  const { data: membersData, isLoading, refetch, refreshNow, dataUpdatedAt, error } = useClusterMembers(node);
+  const { data: membersData, isLoading, refreshNow, dataUpdatedAt, error } = useClusterMembers(node);
   const members = React.useMemo(() => membersData?.members || [], [membersData]);
   const isClustered = membersData?.is_clustered || false;
   const nodeName = membersData?.node || "";

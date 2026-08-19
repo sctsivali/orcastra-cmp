@@ -26,6 +26,7 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
+from app.core.single_flight import single_flight_on_fresh
 from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
 from app.core.dependencies import require_tenant
@@ -418,6 +419,7 @@ _dashboard_cache_lock = asyncio.Lock()  # Prevent thundering herd on concurrent 
     summary="Get monitoring dashboard data",
     description="Get comprehensive monitoring data including cluster metrics, instance stats, storage, and network info.",
 )
+@single_flight_on_fresh("monitoring:dashboard")
 async def get_monitoring_dashboard(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -1036,6 +1038,7 @@ async def get_metrics_history(
     summary="Get network metrics",
     description="Get aggregated network I/O metrics across all instances.",
 )
+@single_flight_on_fresh("monitoring:network")
 async def get_network_metrics(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,

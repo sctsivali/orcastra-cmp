@@ -275,10 +275,9 @@ async def list_all_images(
     # apart from a node with no images. Caching a fleet where nothing answered would
     # still pin an outage for 180s, and a forced refresh during one would replace a good
     # catalog with it, so that case is still not remembered.
-    # note: a partial failure is still cached, so one dead cluster does not make
-    # every request pay the full fan-out. That host reads as empty until the TTL
-    # expires, which is a known gap: the response shape has no per-host reachability
-    # field to say otherwise.
+    # note: a partial failure is still cached, so one dead cluster does not make every
+    # request pay the full fan-out. The cached entry carries that host's reachable=False,
+    # so it reads as unreachable rather than empty for the life of the TTL.
     cache_data = [item.model_dump() for item in response]
     if answered:
         cache.set("api_responses", cache_key, cache_data, ttl=180)

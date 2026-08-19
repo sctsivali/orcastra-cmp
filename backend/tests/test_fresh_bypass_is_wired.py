@@ -118,6 +118,14 @@ def _dashboard_cache_writes(fn: ast.AST) -> list:
     ]
 
 
+def _router_get_handlers():
+    """Every @router.get handler in the router package, as (path, ast node)."""
+    for path in sorted(ROUTERS.glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_router_get(node):
+                yield path, node
+
+
 def _arg_names(node: ast.AST) -> set:
     a = node.args
     return {arg.arg for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
@@ -149,10 +157,6 @@ class FreshBypassTests(unittest.TestCase):
         )
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class DegradedFanOutTests(unittest.TestCase):
     """A fan-out where no cluster answered must not be remembered as the answer.
 
@@ -180,11 +184,7 @@ class DegradedFanOutTests(unittest.TestCase):
     }
 
     def _get_handlers(self):
-        for path in sorted(ROUTERS.glob("*.py")):
-            tree = ast.parse(path.read_text())
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_router_get(node):
-                    yield path, node
+        return _router_get_handlers()
 
     @staticmethod
     def _calls(node, attr, value_id=None):
@@ -553,6 +553,49 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         # exactly one leader rebuilt; the other two read what it produced
         self.assertEqual(seen.count(True), 1, f"expected one rebuild, got {seen}")
         self.assertEqual(seen.count(False), 2)
+
+    def test_every_fleet_fan_out_is_serialised(self):
+        """Which endpoints collapse concurrent forced reads was nobody's decision.
+
+        Six of the sixteen handlers taking `fresh` carried the decorator and ten did not,
+        with nothing recording why. The undecorated ones included /networks, /profiles,
+        /ipam, /storage/volumes and /projects, all of which fan out across every cluster in
+        scope, so ten operators clicking refresh at the same moment meant ten parallel
+        fan-outs against the same hardware. The rate limit does not help: it bounds one
+        operator, and this is the many-operator case.
+
+        The rule discovers rather than lists: a handler that takes `fresh` and reaches the
+        whole fleet must be serialised, or be exempt for a stated reason.
+        """
+        FLEET_CALLS = ("get_node_names(", "list_all_vms(", "list_all_images(")
+        EXEMPT = {
+            # Scoped to one node via its host parameter, and it returns is_online=False for
+            # a disconnected one before doing any work. There is no fleet fan-out to collapse.
+            "get_node_metrics",
+        }
+
+        offenders, checked = [], 0
+        for path, fn in _router_get_handlers():
+            if "fresh" not in _arg_names(fn) or fn.name in EXEMPT:
+                continue
+            body = ast.unparse(fn)
+            if not any(call in body for call in FLEET_CALLS):
+                continue
+            checked += 1
+            decorated = any(
+                getattr(getattr(d, "func", d), "id", None) == "single_flight_on_fresh"
+                for d in fn.decorator_list
+            )
+            if not decorated:
+                offenders.append(f"{path.name}:{fn.lineno} {fn.name}")
+
+        self.assertGreaterEqual(checked, 12, "the scan stopped finding fleet fan-outs")
+        self.assertEqual(
+            offenders,
+            [],
+            "these handlers fan out across the fleet on a forced read with nothing "
+            f"collapsing concurrent ones: {offenders}",
+        )
 
     def test_every_decorated_handler_is_registered_below_the_route(self):
         """The decorator must sit under @router.get, or FastAPI registers the undecorated
@@ -1232,3 +1275,11 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             ttl = next((kw.value.value for kw in call.keywords if kw.arg == "ttl"), None)
             seen[next((p for p in expected if key.startswith(p)), key)] = ttl
         self.assertEqual(seen, expected)
+
+
+if __name__ == "__main__":
+    # note: this used to sit a third of the way up the file, above eight of the ten test
+    # classes, so a direct run collected only FreshBypassTests and reported success for
+    # about twenty tests it never saw. pytest collects the whole file either way, which is
+    # why CI stayed honest. Bottom of the file, as the other fourteen suites have it.
+    unittest.main()

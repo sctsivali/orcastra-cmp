@@ -165,8 +165,11 @@ function handle401() {
  * succeeding: not a timer, and not a React effect re-running. auth-provider's
  * effect re-fires whenever useSession() rebuilds its memo, which update() does on
  * every refresh, so resetting from there erased the very state being tracked.
+ *
+ * note: no longer a counter. The threshold this used to hold was removed when the
+ * handler became two states, and only the stale name survived.
  */
-export function reset401Counter() {
+function clearAuthFailureState() {
   const wasAnnounced = _authFailureAnnounced;
   _refreshCompleted = false;
   _authFailureAnnounced = false;
@@ -380,7 +383,7 @@ async function _fetchAPIInternal<T>(
 
     // a request got through, so whatever was failing has cleared
     if (_refreshCompleted || _authFailureAnnounced) {
-      reset401Counter();
+      clearAuthFailureState();
     }
 
     // handle 204 No Content (no body to parse)
