@@ -828,7 +828,7 @@ async def get_monitoring_dashboard(
         
     except LXDConnectionError as e:
         _dashboard_cache_times.pop(scope_key, None)  # Allow retry on next request
-        logger.error(f"LXD connection error in monitoring: {e}")
+        logger.warning(f"LXD connection error in monitoring: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         _dashboard_cache_times.pop(scope_key, None)  # Allow retry on next request

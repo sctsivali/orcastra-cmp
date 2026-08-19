@@ -332,7 +332,7 @@ async def get_network(
         logger.error(f"LXD error getting network {network_name} on {host}: {e}")
         raise _lxd_http_error(e, network_name)
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error getting network {network_name}: {e}")
+        logger.warning(f"LXD connection error getting network {network_name}: {e}")
         raise HTTPException(status_code=503, detail=f"Could not reach LXD host '{host}'")
     except Exception as e:
         logger.error(f"Unexpected error getting network {network_name}: {e}", exc_info=True)

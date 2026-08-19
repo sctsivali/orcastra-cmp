@@ -147,7 +147,7 @@ async def list_instances(
         
         return response
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
+        logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error listing instances: {e}")
@@ -178,7 +178,7 @@ async def get_instance(
         # 404 (not found) / 403 (ACL) — don't let the generic handler mask these.
         raise
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
+        logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         if "not found" in str(e).lower():
@@ -278,7 +278,7 @@ async def create_instance(
     except LXDConnectionError as e:
         # Cluster unreachable (e.g. during the duplicate-name exists() check or
         # the create POST) — 503, matching the other instance endpoints.
-        logger.error(f"LXD connection error creating instance: {e}")
+        logger.warning(f"LXD connection error creating instance: {e}")
         activity_logger.log_activity(
             action="instance.create",
             target_type="instance",
@@ -579,7 +579,7 @@ async def delete_instance(
             action="delete",
         )
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error deleting {instance_name}: {e}")
+        logger.warning(f"LXD connection error deleting {instance_name}: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         # Map daemon errors to meaningful codes instead of a blanket 500.

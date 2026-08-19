@@ -196,7 +196,7 @@ async def list_projects(
         )
         
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
+        logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
@@ -302,7 +302,7 @@ async def create_project(
         )
         
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
+        logger.warning(f"LXD connection error: {e}")
         activity_logger.log_activity(
             action="project.create",
             target_type="project",
@@ -450,7 +450,7 @@ async def update_project(
     except HTTPException:
         raise
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
+        logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         logger.error(f"LXD operation error: {e}")
@@ -511,7 +511,7 @@ async def delete_project(
         }
         
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
+        logger.warning(f"LXD connection error: {e}")
         activity_logger.log_activity(
             action="project.delete",
             target_type="project",

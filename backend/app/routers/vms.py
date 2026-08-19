@@ -169,7 +169,7 @@ async def list_vms(
         return response
         
     except LXDConnectionError as e:
-        logger.error(f"LXD connection error: {e}")
+        logger.warning(f"LXD connection error: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error listing VMs: {e}")
