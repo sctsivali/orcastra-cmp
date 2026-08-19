@@ -349,7 +349,12 @@ class LXDConnectionManager:
             if cluster_id in self._connection_info:
                 del self._connection_info[cluster_id]
             health.record_failure(cluster_id, f"connect failed: {type(e).__name__}")
-            logger.error(f"Failed to connect to cluster {cluster_id}: {e}")
+            # important: WARNING, not ERROR. An offline cluster is expected operational
+            # noise and the severity is the signal: anything paging on ERROR would page
+            # for a host the operator already knows is down. Measured on the dev fleet,
+            # this one line produced most of 2383 ERROR records in 90 minutes. The router
+            # sites were moved for the same reason; this is where the volume actually is.
+            logger.warning(f"Failed to connect to cluster {cluster_id}: {e}")
             raise LXDConnectionError(f"Cannot connect to {cluster_id}: {str(e)}")
     
     def get_client(self, cluster_id: str) -> Optional[pylxd.Client]:

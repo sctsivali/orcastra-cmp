@@ -234,3 +234,38 @@ def test_cluster_member_list_does_not_claim_the_node_is_standalone():
         f"a dead cluster answered 200, body {r.text[:200]}"
     )
     _assert_unreachable(r, "GET /cluster-members")
+
+
+def test_an_unreachable_cluster_is_not_logged_at_error():
+    """Severity is a contract too, for the same reason the status code is.
+
+    An offline cluster is expected operational noise, so anything alerting on ERROR pages
+    for a host the operator already knows is down. The routers were moved to WARNING in an
+    earlier commit, which left the volume untouched: the service layer logged every failed
+    connect at ERROR, and on the dev fleet that one line produced most of 2383 ERROR
+    records in 90 minutes.
+    """
+    import ast
+    import pathlib
+
+    app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
+    phrases = ("Failed to connect to cluster", "Could not connect to")
+
+    offenders = []
+    for path in sorted(app_dir.rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
+                continue
+            if node.func.attr != "error":
+                continue
+            if not (isinstance(node.func.value, ast.Name) and node.func.value.id == "logger"):
+                continue
+            if not node.args:
+                continue
+            text = ast.unparse(node.args[0])
+            if any(p in text for p in phrases):
+                offenders.append(
+                    f"{path.relative_to(app_dir)}:{node.lineno} logs an unreachable "
+                    "cluster at ERROR"
+                )
+    assert offenders == [], offenders

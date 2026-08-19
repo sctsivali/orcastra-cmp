@@ -237,7 +237,9 @@ class LXDCertificateManager:
             return client
                         
         except Exception as e:
-            logger.error(f"Failed to connect to cluster {cluster_id}: {e}")
+            # important: WARNING, not ERROR. See connection.py: an offline cluster is
+            # expected, and the caller still gets the exception to act on.
+            logger.warning(f"Failed to connect to cluster {cluster_id}: {e}")
             raise LXDCertManagerError(f"Connection failed: {str(e)}")
     
     def verify_connection(self, cluster_id: str, use_breaker: bool = True) -> Tuple[bool, str]:

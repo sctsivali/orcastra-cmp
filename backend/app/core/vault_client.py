@@ -206,7 +206,15 @@ class VaultClient:
                 error_message=str(e),
                 duration_ms=duration,
             )
-            logger.error(f"Failed to read from Vault path {path}: {e}")
+            # important: a 404 is "this secret is not there", which for a cluster that was
+            # registered without one is a configuration state, not a server fault. Keeping
+            # it at ERROR meant a handful of stale cluster entries produced hundreds of
+            # ERROR records an hour and drowned the Vault failures worth paging on.
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 404:
+                logger.info(f"No secret at Vault path {path}")
+            else:
+                logger.error(f"Failed to read from Vault path {path}: {e}")
             raise VaultClientError(f"Vault read failed: {str(e)}")
     
     def _get_cache_ttl(self, path: str) -> int:
