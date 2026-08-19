@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
@@ -168,7 +169,7 @@ async def get_server_info(
     """Get server information for a specific node."""
     verify_cluster_access(node_name)
     try:
-        client = lxd_service.connection_manager.get_client(node_name)
+        client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
         server_data = client.host_info
         
         # Detect node type from api_extensions in the server response
@@ -200,6 +201,11 @@ async def get_server_info(
             environment=server_data.get('environment', {}),
             public=server_data.get('public', False)
         )
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error getting server info from {node_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -218,9 +224,14 @@ async def get_server_config(
     """Get server configuration."""
     verify_cluster_access(node_name)
     try:
-        client = lxd_service.connection_manager.get_client(node_name)
+        client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
         server_data = client.host_info
         return server_data.get('config', {})
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error getting server config from {node_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -261,7 +272,7 @@ async def update_server_config(
     """Update server configuration."""
     verify_cluster_access(node_name)
     try:
-        client = lxd_service.connection_manager.get_client(node_name)
+        client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
         # Update config using PUT method
         response = client.api['1.0'].put(json={'config': config})
         if response.status_code in [200, 202]:

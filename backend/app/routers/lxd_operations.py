@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
@@ -199,7 +200,7 @@ async def get_operation(
     """Get details for a specific operation."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         operation = client.operations.get(operation_id)
         
         return OperationInfo(
@@ -214,6 +215,11 @@ async def get_operation(
             may_cancel=getattr(operation, 'may_cancel', False),
             metadata=getattr(operation, 'metadata', {})
         )
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error getting operation {operation_id}: {e}")
         raise HTTPException(status_code=404, detail=f"Operation {operation_id} not found")
@@ -235,7 +241,7 @@ async def cancel_operation(
     """Cancel an operation."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         # pylxd Operation objects don't have a cancel() method;
         # use the raw API to send DELETE to /1.0/operations/<uuid>
         client.api.operations[operation_id].delete()
@@ -244,6 +250,11 @@ async def cancel_operation(
             "success": True,
             "message": f"Operation {operation_id} cancelled successfully"
         }
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error cancelling operation {operation_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -264,7 +275,7 @@ async def wait_operation(
     """Wait for an operation to complete."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         operation = client.operations.get(operation_id)
         operation.wait(timeout=timeout)
         
@@ -274,6 +285,11 @@ async def wait_operation(
             "status": getattr(operation, 'status', ''),
             "status_code": getattr(operation, 'status_code', 0)
         }
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error waiting for operation {operation_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

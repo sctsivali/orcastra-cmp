@@ -541,8 +541,21 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
     EXEMPT = {
         # Returns (items, connected) where the second element IS the reachability signal,
         # which is how instances and VMs report connected_nodes to their routers.
-        "_fetch_instances_for_node",
+        # note: this used to name "_fetch_instances_for_node", which has never existed under
+        # app/. An exemption for a function that does not exist relaxes nothing and hides
+        # that it is relaxing nothing, which is why test_every_exemption_names_a_real_function
+        # now guards the set itself.
+        "_fetch_vms_from_node",
     }
+
+    # (file, function, variable) where a None client genuinely is not a connection failure.
+    TYPED_EXEMPT = {
+        # The cluster was reached successfully a few lines above; this is a per-project
+        # client that could not be opened, which is an operation failure, not an outage.
+        ("instance.py", "create_instance", "create_client"),
+    }
+
+    CONNECTION_ERROR = "LXDConnectionError"
 
     def test_no_service_method_returns_empty_when_it_cannot_connect(self):
         offenders = []
@@ -577,6 +590,18 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
                             or (isinstance(value, ast.List) and not value.elts)
                             or (isinstance(value, ast.Dict) and not value.keys)
                             or (isinstance(value, ast.Constant) and value.value in (None, ""))
+                            # a tuple of empties blinds the caller exactly as much
+                            or (
+                                isinstance(value, ast.Tuple)
+                                and value.elts
+                                and all(
+                                    isinstance(e, (ast.List, ast.Dict)) and not (
+                                        getattr(e, "elts", None) or getattr(e, "keys", None)
+                                    )
+                                    or (isinstance(e, ast.Constant) and e.value in (None, ""))
+                                    for e in value.elts
+                                )
+                            )
                         )
                         if empty:
                             offenders.append(
@@ -585,3 +610,118 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
                                 "genuinely empty result"
                             )
         self.assertEqual(offenders, [])
+
+    def test_it_raises_a_connection_error_not_an_operation_error(self):
+        """Raising the wrong type is as broken as returning empty, and looks correct.
+
+        LXDConnectionError and LXDOperationError are siblings off Exception
+        (exceptions.py), so `except LXDOperationError` never catches a connection failure
+        and vice versa. Routers map the two to different statuses: connection to 503,
+        operation to 400, 404 or 500 depending on the handler.
+
+        Raising the operation type from a `client is None` branch is what produced 14 x
+        HTTP 500 on GET /api/v1/projects/blitz01, and a 404 claiming an instance did not
+        exist on a cluster that was merely offline.
+        """
+        offenders = []
+        for path in sorted(self.SERVICES.glob("*.py")):
+            # availability.py is the boundary translator: raising HTTPException(503) from a
+            # missing client is precisely its job, and it is not called by other services.
+            if path.name == "availability.py":
+                continue
+            tree = ast.parse(path.read_text())
+            for fn in ast.walk(tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                for node in ast.walk(fn):
+                    if not isinstance(node, ast.If):
+                        continue
+                    test = node.test
+                    if not (
+                        isinstance(test, ast.Compare)
+                        and isinstance(test.ops[0], ast.Is)
+                        and isinstance(test.comparators[0], ast.Constant)
+                        and test.comparators[0].value is None
+                        and isinstance(test.left, ast.Name)
+                        and "client" in test.left.id
+                    ):
+                        continue
+                    if (path.name, fn.name, test.left.id) in self.TYPED_EXEMPT:
+                        continue
+                    for stmt in node.body:
+                        if not isinstance(stmt, ast.Raise) or stmt.exc is None:
+                            continue
+                        exc = stmt.exc.func if isinstance(stmt.exc, ast.Call) else stmt.exc
+                        name = getattr(exc, "id", getattr(exc, "attr", None))
+                        if name != self.CONNECTION_ERROR:
+                            offenders.append(
+                                f"{path.name}:{stmt.lineno} {fn.name} raises {name} when it "
+                                f"cannot connect. Only {self.CONNECTION_ERROR} is mapped to "
+                                "503; every other type becomes a 400, 404 or 500."
+                            )
+        self.assertEqual(offenders, [])
+
+    def test_a_connection_error_is_not_rewrapped_by_a_broad_handler(self):
+        """Raising the right type is only half the fix.
+
+        projects.py raised inside a try whose `except Exception` re-wrapped it as
+        LXDOperationError, so changing the type alone accomplished nothing at all. Any try
+        that raises the connection type while also catching Exception needs the
+        passthrough, as images.py has.
+        """
+        offenders = []
+        for path in sorted(self.SERVICES.glob("*.py")):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Try):
+                    continue
+                raises_conn = False
+                for stmt in node.body:
+                    for n in ast.walk(stmt):
+                        if isinstance(n, ast.Raise) and n.exc is not None:
+                            exc = n.exc.func if isinstance(n.exc, ast.Call) else n.exc
+                            if getattr(exc, "id", None) == self.CONNECTION_ERROR:
+                                raises_conn = True
+                if not raises_conn:
+                    continue
+                names = [
+                    getattr(h.type, "id", getattr(h.type, "attr", "bare")) if h.type else "bare"
+                    for h in node.handlers
+                ]
+                if "Exception" not in names and "bare" not in names:
+                    continue
+                passthrough = any(
+                    getattr(h.type, "id", None) == self.CONNECTION_ERROR
+                    and isinstance(h.body[-1], ast.Raise)
+                    and h.body[-1].exc is None
+                    for h in node.handlers
+                )
+                if not passthrough:
+                    offenders.append(
+                        f"{path.name}:{node.lineno} raises {self.CONNECTION_ERROR} inside a try "
+                        "whose broad handler re-wraps it. Add `except LXDConnectionError: raise` "
+                        "above it, as images.py does."
+                    )
+        self.assertEqual(offenders, [])
+
+    def test_every_exemption_names_a_real_function(self):
+        """An exemption for a function that does not exist is worse than no exemption.
+
+        It relaxes nothing while reading as though it does, so nobody re-examines it. This
+        set spent an unknown period exempting `_fetch_instances_for_node`, which has never
+        existed anywhere under app/.
+        """
+        defined = set()
+        for path in self.SERVICES.glob("*.py"):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    defined.add(node.name)
+        missing = sorted(self.EXEMPT - defined)
+        self.assertEqual(
+            missing, [], f"exemptions naming functions that do not exist: {missing}"
+        )
+        stale = sorted(
+            f"{f}:{fn}" for f, fn, _ in self.TYPED_EXEMPT if fn not in defined
+        )
+        self.assertEqual(stale, [], f"typed exemptions naming functions that do not exist: {stale}")
+

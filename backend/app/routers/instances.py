@@ -348,6 +348,11 @@ async def start_instance(
             action="start",
             new_status=vm.status
         )
+    except LXDConnectionError as e:
+        # The cluster did not answer. Without this the retyped exception falls to
+        # `except Exception` below and answers 500, which pages an engineer for an
+        # offline cluster.
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.error(f"Error starting instance {instance_name}: {e}")
         
@@ -407,6 +412,11 @@ async def stop_instance(
             action="stop",
             new_status=VMStatus.STOPPED  # Stop always results in Stopped
         )
+    except LXDConnectionError as e:
+        # The cluster did not answer. Without this the retyped exception falls to
+        # `except Exception` below and answers 500, which pages an engineer for an
+        # offline cluster.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDGracefulTimeoutError as e:
         # The guest ignored the ACPI shutdown (commonly a VM with no OS, or one
         # sitting at a boot menu). Recoverable by retrying with force, so say so
@@ -481,6 +491,11 @@ async def restart_instance(
             action="restart",
             new_status=VMStatus.RUNNING  # Restart ends in Running
         )
+    except LXDConnectionError as e:
+        # The cluster did not answer. Without this the retyped exception falls to
+        # `except Exception` below and answers 500, which pages an engineer for an
+        # offline cluster.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDGracefulTimeoutError as e:
         # The guest ignored the ACPI shutdown (commonly a VM with no OS, or one
         # sitting at a boot menu). Recoverable by retrying with force, so say so
@@ -621,6 +636,13 @@ async def get_instance_metrics(
         if not metrics:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
         return metrics
+    except LXDConnectionError as e:
+        # The cluster did not answer. Without this the retyped exception falls to
+        # `except Exception` below and answers 500, which pages an engineer for an
+        # offline cluster.
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting metrics for {instance_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

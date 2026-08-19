@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor
 from pylxd.exceptions import LXDAPIException, NotFound
 
-from .exceptions import LXDOperationError
+from .exceptions import LXDConnectionError, LXDOperationError
 from .connection import LXDConnectionManager
 from .audit import audit_operation
 
@@ -60,7 +60,7 @@ class ProjectManager:
             client = self._get_client_with_reconnect(host)
             
             if client is None:
-                raise LXDOperationError(f"No connection to host: {host}. Client returned None.")
+                raise LXDConnectionError(f"Could not connect to {host}")
             
             projects = client.projects.all()
             
@@ -82,6 +82,8 @@ class ProjectManager:
             logger.debug(f"Listed {len(project_list)} projects from {host}")
             return project_list
             
+        except LXDConnectionError:
+            raise
         except Exception as e:
             logger.error(f"Error listing projects from {host}: {e}")
             raise LXDOperationError(f"Failed to list projects: {str(e)}")
@@ -110,7 +112,7 @@ class ProjectManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"No connection to host: {host}. Please ensure the cluster is properly registered and connected.")
+                raise LXDConnectionError(f"Could not connect to {host}")
             
             # prepare project config with default features
             project_config = config or {
@@ -151,6 +153,8 @@ class ProjectManager:
                 "host": host,
             }
             
+        except LXDConnectionError:
+            raise
         except LXDAPIException as e:
             logger.error(f"LXD API error creating project '{name}' on {host}: {e}")
             raise LXDOperationError(f"Failed to create project: {str(e)}")
@@ -181,7 +185,7 @@ class ProjectManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"No connection to host: {host}. Please ensure the cluster is properly registered and connected.")
+                raise LXDConnectionError(f"Could not connect to {host}")
             
             # get the current project
             project = client.projects.get(project_name)
@@ -221,6 +225,8 @@ class ProjectManager:
                 "host": host,
             }
             
+        except LXDConnectionError:
+            raise
         except NotFound:
             logger.error(f"Project '{project_name}' not found on {host}")
             raise LXDOperationError(f"Project '{project_name}' not found")
@@ -237,7 +243,7 @@ class ProjectManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"No connection to host: {host}. Please ensure the cluster is properly registered and connected.")
+                raise LXDConnectionError(f"Could not connect to {host}")
             
             # get the project first
             project = client.projects.get(name)
@@ -247,6 +253,8 @@ class ProjectManager:
             
             logger.info(f"Deleted project '{name}' from {host}")
             
+        except LXDConnectionError:
+            raise
         except NotFound:
             logger.error(f"Project '{name}' not found on {host}")
             raise LXDOperationError(f"Project '{name}' not found")

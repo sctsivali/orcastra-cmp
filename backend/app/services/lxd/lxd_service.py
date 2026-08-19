@@ -19,6 +19,7 @@ from .resources import ResourceManager
 from .instance import InstanceManager
 from .projects import ProjectManager
 from .images import ImageManager
+from .exceptions import LXDConnectionError
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import VaultClient
 from app.core.config import get_settings
@@ -410,6 +411,13 @@ class LXDService:
     ) -> InstanceMetrics:
         """Get real-time metrics for a specific instance."""
         client = self.connection_manager.get_client(host)
+        # important: without this, a None client reaches find_instance_in_projects, which
+        # swallows the AttributeError in both of its loops and returns (None, None). The
+        # caller then reports "Instance '<name>' not found on <host>" and the router
+        # message-sniffs "not found" into a 404 -- telling the operator their instance was
+        # deleted when the cluster is merely offline.
+        if client is None:
+            raise LXDConnectionError(f"Could not connect to {host}")
         return self.resource_manager.get_instance_metrics(client, host, instance_name, project)
 
 

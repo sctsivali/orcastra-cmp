@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission, apply_cluster_filter
@@ -177,7 +178,7 @@ async def get_warning(
     """Get details for a specific warning."""
     try:
         verify_cluster_access(host)
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         warning_response = client.api.warnings[warning_uuid].get(timeout=(5, 30))
         
         if warning_response.status_code == 200:
@@ -227,7 +228,7 @@ async def delete_warning(
     """Delete a warning."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         response = client.api.warnings[warning_uuid].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:

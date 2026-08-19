@@ -208,6 +208,11 @@ async def get_vm(
         
     except HTTPException:
         raise
+    except LXDConnectionError as e:
+        # A cluster that did not answer is not a client error and is not
+        # a missing resource. Without this clause the retyped exception
+        # falls to `except Exception` below and answers 500.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -367,6 +372,11 @@ async def start_vm(
             new_status=vm.status,
         )
         
+    except LXDConnectionError as e:
+        # A cluster that did not answer is not a client error and is not
+        # a missing resource. Without this clause the retyped exception
+        # falls to `except Exception` below and answers 500.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM start failure
         activity_logger.log_activity(
@@ -459,6 +469,11 @@ async def stop_vm(
             error_message=str(e),
         )
         raise HTTPException(status_code=504, detail=str(e))
+    except LXDConnectionError as e:
+        # A cluster that did not answer is not a client error and is not
+        # a missing resource. Without this clause the retyped exception
+        # falls to `except Exception` below and answers 500.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM stop failure
         activity_logger.log_activity(
@@ -550,6 +565,11 @@ async def restart_vm(
             error_message=str(e),
         )
         raise HTTPException(status_code=504, detail=str(e))
+    except LXDConnectionError as e:
+        # A cluster that did not answer is not a client error and is not
+        # a missing resource. Without this clause the retyped exception
+        # falls to `except Exception` below and answers 500.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM restart failure
         activity_logger.log_activity(
@@ -638,6 +658,11 @@ async def delete_vm(
             action="delete",
         )
         
+    except LXDConnectionError as e:
+        # A cluster that did not answer is not a client error and is not
+        # a missing resource. Without this clause the retyped exception
+        # falls to `except Exception` below and answers 500.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         # Log activity: VM delete failure
         activity_logger.log_activity(
@@ -693,6 +718,11 @@ async def get_instance_metrics(
         
         return metrics
         
+    except LXDConnectionError as e:
+        # A cluster that did not answer is not a client error and is not
+        # a missing resource. Without this clause the retyped exception
+        # falls to `except Exception` below and answers 500.
+        raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))

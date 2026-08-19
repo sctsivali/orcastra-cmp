@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
@@ -197,7 +198,7 @@ async def get_storage_volume(
     """Get details for a specific storage volume."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
         used_by = filter_visible_lxd_references(host, volume.used_by or [])
@@ -214,6 +215,11 @@ async def get_storage_volume(
             content_type=getattr(volume, 'content_type', ''),
             node=host,
         )
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error getting storage volume {volume_name}: {e}")
         raise HTTPException(status_code=404, detail=f"Storage volume {volume_name} not found")
@@ -235,7 +241,7 @@ async def create_storage_volume(
     """Create a new storage volume."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         storage_pool = client.storage_pools.get(request.pool)
         
         volume = storage_pool.volumes.create({
@@ -273,6 +279,11 @@ async def create_storage_volume(
                 node=host
             )
         }
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error creating storage volume: {e}")
         # Log activity: storage volume creation failure
@@ -307,7 +318,7 @@ async def update_storage_volume(
     """Update a storage volume."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
         
@@ -324,6 +335,11 @@ async def update_storage_volume(
             "success": True,
             "message": f"Storage volume {volume_name} updated successfully"
         }
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error updating storage volume {volume_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -347,7 +363,7 @@ async def delete_storage_volume(
     """Delete a storage volume."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
         volume.delete()
@@ -369,6 +385,11 @@ async def delete_storage_volume(
             "success": True,
             "message": f"Storage volume {volume_name} deleted successfully"
         }
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error deleting storage volume {volume_name}: {e}")
         # Log activity: storage volume deletion failure

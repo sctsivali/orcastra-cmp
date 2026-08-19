@@ -10,6 +10,7 @@ import logging
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
 from pydantic import BaseModel, Field
 from app.core.single_flight import single_flight_on_fresh
@@ -240,7 +241,7 @@ async def get_cluster_member(
     """Get details for a specific cluster member."""
     verify_cluster_access(node)
     try:
-        client = lxd_service.connection_manager.get_client(node)
+        client = require_client(lxd_service.connection_manager.get_client(node), node)
         
         # Get specific member
         response = client.api.cluster.members[member_name].get()
@@ -264,6 +265,11 @@ async def get_cluster_member(
             groups=member_data.get("groups", [])
         )
         
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error getting cluster member {member_name} from {node}: {e}")
         raise HTTPException(status_code=404, detail=f"Member '{member_name}' not found")
@@ -300,7 +306,7 @@ async def get_member_resources(
     logger.info(f"Cache MISS for member resources: {node}/{member_name}")
     
     try:
-        client = lxd_service.connection_manager.get_client(node)
+        client = require_client(lxd_service.connection_manager.get_client(node), node)
         
         # Get resources for this specific member by targeting it
         member_resources_response = client.api.resources.get(params={"target": member_name})
@@ -472,6 +478,11 @@ async def get_member_resources(
         
         return resources
         
+    except HTTPException:
+        # broad handler below converts it into a 500
+        # important: let require_client's 503 through. Without this the
+        # so an offline cluster does not read as a server fault.
+        raise
     except Exception as e:
         logger.error(f"Error getting resources for member {member_name} from {node}: {e}")
         raise HTTPException(

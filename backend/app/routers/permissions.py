@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
@@ -208,7 +209,7 @@ async def get_identity(
     """Get details for a specific identity."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         response = client.api.get(f'/1.0/auth/identities/{identity_id}')
         
         if response.status_code == 200:

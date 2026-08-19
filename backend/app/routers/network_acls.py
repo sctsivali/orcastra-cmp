@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
+    require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
@@ -173,7 +174,7 @@ async def get_network_acl(
     """Get details for a specific network ACL."""
     try:
         verify_cluster_access(host)
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         response = client.api.get(f'/1.0/network-acls/{acl_name}')
         
         if response.status_code == 200:
@@ -215,7 +216,7 @@ async def create_network_acl(
     """Create a new network ACL."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         
         acl_data = {
             "name": request.name,
@@ -292,7 +293,7 @@ async def update_network_acl(
     """Update a network ACL."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         
         # Get current ACL
         get_response = client.api.get(f'/1.0/network-acls/{acl_name}')
@@ -344,7 +345,7 @@ async def delete_network_acl(
     """Delete a network ACL."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = require_client(lxd_service.connection_manager.get_client(host), host)
         response = client.api.delete(f'/1.0/network-acls/{acl_name}')
         
         if response.status_code in [200, 202]:

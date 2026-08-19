@@ -458,7 +458,7 @@ class InstanceManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
             endpoint = self._get_node_endpoint(host)
             
             instance, project_name = find_instance_in_projects(client, name)
@@ -473,6 +473,8 @@ class InstanceManager:
             
             return vm_info
             
+        except LXDConnectionError:
+            raise
         except Exception as e:
             logger.error(f"Error getting VM {name} from {host}: {e}")
             raise LXDOperationError(f"Failed to get VM: {str(e)}")
@@ -489,7 +491,7 @@ class InstanceManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
             endpoint = self._get_node_endpoint(host)
             
             instance, project_name = find_instance_in_projects(client, name, project)
@@ -566,7 +568,7 @@ class InstanceManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
             endpoint = self._get_node_endpoint(host)
 
             instance, project_name = find_instance_in_projects(client, name, project)
@@ -620,7 +622,7 @@ class InstanceManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
             endpoint = self._get_node_endpoint(host)
 
             instance, project_name = find_instance_in_projects(client, name, project)
@@ -675,7 +677,7 @@ class InstanceManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
             
             instance, project_name = find_instance_in_projects(client, name, project)
             
@@ -710,7 +712,7 @@ class InstanceManager:
         def _work() -> Dict[str, Any]:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
             instance, project_name = find_instance_in_projects(client, name, project)
             if instance is None:
                 raise LXDOperationError(f"Instance {name} not found on {host}")
@@ -756,7 +758,7 @@ class InstanceManager:
         """
         client = self._get_client_with_reconnect(host)
         if client is None:
-            raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+            raise LXDConnectionError(f"Could not connect to {host}")
         instance, project_name = find_instance_in_projects(client, name, project)
         if instance is None:
             raise LXDOperationError(f"Instance {name} not found on {host}")
@@ -856,7 +858,7 @@ class InstanceManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
             endpoint = self._get_node_endpoint(host)
             
             # Build instance configuration
@@ -953,7 +955,7 @@ class InstanceManager:
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
-                raise LXDOperationError(f"Failed to connect to {host}: connection not available")
+                raise LXDConnectionError(f"Could not connect to {host}")
 
             project = project or "default"
             # Dedicated client with a long read timeout: the create POST itself
