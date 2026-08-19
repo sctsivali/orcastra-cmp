@@ -24,6 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { EmptyState } from "@/components/ui/empty-state";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import {
   Tooltip,
@@ -342,16 +343,18 @@ function ActiveSessionsTab() {
             </div>
           )}
           {error && sessions.length === 0 ? (
-            <EmptyState icon={WifiOff} message={error}>
-              <Button variant="outline" size="sm" onClick={() => void fetchSessions(true).catch(() => {})}>Retry</Button>
-            </EmptyState>
+            <EmptyState
+              icon={WifiOff}
+              title={error}
+              action={<Button variant="outline" size="sm" onClick={() => void fetchSessions(true).catch(() => {})}>Retry</Button>}
+            />
           ) : loading && sessions.length === 0 ? (
-            <EmptyState icon={Loader2} message="Loading sessions..." iconClass="animate-spin" />
+            <EmptyState icon={Loader2} title="Loading sessions..." iconClassName="animate-spin" />
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={Terminal}
-              message={sessions.length === 0 ? "No active sessions" : "No matching sessions"}
-              sub={sessions.length === 0 ? "Sessions appear here when you connect to a console or terminal." : "Try adjusting your filter."}
+              title={sessions.length === 0 ? "No active sessions" : "No matching sessions"}
+              description={sessions.length === 0 ? "Sessions appear here when you connect to a console or terminal." : "Try adjusting your filter."}
             />
           ) : (
             <div className="rounded-md border overflow-hidden">
@@ -530,16 +533,18 @@ function SessionHistoryTab() {
             </div>
           )}
           {error && logs.length === 0 ? (
-            <EmptyState icon={WifiOff} message={error}>
-              <Button variant="outline" size="sm" onClick={() => void fetchLogs(true).catch(() => {})}>Retry</Button>
-            </EmptyState>
+            <EmptyState
+              icon={WifiOff}
+              title={error}
+              action={<Button variant="outline" size="sm" onClick={() => void fetchLogs(true).catch(() => {})}>Retry</Button>}
+            />
           ) : loading && logs.length === 0 ? (
-            <EmptyState icon={Loader2} message="Loading history..." iconClass="animate-spin" />
+            <EmptyState icon={Loader2} title="Loading history..." iconClassName="animate-spin" />
           ) : filtered.length === 0 ? (
             <EmptyState
               icon={History}
-              message={logs.length === 0 ? "No session history" : "No matching entries"}
-              sub={logs.length === 0 ? "Your past sessions will appear here once you disconnect." : "Try adjusting your filter."}
+              title={logs.length === 0 ? "No session history" : "No matching entries"}
+              description={logs.length === 0 ? "Your past sessions will appear here once you disconnect." : "Try adjusting your filter."}
             />
           ) : (
             <>
@@ -718,29 +723,6 @@ function SearchInput({
           <X className="h-4 w-4" />
         </button>
       )}
-    </div>
-  );
-}
-
-function EmptyState({
-  icon: Icon,
-  message,
-  sub,
-  iconClass,
-  children,
-}: {
-  icon: React.ComponentType<{ className?: string }>;
-  message: string;
-  sub?: string;
-  iconClass?: string;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-      <Icon className={cn("h-10 w-10 mb-3 opacity-30", iconClass)} />
-      <p className="font-medium">{message}</p>
-      {sub && <p className="text-sm mt-1">{sub}</p>}
-      {children && <div className="mt-3">{children}</div>}
     </div>
   );
 }

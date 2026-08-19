@@ -44,13 +44,15 @@ import { Search, Trash2, MoreVertical } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useIdentities, useDeleteIdentity } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
-export default function IdentitiesPage() {
+function IdentitiesContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useIdentities();
   const identities = (data as any)?.identities || [];
   const { toast } = useToast();
@@ -338,4 +340,18 @@ export default function IdentitiesPage() {
       </AlertDialog>
     </div>
   );
+}
+
+// important: the five sibling partner pages gate here and these two did not, so a tenant
+// deep-linking straight to the route got the page shell and a wall of 403s instead of a
+// redirect. The backend is the real gate (require_partner on both routers); this keeps the
+// UI honest and stops the request being made at all, because the content component's
+// queries only mount once the role resolves.
+export default function IdentitiesPage() {
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
+
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!isPartner) return null;
+
+  return <IdentitiesContent />;
 }

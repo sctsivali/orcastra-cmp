@@ -68,8 +68,8 @@ function TokenSync({ children }: { children: ReactNode }) {
 
         // Don't auto-redirect - it causes visible "random refresh" to the user.
         // Let them continue with the stale token; show an error banner instead.
-        // API calls may 401, but the 401 handler has a threshold before redirect.
-        console.warn("[Auth] Token refresh failed — using stale token");
+        // api.ts no longer redirects on a 401 either: it raises the same banner.
+        console.warn("[Auth] Token refresh failed, using stale token");
         setAuthError(true);
         setAccessToken(session.accessToken); // stale but non-null
         setTokenReady(true);
@@ -80,6 +80,11 @@ function TokenSync({ children }: { children: ReactNode }) {
       retryCountRef.current = 0;
       wasAuthenticatedRef.current = true;
       signOutConfirmedRef.current = false;
+      // important: clear the banner here too. This branch raises it above without going
+      // through api.ts, so onAuthRecovered never fires for it, and the destructive bar
+      // stayed pinned to the top of the viewport for the life of the tab after the
+      // session had fully recovered.
+      setAuthError(false);
       setAccessToken(session.accessToken);
       setTokenReady(true);
     } else if (status === "unauthenticated") {

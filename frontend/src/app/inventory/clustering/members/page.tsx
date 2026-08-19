@@ -5,14 +5,15 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Suspense } from "react";
 import { formatHypervisorType, formatLabel} from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import { 
-  Server, 
-  CheckCircle, 
-  XCircle, 
+import {
+  Server,
+  CheckCircle,
+  XCircle,
   Database,
   RefreshCw,
   Shield,
-  Globe
+  Globe,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -27,6 +28,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { TableLink } from "@/components/ui/table-link";
+import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/hooks/use-toast";
 import { ClusterMember } from "@/types/api";
 import { useClusters, useClusterMembers, useMemberResources } from "@/hooks/use-lxd";
@@ -156,13 +159,11 @@ function ClusterMembersContent() {
             <div>
               <CardTitle>Member Overview</CardTitle>
               <CardDescription>
-                {isClustered ? (
-                  <>
-                    {members.length} {members.length === 1 ? "member" : "members"} in cluster
-                  </>
-                ) : (
-                  "Node is not part of a cluster"
-                )}
+                {error
+                  ? "Cluster did not answer"
+                  : isClustered
+                    ? `${members.length} ${members.length === 1 ? "member" : "members"} in cluster`
+                    : "Node is not part of a cluster"}
               </CardDescription>
             </div>
             <RefreshButton
@@ -173,22 +174,28 @@ function ClusterMembersContent() {
           </div>
         </CardHeader>
         <CardContent>
-          {!isClustered ? (
-            <div className="text-center py-12">
-              <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">Not a Clustered Node</h3>
-              <p className="text-muted-foreground mb-4">
-                This node is not part of a hypervisor cluster
-              </p>
-            </div>
+          {/* important: an unreachable cluster answers 503, which leaves membersData
+              undefined and is_clustered false. Rendering that as "Not a Clustered Node"
+              told the operator their cluster is not a cluster, presenting an outage as a
+              configuration fact. Reachability is checked before clustering. */}
+          {error ? (
+            <EmptyState
+              icon={AlertTriangle}
+              title="Could not reach this cluster"
+              description={`${node} did not answer, so its members cannot be listed. This says nothing about whether the node is clustered.`}
+            />
+          ) : !isClustered ? (
+            <EmptyState
+              icon={Server}
+              title="Not a Clustered Node"
+              description="This node is not part of a hypervisor cluster"
+            />
           ) : members.length === 0 ? (
-            <div className="text-center py-12">
-              <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No Members Found</h3>
-              <p className="text-muted-foreground">
-                Could not retrieve cluster member information
-              </p>
-            </div>
+            <EmptyState
+              icon={Server}
+              title="No Members Found"
+              description="Could not retrieve cluster member information"
+            />
           ) : (
             <Table>
               <TableHeader>
@@ -205,13 +212,12 @@ function ClusterMembersContent() {
                 {sortedMembers.map((member: any) => (
                   <TableRow key={member.server_name}>
                     <TableCell className="font-medium">
-                      <button
-                        onClick={() => handleMemberClick(member.server_name)}
-                        className="flex items-center gap-2 hover:text-primary transition-colors cursor-pointer"
-                      >
-                        <Server className="h-4 w-4 text-muted-foreground" />
-                        <span className="underline decoration-dotted">{member.server_name}</span>
-                      </button>
+                      <span className="flex items-center gap-2">
+                        <Server className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <TableLink onClick={() => handleMemberClick(member.server_name)}>
+                          {member.server_name}
+                        </TableLink>
+                      </span>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1 text-sm">

@@ -807,6 +807,17 @@ export function useIPAM(host?: string) {
 // Storage Pools Hooks
 // The pool LIST for one node, without the fleet-wide resources call.
 //
+// important: the two pool queries are separate caches of the same data, so both must be
+// invalidated together. Only ["storagePools"] was, so after creating or deleting a pool the
+// create form's dropdown kept the old list until SEMI_STATIC_DATA_CONFIG's staleTime lapsed,
+// and the storage-pools refresh button did not touch it at all.
+const STORAGE_POOL_LIST_KEY = "storagePoolList";
+const STORAGE_POOL_KEYS = ["storagePools", STORAGE_POOL_LIST_KEY] as const;
+
+function invalidateStoragePools(queryClient: ReturnType<typeof useQueryClient>) {
+  STORAGE_POOL_KEYS.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
+}
+
 // important: `useStoragePools` resolves the per-node list and `resources-all` in one
 // Promise.all, so a slow or failing fan-out across every cluster takes the pool list down with
 // it, and TanStack reports that error state identically to "this node has no pools". The create
@@ -814,9 +825,9 @@ export function useIPAM(host?: string) {
 // as "no storage here" and refused a create it could have made. Anything that only needs the
 // list should use this; the storage-pools page still uses the combined hook for its usage bars.
 export function useStoragePoolList(host?: string) {
-  return useQuery({
-    queryKey: ["storagePoolList", host],
-    queryFn: () => api.storagePools.list(host),
+  return useRefreshableQuery({
+    queryKey: [STORAGE_POOL_LIST_KEY, host],
+    queryFn: ({ fresh }) => api.storagePools.list(host, { fresh }),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -863,7 +874,7 @@ export function useCreateStoragePool() {
   return useMutation({
     mutationFn: ({ data, host }: { data: any; host: string }) => api.storagePools.create(data, host),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["storagePools"] });
+      invalidateStoragePools(queryClient);
     },
   });
 }
@@ -875,7 +886,7 @@ export function useDeleteStoragePool() {
     mutationFn: ({ name, host }: { name: string; host: string }) => 
       api.storagePools.delete(name, host),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["storagePools"] });
+      invalidateStoragePools(queryClient);
     },
   });
 }
@@ -1303,9 +1314,11 @@ export function useClusterMember(node: string, memberName: string) {
 }
 
 export function useMemberResources(node: string, memberName: string) {
-  return useQuery({
+  return useRefreshableQuery({
     queryKey: ["memberResources", node, memberName],
-    queryFn: () => api.clusterMembers.getResources(node, memberName),
+    // note: getResources routes through the extended fan-out budget, which was unreachable
+    // from the UI while this hook never passed a fresh flag.
+    queryFn: ({ fresh }) => api.clusterMembers.getResources(node, memberName, { fresh }),
     enabled: !!node && !!memberName,
     staleTime: 30 * 1000, // 30 seconds
     gcTime: 5 * 60 * 1000, // 5 minutes
@@ -1608,7 +1621,9 @@ export function useCancelPendingCert() {
 export function useSystemWarnings() {
   return useRefreshableQuery({
     queryKey: ["systemWarnings"],
-    queryFn: () => api.certificates.getSystemWarnings(),
+    // note: every sibling destructures { fresh }; this one did not, so the second half of
+    // "Refresh all" on the warnings page silently reused whatever was already in flight.
+    queryFn: ({ fresh }) => api.certificates.getSystemWarnings({ fresh }),
     refetchInterval: 60000, // Refresh every minute
     staleTime: 30000,
   });

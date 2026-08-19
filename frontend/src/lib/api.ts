@@ -238,8 +238,11 @@ async function fetchAPI<T>(
 
   const request = _fetchAPIInternal<T>(endpoint, url, options, timeoutMs, _isRetry);
 
-  // Track in-flight GET requests for deduplication. A forced request still
-  // registers, so a poll firing mid-refresh joins the fresher request.
+  // Track in-flight GET requests for deduplication, keyed on the endpoint as sent.
+  // note: a forced read carries `?fresh=true`, so it keys separately from the poll of
+  // the same resource and the two never join. That is the point: the click must reach
+  // the server. `force` above covers the reads that cannot say so in the URL, where the
+  // backend has no response cache to bypass.
   if (method === "GET") {
     _inflightGets.set(endpoint, request);
     request.finally(() => {
@@ -289,6 +292,20 @@ function fetchRead<T>(
 /** As fetchRead, but with the extended budget the fan-out endpoints need. */
 function fetchHeavyRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T> {
   return fetchRead<T>(endpoint, opts, opts.fresh ? HEAVY_FRESH_TIMEOUT_MS : undefined);
+}
+
+/**
+ * GET for a read whose backend keeps no response cache.
+ *
+ * important: `fresh` bypasses the in-flight dedupe, so a click landing during a poll still
+ * reaches the server, but the query parameter is deliberately not sent. These handlers do
+ * not read the response cache, so FastAPI dropped the unknown parameter while the
+ * middleware still charged the request against the scarce per-operator bypass budget: the
+ * click cost budget and changed nothing. Applies to /operations, /warnings, /server,
+ * /identities, /groups, /network-acls and /certificates.
+ */
+function fetchUncachedRead<T>(endpoint: string, opts: ReadOptions = {}): Promise<T> {
+  return fetchAPI<T>(endpoint, {}, undefined, false, { force: opts.fresh === true });
 }
 
 async function _fetchAPIInternal<T>(
@@ -1061,7 +1078,7 @@ export const networkAPI = {
 export const networkACLAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/network-acls?host=${encodeURIComponent(host)}` : "/network-acls";
-    return fetchRead(endpoint, opts);
+    return fetchUncachedRead(endpoint, opts);
   },
 
   get: async (name: string, host: string) => {
@@ -1389,7 +1406,7 @@ export const imageUploadAPI = {
 export const operationAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/operations?host=${encodeURIComponent(host)}` : "/operations";
-    return fetchRead(endpoint, opts);
+    return fetchUncachedRead(endpoint, opts);
   },
 
   get: async (id: string, host: string) => {
@@ -1416,7 +1433,7 @@ export const operationAPI = {
 export const warningAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/warnings?host=${encodeURIComponent(host)}` : "/warnings";
-    return fetchRead(endpoint, opts);
+    return fetchUncachedRead(endpoint, opts);
   },
 
   get: async (uuid: string, host: string) => {
@@ -1434,7 +1451,7 @@ export const warningAPI = {
 export const serverAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/server?host=${encodeURIComponent(host)}` : "/server";
-    return fetchRead(endpoint, opts);
+    return fetchUncachedRead(endpoint, opts);
   },
 
   get: async (nodeName: string) => {
@@ -1457,7 +1474,7 @@ export const serverAPI = {
 export const identityAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/identities?host=${encodeURIComponent(host)}` : "/identities";
-    return fetchRead(endpoint, opts);
+    return fetchUncachedRead(endpoint, opts);
   },
 
   get: async (id: string, host: string) => {
@@ -1476,7 +1493,7 @@ export const identityAPI = {
 export const groupAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const endpoint = host ? `/groups?host=${encodeURIComponent(host)}` : "/groups";
-    return fetchRead(endpoint, opts);
+    return fetchUncachedRead(endpoint, opts);
   },
 
   get: async (name: string, host: string) => {
@@ -1656,7 +1673,7 @@ export const monitoringAPI = {
 // Certificate Management API
 export const certificateAPI = {
   list: async (opts: ReadOptions = {}): Promise<CertificateListResponse> => {
-    return fetchRead<CertificateListResponse>("/certificates", opts);
+    return fetchUncachedRead<CertificateListResponse>("/certificates", opts);
   },
 
   get: async (clusterId: string): Promise<CertificateInfo> => {
@@ -1683,8 +1700,8 @@ export const certificateAPI = {
     });
   },
 
-  getSystemWarnings: async (): Promise<SystemWarningsResponse> => {
-    return fetchAPI<SystemWarningsResponse>("/warnings/system/all");
+  getSystemWarnings: async (opts: ReadOptions = {}): Promise<SystemWarningsResponse> => {
+    return fetchUncachedRead<SystemWarningsResponse>("/warnings/system/all", opts);
   },
 
   cleanupPending: async (): Promise<{ success: boolean; message: string; cleaned_count: number }> => {

@@ -55,6 +55,8 @@ import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useGroups, useDeleteGroup, useIdentities } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { Role } from "@/types/rbac";
 import { CreateGroupDialog } from "@/components/groups/create-group-dialog";
 import { EditGroupDialog } from "@/components/groups/edit-group-dialog";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -63,7 +65,7 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
-export default function GroupsPage() {
+function GroupsContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useGroups();
   const groups = (data as any)?.groups || [];
   const nodes = (data as any)?.nodes || [];
@@ -571,4 +573,18 @@ export default function GroupsPage() {
       </Dialog>
     </div>
   );
+}
+
+// important: the five sibling partner pages gate here and these two did not, so a tenant
+// deep-linking straight to the route got the page shell and a wall of 403s instead of a
+// redirect. The backend is the real gate (require_partner on both routers); this keeps the
+// UI honest and stops the request being made at all, because the content component's
+// queries only mount once the role resolves.
+export default function GroupsPage() {
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
+
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!isPartner) return null;
+
+  return <GroupsContent />;
 }
