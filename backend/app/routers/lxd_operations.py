@@ -124,8 +124,13 @@ def _fetch_operations_for_node(lxd_service: LXDService, node_name: str) -> List[
                     logger.warning(f"Error parsing operation data on {node_name}: {e}")
         else:
             logger.warning(f"Got status {response.status_code} for operations on {node_name}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
+        raise
     except Exception as e:
-        logger.error(f"Error listing operations on {node_name}: {e}", exc_info=True)
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing operations on {node_name}: {e}", exc_info=True)
     return operations
 
 

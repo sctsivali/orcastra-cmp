@@ -41,6 +41,11 @@ TOLERATES_NONE = {
     # Fan-out handlers. A dead node is collected into unreachable_nodes and the response is
     # a 200 naming which clusters were lost, which is a better contract than 503 because it
     # says what did answer. Covered by FailureIsLabelledTests in test_fresh_bypass_is_wired.
+    # note: that premise was false for six of these for a while. They raised the connection
+    # error and their own outer `except Exception` caught it straight back into an empty
+    # list, so the exemption held while the behaviour it assumed did not. It is now enforced
+    # by UnreachableIsNotTheSameAsErroringTests
+    # .test_the_raise_is_not_swallowed_by_the_helper_s_own_broad_handler.
     ("cluster_members.py", "list_cluster_members"),
     ("cluster_registration.py", "_get_cluster_info_async"),
     ("ipam.py", "_fetch_ipam_for_node"),

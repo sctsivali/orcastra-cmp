@@ -113,6 +113,11 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> List[
     identities = []
     try:
         client = lxd_service.connection_manager.get_client(node_name)
+        if client is None:
+            # important: unreachable is not empty. Without this the next line
+            # raises AttributeError on None, which the generic handler below
+            # turns into a partial result and the node is never named.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
         # Use recursion=1 to get full details in one call
         response = client.api.auth.identities.get(params={'recursion': '1'}, timeout=(5, 30))
         if response.status_code == 200:
@@ -142,8 +147,13 @@ def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> List[
                     logger.warning(f"Error parsing identity data: {e}")
         else:
             logger.warning(f"Got status {response.status_code} for identities on {node_name}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
+        raise
     except Exception as e:
-        logger.error(f"Error listing identities on {node_name}: {e}")
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing identities on {node_name}: {e}")
     return identities
 
 
@@ -246,8 +256,10 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> List[Grou
             try:
                 client = lxd_service.cert_manager.connect_with_vault_cert(node_name, connection_manager=lxd_service.connection_manager)
             except Exception as e:
+                # important: a node we cannot reconnect to is unreachable, not empty.
+                # Returning here left the caller nothing to name.
                 logger.warning(f"Failed to reconnect to {node_name}: {e}")
-                return groups
+                raise LXDConnectionError(f"Could not connect to {node_name}") from e
             if client is None:
                 # important: unreachable is not empty. Returning a bare collection
                 # here leaves the caller nothing to label, which is how a dead
@@ -291,8 +303,13 @@ def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> List[Grou
                     logger.warning(f"Error parsing group data: {e}")
         else:
             logger.warning(f"Got status {response.status_code} for groups on {node_name}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
+        raise
     except Exception as e:
-        logger.error(f"Error listing groups on {node_name}: {e}")
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing groups on {node_name}: {e}")
     return groups
 
 

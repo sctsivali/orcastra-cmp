@@ -139,8 +139,13 @@ def _fetch_ipam_for_node(
                     )
             except Exception as e:
                 logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
+        raise
     except Exception as e:
-        logger.error(f"Error listing IPAM on {node_name}: {e}")
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing IPAM on {node_name}: {e}")
     return allocations
 
 

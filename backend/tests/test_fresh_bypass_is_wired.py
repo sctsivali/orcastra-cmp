@@ -34,6 +34,49 @@ EXEMPT = {
 }
 
 
+CONNECTION_ERROR = "LXDConnectionError"
+
+
+def _tries_swallowing_a_connection_error(source: str):
+    """Yield the lineno of every `try` that raises the connection error while a broad
+    handler catches it and no passthrough lets it out.
+
+    The rule lives here rather than in one test class because it is the same rule on both
+    sides of the layer boundary. It was written for app/services/lxd/ and the identical
+    defect then shipped in six app/routers/ helpers, where nothing was looking: the router
+    check next to it was a substring scan, and both strings were present because the inner
+    per-item handler supplied the second one.
+    """
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        raises_conn = any(
+            isinstance(n, ast.Raise)
+            and n.exc is not None
+            and getattr(n.exc.func if isinstance(n.exc, ast.Call) else n.exc, "id", None)
+            == CONNECTION_ERROR
+            for stmt in node.body
+            for n in ast.walk(stmt)
+        )
+        if not raises_conn:
+            continue
+        names = [
+            getattr(h.type, "id", getattr(h.type, "attr", "bare")) if h.type else "bare"
+            for h in node.handlers
+        ]
+        if "Exception" not in names and "bare" not in names:
+            continue
+        passthrough = any(
+            getattr(h.type, "id", None) == CONNECTION_ERROR
+            and isinstance(h.body[-1], ast.Raise)
+            and h.body[-1].exc is None
+            for h in node.handlers
+        )
+        if not passthrough:
+            yield node.lineno
+
+
 def _is_router_get(node: ast.AST) -> bool:
     for dec in getattr(node, "decorator_list", []):
         func = dec.func if isinstance(dec, ast.Call) else dec
@@ -669,39 +712,13 @@ class ServiceLayerMustNotSwallowUnreachableTests(unittest.TestCase):
         that raises the connection type while also catching Exception needs the
         passthrough, as images.py has.
         """
-        offenders = []
-        for path in sorted(self.SERVICES.glob("*.py")):
-            tree = ast.parse(path.read_text())
-            for node in ast.walk(tree):
-                if not isinstance(node, ast.Try):
-                    continue
-                raises_conn = False
-                for stmt in node.body:
-                    for n in ast.walk(stmt):
-                        if isinstance(n, ast.Raise) and n.exc is not None:
-                            exc = n.exc.func if isinstance(n.exc, ast.Call) else n.exc
-                            if getattr(exc, "id", None) == self.CONNECTION_ERROR:
-                                raises_conn = True
-                if not raises_conn:
-                    continue
-                names = [
-                    getattr(h.type, "id", getattr(h.type, "attr", "bare")) if h.type else "bare"
-                    for h in node.handlers
-                ]
-                if "Exception" not in names and "bare" not in names:
-                    continue
-                passthrough = any(
-                    getattr(h.type, "id", None) == self.CONNECTION_ERROR
-                    and isinstance(h.body[-1], ast.Raise)
-                    and h.body[-1].exc is None
-                    for h in node.handlers
-                )
-                if not passthrough:
-                    offenders.append(
-                        f"{path.name}:{node.lineno} raises {self.CONNECTION_ERROR} inside a try "
-                        "whose broad handler re-wraps it. Add `except LXDConnectionError: raise` "
-                        "above it, as images.py does."
-                    )
+        offenders = [
+            f"{path.name}:{lineno} raises {self.CONNECTION_ERROR} inside a try whose broad "
+            "handler re-wraps it. Add `except LXDConnectionError: raise` above it, as "
+            "images.py does."
+            for path in sorted(self.SERVICES.glob("*.py"))
+            for lineno in _tries_swallowing_a_connection_error(path.read_text())
+        ]
         self.assertEqual(offenders, [])
 
     def test_every_exemption_names_a_real_function(self):
@@ -747,17 +764,38 @@ class UnreachableIsNotTheSameAsErroringTests(unittest.TestCase):
         "lxd_server.py",
     ]
 
-    def test_a_missing_client_raises_and_is_not_swallowed(self):
-        offenders = []
-        for filename in self.HELPERS:
-            source = (ROUTERS / filename).read_text()
-            if "raise LXDConnectionError" not in source:
-                offenders.append(f"{filename}: a missing client does not raise, so the caller "
-                                 "cannot tell the node was unreachable")
-            if "except LXDConnectionError" not in source:
-                offenders.append(f"{filename}: the generic handler swallows the unreachable "
-                                 "signal it was supposed to let through")
+    def test_a_missing_client_raises(self):
+        offenders = [
+            f"{filename}: a missing client does not raise, so the caller cannot tell the "
+            "node was unreachable"
+            for filename in self.HELPERS
+            if "raise LXDConnectionError" not in (ROUTERS / filename).read_text()
+        ]
         self.assertEqual(offenders, [])
+
+    def test_the_raise_is_not_swallowed_by_the_helper_s_own_broad_handler(self):
+        """Presence of both strings is not the property; reaching the caller is.
+
+        Six of these helpers raised the right type and caught it in an inner per-item
+        handler, while their own outer `except Exception` turned the raise straight back
+        into an empty list. Every substring the previous version of this test looked for
+        was present the whole time, so a breaker-tripped cluster reported "this node has
+        nothing" on six endpoints and was never named in unreachable_nodes.
+        """
+        offenders = [
+            f"{filename}:{lineno} raises {CONNECTION_ERROR} inside a try whose own broad "
+            "handler swallows it, so the node is reported empty rather than unreachable. "
+            "Add `except LXDConnectionError: raise` above it, as profiles.py does."
+            for filename in self.HELPERS
+            for lineno in _tries_swallowing_a_connection_error((ROUTERS / filename).read_text())
+        ]
+        self.assertEqual(offenders, [])
+
+    def test_the_scan_actually_covers_something(self):
+        """A scan whose helper list has drifted out of the tree passes for the wrong reason."""
+        missing = [f for f in self.HELPERS if not (ROUTERS / f).exists()]
+        self.assertEqual(missing, [])
+        self.assertGreaterEqual(len(self.HELPERS), 9)
 
     def test_a_listing_error_does_not_re_raise(self):
         """The generic handler must not re-raise: that is what turned a transient item

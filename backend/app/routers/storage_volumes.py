@@ -107,8 +107,13 @@ def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter
                 # important: not unreachability. See networks.py: an item
                 # vanishing mid-listing must not condemn the whole node.
                 logger.warning(f"Error listing volumes in pool {storage_pool.name}: {e}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
+        raise
     except Exception as e:
-        logger.error(f"Error listing storage volumes on {node_name}: {e}")
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing storage volumes on {node_name}: {e}")
     return volumes_list
 
 

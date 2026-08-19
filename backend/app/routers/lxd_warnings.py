@@ -107,8 +107,13 @@ def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[Wa
             logger.debug(f"Warnings endpoint not available on {node_name} (404 - older LXD version?)")
         else:
             logger.warning(f"Got status {response.status_code} for warnings on {node_name}")
+    except LXDConnectionError:
+        # a missing client IS unreachability: let it through
+        raise
     except Exception as e:
-        logger.error(f"Error listing warnings on {node_name}: {e}", exc_info=True)
+        # important: not unreachability. See networks.py: an item
+        # vanishing mid-listing must not condemn the whole node.
+        logger.warning(f"Error listing warnings on {node_name}: {e}", exc_info=True)
     return warnings
 
 
