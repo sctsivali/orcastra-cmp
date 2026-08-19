@@ -248,12 +248,19 @@ async function fetchAPI<T>(
   // backend has no response cache to bypass.
   if (method === "GET") {
     _inflightGets.set(endpoint, request);
-    request.finally(() => {
-      // only clear our own entry - a forced request may have replaced it
-      if (_inflightGets.get(endpoint) === request) {
-        _inflightGets.delete(endpoint);
-      }
-    });
+    request
+      .finally(() => {
+        // only clear our own entry - a forced request may have replaced it
+        if (_inflightGets.get(endpoint) === request) {
+          _inflightGets.delete(endpoint);
+        }
+      })
+      // important: .finally() returns a NEW promise that rejects with the same reason, and
+      // nothing awaits this one. Every failed GET therefore raised an unhandled rejection
+      // on top of the error the caller was already handling. Invisible while no page load
+      // produced a failing read, then three per mount the moment an endpoint answered 503.
+      // The caller owns the rejection; this branch exists only for the bookkeeping.
+      .catch(() => {});
   }
 
   return request;
