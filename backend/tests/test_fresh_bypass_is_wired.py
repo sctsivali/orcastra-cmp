@@ -256,6 +256,84 @@ class DegradedFanOutTests(unittest.TestCase):
             f"answered, so an outage gets cached as healthy emptiness: {offenders}",
         )
 
+    def test_every_handler_reporting_unreachable_guards_its_cache_write(self):
+        """The scan above only sees handlers that call list_all_vms.
+
+        Nine wrapper routers fan out through run_in_executor instead, so they were invisible
+        to it and every one of them cached a total outage: /networks, /profiles, /ipam,
+        /storage/volumes and both storage-pool resource endpoints pinned an empty result for
+        120 to 180 seconds. This scan discovers by the property that actually matters, which
+        is that the handler reports unreachable_nodes at all, so a new fan-out is covered the
+        day it is written.
+        """
+        offenders, checked = [], 0
+        for path, fn in self._get_handlers():
+            if fn.name in self.FAN_OUT_EXEMPT:
+                continue
+            reports = any(
+                kw.arg == "unreachable_nodes"
+                for node in ast.walk(fn)
+                if isinstance(node, ast.Call)
+                for kw in node.keywords
+            )
+            if not reports:
+                continue
+            sets = [c for c in self._calls(fn, "set", "cache") if _writes_response_cache(c)]
+            if not sets:
+                continue
+            checked += 1
+
+            # any `if <name>:` will do. The guard names differ by handler (answered,
+            # connected_nodes), and pinning the vocabulary would only invite a rename.
+            guard_names = {
+                node.test.id
+                for node in ast.walk(fn)
+                if isinstance(node, ast.If) and isinstance(node.test, ast.Name)
+            }
+            guarded = self._guarded_call_ids(fn, guard_names)
+            offenders += [
+                f"{path.name}:{c.lineno} {fn.name} caches unguarded"
+                for c in sets
+                if id(c) not in guarded
+            ]
+
+        # 7 at the time of writing: instances, vms, networks, profiles, ipam,
+        # storage_pools, storage_volumes. Six more report unreachable_nodes without caching
+        # at all, so the rule does not apply to them.
+        self.assertGreaterEqual(checked, 7, "the scan stopped finding reporting handlers")
+        self.assertEqual(
+            offenders,
+            [],
+            "these handlers report unreachable_nodes but cache the result unconditionally, "
+            f"so a fleet-wide outage is pinned for the whole TTL: {offenders}",
+        )
+
+    def test_storage_pool_resources_does_not_cache_an_unanswered_fleet(self):
+        """The two resource endpoints return a bare dict with no unreachable_nodes field,
+        so the scan above cannot see them. They are the worst case of the class: the value
+        is `{"resources": {}}`, which renders as every pool having zero capacity."""
+        tree = ast.parse((ROUTERS / "storage_pools.py").read_text())
+        names = {
+            "get_all_storage_pool_resources",
+            "get_all_storage_pool_resources_legacy_path",
+        }
+        found = [
+            n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in names
+        ]
+        self.assertEqual(len(found), 2, "both resource handlers must exist; update this test")
+        unguarded = []
+        for fn in found:
+            sets = [c for c in self._calls(fn, "set", "cache") if _writes_response_cache(c)]
+            self.assertTrue(sets, f"{fn.name} no longer caches; update this test")
+            guarded = self._guarded_call_ids(fn, {"answered"})
+            unguarded += [f"storage_pools.py:{c.lineno}" for c in sets if id(c) not in guarded]
+        self.assertEqual(
+            unguarded,
+            [],
+            f"pool resources cached without checking any node answered: {unguarded}",
+        )
+
     def test_image_listing_does_not_cache_a_fleet_that_never_answered(self):
         """images.py fans out per node rather than through list_all_vms, so it is asserted
         directly: an exception per node is rendered as that node having zero images."""
@@ -959,3 +1037,98 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
         )
         # a scan over nothing passes for the wrong reason
         self.assertGreaterEqual(constructed, 2)
+
+    def test_a_prewarm_refuses_to_write_a_fan_out_nobody_answered(self):
+        """The endpoint guard is worthless if the collector reinstates the outage.
+
+        instances.py and vms.py both refuse to cache a fan-out where no cluster answered.
+        The collector writes those exact keys 30s later and had no such refusal, so the
+        guard closed the front door while the prewarm walked in the back. The signal is a
+        fetcher returning None, which the caller's existing `if data:` already honours.
+        """
+        collector = ROUTERS.parent / "services" / "metrics_collector.py"
+        tree = ast.parse(collector.read_text())
+        models = self._models_declaring("unreachable_nodes")
+
+        offenders, checked = [], 0
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            builds = any(
+                getattr(n.func, "id", None) in models
+                for n in ast.walk(fn)
+                if isinstance(n, ast.Call)
+            )
+            if not builds:
+                continue
+            checked += 1
+            bails = any(
+                isinstance(n, ast.Return)
+                and isinstance(n.value, ast.Constant)
+                and n.value.value is None
+                for n in ast.walk(fn)
+            )
+            if not bails:
+                offenders.append(f"{fn.name} at metrics_collector.py:{fn.lineno}")
+        self.assertEqual(
+            offenders,
+            [],
+            "these prewarm fetchers always return a payload, so an outage is written into "
+            "the same key the endpoint deliberately left cold",
+        )
+        self.assertGreaterEqual(checked, 2)
+
+    def test_every_prewarm_states_the_ttl_its_endpoint_uses(self):
+        """A single hardcoded TTL in the helper is a second, invisible cache policy.
+
+        It was 180 for all four, against endpoints using 30, 180, 120 and 60, so the
+        instances list survived six times longer than GET /instances intends. The TTL is
+        the endpoint's decision and belongs at the call site.
+        """
+        collector = ROUTERS.parent / "services" / "metrics_collector.py"
+        tree = ast.parse(collector.read_text())
+
+        helper = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "_prewarm_single_cache"
+        )
+        self.assertIn(
+            "ttl",
+            [a.arg for a in helper.args.args],
+            "_prewarm_single_cache must take the TTL rather than choosing one",
+        )
+        self.assertEqual(
+            helper.args.defaults, [], "a default TTL here silently reintroduces the bug"
+        )
+        for call in ast.walk(helper):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "set"
+            ):
+                ttl = next((kw.value for kw in call.keywords if kw.arg == "ttl"), None)
+                self.assertIsInstance(
+                    ttl, ast.Name, "the helper must pass its ttl argument through, not a literal"
+                )
+
+        # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
+        # routers/instances.py list_instances, routers/vms.py list_vms,
+        # routers/regions.py get_regions_overview, routers/storage_pools.py resources-all.
+        expected = {
+            "instances:list": 30,
+            "vms:list": 180,
+            "regions:overview": 120,
+            "storage_pool_resources:all": 60,
+        }
+        seen = {}
+        for call in ast.walk(tree):
+            if not (isinstance(call, ast.Call) and getattr(call.func, "attr", None) == "_prewarm_single_cache"):
+                continue
+            key_arg = call.args[1] if len(call.args) > 1 else None
+            if not (isinstance(key_arg, ast.Call) and key_arg.args):
+                continue
+            key = key_arg.args[0].value
+            ttl = next((kw.value.value for kw in call.keywords if kw.arg == "ttl"), None)
+            seen[next((p for p in expected if key.startswith(p)), key)] = ttl
+        self.assertEqual(seen, expected)

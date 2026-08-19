@@ -267,15 +267,17 @@ async def list_networks(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
+        answered = 0
         for result in results:
             if isinstance(result, tuple):
                 node_name, networks = result
                 if networks is None:
                     unreachable_nodes.append(node_name)
                 else:
+                    answered += 1
                     all_networks.extend(networks)
             elif isinstance(result, Exception):
-                logger.error(f"Error fetching networks: {result}")
+                logger.warning(f"Error fetching networks: {result}")
 
         if tenant_acl_active():
             visible_networks = []
@@ -293,10 +295,13 @@ async def list_networks(
             unreachable_nodes=sorted(unreachable_nodes),
         )
         
-        # Cache as dict for 120 seconds
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug("Cached networks list for 120 seconds")
-        
+        # important: an outage must not be remembered as the answer. See instances.py.
+        if answered:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+            logger.debug("Cached networks list for 180 seconds")
+        else:
+            logger.warning("Not caching networks list: no node answered")
+
         return response
     except Exception as e:
         logger.error(f"Error listing networks: {e}")

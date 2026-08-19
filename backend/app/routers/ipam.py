@@ -192,11 +192,13 @@ async def list_ipam_allocations(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
+        answered = 0
         for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
+                answered += 1
                 all_allocations.extend(result)
             elif isinstance(result, Exception):
-                logger.error(f"IPAM node query failed: {result}")
+                logger.warning(f"IPAM node query failed: {result}")
                 unreachable_nodes.append(node_name)
 
         all_allocations = [
@@ -216,8 +218,11 @@ async def list_ipam_allocations(
             unreachable_nodes=unreachable_nodes,
         )
 
-        # cache for 120 seconds
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+        # important: an outage must not be remembered as the answer. See instances.py.
+        if answered:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+        else:
+            logger.warning("Not caching IPAM list: no node answered")
         return response
     except Exception as e:
         logger.error(f"Error listing IPAM: {e}")

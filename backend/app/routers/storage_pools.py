@@ -152,11 +152,13 @@ async def list_storage_pools(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
+        answered = 0
         for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
+                answered += 1
                 all_pools.extend(result)
             elif isinstance(result, Exception):
-                logger.error(f"Error fetching pools: {result}")
+                logger.warning(f"Error fetching pools: {result}")
                 unreachable_nodes.append(node_name)
 
         if tenant_acl_active():
@@ -173,10 +175,14 @@ async def list_storage_pools(
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
         )
-        
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug("Cached storage pools list for 120 seconds")
-        
+
+        # important: an outage must not be remembered as the answer. See instances.py.
+        if answered:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+            logger.debug("Cached storage pools list for 180 seconds")
+        else:
+            logger.warning("Not caching storage pools list: no node answered")
+
         return response
     except Exception as e:
         logger.error(f"Error listing storage pools: {e}")
@@ -205,18 +211,23 @@ async def get_all_storage_pool_resources(
         tenant_acl = get_tenant_acl()
 
         if not nodes:
-            response = {"resources": {}}
-            cache.set("api_responses", cache_key, response, ttl=60)
-            return response
+            # important: not cached. get_node_names() lists only nodes holding a live
+            # client, so an empty fleet here is every cluster being down, and pinning that
+            # for 60s is the outage-as-answer bug.
+            return {"resources": {}}
 
-        def _fetch_node_resources(node_name: str) -> dict:
-            """Fetch all pool resources for a single node (runs in thread)."""
+        def _fetch_node_resources(node_name: str):
+            """Fetch all pool resources for a single node (runs in thread).
+
+            Returns None when the node could not be reached, so the caller can tell an
+            outage apart from a node that simply has no pools.
+            """
             result = {}
             try:
                 client = lxd_service.get_client_with_reconnect(node_name)
                 if client is None:
                     logger.warning(f"Could not connect to {node_name}, skipping for resources")
-                    return result
+                    return None
                 pools = client.storage_pools.all()
                 for pool in pools:
                     if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
@@ -237,12 +248,20 @@ async def get_all_storage_pool_resources(
         executor.shutdown(wait=False)
 
         all_resources = {}
+        answered = 0
         for r in results:
             if isinstance(r, dict):
+                answered += 1
                 all_resources.update(r)
 
         response = {"resources": all_resources}
-        cache.set("api_responses", cache_key, response, ttl=60)
+        # important: an outage must not be remembered as the answer. See instances.py.
+        # Counting answers, not entries: a reachable fleet with no pools is legitimately
+        # empty, a fleet that is down is not.
+        if answered:
+            cache.set("api_responses", cache_key, response, ttl=60)
+        else:
+            logger.warning("Not caching storage pool resources: no node answered")
         return response
     except Exception as e:
         logger.error(f"Error getting all storage pool resources: {e}")
@@ -463,14 +482,17 @@ async def get_all_storage_pool_resources_legacy_path(
         nodes = lxd_service.connection_manager.get_node_names()
         tenant_acl = get_tenant_acl()
 
-        def _fetch_node_pool_resources(node_name: str) -> dict:
-            """Fetch all pool resources for a single node (runs in thread)."""
+        def _fetch_node_pool_resources(node_name: str):
+            """Fetch all pool resources for a single node (runs in thread).
+
+            Returns None when the node could not be reached. See the sibling handler.
+            """
             result = {}
             try:
                 client = lxd_service.get_client_with_reconnect(node_name)
                 if client is None:
                     logger.warning(f"Could not connect to {node_name}, skipping")
-                    return result
+                    return None
                 pools = client.storage_pools.all()
                 for pool in pools:
                     if not tenant_acl_can_view_lxd_used_by(tenant_acl, node_name, pool.used_by or []):
@@ -485,9 +507,8 @@ async def get_all_storage_pool_resources_legacy_path(
             return result
 
         if not nodes:
-            response = {"resources": {}}
-            cache.set("api_responses", cache_key, response, ttl=60)
-            return response
+            # important: not cached. See the sibling handler above.
+            return {"resources": {}}
 
         loop = asyncio.get_event_loop()
         executor = ThreadPoolExecutor(max_workers=min(len(nodes), 10))
@@ -496,12 +517,18 @@ async def get_all_storage_pool_resources_legacy_path(
         executor.shutdown(wait=False)
 
         all_resources = {}
+        answered = 0
         for r in results:
             if isinstance(r, dict):
+                answered += 1
                 all_resources.update(r)
 
         response = {"resources": all_resources}
-        cache.set("api_responses", cache_key, response, ttl=60)
+        # important: an outage must not be remembered as the answer. See instances.py.
+        if answered:
+            cache.set("api_responses", cache_key, response, ttl=60)
+        else:
+            logger.warning("Not caching storage pool resources: no node answered")
         return response
     except Exception as e:
         logger.error(f"Error getting storage pool resources: {e}")

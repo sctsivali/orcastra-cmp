@@ -139,11 +139,13 @@ async def list_profiles(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
+        answered = 0
         for node_name, result in zip(nodes_to_query, results):
             if isinstance(result, list):
+                answered += 1
                 all_profiles.extend(result)
             elif isinstance(result, Exception):
-                logger.error(f"Error fetching profiles: {result}")
+                logger.warning(f"Error fetching profiles: {result}")
                 unreachable_nodes.append(node_name)
 
         if tenant_acl_active():
@@ -162,10 +164,13 @@ async def list_profiles(
             unreachable_nodes=unreachable_nodes,
         )
         
-        # Cache as dict for 120 seconds
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-        logger.debug("Cached profiles list for 120 seconds")
-        
+        # important: an outage must not be remembered as the answer. See instances.py.
+        if answered:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
+            logger.debug("Cached profiles list for 180 seconds")
+        else:
+            logger.warning("Not caching profiles list: no node answered")
+
         return response
     except Exception as e:
         logger.error(f"Error listing profiles: {e}")

@@ -186,54 +186,71 @@ class MetricsCollector:
             
             cache = get_cache_manager()
             
+            # important: the TTL belongs to the endpoint, not to this loop. A single
+            # hardcoded 180 pinned the instances list six times longer than GET /instances
+            # intends, so a prewarm both wrote a key the endpoint owns and changed how long
+            # it lived. Each of these matches its handler's own cache.set.
+
             # Pre-warm instances cache (most critical for dashboard)
             await self._prewarm_single_cache(
                 cache,
                 get_scope_cache_key("instances:list:host=None:status=None:type=None:o=0:l=0"),
-                self._fetch_instances
+                self._fetch_instances,
+                ttl=30,
             )
-            
+
             # Pre-warm VMs cache (VM-only view) - key: vms:list:host=None:status=None
             await self._prewarm_single_cache(
                 cache,
                 get_scope_cache_key("vms:list:host=None:status=None:o=0:l=0"),
-                self._fetch_vms
+                self._fetch_vms,
+                ttl=180,
             )
-            
+
             # Pre-warm regions cache (slowest endpoint, 15-45s cold)
             await self._prewarm_single_cache(
                 cache,
                 get_scope_cache_key("regions:overview"),
-                self._fetch_regions
+                self._fetch_regions,
+                ttl=120,
             )
-            
+
             # Pre-warm storage pool resources cache
             await self._prewarm_single_cache(
                 cache,
                 get_scope_cache_key("storage_pool_resources:all"),
-                self._fetch_storage_pool_resources
+                self._fetch_storage_pool_resources,
+                ttl=60,
             )
             
         except Exception as e:
             logger.warning(f"Failed to pre-warm caches: {e}")
     
-    async def _prewarm_single_cache(self, cache, cache_key: str, fetch_func):
-        """Pre-warm a single cache entry if expired."""
+    async def _prewarm_single_cache(self, cache, cache_key: str, fetch_func, ttl: int):
+        """Pre-warm a single cache entry if expired.
+
+        important: a fetcher returns None to mean "nobody answered, do not remember this".
+        The endpoints refuse to cache a fan-out no cluster answered, and this loop writes
+        the same keys, so without that refusal here the collector reinstated the outage
+        30s later through a side door and the endpoint's own guard accomplished nothing.
+        """
         try:
             cached = cache.get("api_responses", cache_key)
             if cached:
                 logger.debug(f"Cache already warm: {cache_key}")
                 return
-            
+
             logger.info(f"Pre-warming cache: {cache_key}")
             start = asyncio.get_event_loop().time()
-            
+
             data = await fetch_func()
             if data:
-                cache.set("api_responses", cache_key, data, ttl=180)
+                cache.set("api_responses", cache_key, data, ttl=ttl)
                 elapsed = asyncio.get_event_loop().time() - start
                 logger.info(f"Cache warmed in {elapsed:.2f}s: {cache_key}")
-                
+            else:
+                logger.warning(f"Not warming {cache_key}: no cluster answered")
+
         except Exception as e:
             logger.debug(f"Pre-warm failed for {cache_key}: {e}")
     
@@ -251,6 +268,10 @@ class MetricsCollector:
         """Fetch instances data for cache warming."""
         from app.models.schemas import VMListResponse
         all_vms, connected_nodes = await self._lxd_service.list_all_vms()
+        if not connected_nodes:
+            # mirrors the guard in routers/instances.py: an unanswered fan-out is not a
+            # result worth remembering.
+            return None
         response = VMListResponse(
             total=len(all_vms),
             vms=all_vms,
@@ -258,11 +279,14 @@ class MetricsCollector:
             unreachable_nodes=self._unreachable(connected_nodes),
         )
         return response.model_dump()
-    
+
     async def _fetch_vms(self):
         """Fetch VMs data for cache warming."""
         from app.models.schemas import VMListResponse
         all_vms, connected_nodes = await self._lxd_service.list_all_vms()
+        if not connected_nodes:
+            # mirrors the guard in routers/vms.py
+            return None
         # Filter to VMs only (type == virtual-machine)
         vms_only = [vm for vm in all_vms if vm.type == "virtual-machine"]
         response = VMListResponse(
@@ -299,6 +323,7 @@ class MetricsCollector:
         try:
             from app.routers.storage_pools import _serialize_pool_resources
             all_resources = {}
+            answered = 0
             nodes = self._lxd_service.connection_manager.get_node_names()
             for node_name in nodes:
                 try:
@@ -306,6 +331,7 @@ class MetricsCollector:
                     if client is None:
                         continue
                     pools = client.storage_pools.all()
+                    answered += 1
                     for pool in pools:
                         try:
                             resources = pool.resources.get()
@@ -314,6 +340,10 @@ class MetricsCollector:
                             pass
                 except Exception:
                     pass
+            if nodes and not answered:
+                # counting answers, not entries: a fleet that is up but has no pools is a
+                # legitimate empty result, an outage is not.
+                return None
             return {"resources": all_resources}
         except Exception as e:
             logger.debug(f"Storage pool resources pre-warm failed: {e}")
