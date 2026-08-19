@@ -81,7 +81,6 @@ function TokenSync({ children }: { children: ReactNode }) {
       signOutConfirmedRef.current = false;
       setAuthError(null);
       setAccessToken(session.accessToken);
-      reset401Counter();
       setTokenReady(true);
     } else if (status === "unauthenticated") {
       // important: next-auth's fetchData() returns null on ANY failure, including a

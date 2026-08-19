@@ -168,7 +168,14 @@ function handle401() {
   return false;
 }
 
-/** Reset the 401 failure streak on a successful token set (called by auth-provider). */
+/**
+  * Reset the 401 failure streak.
+  *
+  * important: the trigger is a request actually succeeding, not a session effect
+  * re-running. auth-provider's effect re-runs whenever useSession() rebuilds its
+  * memo, which update() does on every refresh, so resetting from there pinned the
+  * counter at zero and made the re-auth banner unreachable.
+  */
 export function reset401Counter() {
   _refreshAttempts = 0;
   _authFailureAnnounced = false;
@@ -360,6 +367,11 @@ async function _fetchAPIInternal<T>(
       }
 
       throw new APIError(errorMessage, response.status, errorDetail);
+    }
+
+    // a request got through, so whatever was failing has cleared
+    if (_refreshAttempts !== 0 || _authFailureAnnounced) {
+      reset401Counter();
     }
 
     // handle 204 No Content (no body to parse)
