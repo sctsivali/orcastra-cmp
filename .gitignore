@@ -77,6 +77,10 @@ backup/
 documentation/
 CHANGELOG.md
 .github/instructions/
+# Local QA scratch. The check scripts here are run by make test-frontend and by CI, so they
+# stay tracked. Anything else dropped in this directory is local and stays out of the repo.
+qa/*
+!qa/*.mjs
 
 # Claude Code (local AI tooling - not committed to this public repo)
 .claude/
