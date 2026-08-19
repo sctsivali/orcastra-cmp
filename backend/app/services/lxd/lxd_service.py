@@ -102,7 +102,9 @@ class LXDService:
             health.clear(cluster_id)
             return True
         except Exception as e:
-            logger.error(f"Failed to connect cluster {cluster_id}: {e}")
+            # important: WARNING, not ERROR. See connection.py: an offline cluster is
+            # expected operational noise, and the breaker below already records it.
+            logger.warning(f"Failed to connect cluster {cluster_id}: {e}")
             health.record_failure(cluster_id, str(e))
             return False
     

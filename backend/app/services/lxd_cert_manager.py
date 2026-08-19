@@ -311,7 +311,10 @@ class LXDCertificateManager:
                     break  # unreachable host - do not retry
 
             if response is None:
-                logger.error(f"Connection failed for {cluster_id}: {last_error}")
+                # important: WARNING, not ERROR. Reached only after the retries above have
+                # already logged the same host at WARNING; escalating the summary line for
+                # a cluster that is merely offline is what makes ERROR unreadable.
+                logger.warning(f"Connection failed for {cluster_id}: {last_error}")
                 record_failure(cluster_id, "Cannot connect to LXD endpoint. Check if server is running.")
                 return False, "Cannot connect to LXD endpoint. Check if server is running."
             
@@ -335,11 +338,15 @@ class LXDCertificateManager:
             logger.error(f"SSL error for {cluster_id}: {e}")
             return False, "Certificate error. Verify certificate is valid."
         except requests.exceptions.ConnectionError as e:
-            logger.error(f"Connection error for {cluster_id}: {e}")
+            # important: WARNING. Refused or unresolvable is an offline cluster, and the
+            # breaker below is what the product acts on. The SSL branch above stays at
+            # ERROR on purpose: an untrusted or expired certificate is a state somebody
+            # has to fix, not one that clears itself when the host comes back.
+            logger.warning(f"Connection error for {cluster_id}: {e}")
             record_failure(cluster_id, "Cannot connect to LXD endpoint. Check if server is running.")
             return False, "Cannot connect to LXD endpoint. Check if server is running."
         except requests.exceptions.Timeout as e:
-            logger.error(f"Timeout for {cluster_id}: {e}")
+            logger.warning(f"Timeout for {cluster_id}: {e}")
             record_failure(cluster_id, "Connection timeout. Check network connectivity.")
             return False, "Connection timeout. Check network connectivity."
         except Exception as e:

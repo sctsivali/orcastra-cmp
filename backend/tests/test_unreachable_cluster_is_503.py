@@ -249,7 +249,17 @@ def test_an_unreachable_cluster_is_not_logged_at_error():
     import pathlib
 
     app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
-    phrases = ("Failed to connect to cluster", "Could not connect to")
+    # note: the first version of this list held only the two phrases the fix had already
+    # touched, so it passed while two more sites kept logging the same thing in slightly
+    # different words. The live run found them by counting, not by reading. Match on the
+    # shape of the statement rather than on one spelling of it.
+    phrases = (
+        "Failed to connect to cluster",
+        "Failed to connect cluster",
+        "Could not connect to",
+        "Connection failed for",
+        "Connection error for",
+    )
 
     offenders = []
     for path in sorted(app_dir.rglob("*.py")):
