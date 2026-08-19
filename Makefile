@@ -18,6 +18,17 @@ endif
 APP_VERSION ?= unknown
 CONTAINER_PREFIX ?= dev-orcastra-dashboard
 
+# Provenance stamped into every image. The Dockerfiles already declare the ARG and
+# emit org.opencontainers.image.revision from it; nothing ever supplied the value,
+# so every image built here carried an empty revision and could not say which
+# commit it came from. That turned every "what is actually deployed" question into
+# a hunt for a content marker that happened to differ between two commits.
+# note: a tree with uncommitted changes gets a -dirty suffix. A bare sha would name
+# a commit the image does not actually contain, which is worse than saying nothing.
+BUILD_COMMIT := $(or $(BUILD_COMMIT),$(shell git rev-parse HEAD 2>/dev/null)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty))
+BUILD_DATE := $(or $(BUILD_DATE),$(shell date -u +%Y-%m-%dT%H:%M:%SZ))
+BUILD_ENV = APP_VERSION=$(APP_VERSION) BUILD_COMMIT=$(BUILD_COMMIT) BUILD_DATE=$(BUILD_DATE)
+
 # Colors for output
 COLOR_RESET = \033[0m
 COLOR_BOLD = \033[1m
@@ -37,32 +48,32 @@ help: ## Display this help message
 
 build: ## Build all Docker images
 	@echo "$(COLOR_GREEN)Building Docker images...$(COLOR_RESET)"
-	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build
+	@$(BUILD_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build
 	@echo "$(COLOR_GREEN)✓ Build complete$(COLOR_RESET)"
 
 build-nc: ## Build all Docker images without cache
 	@echo "$(COLOR_YELLOW)Building Docker images without cache...$(COLOR_RESET)"
-	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build --no-cache
+	@$(BUILD_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build --no-cache
 	@echo "$(COLOR_GREEN)✓ Build complete$(COLOR_RESET)"
 
 build-backend: ## Build backend image only
 	@echo "$(COLOR_GREEN)Building backend image...$(COLOR_RESET)"
-	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build backend
+	@$(BUILD_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build backend
 	@echo "$(COLOR_GREEN)✓ Backend build complete$(COLOR_RESET)"
 
 build-backend-nc: ## Build backend image without cache
 	@echo "$(COLOR_YELLOW)Building backend image without cache...$(COLOR_RESET)"
-	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build --no-cache backend
+	@$(BUILD_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build --no-cache backend
 	@echo "$(COLOR_GREEN)✓ Backend build complete$(COLOR_RESET)"
 
 build-frontend: ## Build frontend image only
 	@echo "$(COLOR_GREEN)Building frontend image...$(COLOR_RESET)"
-	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build frontend
+	@$(BUILD_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build frontend
 	@echo "$(COLOR_GREEN)✓ Frontend build complete$(COLOR_RESET)"
 
 build-frontend-nc: ## Build frontend image without cache
 	@echo "$(COLOR_YELLOW)Building frontend image without cache...$(COLOR_RESET)"
-	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build --no-cache frontend
+	@$(BUILD_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) build --no-cache frontend
 	@echo "$(COLOR_GREEN)✓ Frontend build complete$(COLOR_RESET)"
 
 ##@ Docker Compose Commands
@@ -75,7 +86,7 @@ up: ## Start all services
 
 up-build: ## Start all services with build
 	@echo "$(COLOR_GREEN)Starting all services with build...$(COLOR_RESET)"
-	@APP_VERSION=$(APP_VERSION) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) up -d --build
+	@$(BUILD_ENV) $(DOCKER_COMPOSE) -f $(COMPOSE_FILE) up -d --build
 	@echo "$(COLOR_GREEN)✓ All services started$(COLOR_RESET)"
 	@make status
 
