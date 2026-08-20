@@ -111,6 +111,11 @@ jobs:
       # partner destinations shipped with no page-level gate at all.
       - name: Role gates
         run: node scripts/checks/check-role-gates.mjs .
+      # A document reload anywhere in the console surface beacons kill-all-sessions, so it
+      # takes out every other console and terminal the operator has open, not just the panel
+      # that failed. Two of these shipped and were removed.
+      - name: Console reloads
+        run: node scripts/checks/check-no-console-reload.mjs .
 
   commit-format:
     name: Conventional commits
