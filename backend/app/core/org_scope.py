@@ -92,7 +92,22 @@ def verify_cluster_access(cluster_id: str) -> None:
     """
     Raise 403 if the current user cannot access ``cluster_id``.
     No-op for admin / dev mode / background tasks.
+
+    important: a blank id is rejected before the scope check, not after. Every one of the 122
+    call sites passes a required parameter declared as `Query(...)`, which an empty string
+    satisfies, so `?node=` reached the handler. For a scoped caller it then failed the set
+    membership and answered 403, but for an admin the scope var is None and the function
+    returned early, so the request went on to ask Vault for a cluster named "" and logged two
+    ERRORs per attempt. Reachable from the UI: the members page fires this when its refresh is
+    clicked with no cluster chosen. Guarding here covers all 122 sites at once, where adding
+    min_length to 62 signatures would not.
     """
+    if not (cluster_id or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A cluster id is required and must not be blank",
+        )
+
     allowed = _allowed_clusters_var.get(None)
     if allowed is None:
         return

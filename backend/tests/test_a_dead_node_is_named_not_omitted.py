@@ -159,3 +159,41 @@ def test_an_unanswered_fan_out_is_not_written_to_the_cache(module_name, path, it
         f"{path} cached a fan-out no cluster answered: {writes}. The next reader gets that "
         "outage served as the answer until the TTL expires."
     )
+
+
+def test_a_blank_cluster_id_is_refused_before_it_reaches_vault():
+    """`?node=` satisfies a required Query(...) parameter, and 62 of them declare no minimum
+    length. For a scoped caller the empty string then failed the org-scope set and answered
+    403, but an admin has no scope set at all, so verify_cluster_access returned early and the
+    request went on to ask Vault for a cluster named "", logging two ERRORs per attempt.
+
+    Reachable from the UI rather than only by hand: React Query's refetch() runs the query
+    function even when the query is disabled, so the members page fired exactly this whenever
+    its refresh was clicked with no cluster chosen. Found by the live sweep, in the log.
+
+    The guard sits in verify_cluster_access because all 122 call sites pass through it.
+    """
+    import pytest
+    from fastapi import HTTPException
+
+    from app.core.org_scope import verify_cluster_access, set_allowed_clusters
+
+    # admin: no scope set, which is the case that used to fall through
+    set_allowed_clusters(None)
+    for blank in ("", "   ", "\t"):
+        with pytest.raises(HTTPException) as caught:
+            verify_cluster_access(blank)
+        assert caught.value.status_code == 422, f"{blank!r} answered {caught.value.status_code}"
+
+    # a real id still passes for an unscoped caller
+    verify_cluster_access("nuc2")
+
+    # and the scope check still works for a scoped one
+    set_allowed_clusters({"nuc2"})
+    try:
+        verify_cluster_access("nuc2")
+        with pytest.raises(HTTPException) as caught:
+            verify_cluster_access("blitz01")
+        assert caught.value.status_code == 403
+    finally:
+        set_allowed_clusters(None)

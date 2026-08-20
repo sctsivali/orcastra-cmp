@@ -166,11 +166,17 @@ function ClusterMembersContent() {
                     : "Node is not part of a cluster"}
               </CardDescription>
             </div>
-            <RefreshButton
-              label="Refresh cluster members"
-              lastUpdatedAt={dataUpdatedAt}
-              onRefresh={refreshNow}
-            />
+            {/* important: no node means nothing to refresh. React Query's refetch() runs the
+                query function even when the query is disabled, so this control sent
+                `?node=` and the backend went on to ask Vault for a cluster named "".
+                A control that cannot act is also a promise the page cannot keep. */}
+            {node && (
+              <RefreshButton
+                label="Refresh cluster members"
+                lastUpdatedAt={dataUpdatedAt}
+                onRefresh={refreshNow}
+              />
+            )}
           </div>
         </CardHeader>
         <CardContent>
