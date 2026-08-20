@@ -437,6 +437,8 @@ export interface NetworkInfo {
   config: Record<string, string>;
   used_by: string[];
   status: string;
+  /** Set per row by the fan-out. The backend has always sent it; this type had not. */
+  node?: string;
 }
 
 export interface NetworkListResponse {
@@ -462,6 +464,7 @@ export interface NetworkACLInfo {
   egress: Array<Record<string, any>>;
   config: Record<string, string>;
   used_by: string[];
+  node?: string;
 }
 
 export interface NetworkACLListResponse {
@@ -486,6 +489,7 @@ export interface StoragePoolInfo {
   config: Record<string, string>;
   used_by: string[];
   status: string;
+  node?: string;
 }
 
 export interface StoragePoolListResponse {
@@ -510,6 +514,7 @@ export interface StorageVolumeInfo {
   config: Record<string, string>;
   used_by: string[];
   content_type: string;
+  node?: string;
 }
 
 export interface StorageVolumeListResponse {
@@ -539,6 +544,11 @@ export interface OperationInfo {
   err: string;
   may_cancel: boolean;
   metadata: Record<string, any>;
+  /** All three are set by lxd_operations.py and were missing here, which is why the page
+   *  had to fall back to `any` and lost checking on exactly the fields it filters by. */
+  node_name?: string;
+  project?: string;
+  instance_name?: string;
 }
 
 export interface OperationListResponse {
@@ -551,6 +561,8 @@ export interface OperationListResponse {
 export interface WarningInfo {
   uuid: string;
   location: string;
+  /** The registered node that reported it, distinct from `location`, the cluster member. */
+  source_node: string;
   project: string;
   type: string;
   count: number;

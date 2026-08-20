@@ -6,14 +6,6 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -25,7 +17,7 @@ import {
 import { TableLink } from "@/components/ui/table-link";
 import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { formatInstanceType } from "@/lib/utils";
-import { Play, Square, RotateCw, RefreshCw, Trash2, Search, Filter, Terminal, Monitor, Loader2, Box } from "lucide-react";
+import { Play, Square, RotateCw, RefreshCw, Trash2, Terminal, Monitor, Loader2, Box } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
 import { TagBadge } from "@/components/tag-manager";
 import { removePendingCreate } from "@/lib/pending-creates";
@@ -39,16 +31,7 @@ import {
   useRestartInstance,
   useDeleteInstance,
 } from "@/hooks/use-lxd";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { InstanceActionDialogs } from "./components/instance-action-dialogs";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -60,6 +43,9 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { Plus } from "lucide-react";
 import { RebuildDialog } from "@/components/rebuild-dialog";
 
@@ -86,6 +72,57 @@ function rootDiskLabel(instance: any): { text: string; title: string } {
       : `Inherited from a profile${pool ? `, pool ${pool}` : ""}`,
   };
 }
+
+// note: the facet fields are named `host` and `project` deliberately, matching both the
+// existing sort fields and the OrcaHub deep-link keys. That contract keeps working with no
+// translation layer. Only `?instance=` needs mapping, and it is handled in the component.
+const INSTANCES = defineTable<any>()({
+  searchPlaceholder: "Search instances",
+  defaultSort: { field: "name", direction: "asc" },
+  columns: [
+    { field: "name", label: "Name", sort: (i) => i.name, search: (i) => i.name, filter: fromSort("text") },
+    {
+      field: "status",
+      label: "Status",
+      sort: (i) => i.status,
+      facet: (i) => i.status,
+      facetSpec: { primary: true },
+    },
+    {
+      field: "type",
+      label: "Type",
+      sort: (i) => i.type,
+      facet: (i) => i.type,
+      // formatInstanceType, not formatLabel: formatLabel("vm") returns "VM" through the
+      // acronym map, which would be a fifth vocabulary for this one enum.
+      facetSpec: { format: formatInstanceType },
+    },
+    {
+      field: "host",
+      label: "Node",
+      sort: (i) => i.host,
+      search: (i) => i.host,
+      facet: (i) => i.host,
+      facetSpec: { role: "node", primary: true },
+    },
+    {
+      field: "project",
+      label: "Project",
+      sort: (i) => i.project || "default",
+      search: (i) => i.project,
+      facet: (i) => i.project || "default",
+      facetSpec: { role: "project", primary: true },
+    },
+    { field: "ip_addresses", label: "IP Addresses", sort: (i) => i.ip_addresses?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
+    { field: "profiles", label: "Profiles", sort: (i) => i.profiles?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
+    {
+      field: "tags",
+      label: "Tags",
+      facet: (i) => (i.tags ?? []).map((t: any) => (typeof t === "string" ? t : t?.name)).filter(Boolean),
+      facetSpec: { emptyLabel: "(untagged)" },
+    },
+  ],
+});
 
 function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
@@ -149,10 +186,6 @@ function InstancesContent() {
   const deleteDisplayRef = useRef<VMInfo | null>(null);
   if (deleteTarget) deleteDisplayRef.current = deleteTarget;
   const deleteDisplay = deleteTarget ?? deleteDisplayRef.current;
-  const [searchQuery, setSearchQuery] = useState(() => searchParams.get("instance") ?? "");
-  const [filterNode, setFilterNode] = useState<string>(() => searchParams.get("host") ?? "all");
-  const [filterProject, setFilterProject] = useState<string>(() => searchParams.get("project") ?? "all");
-  const [filterStatus, setFilterStatus] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
@@ -193,24 +226,29 @@ function InstancesContent() {
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
   const canDeleteInstance = hasRole(Role.PARTNER);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (i: any) => i.name,
-      status: (i: any) => i.status,
-      type: (i: any) => i.type,
-      host: (i: any) => i.host,
-      project: (i: any) => i.project || "default",
-      ip_addresses: (i: any) => i.ip_addresses?.length ?? 0,
-      profiles: (i: any) => i.profiles?.length ?? 0,
-    }),
-    [],
-  );
+  const resetPage = () => setCurrentPage(1);
+  const filters = useTableFilters(INSTANCES, instances as any[], { onFilterChange: resetPage });
+
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
+    INSTANCES.sortAccessors,
+    INSTANCES.defaultSort.field,
+    INSTANCES.defaultSort.direction,
+    resetPage,
   );
+
+  // OrcaHub links in the wild carry ?instance=<name>. It is an external contract, so it is
+  // read forever and translated once into the canonical search key, then removed. Removing it
+  // is what keeps the seed from reasserting itself the moment the operator clears the field.
+  // ?host= and ?project= need no translation: they already are the facet keys.
+  useEffect(() => {
+    const legacy = searchParams.get("instance");
+    if (legacy === null) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("instance");
+    if (legacy) params.set("q", legacy);
+    const query = params.toString();
+    router.replace(query ? `/inventory/instances?${query}` : "/inventory/instances", { scroll: false });
+  }, [searchParams, router]);
 
   const handleInstanceClick = (instance: VMInfo) => {
     setSelectedInstance(instance);
@@ -320,34 +358,10 @@ function InstancesContent() {
     }
   };
 
-  // Get unique nodes and projects for filters
-  const availableNodes = useMemo(() => {
-    const nodes = Array.from(new Set(instances.map((i: any) => i.host as string))) as string[];
-    return nodes.sort();
-  }, [instances]);
-
-  const availableProjects = useMemo(() => {
-    const projects = Array.from(new Set(instances.map((i: any) => (i.project || "default") as string))) as string[];
-    return projects.sort();
-  }, [instances]);
-
-  // Filter and search instances
-  const filteredInstances = useMemo(() => {
-    return instances.filter((instance: any) => {
-      const matchesSearch =
-        instance.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        instance.host.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (instance.project && instance.project.toLowerCase().includes(searchQuery.toLowerCase()));
-
-      const matchesNode = filterNode === "all" || instance.host === filterNode;
-      const matchesProject = filterProject === "all" || (instance.project || "default") === filterProject;
-      const matchesStatus = filterStatus === "all" || instance.status.toLowerCase() === filterStatus.toLowerCase();
-
-      return matchesSearch && matchesNode && matchesProject && matchesStatus;
-    });
-  }, [instances, searchQuery, filterNode, filterProject, filterStatus]);
-
-  const sortedInstances = useMemo(() => sortItems(filteredInstances), [filteredInstances, sortItems]);
+  const sortedInstances = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   // Pagination
   const totalPages = Math.ceil(sortedInstances.length / pageSize);
@@ -381,75 +395,24 @@ function InstancesContent() {
 
       <UnreachableNodesBanner noun="instances" nodes={unreachableNodes} />
 
-      {/* Filters */}
       <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <CardTitle>All Instances ({filteredInstances.length} of {instances.length})</CardTitle>
-              {/* Only Partner+ can create; the create page enforces this and would
-                  bounce a Tenant straight back, so don't show a dead-end button. */}
-              {canCreateInstance && (
-                <Button
-                  onClick={() => router.push("/inventory/instances/create")}
-                  disabled={isReadOnly}
-                  title={isReadOnly ? "Action disabled in read-only mode" : "Create a new instance"}
-                >
-                  <Plus className="h-4 w-4 mr-2" />
-                  New Instance
-                </Button>
-              )}
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-              <div className="lg:col-span-2">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search instances..."
-                    value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    className="pl-9"
-                  />
-                </div>
-              </div>
-              <Select value={filterNode} onValueChange={(value) => { setFilterNode(value); setCurrentPage(1); }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {availableNodes.map((node: string) => (
-                    <SelectItem key={node} value={node}>{node}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={filterProject} onValueChange={(value) => { setFilterProject(value); setCurrentPage(1); }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="All Projects" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Projects</SelectItem>
-                  {availableProjects.map((project: string) => (
-                    <SelectItem key={project} value={project}>{project}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={filterStatus} onValueChange={(value) => { setFilterStatus(value); setCurrentPage(1); }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="All Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="running">Running</SelectItem>
-                  <SelectItem value="stopped">Stopped</SelectItem>
-                  <SelectItem value="frozen">Frozen</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
+        <CardHeader className="space-y-4">
+          <div className="flex items-center justify-between">
+            <CardTitle>All Instances</CardTitle>
+            {/* Only Partner+ can create; the create page enforces this and would
+                bounce a Tenant straight back, so don't show a dead-end button. */}
+            {canCreateInstance && (
+              <Button
+                onClick={() => router.push("/inventory/instances/create")}
+                disabled={isReadOnly}
+                title={isReadOnly ? "Action disabled in read-only mode" : "Create a new instance"}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                New Instance
+              </Button>
+            )}
           </div>
+          <TableToolbar filters={filters} noun="instances" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -676,7 +639,7 @@ function InstancesContent() {
           <DataTablePagination
             currentPage={currentPage}
             totalPages={totalPages}
-            totalItems={filteredInstances.length}
+            totalItems={sortedInstances.length}
             pageSize={pageSize}
             onPageChange={setCurrentPage}
             onPageSizeChange={setPageSize}
@@ -710,103 +673,21 @@ function InstancesContent() {
         />
       )}
 
-      {/* Delete confirmation (shared across rows, controlled by deleteTarget) */}
-      <AlertDialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => {
-          // Don't let Esc / outside-click dismiss it mid-delete; the delete
-          // keeps running server-side and closing would strand the UI.
+      {/* Confirm-and-mutate dialogs, shared across rows */}
+      <InstanceActionDialogs
+        deleteTarget={deleteTarget}
+        deleteDisplay={deleteDisplay}
+        deletePending={deleteInstance.isPending}
+        onDeleteOpenChange={(open) => {
+          // Don't let Esc / outside-click dismiss it mid-delete; the delete keeps running
+          // server-side and closing would strand the UI.
           if (!open && !deleteInstance.isPending) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete instance &quot;{deleteDisplay?.name}&quot;?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes the instance and its data from{" "}
-              {deleteDisplay?.host}.
-              {deleteDisplay?.status === "Running" &&
-                " The instance is currently running and will be force-stopped first."}
-              {deleteDisplay?.status === "Frozen" &&
-                " The instance is frozen by billing policy and will be force-stopped first."}{" "}
-              This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteInstance.isPending}>
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              // preventDefault blocks Radix's built-in close so the dialog stays
-              // open (and populated, with the spinner) for the full 10-30s that a
-              // force-stop + delete takes. The finally in handleDeleteConfirm
-              // closes it once the request resolves.
-              onClick={(e) => {
-                e.preventDefault();
-                handleDeleteConfirm();
-              }}
-              disabled={deleteInstance.isPending}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleteInstance.isPending && (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              )}
-              {deleteInstance.isPending ? "Deleting…" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Stop / Restart confirmation, with a Force (power-cycle) option. */}
-      <AlertDialog
-        open={confirmAction.open}
-        onOpenChange={(open) => setConfirmAction((prev) => ({ ...prev, open }))}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmAction.action === "stop" ? "Stop" : "Restart"} “{confirmAction.name}”?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmAction.action === "stop"
-                ? "This will shut down the instance."
-                : "This will restart the instance."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {/* A graceful stop asks the guest OS to shut down over ACPI. A VM with
-              no OS installed, or one at a boot menu/UEFI shell, has nothing
-              listening and will time out — force power-cycles those. */}
-          <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={confirmAction.force}
-              onChange={(e) =>
-                setConfirmAction((prev) => ({ ...prev, force: e.target.checked }))
-              }
-            />
-            <span className="text-sm">
-              <span className="font-medium">
-                Force (power-cycle, don&apos;t wait for the guest)
-              </span>
-              <span className="block text-xs text-muted-foreground mt-0.5">
-                {confirmAction.force
-                  ? "Cuts power immediately — like pulling the plug. Unsaved data in the guest may be lost."
-                  : "Use this if nothing in the guest will answer a graceful shutdown: no OS installed yet, sitting at a boot menu, still booting, or a live/installer image that ignores ACPI."}
-              </span>
-            </span>
-          </label>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmActionRun}>
-              {confirmAction.force ? "Force " : ""}
-              {confirmAction.action === "stop" ? "Stop" : "Restart"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        onDeleteConfirm={handleDeleteConfirm}
+        confirmAction={confirmAction}
+        onConfirmActionChange={setConfirmAction}
+        onConfirmActionRun={confirmActionRun}
+      />
     </div>
   );
 }

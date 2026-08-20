@@ -2,30 +2,29 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Terminal, Bell, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2, X } from "lucide-react";
+import { FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Terminal, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoadingLottieMediumEnhanced, LoadingLottiePageEnhanced } from "@/components/loading-lottie";
-import { VMTable } from "@/components/vm-table";
 import { NodeStatusCards } from "@/components/node-status";
 import { useRelativeTime } from "@/hooks/use-relative-time";
 import { StatsOverview } from "@/components/stats-overview";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { TagManager, TagFilter } from "@/components/tag-manager";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+  DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  TooltipTrigger } from "@/components/ui/tooltip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -35,16 +34,14 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+  AlertDialogTrigger } from "@/components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,14 +50,12 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  SelectValue } from "@/components/ui/select";
 import { useInstances, useAllProjects, useStartVM, useStopVM, useRestartVM, useDeleteVM, useDeleteProject, useUpdateProject, useUpdateInstanceTags, useUpdateProjectTags, useClusters, useWarnings, useSystemWarnings, queryKeys } from "@/hooks/use-lxd";
 import { useQueryClient } from "@tanstack/react-query";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
 import { toast } from "@/hooks/use-toast";
-import { cn } from "@/lib/utils";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
@@ -113,8 +108,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
       toast({
         title: "Read-Only Mode Active",
         description: "Tag updates are disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     try {
@@ -122,20 +116,17 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
         host: vm.host,
         instanceName: vm.name,
         tags: newTags,
-        project: vm.project || "default",
-      });
+        project: vm.project || "default" });
       toast({
         title: "Tags Updated",
         description: `Tags for ${vm.name} have been updated.`,
-        variant: "success",
-      });
+        variant: "success" });
       onTagsUpdate?.();
     } catch (error) {
       toast({
         title: "Failed to update tags",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -144,26 +135,22 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
       toast({
         title: "Read-Only Mode Active",
         description: "Instance actions are disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     try {
       await startVM.mutateAsync({
         name: vm.name,
-        request: { host: vm.host, project: vm.project || "default" },
-      });
+        request: { host: vm.host, project: vm.project || "default" } });
       toast({
         title: "VM Started",
         description: `${vm.name} is now starting.`,
-        variant: "success",
-      });
+        variant: "success" });
     } catch (error) {
       toast({
         title: "Failed to start VM",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -172,26 +159,22 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
       toast({
         title: "Read-Only Mode Active",
         description: "Instance actions are disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     try {
       await stopVM.mutateAsync({
         name: vm.name,
-        request: { host: vm.host, project: vm.project || "default" },
-      });
+        request: { host: vm.host, project: vm.project || "default" } });
       toast({
         title: "VM Stopped",
         description: `${vm.name} is now stopping.`,
-        variant: "success",
-      });
+        variant: "success" });
     } catch (error) {
       toast({
         title: "Failed to stop VM",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -200,26 +183,22 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
       toast({
         title: "Read-Only Mode Active",
         description: "Instance actions are disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     try {
       await restartVM.mutateAsync({
         name: vm.name,
-        request: { host: vm.host, project: vm.project || "default" },
-      });
+        request: { host: vm.host, project: vm.project || "default" } });
       toast({
         title: "VM Restarted",
         description: `${vm.name} is now restarting.`,
-        variant: "success",
-      });
+        variant: "success" });
     } catch (error) {
       toast({
         title: "Failed to restart VM",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -228,8 +207,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
       toast({
         title: "Read-Only Mode Active",
         description: "Instance deletion is disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     setIsDeleting(true);
@@ -238,19 +216,16 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
         name: vm.name,
         host: vm.host,
         force: true,
-        project: vm.project || "default",
-      });
+        project: vm.project || "default" });
       toast({
         title: "VM Deleted",
         description: `${vm.name} has been deleted.`,
-        variant: "success",
-      });
+        variant: "success" });
     } catch (error) {
       toast({
         title: "Failed to delete VM",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     } finally {
       setIsDeleting(false);
     }
@@ -389,8 +364,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                     useTerminalStore.getState().openTerminal({
                       instanceName: vm.name,
                       host: vm.host,
-                      project: vm.project || "default",
-                    });
+                      project: vm.project || "default" });
                   }}
                   disabled={!isRunning || !canConsole}
                   title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Terminal"}
@@ -413,8 +387,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       instanceName: vm.name,
                       instanceType: vm.type,
                       host: vm.host,
-                      project: vm.project || "default",
-                    });
+                      project: vm.project || "default" });
                   }}
                   disabled={!isRunning || !canConsole}
                   title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Console"}
@@ -496,28 +469,24 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       toast({
         title: "Read-Only Mode Active",
         description: "Tag updates are disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     try {
       await updateProjectTags.mutateAsync({
         host: project.host,
         projectName: project.name,
-        tags: newTags,
-      });
+        tags: newTags });
       toast({
         title: "Tags Updated",
         description: `Tags for project '${project.name}' have been updated.`,
-        variant: "success",
-      });
+        variant: "success" });
       refetch();
     } catch (error) {
       toast({
         title: "Failed to update tags",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
   
@@ -638,8 +607,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       toast({
         title: "Read-Only Mode Active",
         description: "Project updates are disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     if (submitInFlightRef.current) return;
@@ -675,8 +643,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       toast({
         title: "Project Updated",
         description: `Project '${project.name}' has been updated successfully.`,
-        variant: "success",
-      });
+        variant: "success" });
 
       setEditDialogOpen(false);
       refetch(); // Refresh the project list
@@ -684,8 +651,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       toast({
         title: "Failed to update project",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     } finally {
       submitInFlightRef.current = false;
       setIsSaving(false);
@@ -697,8 +663,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       toast({
         title: "Read-Only Mode Active",
         description: "Project deletion is disabled in read-only mode",
-        variant: "destructive",
-      });
+        variant: "destructive" });
       return;
     }
     e.stopPropagation();
@@ -706,20 +671,17 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
     try {
       await deleteProject.mutateAsync({
         host: project.host,
-        projectName: project.name,
-      });
+        projectName: project.name });
       toast({
         title: "Project Deleted",
         description: `Project '${project.name}' has been deleted from ${project.host}.`,
-        variant: "success",
-      });
+        variant: "success" });
       setDeleteDialogOpen(false);
     } catch (error) {
       toast({
         title: "Failed to delete project",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     } finally {
       setIsDeleting(false);
     }
@@ -1072,28 +1034,88 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
   );
 }
 
+interface ProjectsContext {
+  /** Instance names and tags for a project, indexed once instead of re-scanned per call. */
+  index: Map<string, { names: string[]; tags: string[]; count: number }>;
+}
+
+// A card grid, so it takes the shared toolbar and filter engine but none of the table
+// plumbing. Tags stay behind TagFilter rather than the generic facet popover: getTagColor
+// derives a tag's colour from its prefix, so the colour is data here, not decoration.
+const PROJECTS = defineTable<ProjectInfo, ProjectsContext>()({
+  searchPlaceholder: "Search projects by name, host, description, or instance",
+  defaultSort: { field: "name", direction: "asc" },
+  columns: [
+    { field: "name", label: "Project", sort: (p) => p.name, search: (p) => p.name, filter: fromSort("text") },
+    {
+      field: "host",
+      label: "Node",
+      sort: (p) => p.host,
+      search: (p) => p.host,
+      facet: (p) => p.host,
+      facetSpec: { role: "node", primary: true } },
+    { field: "description", label: "Description", sort: (p) => p.description, search: (p) => p.description, filter: fromSort("text") },
+    {
+      field: "tags",
+      label: "Tags",
+      facet: (p, ctx) => {
+        const entry = ctx.index.get(`${p.host}:${p.name}`);
+        return Array.from(new Set([...(p.tags ?? []), ...(entry?.tags ?? [])]));
+      },
+      facetSpec: { emptyLabel: "(untagged)" } },
+  ] });
+
 function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstanceCounts, refetch, lastUpdatedAt }: ProjectsSectionProps) {
   const lastUpdated = useRelativeTime(lastUpdatedAt);
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const [selectedTags, setSelectedTags] = React.useState<string[]>([]);
-  const [selectedNode, setSelectedNode] = React.useState<string>("all");
+  // note: one index built once, instead of getProjectInstances re-scanning the whole
+  // instance list inside a predicate that ran from both a reduce and a map on every render.
+  const projectIndex = React.useMemo(() => {
+    const index = new Map<string, { names: string[]; tags: string[]; count: number }>();
+    for (const vm of (vmsData ?? []) as any[]) {
+      const key = `${vm.host}:${vm.project || "default"}`;
+      const entry = index.get(key) ?? { names: [], tags: [], count: 0 };
+      entry.names.push(vm.name);
+      if (vm.tags?.length) entry.tags.push(...vm.tags);
+      entry.count += 1;
+      index.set(key, entry);
+    }
+    return index;
+  }, [vmsData]);
+
+  const allProjects = React.useMemo(
+    () => (projectsData ?? []).flatMap((n: any) => n.projects as ProjectInfo[]),
+    [projectsData],
+  );
+
+  const filterContext = React.useMemo(() => ({ index: projectIndex }), [projectIndex]);
+
+  // The declared accessors see the project row only. Instance names, their tags and the instance
+  // count live in the index, so the search reaches them from here and then passes through every
+  // active facet like any other hit.
+  const searchProjectIndex = React.useCallback(
+    (project: ProjectInfo, query: string) => {
+      const entry = projectIndex.get(`${project.host}:${project.name}`);
+      if (!entry) return false;
+      return (
+        entry.names.some((n) => n.toLowerCase().includes(query)) ||
+        entry.tags.some((t) => t.toLowerCase().includes(query)) ||
+        String(entry.count).includes(query)
+      );
+    },
+    [projectIndex],
+  );
+
+  const filters = useTableFilters(PROJECTS, allProjects, {
+    context: filterContext,
+    extraSearch: searchProjectIndex,
+    // Tags render through TagFilter rather than the toolbar, so keep the facet out of the
+    // toolbar's own controls. It still applies, and it still shows as a removable chip.
+    availableFields: PROJECTS.facetFields.filter((f) => f !== "tags") });
+  const selectedTags = filters.selectedValues("tags");
   const { isReadOnly } = useReadOnlyMode();
 
   // Get unique nodes from projects
-  const availableNodes = React.useMemo(() => {
-    if (!projectsData || !Array.isArray(projectsData)) return [];
-    const nodes = new Set<string>();
-    projectsData.forEach((nodeProjects) => {
-      if (nodeProjects && nodeProjects.projects) {
-        nodeProjects.projects.forEach((project) => {
-          if (project.host) nodes.add(project.host);
-        });
-      }
-    });
-    return Array.from(nodes).sort();
-  }, [projectsData]);
-
   // Collect all unique tags from projects and instances
   const allTags = React.useMemo(() => {
     const tags = new Set<string>();
@@ -1143,54 +1165,11 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
     return { running, stopped, other, total: instances.length };
   };
 
-  // Filter projects based on search query, tags, and node
-  const filterProjects = (project: ProjectInfo) => {
-    // Filter by node first
-    if (selectedNode !== "all" && project.host !== selectedNode) {
-      return false;
-    }
-
-    // Filter by tags
-    if (selectedTags.length > 0) {
-      const projectTags = project.tags || [];
-      const instances = getProjectInstances(project.host, project.name);
-      const instanceTags = instances.flatMap(vm => vm.tags || []);
-      const allProjectTags = Array.from(new Set([...projectTags, ...instanceTags]));
-      
-      const hasMatchingTag = selectedTags.some(tag => allProjectTags.includes(tag));
-      if (!hasMatchingTag) return false;
-    }
-
-    // Then filter by search query
-    if (!searchQuery.trim()) return true;
-    
-    const query = searchQuery.toLowerCase();
-    const matchesName = project.name.toLowerCase().includes(query);
-    const matchesHost = project.host.toLowerCase().includes(query);
-    const matchesDescription = project.description?.toLowerCase().includes(query);
-    const projectKey = `${project.host}:${project.name}`;
-    const instanceCount = projectInstanceCounts.get(projectKey) || 0;
-    const matchesInstanceCount = instanceCount.toString().includes(query);
-    
-    // Also search in instance names and tags within the project
-    const instances = getProjectInstances(project.host, project.name);
-    const matchesInstanceName = instances.some(vm => 
-      vm.name.toLowerCase().includes(query)
-    );
-    const matchesTags = [...(project.tags || []), ...instances.flatMap(vm => vm.tags || [])]
-      .some(tag => tag.toLowerCase().includes(query));
-    
-    return matchesName || matchesHost || matchesDescription || matchesInstanceCount || matchesInstanceName || matchesTags;
-  };
-
-  // Get filtered projects count
-  const filteredProjectsCount = projectsData?.reduce((count, nodeProjects) => {
-    return count + nodeProjects.projects.filter(filterProjects).length;
-  }, 0) || 0;
-
-  const totalProjectsCount = projectsData?.reduce((count, nodeProjects) => {
-    return count + nodeProjects.projects.length;
-  }, 0) || 0;
+  // note: this used to union the index hits back on top of filteredRows. Those extras never went
+  // through the facet masks, so a project the Node or Tags facet excluded still rendered a card,
+  // and the toolbar counted filteredRows while the grid showed more. The search now reaches the
+  // index through the hook's extraSearch, so one set feeds both.
+  const visibleProjects = filters.filteredRows;
 
   return (
     <div className="space-y-4">
@@ -1205,55 +1184,15 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
         </div>
       </div>
 
-      {/* Search Bar and Node Filter */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
-          <Input
-            type="text"
-            placeholder="Search projects by name, host, description, or instance..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-4"
-          />
-          {searchQuery && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
-              onClick={() => setSearchQuery("")}
-            >
-              <span className="sr-only">Clear search</span>
-              <X className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-        {availableNodes.length > 1 && (
-          <Select value={selectedNode} onValueChange={setSelectedNode}>
-            <SelectTrigger className="w-[180px]">
-              <Server className="h-4 w-4 mr-2" />
-              <SelectValue placeholder="All Nodes" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Nodes ({availableNodes.length})</SelectItem>
-              {availableNodes.map((node: string) => (
-                <SelectItem key={node} value={node}>{node}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-        {(searchQuery || selectedTags.length > 0 || selectedNode !== "all") && (
-          <div className="text-sm text-muted-foreground whitespace-nowrap">
-            {filteredProjectsCount} of {totalProjectsCount}
-          </div>
-        )}
-      </div>
+      <TableToolbar filters={filters} noun="projects" />
 
-      {/* Tag Filter */}
+      {/* Tag Filter: an alternative renderer for the same facet, not a second control. Its
+          colours come from the tag prefix, which the generic popover cannot show. */}
       {allTags.length > 0 && (
         <TagFilter
           availableTags={allTags}
           selectedTags={selectedTags}
-          onTagsChange={setSelectedTags}
+          onTagsChange={(tags) => filters.setFacet("tags", tags)}
         />
       )}
       
@@ -1264,10 +1203,7 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
           </div>
         ) : (
           <>
-            {projectsData?.map((nodeProjects) =>
-              nodeProjects.projects
-                .filter(filterProjects)
-                .map((project) => {
+            {visibleProjects.map((project) => {
                   const projectKey = `${project.host}:${project.name}`;
                   const instanceCount = projectInstanceCounts.get(projectKey) || 0;
                   const isExpanded = expandedProjects.has(projectKey);
@@ -1288,9 +1224,8 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
                       isReadOnly={isReadOnly}
                     />
                   );
-                })
-            )}
-            {searchQuery && filteredProjectsCount === 0 && (
+                })}
+            {filters.activeFilterCount > 0 && visibleProjects.length === 0 && (
               <div className="col-span-full text-center py-12">
                 <FolderKanban className="h-12 w-12 text-muted-foreground mx-auto mb-3 opacity-50" />
                 <h3 className="text-lg font-semibold text-muted-foreground mb-2">
@@ -1546,7 +1481,8 @@ export function Dashboard() {
       <NodeStatusCards lastUpdatedAt={dataUpdatedAt} onRefresh={handleOverviewRefresh} />
 
       {/* Projects Overview */}
-      <ProjectsSection 
+        <React.Suspense fallback={<LoadingLottieMediumEnhanced showProgress={false} />}>
+        <ProjectsSection 
         projectsData={projectsData} 
         projectsLoading={projectsLoading}
         vmsData={vmsData?.vms || []}
@@ -1554,6 +1490,7 @@ export function Dashboard() {
         refetch={refetch}
         lastUpdatedAt={dataUpdatedAt}
       />
+        </React.Suspense>
     </div>
   );
 }

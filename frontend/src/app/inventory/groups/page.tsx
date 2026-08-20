@@ -1,29 +1,29 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  DialogTitle } from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
+import { TableEmptyRow } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { getEntitlementLabel } from "@/lib/lxd-entitlements";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import {
@@ -31,15 +31,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { 
   Users, 
   UserCheck, 
@@ -48,10 +40,9 @@ import {
   Edit, 
   Trash2, 
   MoreVertical,
-  Search,
-  Loader2,
-} from "lucide-react";
-import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
+  
+  Loader2 } from "lucide-react";
+import { IdentityInfo, IdentityListResponse } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useGroups, useDeleteGroup, useIdentities } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -65,6 +56,61 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
+// filter-coverage: no project dimension here, and not for lack of a mechanism. A group's
+// permissions[].url values do carry ?project= when LXD scopes them, and projectsFromUsedBy
+// already parses exactly that shape. Sampling the live fleet found one distinct permission URL
+// across every group, `/1.0`, with no project qualifier at all, so the facet would derive
+// "default" for every row: a single-option control that the pinned-role rule would then render
+// unconditionally. That turns an invisible gap into a visible dead control. Revisit if
+// per-project group permissions ever appear in the wild.
+const GROUPS = defineTable<any>()({
+  searchPlaceholder: "Search groups",
+  defaultSort: { field: "name", direction: "asc" },
+  columns: [
+    { field: "name", label: "Name", sort: (g) => g.name, search: (g) => g.name, filter: fromSort("text") },
+    {
+      field: "description",
+      label: "Description",
+      sort: (g) => g.description,
+      search: (g) => g.description, filter: fromSort("text") },
+    {
+      field: "node",
+      label: "Node",
+      sort: (g) => g.node,
+      search: (g) => g.node,
+      facet: (g) => g.node,
+      facetSpec: { role: "node", primary: true } },
+    // Identities and Permissions stay count columns with no facet: "which group has the
+    // most" and "which has none" are already answered by sorting.
+    {
+      field: "identities",
+      label: "Identities",
+      sort: (g) => (g.identities?.tls?.length || 0) + (g.identities?.oidc?.length || 0), filter: fromSort("number", { unit: "count" }) },
+    { field: "permissions", label: "Permissions", sort: (g) => g.permissions?.length || 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
+  ] });
+
+// The permissions table lives inside a dialog, so its filter state stays local rather than
+// being written into the address bar of the page behind it.
+const GROUP_PERMISSIONS = defineTable<any>()({
+  id: "perms",
+  searchPlaceholder: "Search permissions",
+  defaultSort: { field: "entity_type", direction: "asc" },
+  columns: [
+    {
+      field: "entity_type",
+      label: "Entity Type",
+      sort: (p) => p.entity_type,
+      facet: (p) => p.entity_type,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "url", label: "Resource URL", sort: (p) => p.url, search: (p) => p.url, filter: fromSort("text") },
+    {
+      field: "entitlement",
+      label: "Entitlement",
+      sort: (p) => p.entitlement,
+      facet: (p) => p.entitlement,
+      facetSpec: { primary: true, format: getEntitlementLabel } },
+  ] });
+
 function GroupsContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useGroups();
   const groups = (data as any)?.groups || [];
@@ -77,8 +123,6 @@ function GroupsContent() {
   const { isReadOnly } = useReadOnlyMode();
   
   // Pagination and search state
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterNode, setFilterNode] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   
@@ -93,14 +137,6 @@ function GroupsContent() {
   const [isDeleting, setIsDeleting] = useState(false);
 
   // Get unique nodes for filter
-  const availableNodes = useMemo((): string[] => {
-    const nodeSet = new Set<string>();
-    groups.forEach((g: any) => {
-      if (g.node) nodeSet.add(g.node as string);
-    });
-    return Array.from(nodeSet).sort();
-  }, [groups]);
-
   // Fetch identities for the selected group's node (for view members modal)
   const { data: identitiesData } = useIdentities(selectedGroup?.node || "");
   const allIdentities: IdentityInfo[] = (identitiesData as IdentityListResponse)?.identities || [];
@@ -111,37 +147,21 @@ function GroupsContent() {
     return identity?.name || null;
   };
 
-  // Main table sort (count columns: identities = tls+oidc, permissions array length)
-  const sortAccessors = useMemo(() => ({
-    name: (g: any) => g.name,
-    description: (g: any) => g.description,
-    node: (g: any) => g.node,
-    identities: (g: any) => (g.identities?.tls?.length || 0) + (g.identities?.oidc?.length || 0),
-    permissions: (g: any) => g.permissions?.length || 0,
-  }), []);
+  const resetPage = () => setCurrentPage(1);
+  const filters = useTableFilters(GROUPS, groups as any[], { onFilterChange: resetPage });
+
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
+    GROUPS.sortAccessors,
+    GROUPS.defaultSort.field,
+    GROUPS.defaultSort.direction,
+    resetPage,
   );
 
-  // Filter and search groups
-  const filteredGroups = useMemo(() => {
-    return groups.filter((group: any) => {
-      const matchesSearch =
-        group.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (group.description && group.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        (group.node && group.node.toLowerCase().includes(searchQuery.toLowerCase()));
-
-      const matchesNode = filterNode === "all" || group.node === filterNode;
-
-      return matchesSearch && matchesNode;
-    });
-  }, [groups, searchQuery, filterNode]);
-
   // Sort across the full filtered set before paginating
-  const sortedGroups = useMemo(() => sortItems(filteredGroups), [filteredGroups, sortItems]);
+  const sortedGroups = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   // Pagination
   const totalPages = Math.ceil(sortedGroups.length / pageSize);
@@ -150,18 +170,21 @@ function GroupsContent() {
     return sortedGroups.slice(startIndex, startIndex + pageSize);
   }, [sortedGroups, currentPage, pageSize]);
 
-  // Permissions modal sort (separate instance, no pagination)
-  const permSortAccessors = useMemo(() => ({
-    entity_type: (p: any) => p.entity_type,
-    url: (p: any) => p.url,
-    entitlement: (p: any) => p.entitlement,
-  }), []);
+  // Permissions modal: its own filter and sort instance, state kept out of the URL.
+  const permFilters = useTableFilters(
+    GROUP_PERMISSIONS,
+    (selectedGroup?.permissions ?? []) as any[],
+    { syncUrl: false },
+  );
   const {
     sortField: permSortField,
     sortDirection: permSortDirection,
     handleSort: permHandleSort,
-    sortItems: permSortItems,
-  } = useTableSort(permSortAccessors, "entity_type");
+    sortItems: permSortItems } = useTableSort(
+    GROUP_PERMISSIONS.sortAccessors,
+    GROUP_PERMISSIONS.defaultSort.field,
+    GROUP_PERMISSIONS.defaultSort.direction,
+  );
 
   const handleShowIdentities = (group: any) => {
     setSelectedGroup(group);
@@ -190,21 +213,18 @@ function GroupsContent() {
     try {
       await deleteGroupMutation.mutateAsync({
         name: groupToDelete.name,
-        host: groupToDelete.node,
-      });
+        host: groupToDelete.node });
 
       toast({
         title: "Success",
-        description: `Group "${groupToDelete.name}" deleted successfully`,
-      });
+        description: `Group "${groupToDelete.name}" deleted successfully` });
 
       refetch();
     } catch (error: any) {
       toast({
         title: "Error",
         description: error.message || "Failed to delete group",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     } finally {
       setIsDeleting(false);
       setDeleteDialogOpen(false);
@@ -251,39 +271,9 @@ function GroupsContent() {
       <UnreachableNodesBanner noun="groups" nodes={unreachableNodes} />
 
       <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <CardTitle>All Groups ({filteredGroups.length} of {groups.length})</CardTitle>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="lg:col-span-2">
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    placeholder="Search groups..."
-                    value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      setCurrentPage(1);
-                    }}
-                    className="pl-9"
-                  />
-                </div>
-              </div>
-              <Select value={filterNode} onValueChange={(value) => { setFilterNode(value); setCurrentPage(1); }}>
-                <SelectTrigger>
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {availableNodes.map((node) => (
-                    <SelectItem key={node} value={node}>{node}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+        <CardHeader className="space-y-4">
+          <CardTitle>All Groups</CardTitle>
+          <TableToolbar filters={filters} noun="groups" />
         </CardHeader>
         <CardContent>
           {groups.length === 0 ? (
@@ -312,7 +302,19 @@ function GroupsContent() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedGroups.map((group: any) => (
+                {paginatedGroups.length === 0 ? (
+                  <TableEmptyRow
+                    colSpan={6}
+                    icon={Users}
+                    title="No groups found"
+                    description={
+                      filters.activeFilterCount > 0
+                        ? "No group matches the current filters."
+                        : undefined
+                    }
+                  />
+                ) : (
+                  paginatedGroups.map((group: any) => (
                   <TableRow key={`${group.node}-${group.name}`}>
                     <TableCell className="font-medium">{group.name}</TableCell>
                     <TableCell className="max-w-xs truncate">
@@ -367,13 +369,14 @@ function GroupsContent() {
                       </DropdownMenu>
                     </TableCell>
                   </TableRow>
-                ))}
+                ))
+              )}
               </TableBody>
             </Table>
             <DataTablePagination
               currentPage={currentPage}
               totalPages={totalPages || 1}
-              totalItems={filteredGroups.length}
+              totalItems={sortedGroups.length}
               pageSize={pageSize}
               onPageChange={setCurrentPage}
               onPageSizeChange={setPageSize}
@@ -487,8 +490,10 @@ function GroupsContent() {
               {selectedGroup?.permissions?.length || 0} permission(s) configured for this group
             </DialogDescription>
           </DialogHeader>
-          <div className="mt-4">
+          <div className="mt-4 space-y-4">
             {selectedGroup?.permissions?.length > 0 ? (
+              <>
+              <TableToolbar filters={permFilters} noun="permissions" />
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -498,7 +503,7 @@ function GroupsContent() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {permSortItems(selectedGroup.permissions).map((permission: any, index: number) => (
+                  {permSortItems(permFilters.filteredRows).map((permission: any, index: number) => (
                     <TableRow key={index}>
                       <TableCell>
                         {formatLabel(permission.entity_type)}
@@ -513,6 +518,7 @@ function GroupsContent() {
                   ))}
                 </TableBody>
               </Table>
+              </>
             ) : (
               <div className="text-center py-8 text-muted-foreground">
                 No permissions configured for this group
@@ -586,5 +592,12 @@ export default function GroupsPage() {
   if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
 
-  return <GroupsContent />;
+  // Suspense is required because useTableFilters reads useSearchParams, which opts the
+  // component out of prerendering. The role gate stays in this file: check-role-gates.mjs
+  // reads page text and does not follow imports.
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <GroupsContent />
+    </Suspense>
+  );
 }

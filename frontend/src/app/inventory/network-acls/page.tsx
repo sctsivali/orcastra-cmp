@@ -1,11 +1,9 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { UsedByProjects } from "@/components/used-by-projects";
@@ -13,19 +11,15 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
+  
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Search } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+  TableRow } from "@/components/ui/table";
+import { ShieldCheck } from "lucide-react";
+import { TableEmptyRow } from "@/components/ui/table-text";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { projectsFromUsedBy } from "@/lib/used-by";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { useNetworkACLs } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -41,63 +35,80 @@ interface ACLInfo {
   node?: string;
 }
 
-export default function NetworkACLsPage() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNetworkACLs();
+const ACLS = defineTable<ACLInfo>()({
+  searchPlaceholder: "Search network ACLs",
+  defaultSort: { field: "name", direction: "asc" },
+  columns: [
+    { field: "name", label: "Name", sort: (a) => a.name, search: (a) => a.name, filter: fromSort("text") },
+    {
+      field: "description",
+      label: "Description",
+      sort: (a) => a.description,
+      search: (a) => a.description, filter: fromSort("text") },
+    {
+      field: "node",
+      label: "Node",
+      sort: (a) => a.node,
+      facet: (a) => a.node,
+      facetSpec: { role: "node", primary: true } },
+    { field: "ingress", label: "Ingress Rules", sort: (a) => a.ingress?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
+    { field: "egress", label: "Egress Rules", sort: (a) => a.egress?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
+    { field: "used_by", label: "Used By", sort: (a) => a.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
+    {
+      field: "projects",
+      label: "Projects",
+      // Was a copy of the used_by accessor, so the header sorted by resource count while the
+      // cell displayed a project count. It now sorts by what it displays.
+      sort: (a) => projectsFromUsedBy(a.used_by).length,
+      facet: (a) => projectsFromUsedBy(a.used_by),
+      facetSpec: { role: "project", primary: true, emptyLabel: "(no project)" } },
+    {
+      field: "usage",
+      label: "Usage",
+      facet: (a) => (a.used_by?.length ? "In use" : "Unused"),
+      facetSpec: {} },
+  ] });
+
+function NetworkACLsContent() {
+  const { data, isLoading, refreshNow, dataUpdatedAt } = useNetworkACLs();
   const acls = (data as any)?.acls || [];
   
-  const [searchQuery, setSearchQuery] = useState("");
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
-  const [filterNode, setFilterNode] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { toast } = useToast();
+  const resetPage = () => setCurrentPage(1);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (i: any) => i.name,
-      description: (i: any) => i.description,
-      node: (i: any) => i.node,
-      ingress: (i: any) => i.ingress?.length ?? 0,
-      egress: (i: any) => i.egress?.length ?? 0,
-      used_by: (i: any) => i.used_by?.length ?? 0,
-      projects: (i: any) => i.used_by?.length ?? 0,
-    }),
-    [],
-  );
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
-  );
-
+  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
+  // returns nothing, which is the state that used to leave the empty row one column too wide.
   const nodes = useMemo(() => {
     const nodeSet = new Set(acls.map((a: any) => a.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [acls]);
 
-  const filteredACLs = useMemo(() => {
-    let filtered = acls;
+  // The column appears once any node is known, the facet once there are two to choose
+  // between. The thresholds differ on purpose: one option filters nothing.
+  const availableFields = useMemo(
+    () => (nodes.length > 0 ? ACLS.facetFields : ACLS.facetFields.filter((f) => f !== "node")),
+    [nodes.length],
+  );
 
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (acl: any) =>
-          acl.name.toLowerCase().includes(query) ||
-          (acl.description && acl.description.toLowerCase().includes(query))
-      );
-    }
+  const filters = useTableFilters(ACLS, acls as ACLInfo[], {
+    onFilterChange: resetPage,
+    availableFields });
 
-    if (filterNode !== "all") {
-      filtered = filtered.filter((acl: any) => acl.node === filterNode);
-    }
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    ACLS.sortAccessors,
+    ACLS.defaultSort.field,
+    ACLS.defaultSort.direction,
+    resetPage,
+  );
 
-    return filtered;
-  }, [acls, searchQuery, filterNode]);
-
-  const sortedACLs = useMemo(() => sortItems(filteredACLs), [filteredACLs, sortItems]);
+  const sortedACLs = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   const totalPages = Math.ceil(sortedACLs.length / pageSize);
   const paginatedACLs = sortedACLs.slice(
@@ -130,48 +141,9 @@ export default function NetworkACLsPage() {
       <UnreachableNodesBanner noun="network ACLs" nodes={unreachableNodes} />
 
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search network ACLs..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            {nodes.length > 0 && (
-              <Select value={filterNode} onValueChange={(value) => {
-                setFilterNode(value);
-                setCurrentPage(1);
-              }}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node: any) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            All Network ACLs ({filteredACLs.length})
-            {(searchQuery || filterNode !== "all") ? ` (filtered from ${acls.length})` : ""}
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>All Network ACLs</CardTitle>
+          <TableToolbar filters={filters} noun="network ACLs" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -188,11 +160,16 @@ export default function NetworkACLsPage() {
             </TableHeader>
             <TableBody>
               {paginatedACLs.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
-                    No network ACLs found
-                  </TableCell>
-                </TableRow>
+                <TableEmptyRow
+                  colSpan={nodes.length > 0 ? 7 : 6}
+                  icon={ShieldCheck}
+                  title="No network ACLs found"
+                  description={
+                    filters.activeFilterCount > 0
+                      ? "No network ACL matches the current filters."
+                      : undefined
+                  }
+                />
               ) : (
                 paginatedACLs.map((acl: any, idx: number) => (
                   <TableRow key={`${acl.node}-${acl.name}-${idx}`}>
@@ -238,7 +215,7 @@ export default function NetworkACLsPage() {
                 currentPage={currentPage}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={filteredACLs.length}
+                totalItems={sortedACLs.length}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
@@ -250,5 +227,15 @@ export default function NetworkACLsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function NetworkACLsPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <NetworkACLsContent />
+    </Suspense>
   );
 }

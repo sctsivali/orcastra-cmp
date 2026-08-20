@@ -1,104 +1,121 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TableToolbar } from "@/components/ui/table-toolbar";
 import { UsedByProjects } from "@/components/used-by-projects";
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyValue } from "@/components/ui/table-text";
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Search } from "lucide-react";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { Layers } from "lucide-react";
 import { ProfileInfo } from "@/types/api";
-import { useToast } from "@/hooks/use-toast";
 import { useProfiles } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { projectsFromUsedBy } from "@/lib/used-by";
+import { defineTable, fromSort } from "@/lib/table-filter";
 
-export default function ProfilesPage() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useProfiles();
-  const profiles = (data as any)?.profiles || [];
-  
-  const [searchQuery, setSearchQuery] = useState("");
+const PROFILES = defineTable<ProfileInfo>()({
+  searchPlaceholder: "Search profiles",
+  defaultSort: { field: "name", direction: "asc" },
+  columns: [
+    { field: "name", label: "Name", sort: (p) => p.name, search: (p) => p.name, filter: fromSort("text") },
+    {
+      field: "description",
+      label: "Description",
+      sort: (p) => p.description,
+      search: (p) => p.description, filter: fromSort("text") },
+    {
+      field: "node",
+      label: "Node",
+      sort: (p) => p.node,
+      facet: (p) => p.node,
+      facetSpec: { role: "node", primary: true },
+    },
+    { field: "devices", label: "Devices", sort: (p) => Object.keys(p.devices || {}).length, filter: fromSort("number", { unit: "count" }) },
+    { field: "used_by", label: "Used By", sort: (p) => p.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
+    {
+      field: "projects",
+      label: "Projects",
+      // Was a copy of the used_by accessor, so the header sorted by instance count while the
+      // cell displayed a project count. It now sorts by what it displays.
+      sort: (p) => projectsFromUsedBy(p.used_by).length,
+      facet: (p) => projectsFromUsedBy(p.used_by),
+      facetSpec: { role: "project", primary: true, emptyLabel: "(no project)" },
+    },
+    {
+      field: "usage",
+      label: "Usage",
+      facet: (p) => (p.used_by?.length ? "In use" : "Unused"),
+      facetSpec: {},
+    },
+  ],
+});
+
+function ProfilesContent() {
+  const { data, isLoading, refreshNow, dataUpdatedAt } = useProfiles();
+  const profiles: ProfileInfo[] = useMemo(() => (data as any)?.profiles || [], [data]);
+
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
-  const [filterNode, setFilterNode] = useState<string>("all");
+
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { toast } = useToast();
+  const resetPage = () => setCurrentPage(1);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (i: any) => i.name,
-      description: (i: any) => i.description,
-      node: (i: any) => i.node,
-      devices: (i: any) => Object.keys(i.devices || {}).length,
-      used_by: (i: any) => i.used_by?.length ?? 0,
-      projects: (i: any) => i.used_by?.length ?? 0,
-    }),
-    [],
+
+  // note: derived from the rows, not from the fleet, matching the five sibling used_by pages.
+  // A pinned role is exempt from the two-value threshold, so without this gate the Node control
+  // renders on a scope with no node at all and offers nothing but the empty bucket.
+  const nodes = useMemo(
+    () => Array.from(new Set(profiles.map((p: any) => p.node).filter(Boolean))).sort(),
+    [profiles],
   );
+
+  // Header, cell and the empty row's width move together; a mismatch renders a short row.
+  const columnCount = nodes.length > 0 ? 6 : 5;
+
+  const availableFields = useMemo(
+    () =>
+      nodes.length > 0
+        ? PROFILES.facetFields
+        : PROFILES.facetFields.filter((f) => f !== "node"),
+    [nodes.length],
+  );
+
+  const filters = useTableFilters(PROFILES, profiles, {
+    onFilterChange: resetPage,
+    availableFields,
+  });
+
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
+    PROFILES.sortAccessors,
+    PROFILES.defaultSort.field,
+    PROFILES.defaultSort.direction,
+    resetPage,
   );
 
-  // Get unique nodes
-  const nodes = useMemo(() => {
-    const nodeSet = new Set(profiles.map((p: any) => p.node).filter((n: any): n is string => Boolean(n)));
-    return Array.from(nodeSet).sort();
-  }, [profiles]);
+  const sortedProfiles = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
-  // Filter and search
-  const filteredProfiles = useMemo(() => {
-    let filtered = profiles;
-
-    // Search
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (profile: any) =>
-          profile.name.toLowerCase().includes(query) ||
-          (profile.description && profile.description.toLowerCase().includes(query))
-      );
-    }
-
-    // Filter by node
-    if (filterNode !== "all") {
-      filtered = filtered.filter((profile: any) => profile.node === filterNode);
-    }
-
-    return filtered;
-  }, [profiles, searchQuery, filterNode]);
-
-  const sortedProfiles = useMemo(() => sortItems(filteredProfiles), [filteredProfiles, sortItems]);
-
-  // Pagination
   const totalPages = Math.ceil(sortedProfiles.length / pageSize);
   const paginatedProfiles = sortedProfiles.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   if (isLoading) {
@@ -125,49 +142,10 @@ export default function ProfilesPage() {
 
       <UnreachableNodesBanner noun="profiles" nodes={unreachableNodes} />
 
-      {/* Search and Filters */}
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search profiles..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            <Select value={filterNode} onValueChange={(value) => {
-              setFilterNode(value);
-              setCurrentPage(1);
-            }}>
-              <SelectTrigger className="w-full sm:w-[200px]">
-                <SelectValue placeholder="All Nodes" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Nodes</SelectItem>
-                {nodes.map((node: any) => (
-                  <SelectItem key={node} value={node}>
-                    {node}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Profiles Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            All Profiles ({filteredProfiles.length})
-            {searchQuery || filterNode !== "all" ? ` (filtered from ${profiles.length})` : ""}
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>All Profiles</CardTitle>
+          <TableToolbar filters={filters} noun="profiles" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -175,7 +153,9 @@ export default function ProfilesPage() {
               <TableRow>
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {nodes.length > 0 && (
+                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                )}
                 <SortableTableHead label="Devices" field="devices" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -183,11 +163,16 @@ export default function ProfilesPage() {
             </TableHeader>
             <TableBody>
               {paginatedProfiles.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No profiles found
-                  </TableCell>
-                </TableRow>
+                <TableEmptyRow
+                  colSpan={columnCount}
+                  icon={Layers}
+                  title="No profiles found"
+                  description={
+                    filters.activeFilterCount > 0
+                      ? "No profile matches the current filters."
+                      : undefined
+                  }
+                />
               ) : (
                 paginatedProfiles.map((profile: any) => (
                   <TableRow key={`${profile.node}-${profile.name}`}>
@@ -195,9 +180,11 @@ export default function ProfilesPage() {
                     <TableCell className="max-w-xs truncate">
                       {profile.description || <TableEmptyValue label="No description" />}
                     </TableCell>
-                    <TableCell>
-                      {profile.node}
-                    </TableCell>
+                    {nodes.length > 0 && (
+                      <TableCell>
+                        {profile.node}
+                      </TableCell>
+                    )}
                     <TableCell>
                       <ClickableBadge
                         count={Object.keys(profile.devices || {}).length}
@@ -232,14 +219,13 @@ export default function ProfilesPage() {
             </TableBody>
           </Table>
 
-          {/* Pagination */}
           {totalPages > 1 && (
             <div className="mt-4">
               <DataTablePagination
                 currentPage={currentPage}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={filteredProfiles.length}
+                totalItems={sortedProfiles.length}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
@@ -251,5 +237,15 @@ export default function ProfilesPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function ProfilesPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <ProfilesContent />
+    </Suspense>
   );
 }

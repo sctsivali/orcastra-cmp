@@ -9,35 +9,73 @@ import {
   Server,
   CheckCircle,
   XCircle,
-  Database,
+  
   RefreshCw,
   Shield,
   Globe,
-  AlertTriangle,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
+  AlertTriangle } from "lucide-react";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import {
   Table,
   TableBody,
   TableCell,
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { TableEmptyValue } from "@/components/ui/table-text";
+  TableRow } from "@/components/ui/table";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { EmptyState } from "@/components/ui/empty-state";
 import { toast } from "@/hooks/use-toast";
-import { ClusterMember } from "@/types/api";
 import { useClusters, useClusterMembers, useMemberResources } from "@/hooks/use-lxd";
 import { MemberResourceModal } from "@/components/member-resource-modal";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const MEMBERS = defineTable<any>()({
+  searchPlaceholder: "Search members",
+  defaultSort: { field: "server_name", direction: "asc" },
+  // important: `node` is reserved. On this page it selects WHICH cluster to query and feeds
+  // the react-query key, so a facet of that name would hijack cluster selection. The table
+  // has no Node column, so there is nothing to collide with, and this pins that.
+  reservedParams: ["node"],
+  columns: [
+    { field: "server_name", label: "Server Name", sort: (m) => m.server_name, search: (m) => m.server_name, filter: fromSort("text") },
+    { field: "url", label: "URL", sort: (m) => m.url, search: (m) => m.url, filter: fromSort("text") },
+    {
+      field: "roles",
+      label: "Roles",
+      sort: (m) => m.roles?.length ?? 0,
+      // Multi-value: a member matches when any of its roles is selected.
+      facet: (m) => m.roles ?? [],
+      facetSpec: { primary: true, format: formatLabel, emptyLabel: "(no role)" } },
+    {
+      field: "status",
+      label: "Status",
+      sort: (m) => m.status,
+      facet: (m) => m.status,
+      facetSpec: { primary: true } },
+    {
+      field: "architecture",
+      label: "Architecture",
+      sort: (m) => m.architecture,
+      // note: never formatLabel here. architecture arrives as x86_64 and would render as
+      // "X86 64".
+      facet: (m) => m.architecture,
+      facetSpec: {} },
+    {
+      field: "failure_domain",
+      label: "Failure Domain",
+      sort: (m) => m.failure_domain || "default",
+      facet: (m) => m.failure_domain || "default",
+      facetSpec: {} },
+  ] });
 
 function ClusterMembersContent() {
   const searchParams = useSearchParams();
@@ -81,8 +119,7 @@ function ClusterMembersContent() {
       toast({
         title: "Failed to fetch cluster members",
         description: error instanceof Error ? error.message : "Unknown error occurred",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   }, [error]);
 
@@ -102,20 +139,16 @@ function ClusterMembersContent() {
   };
 
   // Sorting
-  const sortAccessors = React.useMemo(() => ({
-    server_name: (m: any) => m.server_name,
-    url: (m: any) => m.url,
-    roles: (m: any) => m.roles?.length ?? 0,
-    status: (m: any) => m.status,
-    architecture: (m: any) => m.architecture,
-    failure_domain: (m: any) => m.failure_domain || "default",
-  }), []);
+  const filters = useTableFilters(MEMBERS, members as any[]);
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "server_name",
-    "asc",
+    MEMBERS.sortAccessors,
+    MEMBERS.defaultSort.field,
+    MEMBERS.defaultSort.direction,
   );
-  const sortedMembers = React.useMemo(() => sortItems(members), [members, sortItems]);
+  const sortedMembers = React.useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   // Full-page loading state
   if (isLoading && node) {
@@ -137,8 +170,7 @@ function ClusterMembersContent() {
             options={clusters.map((cluster: any) => ({
               value: cluster.cluster_id,
               label: cluster.display_name || cluster.cluster_id,
-              badge: formatHypervisorType(cluster.cluster_type),
-            }))}
+              badge: formatHypervisorType(cluster.cluster_type) }))}
           />
         </div>
         <div>
@@ -154,7 +186,7 @@ function ClusterMembersContent() {
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <CardTitle>Member Overview</CardTitle>
@@ -162,7 +194,7 @@ function ClusterMembersContent() {
                 {error
                   ? "Cluster did not answer"
                   : isClustered
-                    ? `${members.length} ${members.length === 1 ? "member" : "members"} in cluster`
+                    ? "Members in this cluster"
                     : "Node is not part of a cluster"}
               </CardDescription>
             </div>
@@ -178,6 +210,7 @@ function ClusterMembersContent() {
               />
             )}
           </div>
+          {isClustered && <TableToolbar filters={filters} noun="members" />}
         </CardHeader>
         <CardContent>
           {/* important: an unreachable cluster answers 503, which leaves membersData
@@ -215,7 +248,19 @@ function ClusterMembersContent() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedMembers.map((member: any) => (
+                {sortedMembers.length === 0 ? (
+                  <TableEmptyRow
+                    colSpan={6}
+                    icon={Server}
+                    title="No members found"
+                    description={
+                      filters.activeFilterCount > 0
+                        ? "No member matches the current filters."
+                        : undefined
+                    }
+                  />
+                ) : (
+                  sortedMembers.map((member: any) => (
                   <TableRow key={member.server_name}>
                     <TableCell className="font-medium">
                       <span className="flex items-center gap-2">
@@ -267,7 +312,8 @@ function ClusterMembersContent() {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                ))
+              )}
               </TableBody>
             </Table>
           )}

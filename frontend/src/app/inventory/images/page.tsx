@@ -1,60 +1,78 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
+  
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
-import { formatInstanceType, truncateFingerprint } from "@/lib/utils";
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Search, UploadCloud, Image as ImageIcon } from "lucide-react";
+import { formatInstanceType, formatLabel, truncateFingerprint } from "@/lib/utils";
+import { UploadCloud, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useImages } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { ImageListResponse } from "@/types/api";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { ImageUploadDialog } from "@/components/image-upload-dialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { Role } from "@/types/rbac";
 
-interface ImageInfo {
-  fingerprint: string;
-  architecture: string;
-  type: string;
-  size: number;
-  // The API returns aliases as plain strings (see backend ImageInfo / types/api.ts).
-  aliases: string[];
-  properties: Record<string, string>;
-  public: boolean;
-  cached: boolean;
-  auto_update: boolean;
-  created_at: string;
-  uploaded_at: string;
-  expires_at: string;
-  last_used_at: string;
-  node?: string;
-}
 
-export default function ImagesPage() {
+const IMAGES = defineTable<any>()({
+  searchPlaceholder: "Search images",
+  defaultSort: { field: "fingerprint", direction: "asc" },
+  searchExtra: (i) => [i.properties?.description, ...(i.aliases ?? [])],
+  columns: [
+    {
+      field: "fingerprint",
+      label: "Fingerprint",
+      sort: (i) => i.fingerprint,
+      search: (i) => i.fingerprint, filter: fromSort("text") },
+    { field: "alias", label: "Aliases", sort: (i) => i.aliases?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
+    {
+      field: "architecture",
+      label: "Architecture",
+      sort: (i) => i.architecture,
+      facet: (i) => i.architecture,
+      // note: architecture arrives as x86_64 and must never go through formatLabel, which
+      // renders it as "X86 64". It is excluded by name everywhere it is displayed.
+      facetSpec: { primary: true } },
+    {
+      field: "type",
+      label: "Type",
+      sort: (i) => i.type,
+      facet: (i) => i.type,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "size", label: "Size", sort: (i) => i.size ?? 0, filter: fromSort("number", { unit: "bytes" }) },
+    {
+      field: "node",
+      label: "Node",
+      sort: (i) => i.node,
+      facet: (i) => i.node,
+      facetSpec: { role: "node", primary: true } },
+    {
+      field: "flags",
+      label: "Flags",
+      // The Status column is three independent booleans, so a single-select Status facet
+      // over it would be a lie. Multi-value, and named for what it is.
+      sort: (i) => (i.public ? 1 : 0) + (i.cached ? 1 : 0) + (i.auto_update ? 1 : 0),
+      facet: (i) => [i.public && "Public", i.cached && "Cached", i.auto_update && "Auto-update"].filter(Boolean) as string[],
+      facetSpec: { emptyLabel: "(none)" } },
+  ] });
+
+function ImagesContent() {
   const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt } = useImages();
 
   // A host that did not answer is returned with an empty image list, so without this it
@@ -67,9 +85,6 @@ export default function ImagesPage() {
     [imagesByHost],
   );
   
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterNode, setFilterNode] = useState<string>("all");
-  const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -77,25 +92,7 @@ export default function ImagesPage() {
   const { isReadOnly } = useReadOnlyMode();
   const canUpload = hasRole(Role.PARTNER);
 
-  const sortAccessors = useMemo(
-    () => ({
-      fingerprint: (i: any) => i.fingerprint,
-      alias: (i: any) => i.aliases?.length ?? 0,
-      architecture: (i: any) => i.architecture,
-      type: (i: any) => i.type,
-      size: (i: any) => i.size ?? 0,
-      node: (i: any) => i.node,
-      status: (i: any) =>
-        (i.public ? 1 : 0) + (i.cached ? 1 : 0) + (i.auto_update ? 1 : 0),
-    }),
-    [],
-  );
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "fingerprint",
-    "asc",
-    () => setCurrentPage(1),
-  );
+  const resetPage = () => setCurrentPage(1);
 
   const allImages = useMemo(() => {
     return (imagesByHost as ImageListResponse[]).flatMap((host) =>
@@ -114,39 +111,29 @@ export default function ImagesPage() {
     return Array.from(nodeSet).sort();
   }, [imagesByHost]);
 
-  const imageTypes = useMemo(() => {
-    const typeSet = new Set(allImages.map((img: any) => img.type));
-    return Array.from(typeSet).sort();
-  }, [allImages]);
+  // The Node column is gated on reachable hosts, so on this page the facet can vanish while
+  // rows are still on screen. That is unlike its siblings, where `nodes` empties only when
+  // the whole scope does.
+  const availableFields = useMemo(
+    () => (nodes.length > 0 ? IMAGES.facetFields : IMAGES.facetFields.filter((f) => f !== "node")),
+    [nodes.length],
+  );
 
-  const filteredImages = useMemo(() => {
-    let filtered = allImages;
+  const filters = useTableFilters(IMAGES, allImages as any[], {
+    onFilterChange: resetPage,
+    availableFields });
 
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (img: any) =>
-          img.fingerprint?.toLowerCase()?.includes(query) ||
-          img.aliases?.some((alias: string) =>
-            alias?.toLowerCase()?.includes(query)
-          ) ||
-          (img.properties?.description &&
-            img.properties.description.toLowerCase().includes(query))
-      );
-    }
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    IMAGES.sortAccessors,
+    IMAGES.defaultSort.field,
+    IMAGES.defaultSort.direction,
+    resetPage,
+  );
 
-    if (filterNode !== "all") {
-      filtered = filtered.filter((img) => img.node === filterNode);
-    }
-
-    if (filterType !== "all") {
-      filtered = filtered.filter((img) => img.type === filterType);
-    }
-
-    return filtered;
-  }, [allImages, searchQuery, filterNode, filterType]);
-
-  const sortedImages = useMemo(() => sortItems(filteredImages), [filteredImages, sortItems]);
+  const sortedImages = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   const totalPages = Math.ceil(sortedImages.length / pageSize);
   const paginatedImages = sortedImages.slice(
@@ -200,84 +187,21 @@ export default function ImagesPage() {
       <UnreachableNodesBanner noun="images" nodes={unreachableNodes} />
 
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search images..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            {nodes.length > 0 && (
-              <Select
-                value={filterNode}
-                onValueChange={(value) => {
-                  setFilterNode(value);
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node: any) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Select
-              value={filterType}
-              onValueChange={(value) => {
-                setFilterType(value);
-                setCurrentPage(1);
-              }}
-            >
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {imageTypes.map((type: any) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            All Images ({filteredImages.length})
-            {(searchQuery || filterNode !== "all" || filterType !== "all")
-              ? ` (filtered from ${allImages.length})`
-              : ""}
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>All Images</CardTitle>
+          <TableToolbar filters={filters} noun="images" />
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
                 <SortableTableHead label="Fingerprint" field="fingerprint" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Alias" field="alias" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Aliases" field="alias" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Architecture" field="architecture" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Size" field="size" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
-                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Flags" field="flags" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -285,7 +209,15 @@ export default function ImagesPage() {
                 // note: the outage case is not repeated here. UnreachableNodesBanner above
                 // already names which nodes are missing and why; saying it twice, in two
                 // treatments, reads as two separate problems.
-                <TableEmptyRow colSpan={7} icon={ImageIcon} title="No images found" />
+                <TableEmptyRow
+                  // Derived from the header's own array rather than hardcoded to the
+                  // with-Node count. note: unlike the sibling pages, `nodes` here excludes a
+                  // host flagged unreachable, so this column can vanish from a populated
+                  // table, not only from an empty scope.
+                  colSpan={nodes.length > 0 ? 7 : 6}
+                  icon={ImageIcon}
+                  title="No images found"
+                />
               ) : (
                 paginatedImages.map((image: any, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
@@ -330,7 +262,7 @@ export default function ImagesPage() {
                 currentPage={currentPage}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={filteredImages.length}
+                totalItems={sortedImages.length}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
@@ -348,5 +280,15 @@ export default function ImagesPage() {
         onUploaded={() => refetch()}
       />
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function ImagesPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <ImagesContent />
+    </Suspense>
   );
 }

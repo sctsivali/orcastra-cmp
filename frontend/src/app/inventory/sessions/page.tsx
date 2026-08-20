@@ -10,7 +10,8 @@
 
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { Suspense, useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { LoadingLottiePage } from "@/components/loading-lottie";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,22 +21,20 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
+  
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Terminal,
-  Monitor,
-  RefreshCw,
+  
+  
   Clock,
   Wifi,
   WifiOff,
@@ -43,19 +42,17 @@ import {
   ArrowDownToLine,
   ArrowUpFromLine,
   Loader2,
-  Search,
-  X,
   History,
-  LogIn,
-  LogOut,
-  ShieldAlert,
-} from "lucide-react";
+  ShieldAlert } from "lucide-react";
 import { cn, formatLabel } from "@/lib/utils";
 import { getAccessToken } from "@/lib/api";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 
 // ============ Types ============
 
@@ -132,11 +129,6 @@ function formatDateTime(dateStr: string | null): string {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}, ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-function formatTime(date: Date): string {
-  const pad = (n: number) => n.toString().padStart(2, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
 // Use relative URLs - Next.js rewrites proxy to backend
 const API_URL = "";
 
@@ -176,11 +168,15 @@ export default function SessionsPage() {
           </TabsList>
 
           <TabsContent value="active" className="mt-4">
-            <ActiveSessionsTab />
+            <Suspense fallback={<LoadingLottiePage />}>
+              <ActiveSessionsTab />
+            </Suspense>
           </TabsContent>
 
           <TabsContent value="history" className="mt-4">
-            <SessionHistoryTab />
+            <Suspense fallback={<LoadingLottiePage />}>
+              <SessionHistoryTab />
+            </Suspense>
           </TabsContent>
 
           <TabsContent value="break-glass" className="mt-4">
@@ -194,27 +190,47 @@ export default function SessionsPage() {
 
 // ============ Active Sessions Tab ============
 
+const ACTIVE_SESSIONS = defineTable<SessionData>()({
+  id: "active",
+  searchPlaceholder: "Search sessions",
+  defaultSort: { field: "duration", direction: "desc" },
+  // host is searched but is not a rendered column, which is how it already worked.
+  searchExtra: (s) => [s.host],
+  columns: [
+    { field: "instance", label: "Instance", sort: (s) => s.instance_name, search: (s) => s.instance_name, filter: fromSort("text") },
+    {
+      field: "protocol",
+      label: "Protocol",
+      sort: (s) => s.protocol,
+      search: (s) => s.protocol,
+      facet: (s) => s.protocol,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "duration", label: "Duration", sort: (s) => s.duration_seconds, filter: fromSort("number", { unit: "seconds" }) },
+    { field: "bandwidth", label: "Bandwidth", sort: (s) => s.bandwidth.download_bytes + s.bandwidth.upload_bytes, filter: fromSort("number", { unit: "bytes" }) },
+    { field: "rate", label: "Rate", sort: (s) => s.bandwidth.download_rate_bps + s.bandwidth.upload_rate_bps, filter: fromSort("number", { unit: "bps" }) },
+    {
+      field: "status",
+      label: "Status",
+      sort: (s) => s.connection_status,
+      facet: (s) => s.connection_status,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "node", label: "Node", facet: (s) => s.host, facetSpec: { role: "node",} },
+  ] });
+
 function ActiveSessionsTab() {
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const sortAccessors = useMemo(
-    () => ({
-      instance: (s: SessionData) => s.instance_name,
-      protocol: (s: SessionData) => s.protocol,
-      duration: (s: SessionData) => s.duration_seconds,
-      bandwidth: (s: SessionData) => s.bandwidth.download_bytes + s.bandwidth.upload_bytes,
-      rate: (s: SessionData) => s.bandwidth.download_rate_bps + s.bandwidth.upload_rate_bps,
-      status: (s: SessionData) => s.connection_status,
-    }),
-    [],
+  const filters = useTableFilters(ACTIVE_SESSIONS, sessions);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    ACTIVE_SESSIONS.sortAccessors,
+    ACTIVE_SESSIONS.defaultSort.field,
+    ACTIVE_SESSIONS.defaultSort.direction,
   );
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "duration", "desc");
 
   const fetchSessions = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
@@ -222,8 +238,7 @@ function ActiveSessionsTab() {
     try {
       const token = getAccessToken();
       const res = await fetch(`${API_URL}/api/v1/console/sessions/active`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+        headers: token ? { Authorization: `Bearer ${token}` } : {} });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
       setSessions(await res.json());
       setLastRefresh(new Date());
@@ -247,18 +262,10 @@ function ActiveSessionsTab() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [autoRefresh, fetchSessions]);
 
-  const filtered = useMemo(() => {
-    if (!searchTerm) return sessions;
-    const t = searchTerm.toLowerCase();
-    return sessions.filter(
-      (s) =>
-        s.instance_name.toLowerCase().includes(t) ||
-        s.host.toLowerCase().includes(t) ||
-        s.protocol.toLowerCase().includes(t)
-    );
-  }, [sessions, searchTerm]);
-
-  const sorted = useMemo(() => sortItems(filtered), [filtered, sortItems]);
+  const sorted = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   const totalDlRate = sessions.reduce((sum, s) => sum + s.bandwidth.download_rate_bps, 0);
   const totalUlRate = sessions.reduce((sum, s) => sum + s.bandwidth.upload_rate_bps, 0);
@@ -300,16 +307,10 @@ function ActiveSessionsTab() {
 
       {/* Table */}
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3 space-y-4">
           <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="text-lg">Active Sessions</CardTitle>
-              <CardDescription>
-                {filtered.length} session{filtered.length !== 1 ? "s" : ""}
-              </CardDescription>
-            </div>
+            <CardTitle className="text-lg">Active Sessions</CardTitle>
             <div className="flex items-center gap-2">
-              <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Filter..." />
               <Button
                 variant={autoRefresh ? "default" : "outline"}
                 size="sm"
@@ -332,6 +333,7 @@ function ActiveSessionsTab() {
               />
             </div>
           </div>
+          <TableToolbar filters={filters} noun="sessions" />
         </CardHeader>
         <CardContent>
           {/* important: only replace the table when there is nothing to show. A
@@ -350,7 +352,7 @@ function ActiveSessionsTab() {
             />
           ) : loading && sessions.length === 0 ? (
             <EmptyState icon={Loader2} title="Loading sessions..." iconClassName="animate-spin" />
-          ) : filtered.length === 0 ? (
+          ) : sorted.length === 0 ? (
             <EmptyState
               icon={Terminal}
               title={sessions.length === 0 ? "No active sessions" : "No matching sessions"}
@@ -385,31 +387,48 @@ function ActiveSessionsTab() {
 
 // ============ Session History Tab ============
 
+const SESSION_HISTORY = defineTable<AuditLogEntry>()({
+  id: "history",
+  searchPlaceholder: "Search audit log",
+  defaultSort: { field: "time", direction: "desc" },
+  searchExtra: (l) => [l.host],
+  columns: [
+    {
+      field: "event",
+      label: "Event",
+      sort: (l) => l.event_type,
+      search: (l) => l.event_type,
+      facet: (l) => l.event_type,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "instance", label: "Instance", sort: (l) => l.instance_name, search: (l) => l.instance_name, filter: fromSort("text") },
+    {
+      field: "protocol",
+      label: "Protocol",
+      sort: (l) => l.protocol,
+      search: (l) => l.protocol,
+      facet: (l) => l.protocol,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "duration", label: "Duration", sort: (l) => l.duration_seconds ?? 0, filter: fromSort("number", { unit: "seconds" }) },
+    { field: "transfer", label: "Transfer", sort: (l) => (l.download_bytes ?? 0) + (l.upload_bytes ?? 0), filter: fromSort("number", { unit: "bytes" }) },
+    { field: "time", label: "Time", sort: (l) => (l.created_at ? new Date(l.created_at).getTime() : null), filter: fromSort("date", { horizon: "past" }) },
+    { field: "node", label: "Node", facet: (l) => l.host, facetSpec: { role: "node",} },
+  ] });
+
 function SessionHistoryTab() {
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  const sortAccessors = useMemo(
-    () => ({
-      event: (l: AuditLogEntry) => l.event_type,
-      instance: (l: AuditLogEntry) => l.instance_name,
-      protocol: (l: AuditLogEntry) => l.protocol,
-      duration: (l: AuditLogEntry) => l.duration_seconds ?? 0,
-      transfer: (l: AuditLogEntry) => (l.download_bytes ?? 0) + (l.upload_bytes ?? 0),
-      time: (l: AuditLogEntry) => (l.created_at ? new Date(l.created_at).getTime() : null),
-    }),
-    [],
-  );
+  const resetPage = () => setCurrentPage(1);
+  const filters = useTableFilters(SESSION_HISTORY, logs, { onFilterChange: resetPage });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "time",
-    "desc",
-    () => setCurrentPage(1),
+    SESSION_HISTORY.sortAccessors,
+    SESSION_HISTORY.defaultSort.field,
+    SESSION_HISTORY.defaultSort.direction,
+    resetPage,
   );
 
   const fetchLogs = useCallback(async (showLoading = false) => {
@@ -419,8 +438,7 @@ function SessionHistoryTab() {
       const token = getAccessToken();
       const params = new URLSearchParams({ limit: "500" });
       const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
+        headers: token ? { Authorization: `Bearer ${token}` } : {} });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
       setLogs(await res.json());
       setLastRefresh(new Date());
@@ -435,19 +453,10 @@ function SessionHistoryTab() {
 
   useEffect(() => { void fetchLogs(true).catch(() => {}); }, [fetchLogs]);
 
-  const filtered = useMemo(() => {
-    if (!searchTerm) return logs;
-    const t = searchTerm.toLowerCase();
-    return logs.filter(
-      (l) =>
-        l.instance_name.toLowerCase().includes(t) ||
-        l.host.toLowerCase().includes(t) ||
-        l.event_type.toLowerCase().includes(t) ||
-        l.protocol.toLowerCase().includes(t)
-    );
-  }, [logs, searchTerm]);
-
-  const sorted = useMemo(() => sortItems(filtered), [filtered, sortItems]);
+  const sorted = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   // pagination
   const totalPages = Math.ceil(sorted.length / pageSize);
@@ -455,9 +464,6 @@ function SessionHistoryTab() {
     const start = (currentPage - 1) * pageSize;
     return sorted.slice(start, start + pageSize);
   }, [sorted, currentPage, pageSize]);
-
-  // reset page when search changes
-  useEffect(() => { setCurrentPage(1); }, [searchTerm]);
 
   // aggregate stats from disconnect events
   const disconnects = logs.filter((l) => l.event_type === "disconnect");
@@ -506,16 +512,15 @@ function SessionHistoryTab() {
 
       {/* Table */}
       <Card>
-        <CardHeader className="pb-3">
+        <CardHeader className="pb-3 space-y-4">
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-lg">Session History</CardTitle>
               <CardDescription>
-                {filtered.length} log entr{filtered.length !== 1 ? "ies" : "y"}
+                Connection history
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
-              <SearchInput value={searchTerm} onChange={(v) => { setSearchTerm(v); setCurrentPage(1); }} placeholder="Filter..." />
               <RefreshButton
                 iconClassName="h-3.5 w-3.5"
                 label="Refresh session history"
@@ -524,6 +529,7 @@ function SessionHistoryTab() {
               />
             </div>
           </div>
+          <TableToolbar filters={filters} noun="log entries" />
         </CardHeader>
         <CardContent>
           {error && logs.length > 0 && (
@@ -540,7 +546,7 @@ function SessionHistoryTab() {
             />
           ) : loading && logs.length === 0 ? (
             <EmptyState icon={Loader2} title="Loading history..." iconClassName="animate-spin" />
-          ) : filtered.length === 0 ? (
+          ) : sorted.length === 0 ? (
             <EmptyState
               icon={History}
               title={logs.length === 0 ? "No session history" : "No matching entries"}
@@ -570,7 +576,7 @@ function SessionHistoryTab() {
               <DataTablePagination
                 currentPage={currentPage}
                 totalPages={totalPages}
-                totalItems={filtered.length}
+                totalItems={sorted.length}
                 pageSize={pageSize}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => { setPageSize(size); setCurrentPage(1); }}
@@ -651,7 +657,6 @@ function ActiveRow({ session }: { session: SessionData }) {
 }
 
 function HistoryRow({ log }: { log: AuditLogEntry }) {
-  const isConnect = log.event_type === "connect";
   const isGraphics = log.protocol === "spice-graphics";
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
@@ -696,33 +701,3 @@ function HistoryRow({ log }: { log: AuditLogEntry }) {
 
 // ============ Shared Components ============
 
-function SearchInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  return (
-    <div className="relative w-48">
-      <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-      <input
-        type="text"
-        placeholder={placeholder}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full h-9 pl-8 pr-8 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
-      />
-      {value && (
-        <button
-          onClick={() => onChange("")}
-          className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      )}
-    </div>
-  );
-}

@@ -1,10 +1,9 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState } from "react";
 import { Badge } from "./ui/badge";
 import { TableLink } from "./ui/table-link";
 import { TableEmptyValue } from "./ui/table-text";
-import { LoadingLottieSmall } from "./loading-lottie";
 import {
   Dialog,
   DialogContent,
@@ -12,54 +11,18 @@ import {
   DialogTitle,
   DialogDescription,
 } from "./ui/dialog";
-import { useInstances } from "@/hooks/use-lxd";
+import { resourcesByProject } from "@/lib/used-by";
 
 interface UsedByProjectsProps {
   usedBy: string[];
   resourceName: string;
 }
 
-interface ProjectUsage {
-  project: string;
-  instances: string[];
-}
-
 export function UsedByProjects({ usedBy, resourceName }: UsedByProjectsProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const { data, isLoading } = useInstances();
-  const instances = (data as any)?.vms || [];
-  
-  const projectUsages = useMemo(() => {
-    // Build mapping: instance name -> project
-    const instanceProjectMap = new Map<string, string>();
-    instances.forEach((instance: any) => {
-      instanceProjectMap.set(instance.name, instance.project || 'default');
-    });
-    
-    // Extract instance names from used_by URLs and group by project
-    const projectMap = new Map<string, Set<string>>();
-    
-    usedBy.forEach((url) => {
-      // Extract resource name from URL like "/1.0/instances/instance-name"
-      const match = url.match(/\/1\.0\/instances\/([^/?]+)/);
-      if (match) {
-        const instanceName = match[1];
-        const project = instanceProjectMap.get(instanceName) || 'default';
-        
-        if (!projectMap.has(project)) {
-          projectMap.set(project, new Set());
-        }
-        projectMap.get(project)!.add(instanceName);
-      }
-    });
-    
-    // Convert to array format
-    return Array.from(projectMap.entries()).map(([project, instances]) => ({
-      project,
-      instances: Array.from(instances).sort(),
-    })).sort((a, b) => a.project.localeCompare(b.project));
-  }, [instances, usedBy]);
-
+  // note: derived from the reference strings alone, so this no longer needs the instance
+  // list and no longer fires a query from inside a table cell.
+  const projectUsages = resourcesByProject(usedBy);
   const uniqueProjects = projectUsages.length;
 
   if (usedBy.length === 0) {
@@ -72,7 +35,7 @@ export function UsedByProjects({ usedBy, resourceName }: UsedByProjectsProps) {
         onClick={() => setIsOpen(true)}
         aria-label={`Show projects using ${resourceName}`}
       >
-        {`${uniqueProjects || usedBy.length} project${(uniqueProjects || usedBy.length) !== 1 ? "s" : ""}`}
+        {`${uniqueProjects} project${uniqueProjects !== 1 ? "s" : ""}`}
       </TableLink>
 
       <Dialog open={isOpen} onOpenChange={setIsOpen}>
@@ -85,11 +48,7 @@ export function UsedByProjects({ usedBy, resourceName }: UsedByProjectsProps) {
           </DialogHeader>
 
           <div className="space-y-4 mt-4">
-            {isLoading ? (
-              <div className="flex justify-center py-4">
-                <LoadingLottieSmall />
-              </div>
-            ) : projectUsages.length === 0 ? (
+            {projectUsages.length === 0 ? (
               <div className="text-center text-muted-foreground py-4">
                 No project information available
               </div>
@@ -102,14 +61,14 @@ export function UsedByProjects({ usedBy, resourceName }: UsedByProjectsProps) {
                         {usage.project}
                       </Badge>
                       <span className="text-sm text-muted-foreground">
-                        {usage.instances.length} instance{usage.instances.length !== 1 ? 's' : ''}
+                        {usage.resources.length} resource{usage.resources.length !== 1 ? "s" : ""}
                       </span>
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    {usage.instances.map((instance) => (
-                      <Badge key={instance} variant="outline" className="text-xs px-2 py-1">
-                        {instance}
+                    {usage.resources.map((resource) => (
+                      <Badge key={resource} variant="outline" className="text-xs px-2 py-1">
+                        {resource}
                       </Badge>
                     ))}
                   </div>

@@ -23,13 +23,18 @@ interface DataTablePaginationProps {
 
 export function DataTablePagination({
   currentPage,
-  totalPages,
+  totalPages: rawTotalPages,
   totalItems,
   pageSize,
   onPageChange,
   onPageSizeChange,
   pageSizeOptions = [10, 25, 50, 100, 200],
 }: DataTablePaginationProps) {
+  // important: an empty result gives Math.ceil(0 / pageSize) === 0 while currentPage stays
+  // 1, so `currentPage === totalPages` was 1 === 0, which is false, and Next and Last stayed
+  // live over nothing with an <Input min={1} max={0}>. Filtering to zero is exactly when an
+  // operator reaches for these.
+  const totalPages = Math.max(1, rawTotalPages);
   const startItem = totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1;
   const endItem = Math.min(currentPage * pageSize, totalItems);
 

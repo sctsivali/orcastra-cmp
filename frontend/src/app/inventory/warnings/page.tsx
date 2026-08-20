@@ -12,43 +12,36 @@ import {
   DialogContent,
   DialogDescription,
   DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  DialogTitle } from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  TableRow } from "@/components/ui/table";
 import {
   Tabs,
   TabsContent,
   TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import { AlertTriangle, X, Info, Filter, Flame, ShieldAlert, HelpCircle, Server, FolderOpen, Shield, KeyRound, Wifi, WifiOff } from "lucide-react";
+  TabsTrigger } from "@/components/ui/tabs";
+import { AlertTriangle, Info, Flame, HelpCircle, Server, FolderOpen, Shield, Wifi, WifiOff } from "lucide-react";
 import { useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+  TooltipTrigger } from "@/components/ui/tooltip";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { formatDateTime, formatLabel} from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
+import type { CertificateWarning, WarningInfo } from "@/types/api";
 import { SEVERITY_RANK } from "@/lib/sort";
 
 const toTime = (v: string | null | undefined): number | null => {
@@ -58,6 +51,95 @@ const toTime = (v: string | null | undefined): number | null => {
 };
 
 // Separate component that uses useSearchParams
+// Three tables, three shapes, three namespaces. Shared state would filter one tab by a
+// field another does not carry, which is the defect this page already shipped in reverse:
+// one severity Select rendered once but wired only to the platform tab.
+const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
+  id: "all",
+  searchPlaceholder: "Search warnings",
+  defaultSort: { field: "severity", direction: "asc" },
+  columns: [
+    {
+      field: "type",
+      label: "Type",
+      sort: (w) => w.type,
+      search: (w) => w.type,
+      facet: (w) => w.type,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "message", label: "Message", sort: (w) => w.last_message, search: (w) => w.last_message, filter: fromSort("text") },
+    {
+      field: "severity",
+      label: "Severity",
+      sort: (w) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
+      facet: (w) => String(w.severity || "").toLowerCase(),
+      facetSpec: { primary: true, format: formatLabel, order: ["critical", "error", "high", "warning", "medium", "low", "info"] } },
+    {
+      field: "node",
+      label: "Node",
+      sort: (w) => w.location || w.source_node || "",
+      // The node filter used to be settable only from ?node=, with no control on the page.
+      facet: (w) => w.location || w.source_node || "",
+      facetSpec: { role: "node", primary: true, emptyLabel: "(no node)" } },
+    // note: real and populated, and until now rendered only inside the detail dialog.
+    { field: "project", label: "Project", facet: (w) => w.project, facetSpec: { role: "project", emptyLabel: "(no project)" } },
+    { field: "count", label: "Count", sort: (w) => w.count ?? 0, filter: fromSort("number", { unit: "count" }) },
+    { field: "last_seen", label: "Last Seen", sort: (w) => toTime(w.last_seen_at), filter: fromSort("date", { horizon: "past" }) },
+  ] });
+
+const CERT_WARNINGS = defineTable<CertificateWarning>()({
+  id: "certificates",
+  searchPlaceholder: "Search certificate issues",
+  defaultSort: { field: "days", direction: "asc" },
+  columns: [
+    {
+      field: "cluster",
+      label: "Cluster",
+      sort: (w) => w.display_name || w.cluster_id || "",
+      search: (w) => w.display_name || w.cluster_id || "",
+      facet: (w) => w.display_name || w.cluster_id || "",
+      facetSpec: { role: "node",} },
+    {
+      field: "status",
+      label: "Status",
+      sort: (w) => (w.warning_type === "cert_expired" || (w.days_until_expiry ?? 0) <= 0 ? "Expired" : "Expiring"),
+      facet: (w) => (w.warning_type === "cert_expired" || (w.days_until_expiry ?? 0) <= 0 ? "Expired" : "Expiring"),
+      facetSpec: { primary: true } },
+    {
+      field: "severity",
+      label: "Severity",
+      sort: (w) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
+      facet: (w) => String(w.severity || "").toLowerCase(),
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "days", label: "Days Until Expiry", sort: (w) => w.days_until_expiry, filter: fromSort("number", { unit: "days" }) },
+    { field: "expires", label: "Expires At", sort: (w) => toTime(w.expires_at), filter: fromSort("date", { horizon: "future" }) },
+  ] });
+
+const NODE_WARNINGS = defineTable<CertificateWarning>()({
+  id: "nodes",
+  searchPlaceholder: "Search offline nodes",
+  defaultSort: { field: "cluster", direction: "asc" },
+  columns: [
+    {
+      field: "cluster",
+      label: "Cluster",
+      sort: (w) => w.display_name || w.cluster_id || "",
+      search: (w) => w.display_name || w.cluster_id || "",
+      facet: (w) => w.display_name || w.cluster_id || "",
+      facetSpec: { role: "node",} },
+    { field: "endpoint", label: "Endpoint", sort: (w) => w.endpoint || "", search: (w) => w.endpoint || "", filter: fromSort("text") },
+    {
+      field: "severity",
+      label: "Severity",
+      sort: (w) => SEVERITY_RANK[String(w.severity || "critical").toLowerCase()] ?? 99,
+      facet: (w) => String(w.severity || "critical").toLowerCase(),
+      facetSpec: { primary: true, format: formatLabel } },
+    // note: `message` is what CertificateWarning actually carries. The columns here used to
+    // read `error` and `checked_at`, which the model has never had, so every row rendered the
+    // same "Connection failed" fallback and an empty date while the populated message went
+    // unshown. Typing this table is what turned that from a review finding into a build error.
+    { field: "message", label: "Message", sort: (w) => w.message || "", search: (w) => w.message || "", filter: fromSort("text") },
+  ] });
+
 function WarningsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -77,113 +159,87 @@ function WarningsContent() {
   const [activeTab, setActiveTab] = useState(initialTab);
   
   // Get severity and node filter from URL
-  const initialSeverity = searchParams.get("severity") || "all";
-  const initialNode = searchParams.get("node") || "";
-  const [severityFilter, setSeverityFilter] = useState(initialSeverity);
-  const [nodeFilter, setNodeFilter] = useState(initialNode);
   
-  // Update filter and tab when URL changes
+  // Only the tab is mirrored here now. Severity and node moved into the per-tab filter
+  // instances, where the URL is the single store rather than a copy of one.
   useEffect(() => {
-    const urlSeverity = searchParams.get("severity") || "all";
-    const urlTab = searchParams.get("tab") || "all";
-    const urlNode = searchParams.get("node") || "";
-    setSeverityFilter(urlSeverity);
-    setActiveTab(urlTab);
-    setNodeFilter(urlNode);
+    setActiveTab(searchParams.get("tab") || "all");
   }, [searchParams]);
-  
-  // Filter warnings by severity and node
-  const warnings = useMemo(() => {
-    let filtered = allWarnings;
-    
-    // filter by node
-    if (nodeFilter) {
-      filtered = filtered.filter((w: any) => {
-        const warningNode = w.location || w.source_node || w.host || "";
-        return warningNode === nodeFilter || warningNode.includes(nodeFilter);
-      });
+
+  // Bare ?severity= and ?node= predate the tabs being namespaced and are an external
+  // contract, so they are read forever and translated once into the platform tab's keys,
+  // then removed so the seed cannot reassert itself when the operator clears the control.
+  useEffect(() => {
+    const legacySeverity = searchParams.get("severity");
+    const legacyNode = searchParams.get("node");
+    if (legacySeverity === null && legacyNode === null) return;
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("severity");
+    params.delete("node");
+    if (legacySeverity && legacySeverity !== "all") {
+      params.set("all.severity", legacySeverity.toLowerCase());
     }
-    
-    // filter by severity
-    if (severityFilter !== "all") {
-      filtered = filtered.filter((w: any) => {
-        const sev = (w.severity || "").toLowerCase();
-        switch (severityFilter) {
-          case "critical": return sev === "critical" || sev === "error";
-          case "high": return sev === "high";
-          case "warning": return sev === "warning" || sev === "medium";
-          case "low": return sev === "low" || sev === "info";
-          default: return true;
-        }
-      });
-    }
-    
-    return filtered;
-  }, [allWarnings, severityFilter, nodeFilter]);
+    if (legacyNode) params.set("all.node", legacyNode);
+    const query = params.toString();
+    router.replace(query ? `/inventory/warnings?${query}` : "/inventory/warnings", { scroll: false });
+  }, [searchParams, router]);
+
+
+  // A pinned role is exempt from the two-value threshold, so only availableFields can drop it.
+  // Without these, a tab with no rows still rendered its node control with an empty popover, and
+  // an empty certificates tab is the DESIRED state here, not an edge case.
+  //
+  // important: the gate names the FIELD, not the role. Two of these three spell the node
+  // dimension `cluster`.
+  const gate = <F extends string>(fields: readonly F[], field: F, present: boolean) =>
+    present ? fields : fields.filter((f) => f !== field);
+
+  // One filter instance per tab, each namespaced in the URL so a selection on one cannot
+  // leak into another.
+  const platformFilters = useTableFilters(PLATFORM_WARNINGS, allWarnings as any[], {
+    availableFields: gate(
+      PLATFORM_WARNINGS.facetFields,
+      "node",
+      (allWarnings as any[]).some((w) => w.location || w.source_node),
+    ),
+  });
+  const certFilters = useTableFilters(CERT_WARNINGS, certWarnings as any[], {
+    availableFields: gate(
+      CERT_WARNINGS.facetFields,
+      "cluster",
+      (certWarnings as any[]).some((w) => w.display_name || w.cluster_id),
+    ),
+  });
+  const nodeFilters = useTableFilters(NODE_WARNINGS, nodeWarnings as any[], {
+    availableFields: gate(
+      NODE_WARNINGS.facetFields,
+      "cluster",
+      (nodeWarnings as any[]).some((w) => w.display_name || w.cluster_id),
+    ),
+  });
 
   // Per-table sorting (3 independent tables: platform / certificates / offline nodes)
-  const platformSortAccessors = useMemo(
-    () => ({
-      type: (w: any) => w.type,
-      message: (w: any) => w.last_message,
-      severity: (w: any) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
-      node: (w: any) => w.location || w.source_node || "",
-      count: (w: any) => w.count ?? 0,
-      last_seen: (w: any) => toTime(w.last_seen_at),
-    }),
-    [],
-  );
   const {
     sortField: platformSortField,
     sortDirection: platformSortDirection,
     handleSort: platformHandleSort,
-    sortItems: platformSortItems,
-  } = useTableSort(platformSortAccessors, "severity", "asc");
-  const sortedWarnings = useMemo(() => platformSortItems(warnings), [warnings, platformSortItems]);
+    sortItems: platformSortItems } = useTableSort(PLATFORM_WARNINGS.sortAccessors, PLATFORM_WARNINGS.defaultSort.field, PLATFORM_WARNINGS.defaultSort.direction);
+  const sortedWarnings = useMemo(() => platformSortItems(platformFilters.filteredRows), [platformFilters.filteredRows, platformSortItems]);
 
-  const certSortAccessors = useMemo(
-    () => ({
-      cluster: (w: any) => w.display_name || w.cluster_id || "",
-      status: (w: any) => (w.warning_type === "cert_expired" || w.days_until_expiry <= 0 ? "Expired" : "Expiring"),
-      severity: (w: any) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
-      days: (w: any) => w.days_until_expiry,
-      expires: (w: any) => toTime(w.expires_at),
-    }),
-    [],
-  );
   const {
     sortField: certSortField,
     sortDirection: certSortDirection,
     handleSort: certHandleSort,
-    sortItems: certSortItems,
-  } = useTableSort(certSortAccessors, "days", "asc");
-  const sortedCertWarnings = useMemo(() => certSortItems(certWarnings), [certWarnings, certSortItems]);
+    sortItems: certSortItems } = useTableSort(CERT_WARNINGS.sortAccessors, CERT_WARNINGS.defaultSort.field, CERT_WARNINGS.defaultSort.direction);
+  const sortedCertWarnings = useMemo(() => certSortItems(certFilters.filteredRows), [certFilters.filteredRows, certSortItems]);
 
-  const nodeSortAccessors = useMemo(
-    () => ({
-      cluster: (w: any) => w.display_name || w.cluster_id || "",
-      endpoint: (w: any) => w.endpoint || "",
-      severity: (w: any) => SEVERITY_RANK[String(w.severity || "critical").toLowerCase()] ?? 99,
-      error: (w: any) => w.error || "",
-      checked_at: (w: any) => toTime(w.checked_at),
-    }),
-    [],
-  );
   const {
     sortField: nodeSortField,
     sortDirection: nodeSortDirection,
     handleSort: nodeHandleSort,
-    sortItems: nodeSortItems,
-  } = useTableSort(nodeSortAccessors, "cluster", "asc");
-  const sortedNodeWarnings = useMemo(() => nodeSortItems(nodeWarnings), [nodeWarnings, nodeSortItems]);
+    sortItems: nodeSortItems } = useTableSort(NODE_WARNINGS.sortAccessors, NODE_WARNINGS.defaultSort.field, NODE_WARNINGS.defaultSort.direction);
+  const sortedNodeWarnings = useMemo(() => nodeSortItems(nodeFilters.filteredRows), [nodeFilters.filteredRows, nodeSortItems]);
 
-  // Clear node filter and update URL
-  const clearNodeFilter = () => {
-    setNodeFilter("");
-    const params = new URLSearchParams(searchParams.toString());
-    params.delete("node");
-    router.replace(`/inventory/warnings?${params.toString()}`);
-  };
   
   // State for warning detail modal
   const [selectedWarning, setSelectedWarning] = useState<any>(null);
@@ -322,74 +378,20 @@ function WarningsContent() {
         {/* Platform Warnings Tab */}
         <TabsContent value="all">
           <Card>
-        <CardHeader className="flex flex-col md:flex-row md:items-center justify-between space-y-2 md:space-y-0 pb-4 p-4 md:p-6">
+        <CardHeader className="pb-4 p-4 md:p-6 space-y-4">
           <div className="min-w-0">
-            <CardTitle className="text-base md:text-lg">System Warnings ({warnings.length}{severityFilter !== "all" || nodeFilter ? ` of ${allWarnings.length}` : ""})</CardTitle>
+            <CardTitle className="text-base md:text-lg">System Warnings</CardTitle>
             <CardDescription className="mt-1 text-xs md:text-sm">
-              {nodeFilter ? (
-                <span className="flex items-center gap-1 flex-wrap">
-                  Filtered by node: 
-                  <Badge variant="outline" className="gap-1 text-xs">
-                    <Server className="h-3 w-3" />
-                    {nodeFilter}
-                    <button onClick={clearNodeFilter} className="ml-1 hover:text-destructive">
-                      <X className="h-3 w-3" />
-                    </button>
-                  </Badge>
-                </span>
-              ) : "Click on any row to view full details"}
+              Click on any row to view full details
             </CardDescription>
           </div>
-          <div className="flex items-center gap-2">
-            <Select value={severityFilter} onValueChange={setSeverityFilter}>
-              <SelectTrigger className="w-[120px] md:w-[140px] text-xs md:text-sm">
-                <SelectValue placeholder="Filter severity" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Severities</SelectItem>
-                <SelectItem value="critical">
-                  <span className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-red-500 rounded-full" />
-                    Critical
-                  </span>
-                </SelectItem>
-                <SelectItem value="high">
-                  <span className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-orange-500 rounded-full" />
-                    High/Major
-                  </span>
-                </SelectItem>
-                <SelectItem value="warning">
-                  <span className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-yellow-500 rounded-full" />
-                    Warning
-                  </span>
-                </SelectItem>
-                <SelectItem value="low">
-                  <span className="flex items-center gap-2">
-                    <span className="w-2 h-2 bg-blue-500 rounded-full" />
-                    Low/Info
-                  </span>
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            {severityFilter !== "all" && (
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setSeverityFilter("all")}
-                className="h-8 px-2"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
+          <TableToolbar filters={platformFilters} noun="warnings" />
         </CardHeader>
         <CardContent className="p-0 md:p-6 md:pt-0">
-          {warnings.length === 0 ? (
+          {sortedWarnings.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              {severityFilter !== "all" 
-                ? `No ${severityFilter} warnings found` 
+              {platformFilters.activeFilterCount > 0
+                ? "No warning matches the current filters."
                 : "No warnings found"}
             </div>
           ) : (
@@ -467,16 +469,19 @@ function WarningsContent() {
         {/* Certificate Warnings Tab */}
         <TabsContent value="certificates">
           <Card>
-            <CardHeader className="p-4 md:p-6">
-              <CardTitle className="text-base md:text-lg">
-                Certificate Issues ({certWarnings.length})
-              </CardTitle>
-              <CardDescription className="text-xs md:text-sm">
-                Certificates expiring soon or already expired
-              </CardDescription>
+            <CardHeader className="p-4 md:p-6 space-y-4">
+              <div>
+                <CardTitle className="text-base md:text-lg">Certificate Issues</CardTitle>
+                <CardDescription className="text-xs md:text-sm">
+                  Certificates expiring soon or already expired
+                </CardDescription>
+              </div>
+              {/* Severity applies here too. One Select wired only to the platform tab is the
+                  defect this replaces: all three tables carry a severity. */}
+              <TableToolbar filters={certFilters} noun="certificate issues" />
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
-              {certWarnings.length === 0 ? (
+              {sortedCertWarnings.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p>No certificate issues found</p>
@@ -550,16 +555,17 @@ function WarningsContent() {
         {/* Inactive Nodes Tab */}
         <TabsContent value="nodes">
           <Card>
-            <CardHeader className="p-4 md:p-6">
-              <CardTitle className="text-base md:text-lg">
-                Offline Nodes ({nodeWarnings.length})
-              </CardTitle>
-              <CardDescription className="text-xs md:text-sm">
-                Nodes that are disconnected or not responding
-              </CardDescription>
+            <CardHeader className="p-4 md:p-6 space-y-4">
+              <div>
+                <CardTitle className="text-base md:text-lg">Offline Nodes</CardTitle>
+                <CardDescription className="text-xs md:text-sm">
+                  Nodes that are disconnected or not responding
+                </CardDescription>
+              </div>
+              <TableToolbar filters={nodeFilters} noun="offline nodes" />
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
-              {nodeWarnings.length === 0 ? (
+              {sortedNodeWarnings.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
                   <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
                   <p>All nodes are online</p>
@@ -573,9 +579,8 @@ function WarningsContent() {
                       <SortableTableHead className="min-w-[100px]" label="Cluster" field="cluster" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
                       <SortableTableHead className="min-w-[150px]" label="Endpoint" field="endpoint" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
                       <SortableTableHead className="min-w-[80px]" label="Severity" field="severity" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
-                      <SortableTableHead className="min-w-[150px]" label="Error" field="error" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
-                      <SortableTableHead className="min-w-[150px]" label="Checked At" field="checked_at" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
-                    </TableRow>
+                      <SortableTableHead className="min-w-[150px]" label="Message" field="message" currentField={nodeSortField} direction={nodeSortDirection} onSort={nodeHandleSort} />
+                                          </TableRow>
                   </TableHeader>
                   <TableBody>
                     {sortedNodeWarnings.map((warning: any) => (
@@ -601,16 +606,15 @@ function WarningsContent() {
                           <TooltipProvider>
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <span className="cursor-help line-clamp-2">{warning.error || "Connection failed"}</span>
+                                <span className="cursor-help line-clamp-2">{warning.message || "Connection failed"}</span>
                               </TooltipTrigger>
                               <TooltipContent side="top" className="max-w-sm">
-                                <p>{warning.error || "Connection failed"}</p>
+                                <p>{warning.message || "Connection failed"}</p>
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>
                         </TableCell>
-                        <TableCell className="whitespace-nowrap">{formatDateTime(warning.checked_at)}</TableCell>
-                      </TableRow>
+                                              </TableRow>
                     ))}
                   </TableBody>
                 </Table>

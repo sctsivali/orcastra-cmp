@@ -59,6 +59,11 @@ export function SearchableSelect({
   // A combobox must name the listbox it controls, otherwise a screen reader announces the
   // trigger with no relationship to the options. Radix renders the list in a portal, so the two
   // are not adjacent in the DOM and only an explicit id ties them together.
+  //
+  // important: the id goes on PopoverContent, never on CommandList. cmdk sets its own `id` after
+  // spreading the caller's props, so an id passed to the list is silently dropped and this
+  // reference resolves to nothing. It sat that way here until an audit rendered the two
+  // libraries and checked which id actually reached the DOM.
   const listboxId = React.useId();
 
   return (
@@ -86,7 +91,10 @@ export function SearchableSelect({
           <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
-      <PopoverContent
+      {/* The id belongs on the panel. cmdk's List sets its own id after spreading the
+          caller's props, so an id passed there is dropped and this combobox's aria-controls
+          resolved to nothing. A combobox is required to reference its popup. */}
+      <PopoverContent id={listboxId}
         align="start"
         className={cn(
           "w-[var(--radix-popover-trigger-width)] p-0",
@@ -95,7 +103,7 @@ export function SearchableSelect({
       >
         <Command>
           {showSearch && <CommandInput placeholder={searchPlaceholder} />}
-          <CommandList id={listboxId}>
+          <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
               {options.map((opt) => (

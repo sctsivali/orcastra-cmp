@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TableToolbar } from "@/components/ui/table-toolbar";
 import { UsedByProjects } from "@/components/used-by-projects";
 import {
   Table,
@@ -19,38 +19,92 @@ import {
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import { TableLink } from "@/components/ui/table-link";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Search, Plus, Network as NetworkIcon } from "lucide-react";
+import { Plus, Network as NetworkIcon } from "lucide-react";
 import { useNetworks } from "@/hooks/use-lxd";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
+import type { NetworkInfo } from "@/types/api";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { projectsFromUsedBy } from "@/lib/used-by";
+import { defineTable, fromSort } from "@/lib/table-filter";
 
-interface NetworkInfo {
-  name: string;
-  description: string;
-  type: string;
-  managed: boolean;
-  config: Record<string, string>;
-  used_by: string[];
-  status: string;
-  node?: string;
-}
+const NETWORKS = defineTable<NetworkInfo>()({
+  searchPlaceholder: "Search networks",
+  defaultSort: { field: "name", direction: "asc" },
+  searchExtra: (n) => [n.description],
+  columns: [
+    { field: "name", label: "Name", sort: (n) => n.name, search: (n) => n.name, filter: fromSort("text") },
+    {
+      field: "type",
+      label: "Type",
+      sort: (n) => n.type,
+      facet: (n) => n.type,
+      // note: `type` means a different thing on five pages. Networks are LXD enums, so
+      // formatLabel is right here; instances need formatInstanceType instead.
+      facetSpec: { primary: true, format: formatLabel },
+    },
+    {
+      field: "node",
+      label: "Node",
+      sort: (n) => n.node,
+      facet: (n) => n.node,
+      facetSpec: { role: "node", primary: true },
+    },
+    { field: "ipv4", label: "IPv4 Address", sort: (n) => n.config?.["ipv4.address"], filter: fromSort("text") },
+    { field: "ipv6", label: "IPv6 Address", sort: (n) => n.config?.["ipv6.address"], filter: fromSort("text") },
+    {
+      field: "status",
+      label: "Status",
+      sort: (n) => n.status,
+      facet: (n) => n.status,
+      facetSpec: { primary: true },
+    },
+    {
+      field: "managed",
+      label: "Managed",
+      sort: (n) => n.managed,
+      facet: (n) => (n.managed ? "Managed" : "Unmanaged"),
+      facetSpec: {},
+    },
+    {
+      field: "used_by",
+      label: "Used By",
+      sort: (n) => n.used_by?.length ?? 0,
+      filter: fromSort("number", {
+        unit: "count",
+        presets: [
+          { label: "None", min: null, max: 0 },
+          { label: "Any", min: 1, max: null },
+        ],
+      }),
+    },
+    {
+      field: "projects",
+      label: "Projects",
+      // Was a copy of the used_by accessor, so this column sorted by resource count while the
+      // cell showed a project count. It now sorts by what it displays.
+      sort: (n) => projectsFromUsedBy(n.used_by).length,
+      facet: (n) => projectsFromUsedBy(n.used_by),
+      facetSpec: { role: "project", emptyLabel: "(no project)" },
+    },
+    {
+      field: "usage",
+      label: "Usage",
+      facet: (n) => (n.used_by?.length ? "In use" : "Unused"),
+      facetSpec: {},
+    },
+  ],
+});
 
-export default function NetworksPage() {
+function NetworksContent() {
   const { data, isLoading, refreshNow, dataUpdatedAt } = useNetworks();
-  const networks = (data as any)?.networks || [];
+  const networks: NetworkInfo[] = useMemo(() => (data as any)?.networks || [], [data]);
 
   const router = useRouter();
   const { hasRole } = usePermissions();
@@ -60,73 +114,50 @@ export default function NetworksPage() {
   // rather than silently showing "0 networks" (indistinguishable from empty).
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterNode, setFilterNode] = useState<string>("all");
-  const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const resetPage = () => setCurrentPage(1);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (i: any) => i.name,
-      type: (i: any) => i.type,
-      node: (i: any) => i.node,
-      ipv4: (i: any) => i.config?.["ipv4.address"],
-      ipv6: (i: any) => i.config?.["ipv6.address"],
-      status: (i: any) => i.status,
-      managed: (i: any) => i.managed,
-      used_by: (i: any) => i.used_by?.length ?? 0,
-      projects: (i: any) => i.used_by?.length ?? 0,
-    }),
-    [],
+  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
+  // returns nothing, which is the state that used to leave the empty row one column too wide.
+  const nodes = useMemo(
+    () => Array.from(new Set(networks.map((n) => n.node).filter(Boolean))).sort(),
+    [networks],
   );
+
+  // The column appears once any node is known, the facet needs something to choose between.
+  // A pinned role does not override this: zero options means zero rows.
+  const availableFields = useMemo(
+    () => (nodes.length > 0 ? NETWORKS.facetFields : NETWORKS.facetFields.filter((f) => f !== "node")),
+    [nodes.length],
+  );
+
+  const filters = useTableFilters(NETWORKS, networks, {
+    onFilterChange: resetPage,
+    availableFields,
+  });
+
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
+    NETWORKS.sortAccessors,
+    NETWORKS.defaultSort.field,
+    NETWORKS.defaultSort.direction,
+    resetPage,
   );
 
-  const nodes = useMemo(() => {
-    const nodeSet = new Set(networks.map((n: any) => n.node).filter((n: any): n is string => Boolean(n)));
-    return Array.from(nodeSet).sort();
-  }, [networks]);
-
-  const networkTypes = useMemo(() => {
-    const typeSet = new Set(networks.map((n: any) => n.type));
-    return Array.from(typeSet).sort();
-  }, [networks]);
-
-  const filteredNetworks = useMemo(() => {
-    let filtered = networks;
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (network: any) =>
-          network.name.toLowerCase().includes(query) ||
-          (network.description && network.description.toLowerCase().includes(query))
-      );
-    }
-
-    if (filterNode !== "all") {
-      filtered = filtered.filter((network: any) => network.node === filterNode);
-    }
-
-    if (filterType !== "all") {
-      filtered = filtered.filter((network: any) => network.type === filterType);
-    }
-
-    return filtered;
-  }, [networks, searchQuery, filterNode, filterType]);
-
-  const sortedNetworks = useMemo(() => sortItems(filteredNetworks), [filteredNetworks, sortItems]);
+  const sortedNetworks = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   const totalPages = Math.ceil(sortedNetworks.length / pageSize);
   const paginatedNetworks = sortedNetworks.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
+
+  // Derived from the headers actually rendered, so the empty row cannot span the wrong width
+  // when the conditional Node column is absent.
+  const columnCount = nodes.length > 0 ? 9 : 8;
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -166,64 +197,9 @@ export default function NetworksPage() {
       <UnreachableNodesBanner noun="networks" nodes={unreachableNodes} />
 
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search networks..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            {nodes.length > 0 && (
-              <Select value={filterNode} onValueChange={(value) => {
-                setFilterNode(value);
-                setCurrentPage(1);
-              }}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node: any) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Select value={filterType} onValueChange={(value) => {
-              setFilterType(value);
-              setCurrentPage(1);
-            }}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {networkTypes.map((type: any) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            All Networks ({filteredNetworks.length})
-            {(searchQuery || filterNode !== "all" || filterType !== "all") ? ` (filtered from ${networks.length})` : ""}
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>All Networks</CardTitle>
+          <TableToolbar filters={filters} noun="networks" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -244,14 +220,23 @@ export default function NetworksPage() {
             </TableHeader>
             <TableBody>
               {paginatedNetworks.length === 0 ? (
-                <TableEmptyRow colSpan={9} icon={NetworkIcon} title="No networks found" />
+                <TableEmptyRow
+                  colSpan={columnCount}
+                  icon={NetworkIcon}
+                  title="No networks found"
+                  description={
+                    filters.activeFilterCount > 0
+                      ? "No network matches the current filters."
+                      : undefined
+                  }
+                />
               ) : (
                 paginatedNetworks.map((network: any, idx: number) => {
                   const rawIpv4 = network.config?.["ipv4.address"];
                   const ipv4 = !rawIpv4 || rawIpv4 === "none" ? null : rawIpv4;
                   const rawIpv6 = network.config?.["ipv6.address"];
                   const ipv6 = !rawIpv6 || rawIpv6 === "none" ? null : rawIpv6;
-                  
+
                   return (
                     <TableRow key={`${network.node}-${network.name}-${idx}`}>
                       <TableCell className="font-medium">
@@ -319,7 +304,7 @@ export default function NetworksPage() {
                 currentPage={currentPage}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={filteredNetworks.length}
+                totalItems={sortedNetworks.length}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
@@ -331,5 +316,15 @@ export default function NetworksPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function NetworksPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <NetworksContent />
+    </Suspense>
   );
 }

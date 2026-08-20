@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TableToolbar } from "@/components/ui/table-toolbar";
 import { UsedByProjects } from "@/components/used-by-projects";
 import {
   Table,
@@ -16,20 +15,16 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { TableEmptyRow } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Search } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { HardDrive } from "lucide-react";
 import { useStorageVolumes } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { projectsFromUsedBy } from "@/lib/used-by";
+import { defineTable, fromSort } from "@/lib/table-filter";
 
 interface VolumeInfo {
   name: string;
@@ -41,78 +36,104 @@ interface VolumeInfo {
   node?: string;
 }
 
-export default function StorageVolumesPage() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStorageVolumes();
-  const volumes = (data as any)?.volumes || [];
-  
-  const [searchQuery, setSearchQuery] = useState("");
+const VOLUMES = defineTable<VolumeInfo>()({
+  searchPlaceholder: "Search volumes",
+  defaultSort: { field: "name", direction: "asc" },
+  searchExtra: (v) => [v.description],
+  columns: [
+    { field: "name", label: "Name", sort: (v) => v.name, search: (v) => v.name, filter: fromSort("text") },
+    {
+      field: "type",
+      label: "Type",
+      sort: (v) => v.type,
+      facet: (v) => v.type,
+      facetSpec: { primary: true, format: formatLabel },
+    },
+    {
+      field: "content_type",
+      label: "Content Type",
+      sort: (v) => v.content_type,
+      facet: (v) => v.content_type,
+      facetSpec: { primary: true, format: formatLabel },
+    },
+    {
+      field: "node",
+      label: "Node",
+      sort: (v) => v.node,
+      facet: (v) => v.node,
+      facetSpec: { role: "node", primary: true },
+    },
+    { field: "used_by", label: "Used By", sort: (v) => v.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
+    {
+      field: "projects",
+      label: "Projects",
+      // Was a copy of the used_by accessor, so the header sorted by resource count while the
+      // cell displayed a project count. It now sorts by what it displays.
+      sort: (v) => projectsFromUsedBy(v.used_by).length,
+      facet: (v) => projectsFromUsedBy(v.used_by),
+      facetSpec: { role: "project", emptyLabel: "(no project)" },
+    },
+    {
+      field: "usage",
+      label: "Usage",
+      facet: (v) => (v.used_by?.length ? "In use" : "Unused"),
+      facetSpec: {},
+    },
+  ],
+});
+
+function StorageVolumesContent() {
+  const { data, isLoading, refreshNow, dataUpdatedAt } = useStorageVolumes();
+  const volumes: VolumeInfo[] = useMemo(() => (data as any)?.volumes || [], [data]);
+
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
-  const [filterNode, setFilterNode] = useState<string>("all");
-  const [filterType, setFilterType] = useState<string>("all");
+
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
-  const { toast } = useToast();
+  const resetPage = () => setCurrentPage(1);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (i: any) => i.name,
-      type: (i: any) => i.type,
-      content_type: (i: any) => i.content_type,
-      node: (i: any) => i.node,
-      used_by: (i: any) => i.used_by?.length ?? 0,
-      projects: (i: any) => i.used_by?.length ?? 0,
-    }),
-    [],
+  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
+  // returns nothing, which is the state that used to leave the empty row one column wide.
+  const nodes = useMemo(
+    () => Array.from(new Set(volumes.map((v) => v.node).filter(Boolean))).sort(),
+    [volumes],
   );
+
+  // The column appears once any node is known, the facet once there are two to choose
+  // between. The thresholds differ on purpose: one option filters nothing.
+  const availableFields = useMemo(
+    () => (nodes.length > 0 ? VOLUMES.facetFields : VOLUMES.facetFields.filter((f) => f !== "node")),
+    [nodes.length],
+  );
+
+  const filters = useTableFilters(VOLUMES, volumes, {
+    onFilterChange: resetPage,
+    availableFields,
+  });
+
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
+    VOLUMES.sortAccessors,
+    VOLUMES.defaultSort.field,
+    VOLUMES.defaultSort.direction,
+    resetPage,
   );
 
-  const nodes = useMemo(() => {
-    const nodeSet = new Set(volumes.map((v: any) => v.node).filter((n: any): n is string => Boolean(n)));
-    return Array.from(nodeSet).sort();
-  }, [volumes]);
-
-  const volumeTypes = useMemo(() => {
-    const typeSet = new Set(volumes.map((v: any) => v.type));
-    return Array.from(typeSet).sort();
-  }, [volumes]);
-
-  const filteredVolumes = useMemo(() => {
-    let filtered = volumes;
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (volume: any) =>
-          volume.name.toLowerCase().includes(query) ||
-          (volume.description && volume.description.toLowerCase().includes(query))
-      );
-    }
-
-    if (filterNode !== "all") {
-      filtered = filtered.filter((volume: any) => volume.node === filterNode);
-    }
-
-    if (filterType !== "all") {
-      filtered = filtered.filter((volume: any) => volume.type === filterType);
-    }
-
-    return filtered;
-  }, [volumes, searchQuery, filterNode, filterType]);
-
-  const sortedVolumes = useMemo(() => sortItems(filteredVolumes), [filteredVolumes, sortItems]);
+  const sortedVolumes = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   const totalPages = Math.ceil(sortedVolumes.length / pageSize);
   const paginatedVolumes = sortedVolumes.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
+
+  // Derived from the headers actually rendered. It used to be the with-Node count, so the
+  // empty row was one column too wide on every scope that returns nothing.
+  const columnCount = nodes.length > 0 ? 6 : 5;
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -139,64 +160,9 @@ export default function StorageVolumesPage() {
       <UnreachableNodesBanner noun="storage volumes" nodes={unreachableNodes} />
 
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search storage volumes..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            {nodes.length > 0 && (
-              <Select value={filterNode} onValueChange={(value) => {
-                setFilterNode(value);
-                setCurrentPage(1);
-              }}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node: any) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Select value={filterType} onValueChange={(value) => {
-              setFilterType(value);
-              setCurrentPage(1);
-            }}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {volumeTypes.map((type: any) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            All Storage Volumes ({filteredVolumes.length})
-            {(searchQuery || filterNode !== "all" || filterType !== "all") ? ` (filtered from ${volumes.length})` : ""}
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>All Storage Volumes</CardTitle>
+          <TableToolbar filters={filters} noun="volumes" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -214,11 +180,16 @@ export default function StorageVolumesPage() {
             </TableHeader>
             <TableBody>
               {paginatedVolumes.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
-                    No storage volumes found
-                  </TableCell>
-                </TableRow>
+                <TableEmptyRow
+                  colSpan={columnCount}
+                  icon={HardDrive}
+                  title="No storage volumes found"
+                  description={
+                    filters.activeFilterCount > 0
+                      ? "No volume matches the current filters."
+                      : undefined
+                  }
+                />
               ) : (
                 paginatedVolumes.map((volume: any, idx: number) => (
                   <TableRow key={`${volume.node}-${volume.name}-${idx}`}>
@@ -261,7 +232,7 @@ export default function StorageVolumesPage() {
                 currentPage={currentPage}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={filteredVolumes.length}
+                totalItems={sortedVolumes.length}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
@@ -273,5 +244,15 @@ export default function StorageVolumesPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function StorageVolumesPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <StorageVolumesContent />
+    </Suspense>
   );
 }

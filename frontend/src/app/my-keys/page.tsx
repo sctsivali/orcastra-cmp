@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Table,
@@ -13,8 +12,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
@@ -22,8 +20,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+  DialogTrigger } from "@/components/ui/dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,30 +29,27 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+  AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+  SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Key,
   Plus,
   Download,
   Trash2,
-  Search,
-  Calendar,
+  
+  
   Shield,
-  Server,
-  FolderTree,
+  
+  
   AlertCircle,
   CheckCircle,
-  ChevronLeft,
-} from "lucide-react";
+  ChevronLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -67,13 +61,53 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { useRouter } from "next/navigation";
+import { Input } from "@/components/ui/input";
+import { formatLabel } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
-export default function MyKeysPage() {
+const MY_KEYS = defineTable<KeyInfo>()({
+  searchPlaceholder: "Search by name, project, or node",
+  defaultSort: { field: "name", direction: "asc" },
+  columns: [
+    { field: "name", label: "Name", sort: (k) => k.name, search: (k) => k.name, filter: fromSort("text") },
+    {
+      field: "node",
+      label: "Node",
+      sort: (k) => k.node,
+      search: (k) => k.node,
+      facet: (k) => k.node,
+      facetSpec: { role: "node", primary: true } },
+    {
+      field: "project",
+      label: "Project",
+      sort: (k) => k.project,
+      search: (k) => k.project,
+      facet: (k) => k.project,
+      facetSpec: { role: "project", primary: true } },
+    {
+      field: "auth_level",
+      label: "Access Level",
+      sort: (k) => k.auth_level,
+      facet: (k) => k.auth_level,
+      facetSpec: { format: formatLabel } },
+    { field: "created", label: "Created", sort: (k) => (k.created_at ? new Date(k.created_at).getTime() : null), filter: fromSort("date", { horizon: "past" }) },
+    { field: "expires", label: "Expires", sort: (k) => (k.expires_at ? new Date(k.expires_at).getTime() : null), filter: fromSort("date", { horizon: "future", emptyLabel: "Never" }) },
+    {
+      // filter-coverage: the tabs above the table are this column's control. A Status facet
+      // as well would be two controls for one piece of state, which is the failure this
+      // whole change exists to remove.
+      field: "status",
+      label: "Status",
+      sort: (k) => (k.is_expired ? 1 : 0) },
+  ] });
+
+function MyKeysContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [searchQuery, setSearchQuery] = useState("");
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("active");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -88,36 +122,41 @@ export default function MyKeysPage() {
     isLoading,
     refetch,
     refreshNow,
-    dataUpdatedAt,
-  } = useRefreshableQuery({
-    queryKey: ["my-keys", activeTab, searchQuery],
-    queryFn: ({ fresh }) => api.myKeys.list(activeTab, searchQuery, { fresh }),
-  });
+    dataUpdatedAt } = useRefreshableQuery({
+    // important: one unfiltered fetch. The server was doing a lowercase substring match over
+    // a list it had already materialised and cached, so every keystroke was a Vault round
+    // trip AND its own react-query cache entry. Filtering client-side removes both, and it
+    // is what makes the tab counts and the facet counts honest.
+    queryKey: ["my-keys"],
+    queryFn: ({ fresh }) => api.myKeys.list(undefined, undefined, { fresh }) });
 
   const keys = useMemo(() => (keysData as any)?.keys || [], [keysData]);
-  const activeCount = (keysData as any)?.active || 0;
-  const expiredCount = (keysData as any)?.expired || 0;
+  // Derived from the full list rather than the response counters, so a tab label cannot
+  // disagree with what the other tab holds.
+  const activeCount = useMemo(() => keys.filter((k: KeyInfo) => !k.is_expired).length, [keys]);
+  const expiredCount = useMemo(() => keys.filter((k: KeyInfo) => k.is_expired).length, [keys]);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (k: KeyInfo) => k.name,
-      node: (k: KeyInfo) => k.node,
-      project: (k: KeyInfo) => k.project,
-      auth_level: (k: KeyInfo) => k.auth_level,
-      created: (k: KeyInfo) => (k.created_at ? new Date(k.created_at).getTime() : null),
-      expires: (k: KeyInfo) => (k.expires_at ? new Date(k.expires_at).getTime() : null),
-      status: (k: KeyInfo) => (k.is_expired ? 1 : 0),
-    }),
-    [],
+  const tabKeys = useMemo(() => {
+    if (activeTab === "active") return keys.filter((k: KeyInfo) => !k.is_expired);
+    if (activeTab === "expired") return keys.filter((k: KeyInfo) => k.is_expired);
+    return keys;
+  }, [keys, activeTab]);
+
+  const filters = useTableFilters(MY_KEYS, tabKeys as KeyInfo[]);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    MY_KEYS.sortAccessors,
+    MY_KEYS.defaultSort.field,
+    MY_KEYS.defaultSort.direction,
   );
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "name", "asc");
-  const sortedKeys = useMemo(() => sortItems(keys), [keys, sortItems]);
+  const sortedKeys = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   // Fetch nodes for dropdown
   const { data: nodesData } = useQuery({
     queryKey: ["nodes"],
-    queryFn: () => api.nodes.status(),
-  });
+    queryFn: () => api.nodes.status() });
 
   const nodes = (nodesData as any)?.nodes || [];
   const nodeNames = nodes
@@ -127,8 +166,7 @@ export default function MyKeysPage() {
   // Fetch projects for dropdown
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
     queryKey: ["projects"],
-    queryFn: () => api.projects.listAll(),
-  });
+    queryFn: () => api.projects.listAll() });
 
   // Flatten projects from all hosts
   const projects = projectsData 
@@ -141,8 +179,7 @@ export default function MyKeysPage() {
     onSuccess: () => {
       toast({
         title: "Success",
-        description: "Key generated successfully",
-      });
+        description: "Key generated successfully" });
       setCreateDialogOpen(false);
       queryClient.invalidateQueries({ queryKey: ["my-keys"] });
       refetch();
@@ -151,10 +188,8 @@ export default function MyKeysPage() {
       toast({
         title: "Error",
         description: error.message || "Failed to generate key",
-        variant: "destructive",
-      });
-    },
-  });
+        variant: "destructive" });
+    } });
 
   // Delete key mutation
   const deleteMutation = useMutation({
@@ -162,8 +197,7 @@ export default function MyKeysPage() {
     onSuccess: () => {
       toast({
         title: "Success",
-        description: "Key deleted successfully",
-      });
+        description: "Key deleted successfully" });
       queryClient.invalidateQueries({ queryKey: ["my-keys"] });
       refetch();
     },
@@ -171,10 +205,8 @@ export default function MyKeysPage() {
       toast({
         title: "Error",
         description: error.message || "Failed to delete key",
-        variant: "destructive",
-      });
-    },
-  });
+        variant: "destructive" });
+    } });
 
   if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
@@ -193,14 +225,12 @@ export default function MyKeysPage() {
       document.body.removeChild(a);
       toast({
         title: "Success",
-        description: "Key downloaded successfully",
-      });
+        description: "Key downloaded successfully" });
     } catch (error: any) {
       toast({
         title: "Error",
         description: error.message || "Failed to download key",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -300,22 +330,9 @@ export default function MyKeysPage() {
         </Card>
       </div>
 
-      {/* Search Bar */}
-      <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search by name, project, or node..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10"
-          />
-        </div>
-      </div>
-
       {/* Keys Table with Tabs */}
       <Card>
-        <CardHeader>
+        <CardHeader className="space-y-4">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full max-w-md grid-cols-3 h-auto p-1">
               <TabsTrigger value="active" className="text-xs sm:text-sm px-2 py-1.5">
@@ -327,16 +344,23 @@ export default function MyKeysPage() {
               <TabsTrigger value="" className="text-xs sm:text-sm px-2 py-1.5">All ({keys.length})</TabsTrigger>
             </TabsList>
           </Tabs>
+          <TableToolbar filters={filters} noun="keys" />
         </CardHeader>
         <CardContent>
-          {keys.length === 0 ? (
+          {/* note: gate on the rendered rows, not on the whole key set. Filtering, searching or
+              the Expired tab can empty the table while `keys` is still populated, and gating on
+              `keys.length` rendered a headers-only table with no message at all. The copy keys
+              off the full set, so it stays right whichever of the three did the emptying. */}
+          {sortedKeys.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <Key className="h-12 w-12 mx-auto mb-4 opacity-50" />
               <p className="text-lg font-medium">No keys found</p>
               <p className="text-sm mt-2">
-                {searchQuery
-                  ? "Try adjusting your search criteria"
-                  : "Generate your first key to get started"}
+                {filters.activeFilterCount > 0
+                  ? "Try adjusting your search or filters"
+                  : keys.length > 0
+                    ? "No key on this tab. The other tabs may still have some."
+                    : "Generate your first key to get started"}
               </p>
             </div>
           ) : (
@@ -464,8 +488,7 @@ function CreateKeyDialog({
   projects,
   projectsLoading,
   onSubmit,
-  isSubmitting,
-}: {
+  isSubmitting }: {
   nodes: string[];
   projects: any[];
   projectsLoading: boolean;
@@ -477,8 +500,7 @@ function CreateKeyDialog({
     node: "",  // Don't auto-select - let user choose
     project: "",  // Don't auto-select - let user choose
     auth_level: "standard",
-    expire_days: 365,
-  });
+    expire_days: 365 });
 
   // Get unique projects for the selected node
   const filteredProjects = formData.node 
@@ -635,15 +657,13 @@ function CreateKeyDialog({
                 if (value === '') {
                   setFormData({
                     ...formData,
-                    expire_days: '' as any,
-                  });
+                    expire_days: '' as any });
                 } else {
                   const numValue = parseInt(value);
                   if (!isNaN(numValue) && numValue >= 1 && numValue <= 3650) {
                     setFormData({
                       ...formData,
-                      expire_days: numValue,
-                    });
+                      expire_days: numValue });
                   }
                 }
               }}
@@ -652,8 +672,7 @@ function CreateKeyDialog({
                 if (e.target.value === '' || parseInt(e.target.value) < 1) {
                   setFormData({
                     ...formData,
-                    expire_days: 365,
-                  });
+                    expire_days: 365 });
                 }
               }}
               placeholder="365"
@@ -674,5 +693,15 @@ function CreateKeyDialog({
         </DialogFooter>
       </form>
     </DialogContent>
+  );
+}
+
+// The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
+// imports. Suspense is required because useTableFilters reads useSearchParams.
+export default function MyKeysPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <MyKeysContent />
+    </Suspense>
   );
 }

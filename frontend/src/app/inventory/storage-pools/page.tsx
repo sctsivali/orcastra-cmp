@@ -1,11 +1,10 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { UsedByProjects } from "@/components/used-by-projects";
@@ -19,14 +18,11 @@ import {
 } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Search, Database } from "lucide-react";
+import { Database } from "lucide-react";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { projectsFromUsedBy } from "@/lib/used-by";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { useStoragePools } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -42,58 +38,91 @@ interface PoolInfo {
   node?: string;
 }
 
-interface PoolResources {
-  space: {
-    used: number;
-    total: number;
-  };
-  inodes: {
-    used: number;
-    total: number;
-  };
-}
+const POOLS = defineTable<PoolInfo>()({
+  searchPlaceholder: "Search storage pools",
+  defaultSort: { field: "name", direction: "asc" },
+  searchExtra: (p) => [p.description],
+  columns: [
+    { field: "name", label: "Name", sort: (p) => p.name, search: (p) => p.name, filter: fromSort("text") },
+    {
+      field: "driver",
+      label: "Driver",
+      sort: (p) => p.driver,
+      facet: (p) => p.driver,
+      // note: storage drivers are LXD enums, so formatLabel gives zfs its acronym casing.
+      // GPU drivers elsewhere are kernel module names and must not go through it.
+      facetSpec: { primary: true, format: formatLabel },
+    },
+    {
+      field: "node",
+      label: "Node",
+      sort: (p) => p.node,
+      facet: (p) => p.node,
+      facetSpec: { role: "node", primary: true },
+    },
+    {
+      field: "status",
+      label: "Status",
+      sort: (p) => p.status,
+      facet: (p) => p.status,
+      facetSpec: { primary: true },
+    },
+    { field: "used_by", label: "Used By", sort: (p) => p.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
+    {
+      field: "projects",
+      label: "Projects",
+      // Was a copy of the used_by accessor, so the header sorted by volume count while the
+      // cell displayed a project count. It now sorts by what it displays.
+      sort: (p) => projectsFromUsedBy(p.used_by).length,
+      facet: (p) => projectsFromUsedBy(p.used_by),
+      facetSpec: { role: "project", emptyLabel: "(no project)" },
+    },
+    {
+      field: "usage",
+      label: "Usage",
+      facet: (p) => (p.used_by?.length ? "In use" : "Unused"),
+      facetSpec: {},
+    },
+  ],
+});
 
-export default function StoragePoolsPage() {
+function StoragePoolsContent() {
   const { data, isLoading, refreshNow, dataUpdatedAt } = useStoragePools();
   const pools = (data as any)?.pools || [];
   const poolResources = (data as any)?.resources || {};
   
-  const [searchQuery, setSearchQuery] = useState("");
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
-  const [filterNode, setFilterNode] = useState<string>("all");
-  const [filterDriver, setFilterDriver] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const resetPage = () => setCurrentPage(1);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (i: any) => i.name,
-      driver: (i: any) => i.driver,
-      node: (i: any) => i.node,
-      status: (i: any) => i.status,
-      used_by: (i: any) => i.used_by?.length ?? 0,
-      projects: (i: any) => i.used_by?.length ?? 0,
-    }),
-    [],
-  );
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
-  );
-
+  // note: derived from the rows, not from the fleet. It is empty exactly when the scope
+  // returns nothing, which is the state that used to leave the empty row one column too wide.
   const nodes = useMemo(() => {
     const nodeSet = new Set(pools.map((p: any) => p.node).filter((n: any): n is string => Boolean(n)));
     return Array.from(nodeSet).sort();
   }, [pools]);
 
-  const drivers = useMemo(() => {
-    const driverSet = new Set(pools.map((p: any) => p.driver));
-    return Array.from(driverSet).sort();
-  }, [pools]);
+  // The column appears once any node is known, the facet once there are two to choose
+  // between. The thresholds differ on purpose: one option filters nothing.
+  const availableFields = useMemo(
+    () => (nodes.length > 0 ? POOLS.facetFields : POOLS.facetFields.filter((f) => f !== "node")),
+    [nodes.length],
+  );
+
+  const filters = useTableFilters(POOLS, pools as PoolInfo[], {
+    onFilterChange: resetPage,
+    availableFields,
+  });
+
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    POOLS.sortAccessors,
+    POOLS.defaultSort.field,
+    POOLS.defaultSort.direction,
+    resetPage,
+  );
 
   const formatBytes = (bytes: number) => {
     if (bytes === 0) return "0 B";
@@ -103,30 +132,10 @@ export default function StoragePoolsPage() {
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
   };
 
-  const filteredPools = useMemo(() => {
-    let filtered = pools;
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (pool: any) =>
-          pool.name.toLowerCase().includes(query) ||
-          (pool.description && pool.description.toLowerCase().includes(query))
-      );
-    }
-
-    if (filterNode !== "all") {
-      filtered = filtered.filter((pool: any) => pool.node === filterNode);
-    }
-
-    if (filterDriver !== "all") {
-      filtered = filtered.filter((pool: any) => pool.driver === filterDriver);
-    }
-
-    return filtered;
-  }, [pools, searchQuery, filterNode, filterDriver]);
-
-  const sortedPools = useMemo(() => sortItems(filteredPools), [filteredPools, sortItems]);
+  const sortedPools = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   const totalPages = Math.ceil(sortedPools.length / pageSize);
   const paginatedPools = sortedPools.slice(
@@ -159,64 +168,9 @@ export default function StoragePoolsPage() {
       <UnreachableNodesBanner noun="storage pools" nodes={unreachableNodes} />
 
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search storage pools..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            {nodes.length > 0 && (
-              <Select value={filterNode} onValueChange={(value) => {
-                setFilterNode(value);
-                setCurrentPage(1);
-              }}>
-                <SelectTrigger className="w-full sm:w-[180px]">
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node: any) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Select value={filterDriver} onValueChange={(value) => {
-              setFilterDriver(value);
-              setCurrentPage(1);
-            }}>
-              <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder="All Drivers" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Drivers</SelectItem>
-                {drivers.map((driver: any) => (
-                  <SelectItem key={driver} value={driver}>
-                    {driver}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            All Storage Pools ({filteredPools.length})
-            {(searchQuery || filterNode !== "all" || filterDriver !== "all") ? ` (filtered from ${pools.length})` : ""}
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>All Storage Pools</CardTitle>
+          <TableToolbar filters={filters} noun="storage pools" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -235,7 +189,16 @@ export default function StoragePoolsPage() {
             </TableHeader>
             <TableBody>
               {paginatedPools.length === 0 ? (
-                <TableEmptyRow colSpan={7} icon={Database} title="No storage pools found" />
+                <TableEmptyRow
+                  colSpan={nodes.length > 0 ? 7 : 6}
+                  icon={Database}
+                  title="No storage pools found"
+                  description={
+                    filters.activeFilterCount > 0
+                      ? "No storage pool matches the current filters."
+                      : undefined
+                  }
+                />
               ) : (
                 paginatedPools.map((pool: any, idx: number) => {
                   const poolKey = `${pool.node}-${pool.name}`;
@@ -294,7 +257,7 @@ export default function StoragePoolsPage() {
                 currentPage={currentPage}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={filteredPools.length}
+                totalItems={sortedPools.length}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
@@ -306,5 +269,15 @@ export default function StoragePoolsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function StoragePoolsPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <StoragePoolsContent />
+    </Suspense>
   );
 }

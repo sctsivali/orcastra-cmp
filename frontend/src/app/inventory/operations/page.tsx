@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Button } from "@/components/ui/button";
@@ -12,8 +12,7 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import {
   AlertDialog,
@@ -23,15 +22,13 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+  AlertDialogTitle } from "@/components/ui/alert-dialog";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { X, Clock, Loader2, XCircle, Unplug } from "lucide-react";
+  TooltipTrigger } from "@/components/ui/tooltip";
+import { Loader2, XCircle, Unplug } from "lucide-react";
 import { useOperations } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
@@ -41,9 +38,70 @@ import { Role } from "@/types/rbac";
 import { formatDateTime, formatLabel} from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 
-export default function OperationsPage() {
-  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
+// The instance an operation belongs to: its own field, else the name inside a websocket
+// console operation's resources. Hoisted so sorting, searching and the row cannot disagree.
+function operationInstance(o: any): string {
+  if (o.instance_name) return o.instance_name;
+  if (o.class_name === "websocket" && o.description === "Executing command" && !o.metadata?.command) {
+    const instances = o.metadata?.resources?.instances || [];
+    if (instances.length > 0) {
+      const match = String(instances[0]).match(/\/instances\/([^?]+)/);
+      if (match) return match[1];
+    }
+  }
+  return "";
+}
+
+const OPERATIONS = defineTable<any>()({
+  searchPlaceholder: "Search operations",
+  defaultSort: { field: "created", direction: "desc" },
+  columns: [
+    { field: "id", label: "Operation ID", sort: (o) => o.id, search: (o) => o.id, filter: fromSort("text") },
+    {
+      field: "instance",
+      label: "Instance",
+      sort: operationInstance,
+      search: operationInstance, filter: fromSort("text") },
+    {
+      field: "description",
+      label: "Description",
+      sort: (o) => o.description,
+      search: (o) => o.description, filter: fromSort("text") },
+    {
+      field: "node",
+      label: "Node",
+      sort: (o) => o.node_name,
+      facet: (o) => o.node_name,
+      facetSpec: { role: "node", primary: true } },
+    {
+      field: "project",
+      label: "Project",
+      sort: (o) => o.project || "default",
+      facet: (o) => o.project || "default",
+      facetSpec: { role: "project",} },
+    {
+      field: "status",
+      label: "Status",
+      sort: (o) => o.status,
+      facet: (o) => o.status,
+      facetSpec: { primary: true } },
+    {
+      field: "class",
+      label: "Class",
+      sort: (o) => o.class_name,
+      facet: (o) => o.class_name,
+      facetSpec: { primary: true, format: formatLabel } },
+    {
+      field: "created",
+      label: "Created",
+      sort: (o) => (o.created_at ? new Date(o.created_at).getTime() : null), filter: fromSort("date", { horizon: "past" }) },
+  ] });
+
+function OperationsContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useOperations();
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
@@ -63,37 +121,17 @@ export default function OperationsPage() {
   }>({ open: false, operationId: "", host: "", description: "" });
 
 
-  // Sorting. Instance accessor mirrors the per-row derivation (instance_name, else
-  // extract from a websocket console op's resources, else empty).
-  const sortAccessors = useMemo(() => ({
-    id: (o: any) => o.id,
-    instance: (o: any) => {
-      if (o.instance_name) return o.instance_name;
-      if (o.class_name === "websocket" && o.description === "Executing command" && !o.metadata?.command) {
-        const instances = o.metadata?.resources?.instances || [];
-        if (instances.length > 0) {
-          const match = String(instances[0]).match(/\/instances\/([^?]+)/);
-          if (match) return match[1];
-        }
-      }
-      return "";
-    },
-    description: (o: any) => o.description,
-    node: (o: any) => o.node_name,
-    project: (o: any) => o.project || "default",
-    status: (o: any) => o.status,
-    class: (o: any) => o.class_name,
-    created: (o: any) => (o.created_at ? new Date(o.created_at).getTime() : null),
-  }), []);
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "created",
-    "desc",
-  );
-  const sortedOperations = useMemo(() => sortItems(operations), [operations, sortItems]);
+  const filters = useTableFilters(OPERATIONS, operations as any[]);
 
-  if (!isResolved) return <LoadingLottiePage />;
-  if (!isPartner) return null;
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    OPERATIONS.sortAccessors,
+    OPERATIONS.defaultSort.field,
+    OPERATIONS.defaultSort.direction,
+  );
+  const sortedOperations = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
 
   const getStatusColor = (status: string) => {
     switch (status.toLowerCase()) {
@@ -152,9 +190,7 @@ export default function OperationsPage() {
         {
           method: "DELETE",
           headers: {
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-          },
-        }
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
       
       if (!response.ok) {
@@ -164,8 +200,7 @@ export default function OperationsPage() {
       
       toast({
         title: "Operation cancelled",
-        description: `Operation ${operationId.substring(0, 8)}... has been cancelled`,
-      });
+        description: `Operation ${operationId.substring(0, 8)}... has been cancelled` });
       
       // Refresh operations list
       refetch();
@@ -173,8 +208,7 @@ export default function OperationsPage() {
       toast({
         title: "Failed to cancel operation",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     } finally {
       setCancellingId(null);
       setConfirmDialog({ open: false, operationId: "", host: "", description: "" });
@@ -189,9 +223,7 @@ export default function OperationsPage() {
         {
           method: "DELETE",
           headers: {
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}),
-          },
-        }
+            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
       );
       
       if (!response.ok) {
@@ -201,8 +233,7 @@ export default function OperationsPage() {
       
       toast({
         title: "Session killed",
-        description: `Console session for ${instanceName} has been terminated`,
-      });
+        description: `Console session for ${instanceName} has been terminated` });
       
       // Refresh operations list
       refetch();
@@ -210,8 +241,7 @@ export default function OperationsPage() {
       toast({
         title: "Failed to kill session",
         description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     } finally {
       setKillingId(null);
       setConfirmDialog({ open: false, operationId: "", host: "", description: "" });
@@ -226,8 +256,7 @@ export default function OperationsPage() {
       host,
       description: operation.description || `Operation ${operation.id.substring(0, 8)}...`,
       isKillSession,
-      instanceName,
-    });
+      instanceName });
   };
 
   if (isLoading) {
@@ -306,13 +335,16 @@ export default function OperationsPage() {
       <UnreachableNodesBanner noun="operations" nodes={unreachableNodes} />
 
       <Card>
-        <CardHeader>
-          <CardTitle>Active Operations ({operations.length})</CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>Active Operations</CardTitle>
+          <TableToolbar filters={filters} noun="operations" />
         </CardHeader>
         <CardContent>
-          {operations.length === 0 ? (
+          {sortedOperations.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
-              No active operations
+              {filters.activeFilterCount > 0
+                ? "No operation matches the current filters."
+                : "No active operations"}
             </div>
           ) : (
             <TooltipProvider>
@@ -425,5 +457,20 @@ export default function OperationsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
+// imports. Suspense is required because useTableFilters reads useSearchParams.
+export default function OperationsPage() {
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
+
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!isPartner) return null;
+
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <OperationsContent />
+    </Suspense>
   );
 }

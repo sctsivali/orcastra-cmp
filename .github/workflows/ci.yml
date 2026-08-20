@@ -116,6 +116,23 @@ jobs:
       # that failed. Two of these shipped and were removed.
       - name: Console reloads
         run: node scripts/checks/check-no-console-reload.mjs .
+      # useSearchParams opts a component out of prerendering, so Next needs a Suspense
+      # boundary above it or `next build` fails on that route. Typecheck does not see it, so
+      # this used to surface only at the Build step minutes later.
+      - name: SearchParams Suspense boundaries
+        run: node scripts/checks/check-searchparams-suspense.mjs .
+      # A column an operator can see is a column an operator can filter by. Every column with
+      # a sort accessor must declare a facet, a filter, a search accessor or a written waiver;
+      # a node or project column must declare which dimension it is; and no table may mark
+      # more than two non-dimension facets primary.
+      - name: Table filter coverage
+        run: node scripts/checks/check-table-filters.mjs .
+      # A filter that serialises into a shared link and parses back as something else is the
+      # worst failure this system can have: the URL looks right and the table is wrong. This
+      # compiles the codec standalone and round-trips every kind, including a text query that
+      # is literally the empty sentinel.
+      - name: Filter URL round trip
+        run: node scripts/checks/check-filter-url-roundtrip.mjs .
 
   commit-format:
     name: Conventional commits

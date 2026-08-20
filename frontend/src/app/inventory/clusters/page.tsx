@@ -26,7 +26,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -34,25 +34,27 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
+import { TableEmptyRow } from "@/components/ui/table-text";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+  DialogTitle } from "@/components/ui/dialog";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
-import { ClusterStatus, type ClusterInfo } from "@/types/api";
+import { ClusterStatus } from "@/types/api";
 import { useClusters, useCheckClusterAuth, useDeleteCluster, useRegenerateCert } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { ClusterLocationDialog } from "@/components/cluster-location-dialog";
 import { useRequireRole } from "@/hooks/use-require-role";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { Role } from "@/types/rbac";
 import { copyText } from "@/lib/clipboard";
 
@@ -61,35 +63,60 @@ const statusConfig = {
     label: "Online",
     variant: "default" as const,
     icon: CheckCircle,
-    color: "text-green-500",
-  },
+    color: "text-green-500" },
   [ClusterStatus.NOT_AUTHORIZED]: {
     label: "Pending Trust",
     variant: "secondary" as const,
     icon: Clock,
-    color: "text-amber-500",
-  },
+    color: "text-amber-500" },
   [ClusterStatus.OFFLINE]: {
     label: "Offline",
     variant: "destructive" as const,
     icon: XCircle,
-    color: "text-red-500",
-  },
+    color: "text-red-500" },
   [ClusterStatus.ERROR]: {
     label: "Error",
     variant: "destructive" as const,
     icon: AlertTriangle,
-    color: "text-red-500",
-  },
+    color: "text-red-500" },
   [ClusterStatus.PENDING]: {
     label: "Pending",
     variant: "secondary" as const,
     icon: Clock,
-    color: "text-gray-500",
-  },
-};
+    color: "text-gray-500" } };
 
-export default function ClustersPage() {
+const CLUSTERS = defineTable<any>()({
+  searchPlaceholder: "Search clusters",
+  defaultSort: { field: "cluster", direction: "asc" },
+  columns: [
+    {
+      field: "cluster",
+      label: "Cluster",
+      sort: (c) => c.display_name,
+      search: (c) => c.display_name, filter: fromSort("text") },
+    { field: "endpoint", label: "Endpoint", sort: (c) => c.endpoint, search: (c) => c.endpoint, filter: fromSort("text") },
+    {
+      field: "type",
+      label: "Type",
+      sort: (c) => c.cluster_type,
+      facet: (c) => c.cluster_type,
+      facetSpec: { primary: true, format: formatHypervisorType } },
+    {
+      field: "zone",
+      label: "Zone",
+      sort: (c) => c.zone,
+      search: (c) => c.zone,
+      facet: (c) => c.zone,
+      facetSpec: { emptyLabel: "(no zone)" } },
+    {
+      field: "status",
+      label: "Status",
+      sort: (c) => c.status,
+      facet: (c) => c.status,
+      facetSpec: { primary: true } },
+  ] });
+
+function ClustersContent() {
   const router = useRouter();
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useClusters();
   const clusters = (data as any)?.clusters || [];
@@ -100,22 +127,18 @@ export default function ClustersPage() {
   const [deleteConfirmText, setDeleteConfirmText] = React.useState("");
   const [locationModal, setLocationModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const { isReadOnly } = useReadOnlyMode();
-  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
   const checkClusterAuth = useCheckClusterAuth();
   const deleteCluster = useDeleteCluster();
   const regenerateCert = useRegenerateCert();
 
-  const sortAccessors = React.useMemo(() => ({
-    cluster: (c: any) => c.display_name,
-    endpoint: (c: any) => c.endpoint,
-    type: (c: any) => c.cluster_type,
-    zone: (c: any) => c.zone,
-    status: (c: any) => c.status,
-  }), []);
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "cluster");
+  const filters = useTableFilters(CLUSTERS, clusters as any[]);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    CLUSTERS.sortAccessors,
+    CLUSTERS.defaultSort.field,
+    CLUSTERS.defaultSort.direction,
+  );
 
-  if (!isResolved) return <LoadingLottiePage />;
-  if (!isPartner) return null;
+  const visibleClusters = sortItems(filters.filteredRows);
 
   const handleCheckAuth = async (clusterId: string) => {
     setCheckingAuth(clusterId);
@@ -125,22 +148,19 @@ export default function ClustersPage() {
       if (response.authenticated) {
         toast({
           title: "Authentication Successful",
-          description: `Cluster ${clusterId} is online. Refreshing instance data...`,
-        });
+          description: `Cluster ${clusterId} is online. Refreshing instance data...` });
         // refetch is handled by the mutation's onSuccess (includes delay for LXD stabilization)
       } else {
         toast({
           title: "Not Authenticated",
           description: response.message || "Certificate not yet trusted",
-          variant: "destructive",
-        });
+          variant: "destructive" });
       }
     } catch (error: any) {
       toast({
         title: "Check Failed",
         description: error.message || "Failed to check authentication",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     } finally {
       setCheckingAuth(null);
     }
@@ -174,15 +194,13 @@ export default function ClustersPage() {
         setRegenerateModal({open: true, cluster});
         toast({
           title: "Certificate Regenerated",
-          description: "Copy and run the command on your hypervisor server to add trust",
-        });
+          description: "Copy and run the command on your hypervisor server to add trust" });
       }
     } catch (error: any) {
       toast({
         title: "Regenerate Failed",
         description: error.message || "Failed to regenerate certificate",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -194,8 +212,7 @@ export default function ClustersPage() {
         : {
             title: "Copy Failed",
             description: "Please select and copy the text manually (Ctrl+C or Cmd+C)",
-            variant: "destructive",
-          },
+            variant: "destructive" },
     );
   };
 
@@ -212,8 +229,7 @@ export default function ClustersPage() {
       await deleteCluster.mutateAsync(clusterId);
       toast({
         title: "Cluster Removed",
-        description: `Cluster ${clusterId} has been removed`,
-      });
+        description: `Cluster ${clusterId} has been removed` });
       setDeleteConfirmModal({ open: false, cluster: null });
       setDeleteConfirmText("");
       // useDeleteCluster.onSuccess invalidates ["clusters"] with refetchType:'all',
@@ -222,8 +238,7 @@ export default function ClustersPage() {
       toast({
         title: "Delete Failed",
         description: error.message || "Failed to remove cluster",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -316,8 +331,7 @@ EOF`}
                         if (response.authenticated) {
                           toast({
                             title: "Authentication Successful",
-                            description: `Cluster ${regenerateModal.cluster.cluster_id} is now online`,
-                          });
+                            description: `Cluster ${regenerateModal.cluster.cluster_id} is now online` });
                           // Only close modal if authentication successful
                           setRegenerateModal({open: false, cluster: null});
                           setRegeneratedCert(null);
@@ -326,16 +340,14 @@ EOF`}
                           toast({
                             title: "Not Authenticated Yet",
                             description: response.message || "Certificate not yet trusted. Please run the command on your hypervisor server.",
-                            variant: "destructive",
-                          });
+                            variant: "destructive" });
                           // Keep modal open for retry
                         }
                       } catch (error: any) {
                         toast({
                           title: "Check Failed",
                           description: error.message || "Failed to check authentication",
-                          variant: "destructive",
-                        });
+                          variant: "destructive" });
                         // Keep modal open for retry
                       } finally {
                         setCheckingAuth(null);
@@ -401,20 +413,16 @@ EOF`}
       </div>
 
       <Card>
-        <CardHeader>
+        <CardHeader className="space-y-4">
           <div className="flex items-center justify-between">
-            <div>
-              <CardTitle>Cluster Overview</CardTitle>
-              <CardDescription>
-                {clusters.length} {clusters.length === 1 ? "cluster" : "clusters"} registered
-              </CardDescription>
-            </div>
+            <CardTitle>Cluster Overview</CardTitle>
             <RefreshButton
               label="Refresh clusters"
               lastUpdatedAt={dataUpdatedAt}
               onRefresh={refreshNow}
             />
           </div>
+          <TableToolbar filters={filters} noun="clusters" />
         </CardHeader>
         <CardContent>
           {clusters.length === 0 ? (
@@ -445,7 +453,19 @@ EOF`}
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortItems(clusters).map((cluster: any) => {
+                {visibleClusters.length === 0 ? (
+                  <TableEmptyRow
+                    colSpan={6}
+                    icon={Server}
+                    title="No clusters found"
+                    description={
+                      filters.activeFilterCount > 0
+                        ? "No cluster matches the current filters."
+                        : undefined
+                    }
+                  />
+                ) : (
+                  visibleClusters.map((cluster: any) => {
                   const StatusIcon = statusConfig[cluster.status as ClusterStatus]?.icon || AlertTriangle;
                   return (
                     <TableRow key={cluster.cluster_id}>
@@ -545,7 +565,8 @@ EOF`}
                       </TableCell>
                     </TableRow>
                   );
-                })}
+                })
+              )}
               </TableBody>
             </Table>
           )}
@@ -636,5 +657,20 @@ EOF`}
         onSuccess={() => refetch()}
       />
     </div>
+  );
+}
+
+// The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
+// imports. Suspense is required because useTableFilters reads useSearchParams.
+export default function ClustersPage() {
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
+
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!isPartner) return null;
+
+  return (
+    <React.Suspense fallback={<LoadingLottiePage />}>
+      <ClustersContent />
+    </React.Suspense>
   );
 }

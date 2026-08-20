@@ -13,7 +13,7 @@ import {
   Copy,
   Terminal,
   ChevronLeft,
-} from "lucide-react";
+  ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,23 +24,21 @@ import {
   TableCell,
   TableHead,
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
+import { TableEmptyRow } from "@/components/ui/table-text";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
+  DialogFooter } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  SelectValue } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -50,19 +48,20 @@ import {
   CertificateStatus,
   CertificateTTLOption,
   TTL_LABELS,
-  type CertificateInfo,
-} from "@/types/api";
+  type CertificateInfo } from "@/types/api";
 import {
   useCertificates,
   useInitiateCertRenewal,
   useVerifyCertRenewal,
-  useCancelPendingCert,
-} from "@/hooks/use-lxd";
+  useCancelPendingCert } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useRequireRole } from "@/hooks/use-require-role";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 import { Role } from "@/types/rbac";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
-import { formatDate } from "@/lib/utils";
+import { formatDate, formatLabel } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { copyText } from "@/lib/clipboard";
@@ -73,37 +72,31 @@ const statusConfig = {
     variant: "default" as const,
     icon: CheckCircle,
     color: "text-green-500",
-    bgColor: "bg-green-500/10",
-  },
+    bgColor: "bg-green-500/10" },
   [CertificateStatus.EXPIRING]: {
     label: "Expiring Soon",
     variant: "secondary" as const,
     icon: Clock,
     color: "text-amber-500",
-    bgColor: "bg-amber-500/10",
-  },
+    bgColor: "bg-amber-500/10" },
   [CertificateStatus.EXPIRED]: {
     label: "Expired",
     variant: "destructive" as const,
     icon: XCircle,
     color: "text-red-500",
-    bgColor: "bg-red-500/10",
-  },
+    bgColor: "bg-red-500/10" },
   [CertificateStatus.UNKNOWN]: {
     label: "Unknown",
     variant: "outline" as const,
     icon: AlertTriangle,
     color: "text-gray-500",
-    bgColor: "bg-gray-500/10",
-  },
+    bgColor: "bg-gray-500/10" },
   [CertificateStatus.PENDING_RENEWAL]: {
     label: "Pending Renewal",
     variant: "secondary" as const,
     icon: RefreshCw,
     color: "text-blue-500",
-    bgColor: "bg-blue-500/10",
-  },
-};
+    bgColor: "bg-blue-500/10" } };
 
 function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return "N/A";
@@ -113,12 +106,56 @@ function getDaysDisplay(days: number | null | undefined): string {
   return `${days} days remaining`;
 }
 
-export default function CertificatesPage() {
+const CERTIFICATES = defineTable<CertificateInfo>()({
+  searchPlaceholder: "Search certificates",
+  defaultSort: { field: "expires", direction: "asc" },
+  columns: [
+    {
+      field: "cluster",
+      label: "Cluster",
+      sort: (c) => c.cluster_id,
+      search: (c) => c.cluster_id,
+      // The only cluster-scoped table that could not be filtered by cluster, while both
+      // sibling tables on the warnings page facet the same dimension.
+      //
+      // note: this facets `cluster_id` where warnings facets `display_name || cluster_id`,
+      // because CertificateInfo carries no display_name. Joining a second query inside a
+      // facet accessor is the pattern lib/used-by.ts argues against, so the option labels
+      // differ between sibling pages and that is deliberate.
+      facet: (c) => c.cluster_id,
+      facetSpec: { role: "node" } },
+    {
+      field: "status",
+      label: "Status",
+      sort: (c) => c.status,
+      facet: (c) => c.status,
+      // note: the enum carries five states while the summary cards show three, so Total is
+      // not the sum of the cards. The facet lists all five; the cards stay at the three an
+      // operator acts on.
+      facetSpec: { primary: true, format: formatLabel } },
+    {
+      field: "issuer",
+      label: "Issuer",
+      sort: (c) => c.issuer,
+      search: (c) => c.issuer,
+      facet: (c) => c.issuer,
+      facetSpec: { emptyLabel: "(no issuer)" } },
+    { field: "issued", label: "Issued", sort: (c) => certToTime(c.issued_at), filter: fromSort("date", { horizon: "past" }) },
+    { field: "expires", label: "Expires", sort: (c) => certToTime(c.expires_at), filter: fromSort("date", { horizon: "future" }) },
+    { field: "days", label: "Days Left", sort: (c) => c.days_until_expiry, filter: fromSort("number", { unit: "days" }) },
+  ] });
+
+function certToTime(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const t = new Date(value).getTime();
+  return Number.isNaN(t) ? null : t;
+}
+
+function CertificatesContent() {
   const router = useRouter();
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useCertificates();
   const certificates = data?.certificates || [];
   const { isReadOnly } = useReadOnlyMode();
-  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 
   // Renewal modal state
   const [renewalModal, setRenewalModal] = React.useState<{
@@ -147,23 +184,19 @@ export default function CertificatesPage() {
   const verifyCertRenewal = useVerifyCertRenewal();
   const cancelPendingCert = useCancelPendingCert();
 
-  const toTime = (value: string | null | undefined): number | null => {
-    if (!value) return null;
-    const t = new Date(value).getTime();
-    return Number.isNaN(t) ? null : t;
-  };
-  const sortAccessors = React.useMemo(() => ({
-    cluster: (c: any) => c.cluster_id,
-    status: (c: any) => c.status,
-    issuer: (c: any) => c.issuer,
-    issued: (c: any) => toTime(c.issued_at),
-    expires: (c: any) => toTime(c.expires_at),
-    days: (c: any) => c.days_until_expiry,
-  }), []);
-  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(sortAccessors, "expires");
+  const filters = useTableFilters(CERTIFICATES, certificates);
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    CERTIFICATES.sortAccessors,
+    CERTIFICATES.defaultSort.field,
+    CERTIFICATES.defaultSort.direction,
+  );
 
-  if (!isResolved) return <LoadingLottiePage />;
-  if (!isPartner) return null;
+  const visibleCerts = sortItems(filters.filteredRows);
+
+  // The summary cards and the Status facet are one piece of state rendered twice, not two
+  // controls. Two controls for one state is the failure this whole change exists to remove.
+  const statusSelected = filters.selectedValues("status");
+  const toggleStatus = (value: string) => filters.toggleFacetValue("status", value);
 
   const handleRenewClick = (cert: CertificateInfo) => {
     setRenewalModal({ open: true, certificate: cert });
@@ -183,34 +216,29 @@ export default function CertificatesPage() {
       const result = await initiateCertRenewal.mutateAsync({
         cluster_id: renewalModal.certificate.cluster_id,
         ttl: selectedTTL,
-        trust_password: trustPassword || undefined,
-      });
+        trust_password: trustPassword || undefined });
 
       if (result.auto_renewed) {
         toast({
           title: "Certificate Renewed",
-          description: "Certificate has been automatically renewed and activated.",
-        });
+          description: "Certificate has been automatically renewed and activated." });
         setRenewalModal({ open: false, certificate: null });
         refetch();
       } else if (result.requires_manual_trust) {
         setRenewalResult({
           certificate: result.certificate,
           cli_command: result.cli_command,
-          pending_cert_id: result.pending_cert_id,
-        });
+          pending_cert_id: result.pending_cert_id });
         setShowManualTrust(true);
         toast({
           title: "Manual Trust Required",
-          description: "Please run the CLI command on your hypervisor server.",
-        });
+          description: "Please run the CLI command on your hypervisor server." });
       }
     } catch (error: any) {
       toast({
         title: "Renewal Failed",
         description: error.message || "Failed to initiate certificate renewal",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -220,29 +248,25 @@ export default function CertificatesPage() {
     try {
       const result = await verifyCertRenewal.mutateAsync({
         cluster_id: renewalModal.certificate.cluster_id,
-        pending_cert_id: renewalResult?.pending_cert_id,
-      });
+        pending_cert_id: renewalResult?.pending_cert_id });
 
       if (result.verified && result.activated) {
         toast({
           title: "Certificate Activated",
-          description: "New certificate is now active.",
-        });
+          description: "New certificate is now active." });
         setRenewalModal({ open: false, certificate: null });
         refetch();
       } else {
         toast({
           title: "Not Yet Verified",
           description: "Certificate not yet trusted. Please run the CLI command first.",
-          variant: "destructive",
-        });
+          variant: "destructive" });
       }
     } catch (error: any) {
       toast({
         title: "Verification Failed",
         description: error.message || "Failed to verify certificate",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -251,15 +275,13 @@ export default function CertificatesPage() {
       await cancelPendingCert.mutateAsync(clusterId);
       toast({
         title: "Cancelled",
-        description: "Pending certificate renewal has been cancelled.",
-      });
+        description: "Pending certificate renewal has been cancelled." });
       refetch();
     } catch (error: any) {
       toast({
         title: "Error",
         description: error.message || "Failed to cancel pending renewal",
-        variant: "destructive",
-      });
+        variant: "destructive" });
     }
   };
 
@@ -271,8 +293,7 @@ export default function CertificatesPage() {
         : {
             title: "Failed to copy",
             description: "Please copy manually",
-            variant: "destructive",
-          },
+            variant: "destructive" },
     );
   };
 
@@ -315,53 +336,84 @@ export default function CertificatesPage() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">
-        <Card>
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium">Total Certificates</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold">{data?.total || 0}</div>
-          </CardContent>
-        </Card>
-        <Card className="border-green-500/50">
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-green-600">Valid</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-green-600">
-              {certificates.filter((c) => c.status === CertificateStatus.VALID).length}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-amber-500/50">
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-amber-600">Expiring Soon</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-amber-600">
-              {data?.expiring_count || 0}
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="border-red-500/50">
-          <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-red-600">Expired</CardTitle>
-          </CardHeader>
-          <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-red-600">
-              {data?.expired_count || 0}
-            </div>
-          </CardContent>
-        </Card>
+        {/* Total is neither a bucket nor the sum of the three beside it: the status enum
+            carries five states and the cards show three. It clears the status filter. */}
+        <button
+          type="button"
+          aria-pressed={statusSelected.length === 0}
+          onClick={() => filters.setFacet("status", [])}
+          className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Card className={`h-full ${statusSelected.length === 0 ? "ring-2 ring-ring" : ""}`}>
+            <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
+              <CardTitle className="text-xs md:text-sm font-medium">Total Certificates</CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
+              <div className="text-xl md:text-2xl font-bold">{data?.total || 0}</div>
+            </CardContent>
+          </Card>
+        </button>
+        <button
+          type="button"
+          aria-pressed={statusSelected.includes(CertificateStatus.VALID)}
+          onClick={() => toggleStatus(CertificateStatus.VALID)}
+          className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Card className={`border-green-500/50 h-full ${statusSelected.includes(CertificateStatus.VALID) ? "ring-2 ring-ring" : ""}`}>
+            <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
+              <CardTitle className="text-xs md:text-sm font-medium text-green-600">Valid</CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
+              <div className="text-xl md:text-2xl font-bold text-green-600">
+                {certificates.filter((c) => c.status === CertificateStatus.VALID).length}
+              </div>
+            </CardContent>
+          </Card>
+        </button>
+        <button
+          type="button"
+          aria-pressed={statusSelected.includes(CertificateStatus.EXPIRING)}
+          onClick={() => toggleStatus(CertificateStatus.EXPIRING)}
+          className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Card className={`border-amber-500/50 h-full ${statusSelected.includes(CertificateStatus.EXPIRING) ? "ring-2 ring-ring" : ""}`}>
+            <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
+              <CardTitle className="text-xs md:text-sm font-medium text-amber-600">Expiring Soon</CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
+              <div className="text-xl md:text-2xl font-bold text-amber-600">
+                {data?.expiring_count || 0}
+              </div>
+            </CardContent>
+          </Card>
+        </button>
+        <button
+          type="button"
+          aria-pressed={statusSelected.includes(CertificateStatus.EXPIRED)}
+          onClick={() => toggleStatus(CertificateStatus.EXPIRED)}
+          className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <Card className={`border-red-500/50 h-full ${statusSelected.includes(CertificateStatus.EXPIRED) ? "ring-2 ring-ring" : ""}`}>
+            <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
+              <CardTitle className="text-xs md:text-sm font-medium text-red-600">Expired</CardTitle>
+            </CardHeader>
+            <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
+              <div className="text-xl md:text-2xl font-bold text-red-600">
+                {data?.expired_count || 0}
+              </div>
+            </CardContent>
+          </Card>
+        </button>
       </div>
 
       {/* Certificates Table */}
       <Card>
-        <CardHeader className="p-4 md:p-6">
+        <CardHeader className="p-4 md:p-6 space-y-4">
           <CardTitle className="text-lg md:text-xl">Cluster Certificates</CardTitle>
           <CardDescription className="text-xs md:text-sm">
             View and manage certificates for all registered clusters
           </CardDescription>
+          <TableToolbar filters={filters} noun="certificates" />
         </CardHeader>
         <CardContent className="p-0 md:p-6 md:pt-0">
           {certificates.length === 0 ? (
@@ -383,7 +435,19 @@ export default function CertificatesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortItems(certificates).map((cert) => {
+                {visibleCerts.length === 0 ? (
+                  <TableEmptyRow
+                    colSpan={7}
+                    icon={ShieldCheck}
+                    title="No certificates found"
+                    description={
+                      filters.activeFilterCount > 0
+                        ? "No certificate matches the current filters."
+                        : undefined
+                    }
+                  />
+                ) : (
+                  visibleCerts.map((cert) => {
                   const config = statusConfig[cert.status] || statusConfig[CertificateStatus.UNKNOWN];
                   const StatusIcon = config.icon;
 
@@ -488,7 +552,8 @@ export default function CertificatesPage() {
                       </TableCell>
                     </TableRow>
                   );
-                })}
+                })
+              )}
               </TableBody>
             </Table>
             </div>
@@ -674,5 +739,20 @@ export default function CertificatesPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
+// imports. Suspense is required because useTableFilters reads useSearchParams.
+export default function CertificatesPage() {
+  const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
+
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!isPartner) return null;
+
+  return (
+    <React.Suspense fallback={<LoadingLottiePage />}>
+      <CertificatesContent />
+    </React.Suspense>
   );
 }

@@ -1,117 +1,89 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
+  
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
 import { formatLabel } from "@/lib/utils";
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Search } from "lucide-react";
 import { useIPAM } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
 
-interface IPAMAllocation {
-  address: string;
-  type: string;
-  used_by: string;
-  hardware_address: string;
-  network: string;
-  node: string;
-  project: string;
-}
 
-export default function IPAMPage() {
+const IPAM = defineTable<any>()({
+  searchPlaceholder: "Search IP allocations",
+  defaultSort: { field: "address", direction: "asc" },
+  columns: [
+    { field: "address", label: "IP Address", sort: (a) => a.address, search: (a) => a.address, filter: fromSort("text") },
+    {
+      field: "type",
+      label: "Type",
+      sort: (a) => a.type,
+      facet: (a) => a.type,
+      facetSpec: { primary: true, format: formatLabel } },
+    { field: "used_by", label: "Used By", sort: (a) => a.used_by, search: (a) => a.used_by, filter: fromSort("text") },
+    {
+      field: "hardware_address",
+      label: "MAC Address",
+      sort: (a) => a.hardware_address,
+      search: (a) => a.hardware_address, filter: fromSort("text") },
+    {
+      field: "network",
+      label: "Network",
+      sort: (a) => a.network,
+      facet: (a) => a.network,
+      facetSpec: { primary: true } },
+    {
+      field: "node",
+      label: "Node",
+      sort: (a) => a.node,
+      facet: (a) => a.node,
+      facetSpec: { role: "node", primary: true } },
+    {
+      field: "project",
+      label: "Project",
+      // The column was rendered and sortable with no way to filter by it, on a page that
+      // already offered three other dropdowns.
+      sort: (a) => a.project || "default",
+      facet: (a) => a.project || "default",
+      facetSpec: { role: "project",} },
+  ] });
+
+function IPAMContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useIPAM();
   const allocations = (data as any)?.allocations || [];
-  const nodes = (data as any)?.nodes || [];
   
-  const [searchQuery, setSearchQuery] = useState("");
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
-  const [filterNode, setFilterNode] = useState<string>("all");
-  const [filterNetwork, setFilterNetwork] = useState<string>("all");
-  const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  const sortAccessors = useMemo(
-    () => ({
-      address: (i: any) => i.address,
-      type: (i: any) => i.type,
-      used_by: (i: any) => i.used_by,
-      hardware_address: (i: any) => i.hardware_address,
-      network: (i: any) => i.network,
-      node: (i: any) => i.node,
-      project: (i: any) => i.project || "default",
-    }),
-    [],
-  );
+  const resetPage = () => setCurrentPage(1);
+  const filters = useTableFilters(IPAM, allocations as any[], { onFilterChange: resetPage });
+
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "address",
-    "asc",
-    () => setCurrentPage(1),
+    IPAM.sortAccessors,
+    IPAM.defaultSort.field,
+    IPAM.defaultSort.direction,
+    resetPage,
   );
 
-  const networks = useMemo(() => {
-    const networkSet = new Set(allocations.map((a: any) => a.network).filter(Boolean));
-    return Array.from(networkSet).sort();
-  }, [allocations]);
 
-  const types = useMemo(() => {
-    const typeSet = new Set(allocations.map((a: any) => a.type).filter(Boolean));
-    return Array.from(typeSet).sort();
-  }, [allocations]);
 
-  const filteredAllocations = useMemo(() => {
-    let filtered = allocations;
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (alloc: any) =>
-          alloc.address.toLowerCase().includes(query) ||
-          alloc.used_by.toLowerCase().includes(query) ||
-          alloc.hardware_address.toLowerCase().includes(query)
-      );
-    }
-
-    if (filterNode !== "all") {
-      filtered = filtered.filter((alloc: any) => alloc.node === filterNode);
-    }
-
-    if (filterNetwork !== "all") {
-      filtered = filtered.filter((alloc: any) => alloc.network === filterNetwork);
-    }
-
-    if (filterType !== "all") {
-      filtered = filtered.filter((alloc: any) => alloc.type === filterType);
-    }
-
-    return filtered;
-  }, [allocations, searchQuery, filterNode, filterNetwork, filterType]);
-
-  const sortedAllocations = useMemo(() => sortItems(filteredAllocations), [filteredAllocations, sortItems]);
+  const sortedAllocations = useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
 
   const totalPages = Math.ceil(sortedAllocations.length / pageSize);
   const paginatedAllocations = sortedAllocations.slice(
@@ -144,91 +116,9 @@ export default function IPAMPage() {
       <UnreachableNodesBanner noun="IP allocations" nodes={unreachableNodes} />
 
       <Card>
-        <CardContent className="pt-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search IP, MAC, or resource..."
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setCurrentPage(1);
-                }}
-                className="pl-10"
-              />
-            </div>
-            {nodes.length > 0 && (
-              <Select
-                value={filterNode}
-                onValueChange={(value) => {
-                  setFilterNode(value);
-                  setCurrentPage(1);
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="All Nodes" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Nodes</SelectItem>
-                  {nodes.map((node: any) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            <Select
-              value={filterNetwork}
-              onValueChange={(value) => {
-                setFilterNetwork(value);
-                setCurrentPage(1);
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="All Networks" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Networks</SelectItem>
-                {networks.map((network: any) => (
-                  <SelectItem key={network} value={network}>
-                    {network}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Select
-              value={filterType}
-              onValueChange={(value) => {
-                setFilterType(value);
-                setCurrentPage(1);
-              }}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="All Types" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Types</SelectItem>
-                {types.map((type: any) => (
-                  <SelectItem key={type} value={type}>
-                    {type}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            IP Address Allocations ({filteredAllocations.length})
-            {(searchQuery || filterNode !== "all" || filterNetwork !== "all" || filterType !== "all")
-              ? ` (filtered from ${allocations.length})`
-              : ""}
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>IP Address Allocations</CardTitle>
+          <TableToolbar filters={filters} noun="IP allocations" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -293,7 +183,7 @@ export default function IPAMPage() {
                 currentPage={currentPage}
                 totalPages={totalPages}
                 pageSize={pageSize}
-                totalItems={filteredAllocations.length}
+                totalItems={sortedAllocations.length}
                 onPageChange={setCurrentPage}
                 onPageSizeChange={(size) => {
                   setPageSize(size);
@@ -305,5 +195,15 @@ export default function IPAMPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function IPAMPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <IPAMContent />
+    </Suspense>
   );
 }

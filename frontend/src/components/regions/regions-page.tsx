@@ -6,21 +6,17 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
+import { formatLabel } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Collapsible,
   CollapsibleContent,
-  CollapsibleTrigger,
-} from "@/components/ui/collapsible";
+  CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   Globe,
   Server,
@@ -28,7 +24,7 @@ import {
   MemoryStick,
   HardDrive,
   Sparkles,
-  Search,
+  
   ChevronDown,
   ChevronUp,
   RefreshCw,
@@ -36,13 +32,10 @@ import {
   Loader2,
   Activity,
   Box,
-  Filter,
-  Building2,
-} from "lucide-react";
+  Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRegionsOverview } from "@/hooks/use-lxd";
 import { RegionSummary, ExtendedHardwareInfo, ClusterStatus } from "@/types/api";
-import { CONTINENTS } from "@/lib/regions-data";
 
 // Props interface for the map component
 interface RegionsMapProps {
@@ -60,8 +53,7 @@ const RegionsMap = dynamic<RegionsMapProps>(
       <div className="h-[400px] bg-muted/30 rounded-lg flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
-    ),
-  }
+    ) }
 );
 
 // Format bytes to human readable
@@ -186,8 +178,7 @@ function RegionCard({
   region,
   isExpanded,
   onToggle,
-  onViewOnMap,
-}: {
+  onViewOnMap }: {
   region: RegionSummary;
   isExpanded: boolean;
   onToggle: () => void;
@@ -312,39 +303,52 @@ function RegionCard({
 }
 
 // Main Regions Page Component
-export function RegionsPage() {
+// A card list rather than a table, so it takes the shared toolbar and filter engine but
+// none of the table plumbing: no sortable heads, no pagination, no empty row.
+const REGIONS = defineTable<any>()({
+  searchPlaceholder: "Search regions",
+  defaultSort: { field: "region_name", direction: "asc" },
+  searchExtra: (r) => [r.city, r.country_name, r.country_code, r.facility_name, r.facility_provider],
+  columns: [
+    { field: "region_name", label: "Region", sort: (r) => r.region_name, search: (r) => r.region_name, filter: fromSort("text") },
+    {
+      field: "continent",
+      label: "Continent",
+      sort: (r) => r.continent,
+      facet: (r) => r.continent,
+      facetSpec: { primary: true, format: formatLabel } },
+    {
+      field: "country",
+      label: "Country",
+      sort: (r) => r.country_name,
+      facet: (r) => r.country_name,
+      facetSpec: {} },
+    {
+      field: "provider",
+      label: "Facility Provider",
+      sort: (r) => r.facility_provider,
+      facet: (r) => r.facility_provider,
+      facetSpec: { emptyLabel: "(no provider)" } },
+    {
+      field: "node_status",
+      label: "Node Status",
+      // A region matches when any of its nodes matches.
+      facet: (r) => (r.nodes ?? []).map((n: any) => n.status).filter(Boolean),
+      facetSpec: { primary: true, format: formatLabel, emptyLabel: "(no nodes)" } },
+    {
+      field: "node_type",
+      label: "Node Type",
+      facet: (r) => (r.nodes ?? []).map((n: any) => n.node_type).filter(Boolean),
+      facetSpec: { emptyLabel: "(no nodes)" } },
+  ] });
+
+function RegionsContent() {
   const { data, isLoading, error, refetch, refreshNow, dataUpdatedAt } = useRegionsOverview();
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const [continentFilter, setContinentFilter] = React.useState<string>("all");
   const [expandedRegions, setExpandedRegions] = React.useState<Set<string>>(new Set());
   const [selectedRegion, setSelectedRegion] = React.useState<string | null>(null);
 
-  // Filter regions
-  const filteredRegions = React.useMemo(() => {
-    if (!data?.regions) return [];
-    
-    return data.regions.filter((region) => {
-      // Search filter
-      if (searchQuery) {
-        const query = searchQuery.toLowerCase();
-        const matchesSearch =
-          region.region_name.toLowerCase().includes(query) ||
-          region.city.toLowerCase().includes(query) ||
-          region.country_name.toLowerCase().includes(query) ||
-          region.country_code.toLowerCase().includes(query) ||
-          (region.facility_name && region.facility_name.toLowerCase().includes(query)) ||
-          (region.facility_provider && region.facility_provider.toLowerCase().includes(query));
-        if (!matchesSearch) return false;
-      }
-      
-      // Continent filter
-      if (continentFilter !== "all" && region.continent !== continentFilter) {
-        return false;
-      }
-      
-      return true;
-    });
-  }, [data?.regions, searchQuery, continentFilter]);
+  const filters = useTableFilters(REGIONS, (data?.regions ?? []) as any[]);
+  const filteredRegions = filters.filteredRows;
 
   // Toggle region expansion
   const toggleRegion = (regionId: string) => {
@@ -507,38 +511,11 @@ export function RegionsPage() {
 
       {/* Region List */}
       <div className="space-y-4">
-        {/* Filters sidebar - disabled for now, will enable when more regions exist */}
-        {/* TODO: Enable filters when expanding scope
-        <Card className="h-fit">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Filter className="h-4 w-4" />
-              Filters
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Search</label>
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search regions..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-8"
-                />
-              </div>
-            </div>
-            <div className="pt-4 border-t">
-              <p className="text-sm text-muted-foreground">
-                Showing {filteredRegions.length} of {data?.regions.length || 0} regions
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-        */}
+        {/* Revived. The controls were commented out with "will enable when more regions
+            exist"; the two-value rule generalises that instinct, so a facet with nothing to
+            choose between hides itself rather than needing a TODO. */}
+        <TableToolbar filters={filters} noun="regions" />
 
-        {/* Regions list - full width since filters are hidden */}
         <div className="space-y-4">
           <h2 className="text-lg font-semibold">Regions</h2>
 
@@ -557,13 +534,13 @@ export function RegionsPage() {
                     ? "No nodes with location data registered yet."
                     : "No regions match your filters."}
                 </p>
-                {searchQuery && (
+                {filters.activeFilterCount > 0 && (
                   <Button
                     variant="link"
-                    onClick={() => setSearchQuery("")}
+                    onClick={filters.clearAll}
                     className="mt-2"
                   >
-                    Clear search
+                    Clear filters
                   </Button>
                 )}
               </CardContent>
@@ -586,5 +563,15 @@ export function RegionsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+// The boundary sits next to the component that reads the query string rather than in the
+// route file, so it stays visible to anyone editing this component and to the guard.
+export function RegionsPage() {
+  return (
+    <React.Suspense fallback={<LoadingLottiePage />}>
+      <RegionsContent />
+    </React.Suspense>
   );
 }

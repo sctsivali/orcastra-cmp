@@ -1,20 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
+  
   TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -25,9 +22,51 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { Role } from "@/types/rbac";
-import { Search, UploadCloud, Disc } from "lucide-react";
+import { UploadCloud, Disc } from "lucide-react";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
+import { projectsFromUsedBy } from "@/lib/used-by";
+import { UsedByProjects } from "@/components/used-by-projects";
 
-export default function IsoImagesPage() {
+const ISOS = defineTable<any>()({
+  searchPlaceholder: "Search ISO images",
+  defaultSort: { field: "name", direction: "asc" },
+  columns: [
+    { field: "name", label: "Name", sort: (i) => i.name, search: (i) => i.name, filter: fromSort("text") },
+    {
+      field: "pool",
+      label: "Pool",
+      sort: (i) => i.pool,
+      search: (i) => i.pool,
+      facet: (i) => i.pool,
+      facetSpec: { primary: true } },
+    {
+      field: "node",
+      label: "Node",
+      sort: (i) => i.node,
+      search: (i) => i.node,
+      facet: (i) => i.node,
+      facetSpec: { role: "node", primary: true } },
+    { field: "used_by", label: "Used By", sort: (i) => i.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
+    {
+      field: "projects",
+      label: "Projects",
+      // The one page in the used_by family that never had this column, though the rows have
+      // always carried used_by. Same shape as storage-volumes.
+      sort: (i) => projectsFromUsedBy(i.used_by).length,
+      facet: (i) => projectsFromUsedBy(i.used_by),
+      facetSpec: { role: "project", emptyLabel: "(no project)" },
+    },
+    {
+      field: "usage",
+      label: "Usage",
+      facet: (i) => (i.used_by?.length ? "In use" : "Unused"),
+      facetSpec: {},
+    },
+  ] });
+
+function IsoImagesContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStorageVolumes();
   const allVolumes = (data as any)?.volumes || [];
   // ISOs are custom storage volumes with content-type "iso".
@@ -40,39 +79,44 @@ export default function IsoImagesPage() {
   const { isReadOnly } = useReadOnlyMode();
   const canUpload = hasRole(Role.PARTNER);
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [uploadOpen, setUploadOpen] = useState(false);
 
-  const sortAccessors = useMemo(
-    () => ({
-      name: (i: any) => i.name,
-      pool: (i: any) => i.pool,
-      node: (i: any) => i.node,
-      used_by: (i: any) => i.used_by?.length ?? 0,
-    }),
-    [],
+  const resetPage = () => setCurrentPage(1);
+
+  // note: derived from the rows, not from the fleet, matching the five sibling used_by pages.
+  // A pinned role is exempt from the two-value threshold, so without this gate the Node control
+  // renders on a scope with no node at all and offers nothing but the empty bucket.
+  const nodes = useMemo(
+    () => Array.from(new Set(isos.map((i: any) => i.node).filter(Boolean))).sort(),
+    [isos],
   );
+
+  // Header, cell and the empty row's width move together; a mismatch renders a short row.
+  const columnCount = nodes.length > 0 ? 5 : 4;
+
+  const availableFields = useMemo(
+    () =>
+      nodes.length > 0
+        ? ISOS.facetFields
+        : ISOS.facetFields.filter((f) => f !== "node"),
+    [nodes.length],
+  );
+
+  const filters = useTableFilters(ISOS, isos as any[], {
+    onFilterChange: resetPage,
+    availableFields,
+  });
+
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
-    sortAccessors,
-    "name",
-    "asc",
-    () => setCurrentPage(1),
+    ISOS.sortAccessors,
+    ISOS.defaultSort.field,
+    ISOS.defaultSort.direction,
+    resetPage,
   );
 
-  const filtered = useMemo(() => {
-    if (!searchQuery) return isos;
-    const q = searchQuery.toLowerCase();
-    return isos.filter(
-      (v: any) =>
-        v.name.toLowerCase().includes(q) ||
-        (v.pool && v.pool.toLowerCase().includes(q)) ||
-        (v.node && v.node.toLowerCase().includes(q)),
-    );
-  }, [isos, searchQuery]);
-
-  const sorted = useMemo(() => sortItems(filtered), [filtered, sortItems]);
+  const sorted = useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
   const totalPages = Math.ceil(sorted.length / pageSize);
   const paginated = sorted.slice(
     (currentPage - 1) * pageSize,
@@ -111,28 +155,9 @@ export default function IsoImagesPage() {
       </div>
 
       <Card>
-        <CardContent className="pt-6">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search ISO images..."
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentPage(1);
-              }}
-              className="pl-10"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>
-            ISO Images ({filtered.length}
-            {searchQuery ? ` of ${isos.length}` : ""})
-          </CardTitle>
+        <CardHeader className="space-y-4">
+          <CardTitle>ISO Images</CardTitle>
+          <TableToolbar filters={filters} noun="ISO images" />
         </CardHeader>
         <CardContent>
           <Table>
@@ -140,14 +165,17 @@ export default function IsoImagesPage() {
               <TableRow>
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Pool" field="pool" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {nodes.length > 0 && (
+                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginated.length === 0 ? (
                 <TableEmptyRow
-                  colSpan={4}
+                  colSpan={columnCount}
                   icon={Disc}
                   title="No ISO images yet"
                   description={canUpload ? 'Use "Upload ISO" to add one.' : undefined}
@@ -159,15 +187,20 @@ export default function IsoImagesPage() {
                     <TableCell>
                       {v.pool}
                     </TableCell>
-                    <TableCell>
-                      {v.node}
-                    </TableCell>
+                    {nodes.length > 0 && (
+                      <TableCell>
+                        {v.node}
+                      </TableCell>
+                    )}
                     <TableCell>
                       {v.used_by && v.used_by.length > 0 ? (
                         `${v.used_by.length} instance${v.used_by.length === 1 ? "" : "s"}`
                       ) : (
                         <TableEmptyValue label="Not used" />
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <UsedByProjects usedBy={v.used_by || []} resourceName={v.name} />
                     </TableCell>
                   </TableRow>
                 ))
@@ -194,5 +227,15 @@ export default function IsoImagesPage() {
         onUploaded={() => refetch()}
       />
     </div>
+  );
+}
+
+// Suspense is required because useTableFilters reads useSearchParams, which opts the
+// component out of prerendering.
+export default function IsoImagesPage() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <IsoImagesContent />
+    </Suspense>
   );
 }

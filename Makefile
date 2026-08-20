@@ -253,6 +253,12 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-role-gates.mjs
 	@echo "$(COLOR_GREEN)Checking console reloads...$(COLOR_RESET)"
 	@node scripts/checks/check-no-console-reload.mjs
+	@echo "$(COLOR_GREEN)Checking searchparams Suspense boundaries...$(COLOR_RESET)"
+	@node scripts/checks/check-searchparams-suspense.mjs
+	@echo "$(COLOR_GREEN)Checking table filter coverage...$(COLOR_RESET)"
+	@node scripts/checks/check-table-filters.mjs
+	@echo "$(COLOR_GREEN)Checking filter URL round trip...$(COLOR_RESET)"
+	@node scripts/checks/check-filter-url-roundtrip.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
 
 setup-hooks: ## Point git at the repo's hooks (run once per clone)
