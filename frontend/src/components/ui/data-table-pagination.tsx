@@ -72,6 +72,7 @@ export function DataTablePagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(1)}
+          aria-label="Go to first page"
           disabled={currentPage === 1}
           className="h-8 w-8 p-0"
         >
@@ -81,6 +82,7 @@ export function DataTablePagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(currentPage - 1)}
+          aria-label="Go to previous page"
           disabled={currentPage === 1}
           className="h-8 w-8 p-0"
         >
@@ -89,6 +91,7 @@ export function DataTablePagination({
         <div className="flex items-center gap-1">
           <Input
             type="number"
+            aria-label="Page number"
             min={1}
             max={totalPages}
             value={currentPage}
@@ -106,6 +109,7 @@ export function DataTablePagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(currentPage + 1)}
+          aria-label="Go to next page"
           disabled={currentPage === totalPages}
           className="h-8 w-8 p-0"
         >
@@ -115,6 +119,7 @@ export function DataTablePagination({
           variant="outline"
           size="sm"
           onClick={() => onPageChange(totalPages)}
+          aria-label="Go to last page"
           disabled={currentPage === totalPages}
           className="h-8 w-8 p-0"
         >

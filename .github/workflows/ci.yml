@@ -133,6 +133,12 @@ jobs:
       # is literally the empty sentinel.
       - name: Filter URL round trip
         run: node scripts/checks/check-filter-url-roundtrip.mjs .
+      # A button holding nothing but an icon is announced as a bare "button" unless the
+      # element names itself. A Radix Tooltip does not do it: it contributes
+      # aria-describedby, which is a description. Measured live before this check existed,
+      # the dashboard had 22 such buttons on one screen and the shared pagination 4 more.
+      - name: Icon button names
+        run: node scripts/checks/check-icon-button-names.mjs .
 
   commit-format:
     name: Conventional commits

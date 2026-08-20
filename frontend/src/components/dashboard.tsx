@@ -301,6 +301,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleStart}
+                  aria-label={`Start instance ${vm.name}`}
                   disabled={isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {startVM.isPending ? (
@@ -321,6 +322,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleStop}
+                  aria-label={`Stop instance ${vm.name}`}
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {stopVM.isPending ? (
@@ -341,6 +343,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleRestart}
+                  aria-label={`Restart instance ${vm.name}`}
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {restartVM.isPending ? (
@@ -368,6 +371,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   }}
                   disabled={!isRunning || !canConsole}
                   title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Terminal"}
+                  aria-label={`Open terminal for instance ${vm.name}`}
                 >
                   <Terminal className="h-3.5 w-3.5" />
                 </Button>
@@ -391,6 +395,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   }}
                   disabled={!isRunning || !canConsole}
                   title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Console"}
+                  aria-label={`Open console for instance ${vm.name}`}
                 >
                   <Monitor className="h-3.5 w-3.5" />
                 </Button>
@@ -409,6 +414,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       size="icon"
                       className="h-7 w-7 text-destructive hover:text-destructive"
                       disabled={isPending || isDeleting || isReadOnly}
+                      aria-label={`Delete instance ${vm.name}`}
                     >
                       {isDeleting ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -707,6 +713,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
                     <Button variant="ghost" size="icon" className="h-7 w-7">
+                    aria-label={`Project actions for ${project.name}`}
                       <MoreVertical className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>

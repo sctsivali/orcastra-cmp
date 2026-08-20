@@ -1,5 +1,22 @@
 "use client";
 
+// DEPRECATED. Nothing renders this component.
+//
+// `VMTable` is its only export and the sole reference to it is the barrel re-export at
+// components/index.ts. The live instances table is inline in
+// app/inventory/instances/page.tsx, and the dashboard has its own in dashboard.tsx.
+// Kept on purpose rather than deleted, so the implementation stays available, but do not
+// spend effort maintaining it: it was last swept by a table typography pass that no user
+// could see the result of.
+//
+// Two things to know before touching it:
+//   - Its action buttons have neither an aria-label nor a title, so they would have no
+//     accessible name at all if this were ever rendered. Fix that before reviving it.
+//   - It renders a table body without the shared column contract, so the filter coverage
+//     check counts it among the unmanaged tables. Do not write the generic call form of
+//     that contract into this comment: the check matches the literal text, and a mention
+//     here would make the file look managed and lower the ratchet baseline by one.
+
 import * as React from "react";
 import {
   Play,
