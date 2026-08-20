@@ -74,9 +74,19 @@ function readTables(code) {
 
     const block = code.slice(columnsAt, end);
     const columns = [];
-    for (const part of block.split(/field:\s*"/).slice(1)) {
+    // note: splitting on `field:` puts everything BEFORE a column's field name into the
+    // PREVIOUS column's chunk, and a waiver comment is naturally written above `field:`. The
+    // per-column waiver therefore never matched its own column; it was the file-wide fallback
+    // that made my-keys pass, and removing that fallback is what exposed this. `lead` is the
+    // text from the brace that opens this column up to its field name.
+    const parts = block.split(/field:\s*"/);
+    for (let i = 1; i < parts.length; i += 1) {
+      const part = parts[i];
+      const prev = parts[i - 1];
+      const braceAt = prev.lastIndexOf('{');
+      const lead = braceAt === -1 ? '' : prev.slice(braceAt);
       const field = part.slice(0, part.indexOf('"'));
-      const body = part.slice(part.indexOf('"') + 1);
+      const body = lead + part.slice(part.indexOf('"') + 1);
       const label = (body.match(/label:\s*"([^"]*)"/) ?? [])[1] ?? '';
       // note: not /\n\s*facet:/. A column written on one line has no newline before its flags,
       // and a guard that only recognises the formatting its author had in mind is the blind
@@ -130,7 +140,6 @@ for (const file of walk(src)) {
     }
   }
 
-  const fileWaiver = /\/\/\s*filter-coverage:/.test(code);
   const roleExempt = ROLE_EXEMPT.has(relPosix);
 
   for (const columns of readTables(code)) {
@@ -148,7 +157,13 @@ for (const file of walk(src)) {
       }
 
       // Rule 1: a rendered column is filterable, searchable, or carries a written waiver.
-      if (column.hasSort && !filterable && !column.hasSearch && !column.waived && !fileWaiver) {
+      //
+      // important: the waiver is per COLUMN. It used to also accept a `// filter-coverage:`
+      // comment anywhere in the file, which meant the note on groups/page.tsx explaining why
+      // that table has no project dimension silently exempted all eight of its columns from
+      // this rule. A waiver for a column that does not exist cannot trip this rule anyway, so
+      // the file-wide form bought nothing and disabled the check wholesale.
+      if (column.hasSort && !filterable && !column.hasSearch && !column.waived) {
         offenders.push(
           `${rel}: column "${column.field}" has a sort accessor but no facet, filter or search`,
         );
