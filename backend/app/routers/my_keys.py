@@ -629,7 +629,16 @@ async def list_keys(
                     is_expired = now > expires_at
                 except:
                     pass
-            
+
+            # important: count before the filters, not after. These two are the tab labels,
+            # so counting inside the filtered branch made "Expired (0)" always read 0 while
+            # the Active tab was open, and vice versa. The counts describe the caller's whole
+            # key set; the filters describe what is being returned.
+            if is_expired:
+                expired_count += 1
+            else:
+                active_count += 1
+
             # Apply status filter
             if status_filter:
                 if status_filter == "active" and is_expired:
@@ -661,11 +670,6 @@ async def list_keys(
                 fingerprint=key_meta.get("fingerprint", ""),
             )
             processed_keys.append(key_info)
-            
-            if is_expired:
-                expired_count += 1
-            else:
-                active_count += 1
         
         return KeyListResponse(
             total=len(processed_keys),
