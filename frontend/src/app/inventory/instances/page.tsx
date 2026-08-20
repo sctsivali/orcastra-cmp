@@ -532,6 +532,7 @@ function InstancesContent() {
                             handleAction(instance.name, instance.host, "start")
                           }
                           disabled={actionLoading === `${instance.name}-start` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
+                          aria-label={`Start instance ${instance.name}`}
                           title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Start instance", "No operate permission")}
                         >
                           <Play className="h-4 w-4" />
@@ -546,6 +547,7 @@ function InstancesContent() {
                               handleAction(instance.name, instance.host, "stop")
                             }
                             disabled={actionLoading === `${instance.name}-stop` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
+                            aria-label={`Stop instance ${instance.name}`}
                             title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Stop instance", "No operate permission")}
                           >
                             <Square className="h-4 w-4" />
@@ -557,6 +559,7 @@ function InstancesContent() {
                               handleAction(instance.name, instance.host, "restart")
                             }
                             disabled={actionLoading === `${instance.name}-restart` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
+                            aria-label={`Restart instance ${instance.name}`}
                             title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Restart instance", "No operate permission")}
                           >
                             <RotateCw className="h-4 w-4" />
@@ -572,6 +575,7 @@ function InstancesContent() {
                               });
                             }}
                             disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
+                            aria-label={`Open terminal for instance ${instance.name}`}
                             title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Terminal", "No console permission")}
                           >
                             <Terminal className="h-4 w-4" />
@@ -588,6 +592,7 @@ function InstancesContent() {
                               });
                             }}
                             disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
+                            aria-label={`Open console for instance ${instance.name}`}
                             title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Console", "No console permission")}
                           >
                             <Monitor className="h-4 w-4" />
