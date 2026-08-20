@@ -77,6 +77,12 @@ def get_cert_manager() -> LXDCertificateManager:
         
         return cert_manager
         
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Failed to initialize certificate manager: {e}")
         raise HTTPException(
@@ -1035,6 +1041,12 @@ async def regenerate_certificate(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=str(e)
         )
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Unexpected error regenerating certificate: {e}")
         raise HTTPException(

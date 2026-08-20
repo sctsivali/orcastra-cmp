@@ -296,6 +296,12 @@ async def get_storage_pool(
             used_by=pool.used_by or [],
             status=getattr(pool, 'status', '')
         )
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error getting storage pool {pool_name}: {e}")
         raise HTTPException(status_code=404, detail=f"Storage pool {pool_name} not found")
@@ -352,6 +358,12 @@ async def create_storage_pool(
                 node=host
             )
         }
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error creating storage pool: {e}")
         # Log activity: storage pool creation failure
@@ -402,6 +414,12 @@ async def update_storage_pool(
             "success": True,
             "message": f"Storage pool {pool_name} updated successfully"
         }
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error updating storage pool {pool_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -444,6 +462,12 @@ async def delete_storage_pool(
             "success": True,
             "message": f"Storage pool {pool_name} deleted successfully"
         }
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error deleting storage pool {pool_name}: {e}")
         # Log activity: storage pool deletion failure
@@ -563,6 +587,12 @@ async def get_storage_pool_resources(
             "name": pool_name,
             "resources": _serialize_pool_resources(resources)
         }
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error getting storage pool resources {pool_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

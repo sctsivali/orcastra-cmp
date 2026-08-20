@@ -327,6 +327,12 @@ async def create_project(
             error_message=str(e),
         )
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error creating project: {e}")
         raise HTTPException(status_code=500, detail=str(e))

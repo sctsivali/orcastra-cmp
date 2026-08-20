@@ -341,7 +341,14 @@ class ResourceManager:
                 })
             return gpus
         except Exception as e:
-            logger.error(f"Error listing GPUs for {node_name}: {e}")
+            # important: WARNING, not ERROR. The caller passes whatever get_client returned,
+            # which is None for a breaker-tripped cluster, so this is the ordinary shape of an
+            # offline host rather than a fault. It deliberately still returns an empty list:
+            # the only caller, GET /nodes, reports that node's reachability through its own
+            # `connected` field, so an empty GPU list there is not a claim that the node has
+            # none. Raising instead would turn a partially-dead fleet into a 503 on the most
+            # used endpoint in the product.
+            logger.warning(f"Error listing GPUs for {node_name}: {e}")
             raise LXDOperationError(f"Failed to list GPUs: {str(e)}")
 
     def get_node_resources(self, client: pylxd.Client, node_name: str) -> Dict[str, Any]:
@@ -432,7 +439,10 @@ class ResourceManager:
             }
             
         except Exception as e:
-            logger.error(f"Error getting resources for {node_name}: {e}")
+            # important: WARNING for the same reason as get_node_gpus above. This receives
+            # whatever get_client returned, so a breaker-tripped cluster arrives here as a
+            # None dereference, which is expected operational noise rather than a fault.
+            logger.warning(f"Error getting resources for {node_name}: {e}")
             raise LXDOperationError(f"Failed to get node resources: {str(e)}")
     
     def check_node_status(self, client: pylxd.Client, node_name: str, endpoint: str) -> NodeStatus:

@@ -157,8 +157,20 @@ class RouterClientDerefTests(unittest.TestCase):
                         )
         self.assertEqual(offenders, [])
 
-    def test_a_guard_503_is_not_converted_by_a_broad_handler(self):
-        """The guard is only half the fix; without this the 503 becomes a 500."""
+    def test_a_deliberate_status_is_not_converted_by_a_broad_handler(self):
+        """The guard is only half the fix. Without this the status is rewritten.
+
+        This used to look only for `require_client(`, which covered the converted helpers and
+        nothing else. Thirteen try-blocks across six routers raised HTTPException directly,
+        with a status chosen on purpose, and their own broad handler rewrote it: an
+        unreachable cluster answered 500 or 404 instead of 503, and a tenant ACL denial
+        answered 500 instead of 403. Found in the log during a full QA sweep, as
+        "Error getting profile default: 503: Could not connect to ...".
+
+        The rule is the general one: if a try raises HTTPException anywhere in its body and
+        also catches Exception or bare, it needs the passthrough. How the exception got there,
+        through require_client or by hand, does not change the consequence.
+        """
         offenders = []
         for path in sorted(ROUTERS.glob("*.py")):
             src = path.read_text()
@@ -167,16 +179,23 @@ class RouterClientDerefTests(unittest.TestCase):
                 if not isinstance(node, ast.Try):
                     continue
                 seg = ast.get_source_segment(src, node) or ""
-                if "require_client(" not in seg:
+                raises_directly = any(
+                    isinstance(n, ast.Raise)
+                    and isinstance(n.exc, ast.Call)
+                    and getattr(n.exc.func, "id", "") == "HTTPException"
+                    for stmt in node.body
+                    for n in ast.walk(stmt)
+                )
+                if "require_client(" not in seg and not raises_directly:
                     continue
                 names = _handler_names(node)
                 if "Exception" not in names and "bare" not in names:
                     continue
                 if "HTTPException" not in names:
                     offenders.append(
-                        f"{path.name}:{node.lineno} calls require_client inside a try whose "
-                        "broad handler converts its 503 into a 500. Add "
-                        "`except HTTPException: raise` above it."
+                        f"{path.name}:{node.lineno} raises a deliberate status inside a try "
+                        "whose broad handler rewrites it. Add `except HTTPException: raise` "
+                        "above it."
                     )
         self.assertEqual(offenders, [])
 

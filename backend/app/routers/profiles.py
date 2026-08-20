@@ -209,6 +209,12 @@ async def get_profile(
             used_by=used_by,
             node=host,
         )
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error getting profile {profile_name}: {e}")
         raise HTTPException(status_code=404, detail=f"Profile {profile_name} not found")
@@ -264,6 +270,12 @@ async def create_profile(
                 node=host
             )
         }
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error creating profile: {e}")
         # Log activity: profile creation failure
@@ -326,6 +338,12 @@ async def update_profile(
             "success": True,
             "message": f"Profile {profile_name} updated successfully"
         }
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error updating profile {profile_name}: {e}")
         # Log activity: profile update failure
@@ -377,6 +395,12 @@ async def delete_profile(
             "success": True,
             "message": f"Profile {profile_name} deleted successfully"
         }
+    except HTTPException:
+        # important: let a deliberate status through. This try raises HTTPException
+        # itself, and the broad handler below rewrote it, so an unreachable cluster
+        # answered 500 or 404 instead of 503 and a tenant ACL denial answered 500
+        # instead of 403.
+        raise
     except Exception as e:
         logger.error(f"Error deleting profile {profile_name}: {e}")
         # Log activity: profile deletion failure
