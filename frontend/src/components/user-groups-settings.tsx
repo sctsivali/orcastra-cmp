@@ -29,6 +29,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { OverflowCell } from "@/components/ui/overflow-cell";
 import {
   Dialog,
   DialogContent,
@@ -455,14 +456,26 @@ export function UserGroupsSettings() {
                       </TableCell>
                       <TableCell>{roleBadge(user.role)}</TableCell>
                       <TableCell>
-                        {user.organizations?.length ? (
-                          <div title={user.organizations.map((o) => o.name).join(", ")}>
-                            {user.organizations.slice(0, 3).map((o) => o.name).join(", ")}
-                            {user.organizations.length > 3 && ` +${user.organizations.length - 3}`}
-                          </div>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
+                        <OverflowCell
+                          items={user.organizations}
+                          preview={3}
+                          noun="organizations"
+                          ownerLabel={user.user_email}
+                          emptyLabel="No organizations"
+                          itemLabel="organization"
+                          renderInline={(org) => (org as { name: string }).name}
+                          renderItem={(org) => {
+                            const o = org as { name: string; slug?: string };
+                            return (
+                              <span className="flex min-w-0 flex-col">
+                                <span className="truncate font-medium">{o.name}</span>
+                                {o.slug ? (
+                                  <span className="truncate font-mono text-xs text-muted-foreground">{o.slug}</span>
+                                ) : null}
+                              </span>
+                            );
+                          }}
+                        />
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center gap-1.5">

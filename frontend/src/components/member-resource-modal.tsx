@@ -4,6 +4,7 @@ import * as React from "react";
 import { LoadingLottieMedium } from "./loading-lottie";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -11,6 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { TableLink } from "@/components/ui/table-link";
 import { Progress } from "@/components/ui/progress";
 import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, Sparkles } from "lucide-react";
 import { api } from "@/lib/api";
@@ -101,23 +104,38 @@ export function MemberResourceModal({
   const [instances, setInstances] = React.useState<VMInfo[]>([]);
   const [loadingInstances, setLoadingInstances] = React.useState(false);
 
+  const [instancesError, setInstancesError] = React.useState<string | null>(null);
+
+  // important: this used to set an empty array on purpose, with a comment saying LXD does not
+  // report which member an instance runs on. It does; VMInfo simply did not carry the field, so
+  // the drill-down always rendered "Instance Details Unavailable". `location` is now modelled
+  // and both builders populate it.
+  //
+  // important: it filters the tenant-scoped /instances list rather than reading the member scan
+  // that produced the badge count. That endpoint applies no tenant ACL, so returning its
+  // instance names here would leak across organisations. The consequence is that the list can
+  // be shorter than the badge for a tenant, and the copy says "visible to you" rather than
+  // pretending otherwise. Do not "fix" the mismatch by filtering the count.
   const handleShowInstances = async (filter: "running" | "stopped") => {
     if (!memberName || !nodeName) return;
-    
+
     setInstanceFilter(filter);
     setLoadingInstances(true);
+    setInstancesError(null);
     setShowInstanceModal(true);
-    
+
     try {
-      // Note: LXD instances list doesn't include location field when queried via host
-      // The instance count shown in the card is accurate (counted directly from member)
-      // This modal shows a message that instance details per member require direct LXD API access
-      
-      // For now, we show an informative message instead of incorrect data
-      setInstances([]);
+      const response = await api.instances.list(nodeName);
+      const wanted = filter === "running" ? "Running" : "Stopped";
+      setInstances(
+        (response.vms ?? []).filter(
+          (vm) => vm.location === memberName && vm.status === wanted,
+        ),
+      );
     } catch (error) {
       console.error("Error loading instances:", error);
       setInstances([]);
+      setInstancesError(error instanceof Error ? error.message : "Could not load instances");
     } finally {
       setLoadingInstances(false);
     }
@@ -125,7 +143,7 @@ export function MemberResourceModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>
             {memberName || "Member Resources"}
@@ -135,6 +153,7 @@ export function MemberResourceModal({
           </DialogDescription>
         </DialogHeader>
 
+        <DialogBody className="pr-2">
         {isLoading ? (
           <div className="flex items-center justify-center py-12">
             <LoadingLottieMedium />
@@ -240,22 +259,20 @@ export function MemberResourceModal({
                     </div>
                     <div className="flex flex-col items-center justify-center gap-2">
                       {resources.instances_running > 0 && (
-                        <Badge
-                          variant="default"
-                          className="text-xs cursor-pointer hover:opacity-80 transition-opacity"
+                        <TableLink
                           onClick={() => handleShowInstances("running")}
+                          aria-label={`Show the running instances on ${memberName}`}
                         >
-                          {resources.instances_running} Running
-                        </Badge>
+                          {`${resources.instances_running} Running`}
+                        </TableLink>
                       )}
                       {resources.instances_count - resources.instances_running > 0 && (
-                        <Badge
-                          variant="secondary"
-                          className="text-xs cursor-pointer hover:opacity-80 transition-opacity"
+                        <TableLink
                           onClick={() => handleShowInstances("stopped")}
+                          aria-label={`Show the stopped instances on ${memberName}`}
                         >
-                          {resources.instances_count - resources.instances_running} Stopped
-                        </Badge>
+                          {`${resources.instances_count - resources.instances_running} Stopped`}
+                        </TableLink>
                       )}
                     </div>
                   </div>
@@ -475,20 +492,22 @@ export function MemberResourceModal({
             </p>
           </div>
         )}
+        </DialogBody>
       </DialogContent>
 
       {/* Instance Details Modal */}
       <Dialog open={showInstanceModal} onOpenChange={setShowInstanceModal}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>
               {instanceFilter === "running" ? "Running" : "Stopped"} Instances on {memberName}
             </DialogTitle>
             <DialogDescription>
-              {instances.length} {instanceFilter} instance{instances.length !== 1 ? "s" : ""} found
+              {`${instances.length} ${instanceFilter} instance${instances.length === 1 ? "" : "s"} visible to you`}
             </DialogDescription>
           </DialogHeader>
 
+          <DialogBody className="pr-2">
           {loadingInstances ? (
             <div className="flex items-center justify-center py-12">
               <Activity className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -531,19 +550,26 @@ export function MemberResourceModal({
                 </Card>
               ))}
             </div>
+          ) : instancesError ? (
+            <EmptyState
+              icon={Layers}
+              title="Could not load instances"
+              description={instancesError}
+            />
           ) : (
-            <div className="text-center py-12">
-              <Layers className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">Instance Details Unavailable</h3>
-              <p className="text-muted-foreground mb-2">
-                This cluster member has {instanceFilter === "running" ? resources?.instances_running : (resources?.instances_count || 0) - (resources?.instances_running || 0)} {instanceFilter} instance{((instanceFilter === "running" ? resources?.instances_running : (resources?.instances_count || 0) - (resources?.instances_running || 0)) !== 1) ? "s" : ""}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Detailed instance information per cluster member<br />
-                requires direct cluster API access
-              </p>
-            </div>
+            <EmptyState
+              icon={Layers}
+              title={`No ${instanceFilter} instances visible to you`}
+              description={
+                `The member reports ${
+                  instanceFilter === "running"
+                    ? resources?.instances_running ?? 0
+                    : (resources?.instances_count || 0) - (resources?.instances_running || 0)
+                } ${instanceFilter}. Any not listed here belong to an organization you cannot see.`
+              }
+            />
           )}
+          </DialogBody>
         </DialogContent>
       </Dialog>
     </Dialog>

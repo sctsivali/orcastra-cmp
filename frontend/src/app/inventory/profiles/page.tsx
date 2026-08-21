@@ -4,10 +4,16 @@ import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TableToolbar } from "@/components/ui/table-toolbar";
-import { UsedByProjects } from "@/components/used-by-projects";
+import {
+  ProjectsCell,
+  UsedByCell,
+  UsedByDialog,
+  useUsedByDialog,
+  type UsedBySubject,
+} from "@/components/used-by";
+import { TableLink } from "@/components/ui/table-link";
 import {
   Table,
   TableBody,
@@ -94,6 +100,9 @@ function ProfilesContent() {
         : PROFILES.facetFields.filter((f) => f !== "node"),
     [nodes.length],
   );
+
+  // One dialog for the page, opened from the devices, used-by and projects cells alike.
+  const usedBy = useUsedByDialog();
 
   const filters = useTableFilters(PROFILES, profiles, {
     onFilterChange: resetPage,
@@ -186,31 +195,31 @@ function ProfilesContent() {
                       </TableCell>
                     )}
                     <TableCell>
-                      <ClickableBadge
-                        count={Object.keys(profile.devices || {}).length}
-                        label="devices"
-                        items={Object.entries(profile.devices || {}).map(([name, config]) => ({
-                          name,
-                          type: (config as any).type || "N/A",
-                          config
-                        }))}
-                        title={`Devices in ${profile.name}`}
-                        description={`${Object.keys(profile.devices || {}).length} device(s) configured`}
+                      {Object.keys(profile.devices || {}).length > 0 ? (
+                        <TableLink
+                          onClick={() => usedBy.openPanel(profileSubject(profile), "devices")}
+                          aria-label={`Show the devices in ${profile.name}`}
+                        >
+                          {`${Object.keys(profile.devices).length} devices`}
+                        </TableLink>
+                      ) : (
+                        <TableEmptyValue label="No devices" />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <UsedByCell
+                        usedBy={profile.used_by}
+                        noun="instances"
+                        subjectName={profile.name}
+                        emptyLabel="Not used"
+                        onOpen={() => usedBy.openUsage(profileSubject(profile))}
                       />
                     </TableCell>
                     <TableCell>
-                      <ClickableBadge
-                        count={profile.used_by?.length || 0}
-                        label="instances"
-                        items={profile.used_by || []}
-                        title={`Instances using ${profile.name}`}
-                        description={`${profile.used_by?.length || 0} instance(s) using this profile`}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <UsedByProjects
-                        usedBy={profile.used_by || []}
-                        resourceName={profile.name}
+                      <ProjectsCell
+                        usedBy={profile.used_by}
+                        subjectName={profile.name}
+                        onOpen={() => usedBy.openProjects(profileSubject(profile))}
                       />
                     </TableCell>
                   </TableRow>
@@ -236,6 +245,8 @@ function ProfilesContent() {
           )}
         </CardContent>
       </Card>
+
+      <UsedByDialog {...usedBy.dialogProps} />
     </div>
   );
 }
@@ -248,4 +259,28 @@ export default function ProfilesPage() {
       <ProfilesContent />
     </Suspense>
   );
+}
+
+// note: built on click, for the one row the operator chose. profile.config is rendered here for
+// the first time anywhere in the app: limits.cpu, limits.memory, security.* and cloud-init.*
+// have always been on the wire and never on screen.
+function profileSubject(profile: ProfileInfo): UsedBySubject {
+  const devices = profile.devices ?? {};
+  const config = profile.config ?? {};
+  return {
+    kind: "profiles",
+    name: profile.name,
+    node: profile.node,
+    description: profile.description || undefined,
+    usedBy: profile.used_by ?? [],
+    facts: [
+      { label: "Node", value: profile.node },
+      { label: "Devices", value: Object.keys(devices).length },
+      { label: "Config keys", value: Object.keys(config).length },
+    ],
+    panels: [
+      { id: "devices", label: "Devices", kind: "devices", devices },
+      { id: "config", label: "Configuration", kind: "config", entries: config },
+    ],
+  };
 }

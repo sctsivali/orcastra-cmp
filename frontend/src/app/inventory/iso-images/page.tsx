@@ -1,5 +1,7 @@
 "use client";
 
+import type { StorageVolumeInfo } from "@/types/api";
+
 import { Suspense, useMemo, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +14,7 @@ import {
   
   TableHeader,
   TableRow } from "@/components/ui/table";
-import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { TableEmptyRow } from "@/components/ui/table-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -27,7 +29,13 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { projectsFromUsedBy } from "@/lib/used-by";
-import { UsedByProjects } from "@/components/used-by-projects";
+import {
+  ProjectsCell,
+  UsedByCell,
+  UsedByDialog,
+  useUsedByDialog,
+  type UsedBySubject,
+} from "@/components/used-by";
 
 const ISOS = defineTable<any>()({
   searchPlaceholder: "Search ISO images",
@@ -103,6 +111,9 @@ function IsoImagesContent() {
         : ISOS.facetFields.filter((f) => f !== "node"),
     [nodes.length],
   );
+
+  // One dialog for the page, opened from either cell. See components/used-by.
+  const usedBy = useUsedByDialog();
 
   const filters = useTableFilters(ISOS, isos as any[], {
     onFilterChange: resetPage,
@@ -193,14 +204,20 @@ function IsoImagesContent() {
                       </TableCell>
                     )}
                     <TableCell>
-                      {v.used_by && v.used_by.length > 0 ? (
-                        `${v.used_by.length} instance${v.used_by.length === 1 ? "" : "s"}`
-                      ) : (
-                        <TableEmptyValue label="Not used" />
-                      )}
+                      <UsedByCell
+                        usedBy={v.used_by}
+                        noun="instances"
+                        subjectName={v.name}
+                        emptyLabel="Not used"
+                        onOpen={() => usedBy.openUsage(isoSubject(v))}
+                      />
                     </TableCell>
                     <TableCell>
-                      <UsedByProjects usedBy={v.used_by || []} resourceName={v.name} />
+                      <ProjectsCell
+                        usedBy={v.used_by}
+                        subjectName={v.name}
+                        onOpen={() => usedBy.openProjects(isoSubject(v))}
+                      />
                     </TableCell>
                   </TableRow>
                 ))
@@ -221,6 +238,8 @@ function IsoImagesContent() {
         </CardContent>
       </Card>
 
+      <UsedByDialog {...usedBy.dialogProps} />
+
       <IsoUploadDialog
         open={uploadOpen}
         onOpenChange={setUploadOpen}
@@ -238,4 +257,26 @@ export default function IsoImagesPage() {
       <IsoImagesContent />
     </Suspense>
   );
+}
+
+// note: built on click for the row the operator chose, never during the table's render pass.
+// An ISO volume carries no devices, rules or capacity of its own, so its only extra panel is
+// its config, and when that is empty the dialog renders no tab strip at all.
+function isoSubject(volume: StorageVolumeInfo): UsedBySubject {
+  const config = volume.config ?? {};
+  return {
+    kind: "volumes",
+    name: volume.name,
+    node: volume.node,
+    description: volume.description || undefined,
+    usedBy: volume.used_by ?? [],
+    facts: [
+      { label: "Pool", value: volume.pool },
+      { label: "Node", value: volume.node },
+      { label: "Content type", value: volume.content_type },
+    ],
+    panels: Object.keys(config).length
+      ? [{ id: "config", label: "Configuration", kind: "config", entries: config }]
+      : [],
+  };
 }

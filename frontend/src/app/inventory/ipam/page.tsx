@@ -12,6 +12,8 @@ import {
   
   TableHeader,
   TableRow } from "@/components/ui/table";
+import { TableLink } from "@/components/ui/table-link";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import { useIPAM } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -135,14 +137,7 @@ function IPAMContent() {
             </TableHeader>
             <TableBody>
               {paginatedAllocations.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="text-center text-muted-foreground"
-                  >
-                    No IP allocations found
-                  </TableCell>
-                </TableRow>
+                <TableEmptyRow colSpan={7} title="No IP allocations found" />
               ) : (
                 paginatedAllocations.map((alloc: any, idx: number) => (
                   <TableRow key={`${alloc.node}-${alloc.address}-${idx}`}>
@@ -153,17 +148,36 @@ function IPAMContent() {
                       {formatLabel(alloc.type)}
                     </TableCell>
                     <TableCell className="font-medium">
-                      {alloc.used_by}
-                    </TableCell>
-                    <TableCell>
-                      {alloc.hardware_address ? (
-                        <code className="text-xs">{alloc.hardware_address}</code>
+                      {alloc.type === "instance" && alloc.used_by ? (
+                        <TableLink
+                          href={`/inventory/instances?q=${encodeURIComponent(alloc.used_by)}&project=${encodeURIComponent(alloc.project || "default")}&host=${encodeURIComponent(alloc.node)}`}
+                          title={`Open ${alloc.used_by} in Instances`}
+                        >
+                          {alloc.used_by}
+                        </TableLink>
                       ) : (
-                        <span className="text-muted-foreground text-xs">N/A</span>
+                        alloc.used_by || <TableEmptyValue label="Not used" />
                       )}
                     </TableCell>
                     <TableCell>
-                      {alloc.network}
+                      {/* note: font-mono, not <code>. One mono idiom in a table cell. */}
+                      {alloc.hardware_address ? (
+                        <span className="font-mono">{alloc.hardware_address}</span>
+                      ) : (
+                        <TableEmptyValue label="No MAC address" />
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {alloc.network ? (
+                        <TableLink
+                          href={`/inventory/networks/${encodeURIComponent(alloc.network)}?host=${encodeURIComponent(alloc.node)}`}
+                          title={`Open the detail page for ${alloc.network}`}
+                        >
+                          {alloc.network}
+                        </TableLink>
+                      ) : (
+                        <TableEmptyValue label="No network" />
+                      )}
                     </TableCell>
                     <TableCell>
                       {alloc.node}

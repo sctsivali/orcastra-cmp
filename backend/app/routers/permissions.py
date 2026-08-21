@@ -229,11 +229,17 @@ async def get_identity(
         
         if response.status_code == 200:
             identity_data = response.json().get('metadata', {})
+            # note: auth_type and node are declared on IdentityInfo and were the only two
+            # fields this handler did not populate, so the detail route answered with a shape
+            # the list route does not. Both are already in hand: the helper derives one from
+            # the type, and host is a required query parameter validated above.
             return IdentityInfo(
                 id=identity_data.get('id', ''),
                 name=identity_data.get('name', ''),
                 type=identity_data.get('type', ''),
-                groups=identity_data.get('groups', [])
+                auth_type=_get_auth_type_from_type(identity_data.get('type', '')),
+                groups=identity_data.get('groups', []),
+                node=host,
             )
         else:
             raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")

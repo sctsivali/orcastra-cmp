@@ -1,5 +1,11 @@
 "use client";
 
+// note: no sidebar entry on purpose. This route is reachable by URL and is covered by the
+// root loading boundary (see app/loading.tsx), but it is not a nav destination, so it is
+// absent from components/sidebar/nav-config.tsx and from the sidebar click-through spec.
+// It has been flagged as an orphan by more than one cleanup sweep. It is not one: the
+// decision is to keep the route, so please leave this note in place rather than rediscover
+// the question.
 import * as React from "react";
 import Image from "next/image";
 import Link from "next/link";

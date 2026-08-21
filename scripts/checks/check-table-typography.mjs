@@ -127,11 +127,21 @@ for (const file of walk(ROOT)) {
 // A td is not focusable, gets no focus ring, and is invisible to keyboard and switch users.
 // Wrap the text in TableLink instead, which renders a real button or anchor. This is a hard
 // ban rather than a ratchet: there is no case where a bare <TableCell onClick> is correct.
+//
+// <TableRow onClick> is the same defect one element up, and it hid behind this rule for a
+// while because the check only looked at cells. A tr is no more focusable than a td, so a
+// whole-row click is mouse-only too, and it is worse in one respect: the row usually carries
+// cursor-pointer, so it advertises an affordance that keyboard users cannot reach. The
+// warnings page shipped exactly that, and its card even told every reader to click a row.
 const clickableCells = [];
 for (const file of walk(ROOT)) {
   const src = readFileSync(file, "utf8");
-  for (const m of src.matchAll(/<TableCell\b[^>]*?onClick=/gs)) {
-    clickableCells.push({ file: relative(ROOT, file), line: src.slice(0, m.index).split("\n").length });
+  for (const m of src.matchAll(/<Table(?:Cell|Row)\b[^>]*?onClick=/gs)) {
+    clickableCells.push({
+      file: relative(ROOT, file),
+      line: src.slice(0, m.index).split("\n").length,
+      tag: m[0].startsWith("<TableRow") ? "TableRow" : "TableCell",
+    });
   }
 }
 
@@ -142,7 +152,7 @@ console.log(
 console.log(
   `arbitrary font sizes: ${arbitrary.length} (baseline ${ARBITRARY_BASELINE})` +
     `   badges in table bodies: ${badgesInBodies} (baseline ${BADGE_BASELINE})` +
-    `   mouse-only cells: ${clickableCells.length}`
+    `   mouse-only rows and cells: ${clickableCells.length}`
 );
 
 // A ratchet rather than a ban. The remaining occurrences live on chart, console and
@@ -171,10 +181,10 @@ if (badgesInBodies > BADGE_BASELINE) {
 
 if (clickableCells.length) {
   console.log(
-    `\n${clickableCells.length} table cell(s) carry an onClick. A td is not focusable and ` +
-      `gets no focus ring, so the control is mouse-only. Use TableLink:`
+    `\n${clickableCells.length} table row(s) or cell(s) carry an onClick. Neither a tr nor ` +
+      `a td is focusable, so the control is mouse-only. Use TableLink:`
   );
-  for (const c of clickableCells) console.log(`  ${c.file}:${c.line}`);
+  for (const c of clickableCells) console.log(`  ${c.file}:${c.line}  <${c.tag} onClick>`);
 }
 
 if (

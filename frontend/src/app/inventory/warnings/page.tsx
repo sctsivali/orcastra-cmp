@@ -21,6 +21,13 @@ import {
   TableHead,
   TableHeader,
   TableRow } from "@/components/ui/table";
+import { TableLink } from "@/components/ui/table-link";
+import {
+  WarningDetailDialog,
+  type WarningKind,
+  type WarningRecord,
+} from "./components/warning-detail-dialog";
+import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import {
   Tabs,
   TabsContent,
@@ -242,12 +249,13 @@ function WarningsContent() {
   const sortedNodeWarnings = useMemo(() => nodeSortItems(nodeFilters.filteredRows), [nodeFilters.filteredRows, nodeSortItems]);
 
   
-  // State for warning detail modal
-  const [selectedWarning, setSelectedWarning] = useState<any>(null);
+  // State for warning detail modal. The kind travels with the record, because the three tabs
+  // carry three different shapes and the dialog renders each one differently.
+  const [selectedWarning, setSelectedWarning] = useState<WarningRecord | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
 
-  const handleShowWarningDetail = (warning: any) => {
-    setSelectedWarning(warning);
+  const handleShowWarningDetail = (kind: WarningKind, record: any) => {
+    setSelectedWarning({ kind, record });
     setDetailModalOpen(true);
   };
 
@@ -383,7 +391,7 @@ function WarningsContent() {
           <div className="min-w-0">
             <CardTitle className="text-base md:text-lg">System Warnings</CardTitle>
             <CardDescription className="mt-1 text-xs md:text-sm">
-              Click on any row to view full details
+              Select a warning type to see its full message and where it came from
             </CardDescription>
           </div>
           <TableToolbar filters={platformFilters} noun="warnings" />
@@ -431,13 +439,14 @@ function WarningsContent() {
               </TableHeader>
               <TableBody>
                 {sortedWarnings.map((warning: any) => (
-                  <TableRow 
-                    key={warning.uuid}
-                    className="cursor-pointer hover:bg-accent/50 transition-colors"
-                    onClick={() => handleShowWarningDetail(warning)}
-                  >
+                  <TableRow key={warning.uuid}>
                     <TableCell>
-                      {formatLabel(warning.type)}
+                      <TableLink
+                        onClick={() => handleShowWarningDetail("platform", warning)}
+                        aria-label={`Show details for ${formatLabel(warning.type)} warning`}
+                      >
+                        {formatLabel(warning.type)}
+                      </TableLink>
                     </TableCell>
                     <TableCell className="max-w-md truncate">
                       {warning.last_message}
@@ -449,7 +458,11 @@ function WarningsContent() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <span className="font-medium">{warning.location || warning.source_node || "N/A"}</span>
+                      {warning.location || warning.source_node ? (
+                        <span className="font-medium">{warning.location || warning.source_node}</span>
+                      ) : (
+                        <TableEmptyValue label="No location" />
+                      )}
                     </TableCell>
                     <TableCell>
                       {warning.count.toLocaleString()}
@@ -510,8 +523,15 @@ function WarningsContent() {
                       <TableRow key={warning.cluster_id}>
                         <TableCell>
                           <div>
-                            <p className="font-medium">{warning.display_name || warning.cluster_id}</p>
-                            <p className="text-xs text-muted-foreground">{warning.cluster_id}</p>
+                            <p className="font-medium">
+                              <TableLink
+                                onClick={() => handleShowWarningDetail("certificate", warning)}
+                                aria-label={`Show details for ${warning.display_name || warning.cluster_id}`}
+                              >
+                                {warning.display_name || warning.cluster_id}
+                              </TableLink>
+                            </p>
+                            <TableSubText>{warning.cluster_id}</TableSubText>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -587,14 +607,23 @@ function WarningsContent() {
                       <TableRow key={warning.cluster_id}>
                         <TableCell>
                           <div>
-                            <p className="font-medium">{warning.display_name || warning.cluster_id}</p>
-                            <p className="text-xs text-muted-foreground">{warning.cluster_id}</p>
+                            <p className="font-medium">
+                              <TableLink
+                                onClick={() => handleShowWarningDetail("node", warning)}
+                                aria-label={`Show details for ${warning.display_name || warning.cluster_id}`}
+                              >
+                                {warning.display_name || warning.cluster_id}
+                              </TableLink>
+                            </p>
+                            <TableSubText>{warning.cluster_id}</TableSubText>
                           </div>
                         </TableCell>
                         <TableCell>
-                          <code className="text-xs bg-secondary/50 px-2 py-1 rounded break-all">
-                            {warning.endpoint || "N/A"}
-                          </code>
+                          {warning.endpoint ? (
+                            <span className="font-mono break-all">{warning.endpoint}</span>
+                          ) : (
+                            <TableEmptyValue label="No endpoint" />
+                          )}
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
                           <Badge variant="destructive" className="flex items-center gap-1 w-fit">
@@ -625,114 +654,17 @@ function WarningsContent() {
         </TabsContent>
       </Tabs>
 
-      {/* Warning Detail Modal */}
-      <Dialog open={detailModalOpen} onOpenChange={setDetailModalOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
-              Warning Details
-            </DialogTitle>
-            <DialogDescription>
-              Detailed information about the system warning
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4 space-y-4">
-            {selectedWarning && (
-              <>
-                {/* Warning Type & Severity */}
-                <div className="flex items-center gap-3">
-                  <div>
-                    <span className="text-sm font-medium text-muted-foreground">Type:</span>
-                    <Badge variant="outline" className="ml-2">{selectedWarning.type}</Badge>
-                  </div>
-                  <div>
-                    <span className="text-sm font-medium text-muted-foreground">Severity:</span>
-                    <Badge variant={getSeverityColor(selectedWarning.severity)} className="ml-2">
-                      {selectedWarning.severity}
-                    </Badge>
-                  </div>
-                  <div>
-                    <span className="text-sm font-medium text-muted-foreground">Status:</span>
-                    <Badge variant="secondary" className="ml-2">{selectedWarning.status}</Badge>
-                  </div>
-                </div>
-
-                {/* Node & Project */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground flex items-center gap-1">
-                      <Server className="h-3 w-3" />
-                      Node:
-                    </span>
-                    <p className="text-sm font-mono bg-secondary/50 p-2 rounded">
-                      {selectedWarning.location || selectedWarning.source_node || "N/A"}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground flex items-center gap-1">
-                      <FolderOpen className="h-3 w-3" />
-                      Project:
-                    </span>
-                    <p className="text-sm font-mono bg-secondary/50 p-2 rounded">
-                      {selectedWarning.project || "default"}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Full Message */}
-                <div className="space-y-2">
-                  <span className="text-sm font-medium text-muted-foreground">Full Message:</span>
-                  <div className="p-4 bg-secondary/50 rounded-md border border-border">
-                    <p className="text-sm whitespace-pre-wrap break-words">
-                      {selectedWarning.last_message || "No message available"}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Occurrence Info */}
-                <div className="grid grid-cols-3 gap-4 pt-4 border-t">
-                  <div className="space-y-1">
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <span className="text-sm font-medium text-muted-foreground flex items-center gap-1 cursor-help">
-                            Occurrences:
-                            <HelpCircle className="h-3 w-3" />
-                          </span>
-                        </TooltipTrigger>
-                        <TooltipContent side="top" className="z-[100]">
-                          <p>Total number of times this warning occurred</p>
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                    <p className="text-lg font-semibold">{selectedWarning.count.toLocaleString()}</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">First Seen:</span>
-                    <p className="text-sm">
-                      {formatDateTime(selectedWarning.first_seen_at)}
-                    </p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">Last Seen:</span>
-                    <p className="text-sm">
-                      {formatDateTime(selectedWarning.last_seen_at)}
-                    </p>
-                  </div>
-                </div>
-
-                {/* UUID */}
-                <div className="pt-4 border-t">
-                  <span className="text-xs font-medium text-muted-foreground">UUID:</span>
-                  <p className="text-xs font-mono bg-secondary/30 p-2 rounded mt-1">
-                    {selectedWarning.uuid}
-                  </p>
-                </div>
-              </>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* One dialog for all three tabs. Certificates and Offline Nodes never had one, and
+          each dropped the field that matters most: a full cluster id, and the connection
+          error the table clips to two lines behind a tooltip. */}
+      <WarningDetailDialog
+        selected={selectedWarning}
+        open={detailModalOpen}
+        onOpenChange={(next) => {
+          setDetailModalOpen(next);
+          if (!next) setSelectedWarning(null);
+        }}
+      />
     </div>
   );
 }

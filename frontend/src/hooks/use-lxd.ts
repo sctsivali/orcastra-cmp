@@ -16,7 +16,12 @@ import {
   api 
 } from "@/lib/api";
 import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse } from "@/types";
-import { STATIC_DATA_CONFIG, SEMI_STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG } from "@/lib/query-config";
+import {
+  DYNAMIC_DATA_CONFIG,
+  ON_DEMAND_CONFIG,
+  SEMI_STATIC_DATA_CONFIG,
+  STATIC_DATA_CONFIG,
+} from "@/lib/query-config";
 
 // Query Keys
 export const queryKeys = {
@@ -1084,12 +1089,18 @@ export function useInstances(host?: string, opts?: { realtime?: boolean }) {
   });
 }
 
-export function useInstance(name: string, host: string) {
+// note: ON_DEMAND_CONFIG rather than DYNAMIC_DATA_CONFIG, because this is opened by a person
+// rather than polled. It is also the only way to get `resources`: the list path sets it to None
+// (services/lxd/instance.py:427) while the single-get path populates it (:266).
+//
+// important: `enabled` is re-asserted AFTER the spread. ON_DEMAND_CONFIG sets enabled false by
+// design, so spreading it last would silently disable every caller.
+export function useInstance(name: string, host: string, enabled = true) {
   return useQuery({
     queryKey: ["instance", name, host],
     queryFn: () => api.instances.get(name, host),
-    enabled: !!name && !!host,
-    ...DYNAMIC_DATA_CONFIG,
+    ...ON_DEMAND_CONFIG,
+    enabled: enabled && !!name && !!host,
   });
 }
 

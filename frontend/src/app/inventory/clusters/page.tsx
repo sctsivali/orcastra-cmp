@@ -36,7 +36,9 @@ import {
   TableHead,
   TableHeader,
   TableRow } from "@/components/ui/table";
-import { TableEmptyRow } from "@/components/ui/table-text";
+import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { TableLink } from "@/components/ui/table-link";
+import { ClusterDetailDialog } from "./components/cluster-detail-dialog";
 import {
   Dialog,
   DialogContent,
@@ -47,7 +49,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/hooks/use-toast";
-import { ClusterStatus } from "@/types/api";
+import { ClusterInfo, ClusterStatus } from "@/types/api";
 import { useClusters, useCheckClusterAuth, useDeleteCluster, useRegenerateCert } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
@@ -121,6 +123,7 @@ function ClustersContent() {
   const { navigate } = useNavigationProgress();
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useClusters();
   const clusters = (data as any)?.clusters || [];
+  const [detailCluster, setDetailCluster] = React.useState<ClusterInfo | null>(null);
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
   const [regenerateModal, setRegenerateModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
   const [regeneratedCert, setRegeneratedCert] = React.useState<{identityName: string, certificate: string, cluster_type?: string} | null>(null);
@@ -470,33 +473,28 @@ EOF`}
                         <div className="flex items-center gap-2">
                           <Server className="h-4 w-4 text-muted-foreground" />
                           <div>
-                            <div className="font-semibold">{cluster.display_name}</div>
-                            <div className="text-xs text-muted-foreground">
-                              {cluster.cluster_id}
+                            <div className="font-semibold">
+                              <TableLink
+                                onClick={() => setDetailCluster(cluster)}
+                                aria-label={`Show details for ${cluster.display_name}`}
+                              >
+                                {cluster.display_name}
+                              </TableLink>
                             </div>
+                            <TableSubText>{cluster.cluster_id}</TableSubText>
                           </div>
                         </div>
                       </TableCell>
                       <TableCell>
-                        <a
-                          href={cluster.endpoint}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-sm hover:underline flex items-center gap-1"
-                        >
+                        <TableLink href={cluster.endpoint} external title="Open the hypervisor endpoint">
                           {cluster.endpoint}
-                          <ExternalLink className="h-3 w-3" />
-                        </a>
+                        </TableLink>
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">{formatHypervisorType(cluster.cluster_type)}</Badge>
                       </TableCell>
                       <TableCell>
-                        {cluster.zone ? (
-                          <span className="text-sm">{cluster.zone}</span>
-                        ) : (
-                          <span className="text-sm text-muted-foreground">—</span>
-                        )}
+                        {cluster.zone || <TableEmptyValue label="No zone" />}
                       </TableCell>
                       <TableCell>
                         <Badge variant={statusConfig[cluster.status as ClusterStatus]?.variant || "secondary"}>
@@ -566,6 +564,14 @@ EOF`}
           )}
         </CardContent>
       </Card>
+
+      <ClusterDetailDialog
+        cluster={detailCluster}
+        open={!!detailCluster}
+        onOpenChange={(next) => {
+          if (!next) setDetailCluster(null);
+        }}
+      />
 
       {/* Delete Confirmation Modal */}
       <Dialog 

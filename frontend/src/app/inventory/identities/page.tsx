@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { OverflowCell } from "@/components/ui/overflow-cell";
 import { formatLabel } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -212,16 +213,14 @@ function IdentitiesContent() {
                         {identity.node || <TableEmptyValue label="No node" />}
                       </TableCell>
                       <TableCell>
-                        <div title={(identity.groups ?? []).join(", ")}>
-                          {identity.groups && identity.groups.length > 0 ? (
-                            <>
-                              {identity.groups.slice(0, 3).join(", ")}
-                              {identity.groups.length > 3 && ` +${identity.groups.length - 3}`}
-                            </>
-                          ) : (
-                            <TableEmptyValue label="No groups" />
-                          )}
-                        </div>
+                        <OverflowCell
+                          items={identity.groups}
+                          preview={3}
+                          noun="groups"
+                          ownerLabel={identity.name}
+                          emptyLabel="No groups"
+                          itemLabel="group"
+                        />
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>

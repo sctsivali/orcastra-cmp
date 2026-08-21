@@ -54,6 +54,11 @@ class ImageManager:
             for image in client.images.all():
                 aliases = [a.get("name", "") for a in image.aliases] if image.aliases else []
                 
+                # note: pylxd declares auto_update optional, so the attribute is absent rather
+                # than falsy when LXD omits it and a direct read raises AttributeError. Every
+                # other field below is a readonly attribute that is always present. None of
+                # these cost an extra request: pylxd syncs the whole object on first attribute
+                # access, which the aliases and properties reads above have already done.
                 images.append(ImageInfo(
                     fingerprint=image.fingerprint,
                     aliases=aliases,
@@ -63,6 +68,12 @@ class ImageManager:
                     upload_date=image.uploaded_at,
                     public=image.public,
                     type=image.type,
+                    cached=bool(getattr(image, "cached", False)),
+                    auto_update=bool(getattr(image, "auto_update", False)),
+                    created_at=getattr(image, "created_at", None),
+                    last_used_at=getattr(image, "last_used_at", None),
+                    expires_at=getattr(image, "expires_at", None),
+                    profiles=list(getattr(image, "profiles", None) or []),
                 ))
             
             return images

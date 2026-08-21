@@ -29,14 +29,58 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+// important: closing a dialog used to drop focus onto <body> everywhere in this app, so a
+// keyboard user was returned to the top of the document and had to tab through the whole page
+// to get back to the row they came from. On a 25-row table that is the difference between
+// usable and not.
+//
+// The cause is upstream and worth writing down, because it looks like a Radix bug and is not.
+// Radix's modal Content ships this default (@radix-ui/react-dialog 1.1.15):
+//
+//     onCloseAutoFocus: composeEventHandlers(props.onCloseAutoFocus, (event) => {
+//       event.preventDefault();
+//       context.triggerRef.current?.focus();
+//     })
+//
+// It cancels FocusScope's own restore and focuses the DialogTrigger instead. That is correct
+// for the trigger-driven API, but nothing in this codebase uses DialogTrigger: every dialog is
+// controlled through `open`/`onOpenChange` with its opener rendered somewhere else entirely,
+// usually a TableLink in a cell. So triggerRef is null, the optional chain quietly does
+// nothing, and the restore that would have happened was already cancelled.
+//
+// So capture the opener ourselves. onOpenAutoFocus fires before FocusScope moves focus into
+// the content, which is the last moment document.activeElement is still the control the user
+// pressed. composeEventHandlers runs a caller's handler before the built-in one and honours
+// defaultPrevented, so preventing here suppresses the null-trigger focus above, and a caller
+// that wants different behaviour can still prevent it first and win.
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
+  const openerRef = React.useRef<HTMLElement | null>(null);
+
+  return (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
+      onOpenAutoFocus={(event) => {
+        const active = document.activeElement;
+        openerRef.current = active instanceof HTMLElement ? active : null;
+        onOpenAutoFocus?.(event);
+      }}
+      onCloseAutoFocus={(event) => {
+        onCloseAutoFocus?.(event);
+        if (event.defaultPrevented) return;
+        const opener = openerRef.current;
+        // note: a background refetch can replace the row while the dialog is open, which
+        // detaches the opener. Falling through to the built-in behaviour is right there:
+        // focusing a node that is no longer in the document does nothing at all.
+        if (opener && opener.isConnected) {
+          event.preventDefault();
+          opener.focus();
+        }
+      }}
       className={cn(
         // Fixed centered modal - use viewport-relative positioning
         // z-[100001] to be above terminal layer (99999)
@@ -64,7 +108,8 @@ const DialogContent = React.forwardRef<
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
   </DialogPortal>
-))
+  );
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({

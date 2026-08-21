@@ -26,6 +26,11 @@ import {
   TableRow } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { TableLink } from "@/components/ui/table-link";
+import {
+  SessionDetailDialog,
+  type SessionRecord,
+} from "./components/session-detail-dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -218,6 +223,7 @@ const ACTIVE_SESSIONS = defineTable<SessionData>()({
   ] });
 
 function ActiveSessionsTab() {
+  const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [sessions, setSessions] = useState<SessionData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -373,7 +379,7 @@ function ActiveSessionsTab() {
                 </TableHeader>
                 <TableBody>
                   {sorted.map((s) => (
-                    <ActiveRow key={s.session_id} session={s} />
+                    <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} />
                   ))}
                 </TableBody>
               </Table>
@@ -381,6 +387,14 @@ function ActiveSessionsTab() {
           )}
         </CardContent>
       </Card>
+
+      <SessionDetailDialog
+        selected={selectedSession}
+        open={!!selectedSession}
+        onOpenChange={(next) => {
+          if (!next) setSelectedSession(null);
+        }}
+      />
     </div>
   );
 }
@@ -415,6 +429,7 @@ const SESSION_HISTORY = defineTable<AuditLogEntry>()({
   ] });
 
 function SessionHistoryTab() {
+  const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -568,7 +583,7 @@ function SessionHistoryTab() {
                   </TableHeader>
                   <TableBody>
                     {paginated.map((log) => (
-                      <HistoryRow key={`${log.id}-${log.event_type}`} log={log} />
+                      <HistoryRow key={`${log.id}-${log.event_type}`} log={log} onSelect={setSelectedSession} />
                     ))}
                   </TableBody>
                 </Table>
@@ -586,13 +601,21 @@ function SessionHistoryTab() {
           )}
         </CardContent>
       </Card>
+
+      <SessionDetailDialog
+        selected={selectedSession}
+        open={!!selectedSession}
+        onOpenChange={(next) => {
+          if (!next) setSelectedSession(null);
+        }}
+      />
     </div>
   );
 }
 
 // ============ Row Components ============
 
-function ActiveRow({ session }: { session: SessionData }) {
+function ActiveRow({ session, onSelect }: { session: SessionData; onSelect: (r: SessionRecord) => void }) {
   const isGraphics = session.protocol === "spice-graphics";
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
@@ -600,8 +623,15 @@ function ActiveRow({ session }: { session: SessionData }) {
     <TableRow className="hover:bg-muted/50">
       <TableCell>
         <div className="flex flex-col">
-          <span className="font-medium">{session.instance_name}</span>
-          <span className="text-xs text-muted-foreground">{session.host} / {session.project}</span>
+          <span className="font-medium">
+            <TableLink
+              onClick={() => onSelect({ kind: "active", record: session })}
+              aria-label={`Show details for the session on ${session.instance_name}`}
+            >
+              {session.instance_name}
+            </TableLink>
+          </span>
+          <TableSubText>{session.host} / {session.project}</TableSubText>
         </div>
       </TableCell>
       <TableCell>
@@ -656,7 +686,7 @@ function ActiveRow({ session }: { session: SessionData }) {
   );
 }
 
-function HistoryRow({ log }: { log: AuditLogEntry }) {
+function HistoryRow({ log, onSelect }: { log: AuditLogEntry; onSelect: (r: SessionRecord) => void }) {
   const isGraphics = log.protocol === "spice-graphics";
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
@@ -665,7 +695,14 @@ function HistoryRow({ log }: { log: AuditLogEntry }) {
       <TableCell className="whitespace-nowrap">{formatLabel(log.event_type)}</TableCell>
       <TableCell>
         <div className="flex flex-col">
-          <span className="font-medium">{log.instance_name}</span>
+          <span className="font-medium">
+            <TableLink
+              onClick={() => onSelect({ kind: "history", record: log })}
+              aria-label={`Show details for the ${log.event_type} on ${log.instance_name}`}
+            >
+              {log.instance_name}
+            </TableLink>
+          </span>
           <TableSubText>{log.host} / {log.project}</TableSubText>
         </div>
       </TableCell>

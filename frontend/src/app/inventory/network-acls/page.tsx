@@ -1,12 +1,19 @@
 "use client";
 
+import type { NetworkACLInfo } from "@/types/api";
+
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { UsedByProjects } from "@/components/used-by-projects";
+import {
+  ProjectsCell,
+  UsedByCell,
+  UsedByDialog,
+  useUsedByDialog,
+  type UsedBySubject,
+} from "@/components/used-by";
 import {
   Table,
   TableBody,
@@ -15,7 +22,8 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { ShieldCheck } from "lucide-react";
-import { TableEmptyRow } from "@/components/ui/table-text";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { TableLink } from "@/components/ui/table-link";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
@@ -93,6 +101,9 @@ function NetworkACLsContent() {
     () => (nodes.length > 0 ? ACLS.facetFields : ACLS.facetFields.filter((f) => f !== "node")),
     [nodes.length],
   );
+
+  // One dialog for the page, opened from either cell. See components/used-by.
+  const usedBy = useUsedByDialog();
 
   const filters = useTableFilters(ACLS, acls as ACLInfo[], {
     onFilterChange: resetPage,
@@ -183,24 +194,35 @@ function NetworkACLsContent() {
                       </TableCell>
                     )}
                     <TableCell>
-                      {acl.ingress?.length || 0} rules
-                    </TableCell>
-                    <TableCell>
-                      {acl.egress?.length || 0} rules
-                    </TableCell>
-                    <TableCell>
-                      <ClickableBadge
-                        count={acl.used_by?.length || 0}
-                        label="networks"
-                        items={acl.used_by || []}
-                        title={`Networks using ${acl.name}`}
-                        description={`${acl.used_by?.length || 0} network(s) using this ACL`}
+                      <RuleCountCell
+                        count={acl.ingress?.length ?? 0}
+                        direction="ingress"
+                        aclName={acl.name}
+                        onOpen={() => usedBy.openPanel(aclSubject(acl), "rules")}
                       />
                     </TableCell>
                     <TableCell>
-                      <UsedByProjects
-                        usedBy={acl.used_by || []}
-                        resourceName={acl.name}
+                      <RuleCountCell
+                        count={acl.egress?.length ?? 0}
+                        direction="egress"
+                        aclName={acl.name}
+                        onOpen={() => usedBy.openPanel(aclSubject(acl), "rules")}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <UsedByCell
+                        usedBy={acl.used_by}
+                        noun="networks"
+                        subjectName={acl.name}
+                        emptyLabel="Not used"
+                        onOpen={() => usedBy.openUsage(aclSubject(acl))}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <ProjectsCell
+                        usedBy={acl.used_by}
+                        subjectName={acl.name}
+                        onOpen={() => usedBy.openProjects(aclSubject(acl))}
                       />
                     </TableCell>
                   </TableRow>
@@ -226,6 +248,8 @@ function NetworkACLsContent() {
           )}
         </CardContent>
       </Card>
+
+      <UsedByDialog {...usedBy.dialogProps} />
     </div>
   );
 }
@@ -237,5 +261,51 @@ export default function NetworkACLsPage() {
     <Suspense fallback={<LoadingLottiePage />}>
       <NetworkACLsContent />
     </Suspense>
+  );
+}
+
+// note: the ingress and egress arrays are the richest payload in the app that nothing rendered.
+// The table showed "N rules" as plain text, so action, source, destination, protocol, ports,
+// state and each rule's own description all arrived on the wire and were dropped.
+function aclSubject(acl: NetworkACLInfo): UsedBySubject {
+  const config = acl.config ?? {};
+  const ingress = acl.ingress ?? [];
+  const egress = acl.egress ?? [];
+  return {
+    kind: "network-acls",
+    name: acl.name,
+    node: acl.node,
+    description: acl.description || undefined,
+    usedBy: acl.used_by ?? [],
+    facts: [
+      { label: "Node", value: acl.node },
+      { label: "Ingress rules", value: ingress.length },
+      { label: "Egress rules", value: egress.length },
+    ],
+    panels: [
+      { id: "rules", label: "Rules", kind: "aclRules", ingress, egress },
+      { id: "config", label: "Configuration", kind: "config", entries: config },
+    ],
+  };
+}
+
+// A rule count with the rules already in the row payload. Plain text here was the same dead end
+// as the ISO "N instances" cell: a number the operator could see and never open.
+function RuleCountCell({
+  count,
+  direction,
+  aclName,
+  onOpen,
+}: {
+  count: number;
+  direction: "ingress" | "egress";
+  aclName: string;
+  onOpen: () => void;
+}) {
+  if (count === 0) return <TableEmptyValue label={`No ${direction} rules`} />;
+  return (
+    <TableLink onClick={onOpen} aria-label={`Show the ${count} ${direction} rules on ${aclName}`}>
+      {`${count} rule${count === 1 ? "" : "s"}`}
+    </TableLink>
   );
 }

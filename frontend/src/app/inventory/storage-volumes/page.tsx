@@ -1,13 +1,20 @@
 "use client";
 
+import type { StorageVolumeInfo } from "@/types/api";
+
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TableToolbar } from "@/components/ui/table-toolbar";
-import { UsedByProjects } from "@/components/used-by-projects";
+import {
+  ProjectsCell,
+  UsedByCell,
+  UsedByDialog,
+  useUsedByDialog,
+  type UsedBySubject,
+} from "@/components/used-by";
 import {
   Table,
   TableBody,
@@ -108,6 +115,9 @@ function StorageVolumesContent() {
     [nodes.length],
   );
 
+  // One dialog for the page, opened from either cell. See components/used-by.
+  const usedBy = useUsedByDialog();
+
   const filters = useTableFilters(VOLUMES, volumes, {
     onFilterChange: resetPage,
     availableFields,
@@ -206,18 +216,19 @@ function StorageVolumesContent() {
                       </TableCell>
                     )}
                     <TableCell className="text-center">
-                      <ClickableBadge
-                        count={volume.used_by?.length || 0}
-                        label="resources"
-                        items={volume.used_by || []}
-                        title={`Resources using ${volume.name}`}
-                        description={`${volume.used_by?.length || 0} resource(s) using this volume`}
+                      <UsedByCell
+                        usedBy={volume.used_by}
+                        noun="resources"
+                        subjectName={volume.name}
+                        emptyLabel="Not used"
+                        onOpen={() => usedBy.openUsage(volumeSubject(volume))}
                       />
                     </TableCell>
                     <TableCell>
-                      <UsedByProjects
-                        usedBy={volume.used_by || []}
-                        resourceName={volume.name}
+                      <ProjectsCell
+                        usedBy={volume.used_by}
+                        subjectName={volume.name}
+                        onOpen={() => usedBy.openProjects(volumeSubject(volume))}
                       />
                     </TableCell>
                   </TableRow>
@@ -243,6 +254,8 @@ function StorageVolumesContent() {
           )}
         </CardContent>
       </Card>
+
+      <UsedByDialog {...usedBy.dialogProps} />
     </div>
   );
 }
@@ -255,4 +268,26 @@ export default function StorageVolumesPage() {
       <StorageVolumesContent />
     </Suspense>
   );
+}
+
+// note: `pool` is on every volume and is not a column in this table, so the subject strip is
+// where an operator finally learns which pool a volume lives in without leaving the page.
+function volumeSubject(volume: StorageVolumeInfo): UsedBySubject {
+  const config = volume.config ?? {};
+  return {
+    kind: "volumes",
+    name: volume.name,
+    node: volume.node,
+    description: volume.description || undefined,
+    usedBy: volume.used_by ?? [],
+    facts: [
+      { label: "Pool", value: volume.pool },
+      { label: "Type", value: formatLabel(volume.type) },
+      { label: "Content type", value: volume.content_type },
+      { label: "Node", value: volume.node },
+    ],
+    panels: Object.keys(config).length
+      ? [{ id: "config", label: "Configuration", kind: "config", entries: config }]
+      : [],
+  };
 }

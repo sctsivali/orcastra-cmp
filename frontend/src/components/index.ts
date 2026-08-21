@@ -6,7 +6,7 @@ export * from "./project-create-form";
 export * from "./node-status";
 export * from "./node-detail-modal";
 export * from "./stats-overview";
-export * from "./instance-monitoring-modal";
+export * from "./instance-detail/instance-detail-dialog";
 export * from "./sidebar/sidebar";
 export * from "./theme-provider";
 export * from "./layout-provider";

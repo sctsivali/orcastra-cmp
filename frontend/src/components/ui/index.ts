@@ -15,7 +15,6 @@ export * from "./skeleton";
 export * from "./dropdown-menu";
 export * from "./popover";
 export * from "./scroll-area";
-export * from "./clickable-badge";
 export * from "./data-table-pagination";
 export * from "./refresh-button";
 export * from "./empty-state";

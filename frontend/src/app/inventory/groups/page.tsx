@@ -20,6 +20,10 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
+import {
+  GroupDetailDialog,
+  type GroupDetailTab,
+} from "./components/group-detail-dialog";
 import { getEntitlementLabel } from "@/lib/lxd-entitlements";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -91,25 +95,6 @@ const GROUPS = defineTable<any>()({
 
 // The permissions table lives inside a dialog, so its filter state stays local rather than
 // being written into the address bar of the page behind it.
-const GROUP_PERMISSIONS = defineTable<any>()({
-  id: "perms",
-  searchPlaceholder: "Search permissions",
-  defaultSort: { field: "entity_type", direction: "asc" },
-  columns: [
-    {
-      field: "entity_type",
-      label: "Entity Type",
-      sort: (p) => p.entity_type,
-      facet: (p) => p.entity_type,
-      facetSpec: { primary: true, format: formatLabel } },
-    { field: "url", label: "Resource URL", sort: (p) => p.url, search: (p) => p.url, filter: fromSort("text") },
-    {
-      field: "entitlement",
-      label: "Entitlement",
-      sort: (p) => p.entitlement,
-      facet: (p) => p.entitlement,
-      facetSpec: { primary: true, format: getEntitlementLabel } },
-  ] });
 
 function GroupsContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useGroups();
@@ -127,8 +112,8 @@ function GroupsContent() {
   const [pageSize, setPageSize] = useState(25);
   
   // State for modals
-  const [identitiesModalOpen, setIdentitiesModalOpen] = useState(false);
-  const [permissionsModalOpen, setPermissionsModalOpen] = useState(false);
+  // Which panel the clicked cell wants. null means the dialog is closed.
+  const [groupDetailTab, setGroupDetailTab] = useState<GroupDetailTab | null>(null);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState<any>(null);
@@ -171,29 +156,10 @@ function GroupsContent() {
   }, [sortedGroups, currentPage, pageSize]);
 
   // Permissions modal: its own filter and sort instance, state kept out of the URL.
-  const permFilters = useTableFilters(
-    GROUP_PERMISSIONS,
-    (selectedGroup?.permissions ?? []) as any[],
-    { syncUrl: false },
-  );
-  const {
-    sortField: permSortField,
-    sortDirection: permSortDirection,
-    handleSort: permHandleSort,
-    sortItems: permSortItems } = useTableSort(
-    GROUP_PERMISSIONS.sortAccessors,
-    GROUP_PERMISSIONS.defaultSort.field,
-    GROUP_PERMISSIONS.defaultSort.direction,
-  );
 
-  const handleShowIdentities = (group: any) => {
+  const openGroupDetail = (group: any, tab: GroupDetailTab) => {
     setSelectedGroup(group);
-    setIdentitiesModalOpen(true);
-  };
-
-  const handleShowPermissions = (group: any) => {
-    setSelectedGroup(group);
-    setPermissionsModalOpen(true);
+    setGroupDetailTab(tab);
   };
 
   const handleEdit = (group: any) => {
@@ -324,12 +290,12 @@ function GroupsContent() {
                       {group.node || <TableEmptyValue label="No node" />}
                     </TableCell>
                     <TableCell className="text-center">
-                      <TableLink onClick={() => handleShowIdentities(group)}>
+                      <TableLink onClick={() => openGroupDetail(group, "members")}>
                         {((group.identities?.tls?.length || 0) + (group.identities?.oidc?.length || 0))} members
                       </TableLink>
                     </TableCell>
                     <TableCell className="text-center">
-                      <TableLink onClick={() => handleShowPermissions(group)}>
+                      <TableLink onClick={() => openGroupDetail(group, "permissions")}>
                         {group.permissions?.length || 0} permissions
                       </TableLink>
                     </TableCell>
@@ -348,11 +314,11 @@ function GroupsContent() {
                             <Edit className="h-4 w-4 mr-2" />
                             Edit Group
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleShowIdentities(group)}>
+                          <DropdownMenuItem onClick={() => openGroupDetail(group, "members")}>
                             <UserCheck className="h-4 w-4 mr-2" />
                             View Members
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleShowPermissions(group)}>
+                          <DropdownMenuItem onClick={() => openGroupDetail(group, "permissions")}>
                             <Shield className="h-4 w-4 mr-2" />
                             View Permissions
                           </DropdownMenuItem>
@@ -401,132 +367,16 @@ function GroupsContent() {
         onRefresh={refetch}
       />
 
-      {/* Identities Modal */}
-      <Dialog open={identitiesModalOpen} onOpenChange={setIdentitiesModalOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              Group Members: {selectedGroup?.name}
-            </DialogTitle>
-            <DialogDescription>
-              {((selectedGroup?.identities?.tls?.length || 0) + (selectedGroup?.identities?.oidc?.length || 0))} member(s) in this group
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4 space-y-4">
-            {/* TLS Identities */}
-            {selectedGroup?.identities?.tls?.length > 0 && (
-              <div>
-                <h4 className="text-sm font-semibold mb-2">
-                  TLS Identities ({selectedGroup.identities.tls.length})
-                </h4>
-                <div className="space-y-2">
-                  {selectedGroup.identities.tls.map((identity: string, index: number) => {
-                    const identityName = getIdentityName(identity);
-                    return (
-                      <div 
-                        key={`tls-${index}`}
-                        className="flex flex-col gap-1 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
-                      >
-                        <div className="flex items-center gap-2">
-                          <Shield className="h-4 w-4 text-muted-foreground shrink-0" />
-                          <span className="font-medium text-sm">
-                            {identityName || "N/A"}
-                          </span>
-                        </div>
-                        <span className="font-mono text-xs text-muted-foreground ml-6">
-                          {identity}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            
-            {/* OIDC Identities */}
-            {selectedGroup?.identities?.oidc?.length > 0 && (
-              <div>
-                <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
-                  <Users className="h-4 w-4" />
-                  OIDC Identities ({selectedGroup.identities.oidc.length})
-                </h4>
-                <div className="space-y-2">
-                  {selectedGroup.identities.oidc.map((identity: string, index: number) => {
-                    const identityName = getIdentityName(identity);
-                    return (
-                      <div 
-                        key={`oidc-${index}`}
-                        className="flex items-center gap-2 p-3 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors"
-                      >
-                        <Users className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <span className="font-medium text-sm">
-                          {identityName || identity}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-            
-            {/* No members */}
-            {(!selectedGroup?.identities?.tls?.length && !selectedGroup?.identities?.oidc?.length) && (
-              <div className="text-center py-8 text-muted-foreground">
-                No members in this group
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Permissions Modal */}
-      <Dialog open={permissionsModalOpen} onOpenChange={setPermissionsModalOpen}>
-        <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>
-              Permissions: {selectedGroup?.name}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedGroup?.permissions?.length || 0} permission(s) configured for this group
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4 space-y-4">
-            {selectedGroup?.permissions?.length > 0 ? (
-              <>
-              <TableToolbar filters={permFilters} noun="permissions" />
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableTableHead label="Entity Type" field="entity_type" currentField={permSortField} direction={permSortDirection} onSort={permHandleSort} />
-                    <SortableTableHead label="Resource URL" field="url" currentField={permSortField} direction={permSortDirection} onSort={permHandleSort} />
-                    <SortableTableHead label="Entitlement" field="entitlement" currentField={permSortField} direction={permSortDirection} onSort={permHandleSort} />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {permSortItems(permFilters.filteredRows).map((permission: any, index: number) => (
-                    <TableRow key={index}>
-                      <TableCell>
-                        {formatLabel(permission.entity_type)}
-                      </TableCell>
-                      <TableCell className="font-mono max-w-md truncate">
-                        {permission.url || "N/A"}
-                      </TableCell>
-                      <TableCell>
-                        {getEntitlementLabel(permission.entitlement)}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              </>
-            ) : (
-              <div className="text-center py-8 text-muted-foreground">
-                No permissions configured for this group
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* One dialog for both. Merging them also gave the group its own Overview, which is
+          where `description` and `node` finally appear: the members modal dropped both. */}
+      <GroupDetailDialog
+        group={selectedGroup}
+        open={groupDetailTab !== null}
+        defaultTab={groupDetailTab ?? "overview"}
+        onOpenChange={(next) => {
+          if (!next) setGroupDetailTab(null);
+        }}
+      />
 
       {/* Delete Group Confirmation Dialog */}
       <Dialog open={deleteDialogOpen} onOpenChange={(open) => {

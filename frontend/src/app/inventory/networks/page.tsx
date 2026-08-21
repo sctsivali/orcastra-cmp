@@ -5,10 +5,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
-import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TableToolbar } from "@/components/ui/table-toolbar";
-import { UsedByProjects } from "@/components/used-by-projects";
+import {
+  ProjectsCell,
+  UsedByCell,
+  UsedByDialog,
+  useUsedByDialog,
+  type UsedBySubject,
+} from "@/components/used-by";
 import {
   Table,
   TableBody,
@@ -16,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import { TableLink } from "@/components/ui/table-link";
 import { Plus, Network as NetworkIcon } from "lucide-react";
@@ -131,6 +136,9 @@ function NetworksContent() {
     () => (nodes.length > 0 ? NETWORKS.facetFields : NETWORKS.facetFields.filter((f) => f !== "node")),
     [nodes.length],
   );
+
+  // One dialog for the page, opened from either cell. See components/used-by.
+  const usedBy = useUsedByDialog();
 
   const filters = useTableFilters(NETWORKS, networks, {
     onFilterChange: resetPage,
@@ -277,18 +285,19 @@ function NetworksContent() {
                         )}
                       </TableCell>
                       <TableCell className="text-center">
-                        <ClickableBadge
-                          count={network.used_by?.length || 0}
-                          label="resources"
-                          items={network.used_by || []}
-                          title={`Resources using ${network.name}`}
-                          description={`${network.used_by?.length || 0} resource(s) using this network`}
+                        <UsedByCell
+                          usedBy={network.used_by}
+                          noun="resources"
+                          subjectName={network.name}
+                          emptyLabel="Not used"
+                          onOpen={() => usedBy.openUsage(networkSubject(network))}
                         />
                       </TableCell>
                       <TableCell>
-                        <UsedByProjects
-                          usedBy={network.used_by || []}
-                          resourceName={network.name}
+                        <ProjectsCell
+                          usedBy={network.used_by}
+                          subjectName={network.name}
+                          onOpen={() => usedBy.openProjects(networkSubject(network))}
                         />
                       </TableCell>
                     </TableRow>
@@ -315,6 +324,8 @@ function NetworksContent() {
           )}
         </CardContent>
       </Card>
+
+      <UsedByDialog {...usedBy.dialogProps} />
     </div>
   );
 }
@@ -327,4 +338,27 @@ export default function NetworksPage() {
       <NetworksContent />
     </Suspense>
   );
+}
+
+// note: the network dialog is the only one whose title links out, because /inventory/networks/
+// [name] is the app's one real detail route. The config panel surfaces ipv4.nat, dns.domain,
+// bridge.mtu, the OVN uplink and security.acls, none of which the table has a column for.
+function networkSubject(network: NetworkInfo): UsedBySubject {
+  const config = network.config ?? {};
+  return {
+    kind: "networks",
+    name: network.name,
+    node: network.node,
+    description: network.description || undefined,
+    usedBy: network.used_by ?? [],
+    facts: [
+      { label: "Type", value: formatLabel(network.type) },
+      { label: "Status", value: network.status },
+      { label: "Managed", value: network.managed ? "Yes" : "No" },
+      { label: "Node", value: network.node },
+      { label: "IPv4", value: config["ipv4.address"] || EMPTY_VALUE },
+      { label: "IPv6", value: config["ipv6.address"] || EMPTY_VALUE },
+    ],
+    panels: [{ id: "config", label: "Configuration", kind: "config", entries: config }],
+  };
 }

@@ -1,13 +1,20 @@
 "use client";
 
+import type { StoragePoolInfo } from "@/types/api";
+
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
-import { ClickableBadge } from "@/components/ui/clickable-badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { UsedByProjects } from "@/components/used-by-projects";
+import {
+  ProjectsCell,
+  UsedByCell,
+  UsedByDialog,
+  useUsedByDialog,
+  type UsedBySubject,
+} from "@/components/used-by";
 import {
   Table,
   TableBody,
@@ -17,6 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { TableLink } from "@/components/ui/table-link";
 import { formatLabel } from "@/lib/utils";
 import { Database } from "lucide-react";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -111,6 +119,9 @@ function StoragePoolsContent() {
     () => (nodes.length > 0 ? POOLS.facetFields : POOLS.facetFields.filter((f) => f !== "node")),
     [nodes.length],
   );
+
+  // One dialog for the page, opened from either cell. See components/used-by.
+  const usedBy = useUsedByDialog();
 
   const filters = useTableFilters(POOLS, pools as PoolInfo[], {
     onFilterChange: resetPage,
@@ -217,9 +228,12 @@ function StoragePoolsContent() {
                       )}
                       <TableCell>
                         {resources ? (
-                          <>
-                            {formatBytes(resources.space.used)} / {formatBytes(resources.space.total)}
-                          </>
+                          <TableLink
+                            onClick={() => usedBy.openPanel(poolSubject(pool, poolResources), "capacity")}
+                            aria-label={`Show the capacity breakdown for ${pool.name}`}
+                          >
+                            {`${formatBytes(resources.space.used)} / ${formatBytes(resources.space.total)}`}
+                          </TableLink>
                         ) : (
                           <TableEmptyValue label="Usage unavailable" />
                         )}
@@ -230,18 +244,19 @@ function StoragePoolsContent() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <ClickableBadge
-                          count={pool.used_by?.length || 0}
-                          label="volumes"
-                          items={pool.used_by || []}
-                          title={`Volumes in ${pool.name}`}
-                          description={`${pool.used_by?.length || 0} volume(s) in this pool`}
+                        <UsedByCell
+                          usedBy={pool.used_by}
+                          noun="volumes"
+                          subjectName={pool.name}
+                          emptyLabel="No volumes"
+                          onOpen={() => usedBy.openUsage(poolSubject(pool, poolResources))}
                         />
                       </TableCell>
                       <TableCell>
-                        <UsedByProjects
-                          usedBy={pool.used_by || []}
-                          resourceName={pool.name}
+                        <ProjectsCell
+                          usedBy={pool.used_by}
+                          subjectName={pool.name}
+                          onOpen={() => usedBy.openProjects(poolSubject(pool, poolResources))}
                         />
                       </TableCell>
                     </TableRow>
@@ -268,6 +283,8 @@ function StoragePoolsContent() {
           )}
         </CardContent>
       </Card>
+
+      <UsedByDialog {...usedBy.dialogProps} />
     </div>
   );
 }
@@ -280,4 +297,29 @@ export default function StoragePoolsPage() {
       <StoragePoolsContent />
     </Suspense>
   );
+}
+
+// note: the capacity panel reads the resources blob the page already fetches from
+// /storage/pools/resources-all. Only space.used and space.total were ever displayed, so the
+// whole inodes dict was paid for on every page load and thrown away. A pool can sit at 20% on
+// bytes and be completely full on inodes, and until now the UI could not say so.
+function poolSubject(pool: StoragePoolInfo, resources: Record<string, any>): UsedBySubject {
+  const config = pool.config ?? {};
+  const usage = resources?.[`${pool.node}-${pool.name}`] ?? {};
+  return {
+    kind: "storage-pools",
+    name: pool.name,
+    node: pool.node,
+    description: pool.description || undefined,
+    usedBy: pool.used_by ?? [],
+    facts: [
+      { label: "Driver", value: formatLabel(pool.driver) },
+      { label: "Status", value: pool.status },
+      { label: "Node", value: pool.node },
+    ],
+    panels: [
+      { id: "capacity", label: "Capacity", kind: "capacity", space: usage.space, inodes: usage.inodes },
+      { id: "config", label: "Configuration", kind: "config", entries: config },
+    ],
+  };
 }

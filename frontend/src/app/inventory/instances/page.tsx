@@ -15,6 +15,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { TableLink } from "@/components/ui/table-link";
+import { OverflowCell } from "@/components/ui/overflow-cell";
 import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { formatInstanceType } from "@/lib/utils";
 import { Play, Square, RotateCw, RefreshCw, Trash2, Terminal, Monitor, Loader2, Box } from "lucide-react";
@@ -33,7 +34,7 @@ import {
 } from "@/hooks/use-lxd";
 import { InstanceActionDialogs } from "./components/instance-action-dialogs";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
+import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useTerminalStore } from "@/lib/terminal-store";
@@ -489,40 +490,40 @@ function InstancesContent() {
                   <TableCell className="whitespace-nowrap">{instance.host}</TableCell>
                   <TableCell className="whitespace-nowrap">{instance.project || "default"}</TableCell>
                   <TableCell>
-                    {instance.ip_addresses.length > 0 ? (
-                      instance.ip_addresses.slice(0, 2).join(", ")
-                    ) : (
-                      <TableEmptyValue label="No IP addresses" />
-                    )}
+                    <OverflowCell
+                      items={instance.ip_addresses}
+                      preview={2}
+                      noun="IP addresses"
+                      ownerLabel={instance.name}
+                      emptyLabel="No IP addresses"
+                      itemLabel="IP address"
+                    />
                   </TableCell>
-                  <TableCell title={instance.profiles.join(", ")}>
-                    {instance.profiles.length > 0 ? (
-                      <>
-                        {instance.profiles.slice(0, 3).join(", ")}
-                        {instance.profiles.length > 3 && ` +${instance.profiles.length - 3}`}
-                      </>
-                    ) : (
-                      <TableEmptyValue label="No profiles" />
-                    )}
+                  <TableCell>
+                    <OverflowCell
+                      items={instance.profiles}
+                      preview={3}
+                      noun="profiles"
+                      ownerLabel={instance.name}
+                      emptyLabel="No profiles"
+                      itemLabel="profile"
+                    />
                   </TableCell>
                   <TableCell className="whitespace-nowrap" title={rootDiskLabel(instance).title}>
                     {rootDiskLabel(instance).text}
                   </TableCell>
                   <TableCell>
-                    {instance.tags && instance.tags.length > 0 ? (
-                      <div className="flex flex-wrap gap-1.5">
-                        {instance.tags.slice(0, 3).map((tag: string) => (
-                          <TagBadge key={tag} tag={tag} size="sm" />
-                        ))}
-                        {instance.tags.length > 3 && (
-                          <span className="text-xs text-muted-foreground">
-                            +{instance.tags.length - 3}
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <TableEmptyValue label="No tags" />
-                    )}
+                    <OverflowCell
+                      items={instance.tags}
+                      preview={3}
+                      noun="tags"
+                      ownerLabel={instance.name}
+                      emptyLabel="No tags"
+                      triggerMode="indicator"
+                      separator={null}
+                      renderInline={(tag) => <TagBadge tag={tag as string} size="sm" />}
+                      renderItem={(tag) => <TagBadge tag={tag as string} size="sm" />}
+                    />
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-2">
@@ -654,7 +655,7 @@ function InstancesContent() {
         </CardContent>
       </Card>
 
-      <InstanceMonitoringModal
+      <InstanceDetailDialog
         instance={selectedInstance}
         isOpen={isMonitoringModalOpen}
         onClose={() => {

@@ -11,7 +11,7 @@ import { LoadingLottieMediumEnhanced, LoadingLottiePageEnhanced } from "@/compon
 import { NodeStatusCards } from "@/components/node-status";
 import { useRelativeTime } from "@/hooks/use-relative-time";
 import { StatsOverview } from "@/components/stats-overview";
-import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
+import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
 import { TagManager, TagFilter } from "@/components/tag-manager";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -453,7 +453,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
       </div>
       
       {/* Monitoring Modal */}
-      <InstanceMonitoringModal
+      <InstanceDetailDialog
         instance={vm}
         isOpen={showMonitoring}
         onClose={() => setShowMonitoring(false)}

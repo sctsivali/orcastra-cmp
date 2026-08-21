@@ -14,6 +14,8 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { TableLink } from "@/components/ui/table-link";
+import { OperationDetailDialog } from "./components/operation-detail-dialog";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -109,6 +111,7 @@ function OperationsContent() {
   const operations = useMemo(() => (data as any)?.operations || [], [data]);
   const nodes = (data as any)?.nodes || [];
   
+  const [detailOperation, setDetailOperation] = useState<{ operation: any; instanceName?: string } | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [killingId, setKillingId] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -371,16 +374,21 @@ function OperationsContent() {
                     return (
                     <TableRow key={operation.id}>
                       <TableCell className="font-mono">
-                        {operation.id.substring(0, 8)}...
+                        <TableLink
+                          onClick={() => setDetailOperation({ operation, instanceName })}
+                          aria-label={`Show details for operation ${operation.id}`}
+                        >
+                          {`${operation.id.substring(0, 8)}...`}
+                        </TableLink>
                       </TableCell>
                       <TableCell>
                         {instanceName ? (
-                          <span className="font-medium text-sm">{instanceName}</span>
+                          <span className="font-medium">{instanceName}</span>
                         ) : (
-                          <span className="text-muted-foreground text-xs">-</span>
+                          <TableEmptyValue label="No instance" />
                         )}
                       </TableCell>
-                      <TableCell>{operation.description || "N/A"}</TableCell>
+                      <TableCell>{operation.description || <TableEmptyValue label="No description" />}</TableCell>
                       <TableCell>
                         {operation.node_name || <TableEmptyValue label="No node" />}
                       </TableCell>
@@ -456,6 +464,15 @@ function OperationsContent() {
           )}
         </CardContent>
       </Card>
+
+      <OperationDetailDialog
+        operation={detailOperation?.operation ?? null}
+        instanceName={detailOperation?.instanceName}
+        open={!!detailOperation}
+        onOpenChange={(next) => {
+          if (!next) setDetailOperation(null);
+        }}
+      />
     </div>
   );
 }

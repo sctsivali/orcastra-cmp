@@ -8,6 +8,11 @@
 // The one deliberate divergence: the Python decodes query values twice (parse_qs decodes,
 // then unquote decodes again). That only differs for a value containing a literal `%`,
 // which an LXD project name cannot contain, so this decodes once.
+//
+// important: the parity contract covers `project` and `instance` only. Those are the two
+// values parse_lxd_reference returns and the two authorization keys off. `kind`, `name` and
+// `projectExplicit` are a frontend display extension the backend never computes. Helpers below
+// may read them freely; none of them may re-derive project or instance.
 
 export const DEFAULT_PROJECT = "default";
 
@@ -130,30 +135,81 @@ export function projectsFromUsedBy(
   return result;
 }
 
-export interface ProjectUsage {
-  project: string;
-  /** Referenced resource names in this project, sorted. */
-  resources: string[];
+
+// Cache keyed on the used_by array identity, the same discipline as projectsFromUsedBy. Query
+// results hold their arrays steady between refetches, so a list is parsed once no matter how
+// many of the helpers below look at it.
+//
+// note: each derived cache keys on the SAME `usedBy` array, never on an array a helper
+// returns. referencesFromUsedBy allocates a fresh array on a miss, so keying a second cache
+// off its result would leak an entry per call.
+const referencesCache = new WeakMap<readonly string[], readonly LxdReference[]>();
+
+/** Every reference parsed once, in input order. */
+export function referencesFromUsedBy(
+  usedBy: readonly string[] | null | undefined,
+): readonly LxdReference[] {
+  if (!usedBy?.length) return [];
+  const cached = referencesCache.get(usedBy);
+  if (cached) return cached;
+  const parsed = usedBy.map(parseLxdReference);
+  referencesCache.set(usedBy, parsed);
+  return parsed;
 }
 
-/** Group the referenced resource names by project, for the detail dialog. */
-export function resourcesByProject(
+export interface ProjectReferences {
+  project: string;
+  /** True when every reference in this bucket named the project rather than defaulting to it. */
+  allExplicit: boolean;
+  references: readonly LxdReference[];
+}
+
+const byProjectCache = new WeakMap<readonly string[], readonly ProjectReferences[]>();
+
+/**
+ * Group by project keeping the whole reference.
+ *
+ * Replaces resourcesByProject, which collapsed each reference to a bare name. That is why the
+ * dialog it fed could show a project and a name, but never say whether the thing named was an
+ * instance, a profile or somebody else's volume.
+ */
+export function referencesByProject(
   usedBy: readonly string[] | null | undefined,
-): ProjectUsage[] {
+): readonly ProjectReferences[] {
   if (!usedBy?.length) return [];
-  const grouped = new Map<string, Set<string>>();
-  for (const reference of usedBy) {
-    const ref = parseLxdReference(reference);
-    const project = ref.project;
-    const label = ref.name ?? ref.raw;
-    const bucket = grouped.get(project);
-    if (bucket) bucket.add(label);
-    else grouped.set(project, new Set([label]));
+  const cached = byProjectCache.get(usedBy);
+  if (cached) return cached;
+
+  const grouped = new Map<string, LxdReference[]>();
+  for (const reference of referencesFromUsedBy(usedBy)) {
+    const bucket = grouped.get(reference.project);
+    if (bucket) bucket.push(reference);
+    else grouped.set(reference.project, [reference]);
   }
-  return Array.from(grouped.entries())
-    .map(([project, resources]) => ({
+
+  const result = Array.from(grouped.entries())
+    .map(([project, references]) => ({
       project,
-      resources: Array.from(resources).sort((a, b) => a.localeCompare(b)),
+      allExplicit: references.every((r) => r.projectExplicit),
+      references: references
+        .slice()
+        .sort((a, b) => (a.name ?? a.raw).localeCompare(b.name ?? b.raw)),
     }))
     .sort((a, b) => a.project.localeCompare(b.project));
+
+  byProjectCache.set(usedBy, result);
+  return result;
+}
+
+/**
+ * Reorder into project order for the grouped view.
+ *
+ * important: relies on sort being stable, which the language guarantees, so whatever column
+ * the operator sorted by still holds inside each project. Grouping must not silently discard
+ * the sort the user chose.
+ */
+export function orderByProject(
+  references: readonly LxdReference[],
+): readonly LxdReference[] {
+  return references.slice().sort((a, b) => a.project.localeCompare(b.project));
 }

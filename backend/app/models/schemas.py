@@ -61,6 +61,13 @@ class VMInfo(BaseModel):
     ip_addresses: List[str] = Field(default_factory=list, description="List of IP addresses")
     host: str = Field(..., description="LXD host node name")
     host_endpoint: str = Field(..., description="LXD host endpoint URL")
+    # note: LXD reports which cluster member an instance sits on, and this model dropped it, so
+    # the members page could count instances per member and never list them. That is why its
+    # per-member drill-down rendered "Instance Details Unavailable" for everyone, and why the
+    # comment there blamed a missing API that was in fact already being read server-side.
+    location: Optional[str] = Field(
+        None, description="Cluster member the instance runs on, when the target is clustered"
+    )
     project: Optional[str] = Field(None, description="LXD project name")
     architecture: Optional[str] = Field(None, description="VM architecture")
     created_at: Optional[datetime] = Field(None, description="VM creation timestamp")
@@ -247,6 +254,17 @@ class ImageInfo(BaseModel):
     upload_date: Optional[datetime] = Field(None, description="Upload timestamp")
     public: bool = Field(default=False, description="Whether image is public")
     type: str = Field(default="virtual-machine", description="Image type")
+    # important: cached and auto_update are the two questions an operator asks of an image
+    # list, and the frontend has been reading both since the Flags column was written. They
+    # were never on this model, and response_model strips anything not declared, so the facet
+    # could only ever offer "Public" and the other two values never appeared. Adding them here
+    # is what makes that column tell the truth.
+    cached: bool = Field(default=False, description="Whether the image was pulled from a remote")
+    auto_update: bool = Field(default=False, description="Whether the image auto-updates from its source")
+    created_at: Optional[datetime] = Field(None, description="Creation timestamp")
+    last_used_at: Optional[datetime] = Field(None, description="Last time an instance used this image")
+    expires_at: Optional[datetime] = Field(None, description="Expiry timestamp for a cached image")
+    profiles: List[str] = Field(default_factory=list, description="Profiles applied to instances from this image")
 
 
 class ImageListResponse(BaseModel):

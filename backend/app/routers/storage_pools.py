@@ -287,14 +287,25 @@ async def get_storage_pool(
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(pool_name)
-        
+        # important: this router is mounted with require_tenant(), and the list endpoint both
+        # filters used_by and drops a pool with nothing visible left. Without the same two
+        # steps here, a tenant could read another organization's instance and volume
+        # references through the detail route, and reach a pool absent from their own list.
+        # Written in the same two lines as the five sibling detail handlers, deliberately: one
+        # pass over the references, and the denial derived from what survived it, so a future
+        # edit cannot keep the gate while dropping the filter.
+        used_by = filter_visible_lxd_references(host, pool.used_by or [])
+        if tenant_acl_active() and not used_by:
+            raise HTTPException(status_code=403, detail="Access denied to this storage pool")
+
         return StoragePoolInfo(
             name=pool.name,
             description=getattr(pool, 'description', '') or "",
             driver=pool.driver,
             config=pool.config or {},
-            used_by=pool.used_by or [],
-            status=getattr(pool, 'status', '')
+            used_by=used_by,
+            status=getattr(pool, 'status', ''),
+            node=host,
         )
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException

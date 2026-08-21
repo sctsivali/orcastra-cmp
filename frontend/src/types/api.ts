@@ -51,6 +51,8 @@ export interface VMInfo {
   ip_addresses: string[];
   host: string;
   host_endpoint: string;
+  /** Cluster member the instance runs on, when the target is clustered. */
+  location?: string | null;
   project: string | null;
   architecture: string | null;
   created_at: string | null;
@@ -182,6 +184,16 @@ export interface ImageInfo {
   upload_date: string | null;
   public: boolean;
   type: string;
+  /** True when the image was pulled from a remote rather than uploaded here. */
+  cached: boolean;
+  /** True when the image refreshes itself from its source. */
+  auto_update: boolean;
+  created_at: string | null;
+  last_used_at: string | null;
+  expires_at: string | null;
+  profiles: string[];
+  /** Present on the flattened per-host rows the images page builds, not on the API model. */
+  node?: string;
 }
 
 // Image List Response

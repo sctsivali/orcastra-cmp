@@ -140,6 +140,12 @@ jobs:
       - name: Icon button names
         run: node scripts/checks/check-icon-button-names.mjs .
 
+      # A Badge renders a div, so a dialog opened from one is mouse-only: no focus, no focus
+      # ring, and Enter does nothing. And a DialogContent that bounds its own height must clip
+      # and scroll in DialogBody, or the title scrolls away with the body on a long record.
+      - name: Dialog affordances
+        run: node scripts/checks/check-dialog-affordances.mjs .
+
   commit-format:
     name: Conventional commits
     runs-on: ubuntu-latest

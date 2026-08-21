@@ -75,6 +75,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { TableLink } from "@/components/ui/table-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -95,7 +96,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
+import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
 import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { cn, formatHypervisorType } from "@/lib/utils";
@@ -829,9 +830,11 @@ interface InstanceDetailsDialogProps {
   filterType: "running" | "stopped" | "other" | "container" | "vm" | null;
   instances: VMInfo[];
   isLoading: boolean;
+  /** Opens the instance dialog for one row. This list closes first; modals do not stack. */
+  onSelectInstance: (instance: VMInfo) => void;
 }
 
-function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading }: InstanceDetailsDialogProps) {
+function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading, onSelectInstance }: InstanceDetailsDialogProps) {
   const getTitle = () => {
     switch (filterType) {
       case "running": return "Running Instances";
@@ -887,7 +890,16 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
                     )}
                   </div>
                   <div>
-                    <p className="font-medium">{instance.name}</p>
+                    {/* The hover tint on this row promised something for as long as it existed
+                        and never delivered it. The name is now a real control. */}
+                    <p className="font-medium">
+                      <TableLink
+                        onClick={() => onSelectInstance(instance)}
+                        aria-label={`Show details for ${instance.name}`}
+                      >
+                        {instance.name}
+                      </TableLink>
+                    </p>
                     <p className="text-xs text-muted-foreground">{instance.host}</p>
                   </div>
                 </div>
@@ -923,6 +935,10 @@ export default function MonitoringContent() {
   const [allInstances, setAllInstances] = useState<VMInfo[]>([]);
   const [instancesLoading, setInstancesLoading] = useState(false);
   const [selectedTopConsumer, setSelectedTopConsumer] = useState<InstanceMonitoringSummary | null>(null);
+  // A row picked out of the instance list dialog. Kept separate from the top-consumer path
+  // because that one holds a monitoring summary and has to convert; this one already has the
+  // VMInfo in hand.
+  const [selectedListInstance, setSelectedListInstance] = useState<VMInfo | null>(null);
   
   // Sort order for top consumers (true = highest first, false = lowest first)
   const [sortDescending, setSortDescending] = useState(true);
@@ -2913,13 +2929,22 @@ export default function MonitoringContent() {
         filterType={instanceFilterType}
         instances={allInstances}
         isLoading={instancesLoading}
+        onSelectInstance={(instance) => {
+          // Close the list before opening the detail. Stacking one modal on another is the
+          // pattern being removed from member-resource-modal, not one to copy.
+          setInstanceDialogOpen(false);
+          setSelectedListInstance(instance);
+        }}
       />
 
-      <InstanceMonitoringModal
-        instance={selectedTopConsumerVm}
-        isOpen={!!selectedTopConsumer}
-        onClose={() => setSelectedTopConsumer(null)}
-        project={selectedTopConsumer?.project || "default"}
+      <InstanceDetailDialog
+        instance={selectedListInstance ?? selectedTopConsumerVm}
+        isOpen={!!selectedListInstance || !!selectedTopConsumer}
+        onClose={() => {
+          setSelectedListInstance(null);
+          setSelectedTopConsumer(null);
+        }}
+        project={selectedListInstance?.project || selectedTopConsumer?.project || "default"}
       />
     </div>
   );

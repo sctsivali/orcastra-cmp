@@ -13,12 +13,15 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { OverflowCell } from "@/components/ui/overflow-cell";
 import { formatInstanceType, formatLabel, truncateFingerprint } from "@/lib/utils";
 import { UploadCloud, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useImages } from "@/hooks/use-lxd";
+import { useImages, useInstances } from "@/hooks/use-lxd";
+import { TableLink } from "@/components/ui/table-link";
+import { ImageDetailDialog } from "./components/image-detail-dialog";
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import { ImageListResponse } from "@/types/api";
+import { ImageInfo, ImageListResponse, VMInfo } from "@/types/api";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -30,10 +33,15 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { Role } from "@/types/rbac";
 
 
-const IMAGES = defineTable<any>()({
+// important: typed, not `any`. The `any` is what let this file read i.properties?.description,
+// i.cached and i.auto_update for as long as it has: none of the three existed on ImageInfo or
+// on the backend model, so the Flags facet could only ever offer "Public" and searchExtra
+// pushed a permanent undefined. The backend now sends cached and auto_update; description has
+// always been sent under its own name.
+const IMAGES = defineTable<ImageInfo>()({
   searchPlaceholder: "Search images",
   defaultSort: { field: "fingerprint", direction: "asc" },
-  searchExtra: (i) => [i.properties?.description, ...(i.aliases ?? [])],
+  searchExtra: (i) => [i.description, ...(i.aliases ?? [])],
   columns: [
     {
       field: "fingerprint",
@@ -74,6 +82,22 @@ const IMAGES = defineTable<any>()({
 
 function ImagesContent() {
   const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt } = useImages();
+  const [detailImage, setDetailImage] = useState<any>(null);
+  // One request for the page, not one per row. The instances list is tenant-filtered server
+  // side, which is why the dialog's heading says "your instances" rather than implying a total.
+  const { data: instanceData } = useInstances();
+  const instancesByImage = useMemo(() => {
+    const byFingerprint = new Map<string, VMInfo[]>();
+    for (const vm of ((instanceData as any)?.vms ?? []) as VMInfo[]) {
+      // The same key the backend filters on at routers/images.py:189.
+      const fingerprint = vm.config?.["volatile.base_image"];
+      if (!fingerprint) continue;
+      const bucket = byFingerprint.get(fingerprint);
+      if (bucket) bucket.push(vm);
+      else byFingerprint.set(fingerprint, [vm]);
+    }
+    return byFingerprint;
+  }, [instanceData]);
 
   // A host that did not answer is returned with an empty image list, so without this it
   // is indistinguishable from a host that genuinely has no images.
@@ -222,14 +246,22 @@ function ImagesContent() {
                 paginatedImages.map((image: any, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
                     <TableCell className="font-mono">
-                      {truncateFingerprint(image.fingerprint)}
+                      <TableLink
+                        onClick={() => setDetailImage(image)}
+                        aria-label={`Show details for image ${image.fingerprint}`}
+                      >
+                        {truncateFingerprint(image.fingerprint)}
+                      </TableLink>
                     </TableCell>
                     <TableCell>
-                      {image.aliases && image.aliases.length > 0 && image.aliases[0] ? (
-                        image.aliases[0]
-                      ) : (
-                        <TableEmptyValue label="No alias" />
-                      )}
+                      <OverflowCell
+                        items={image.aliases?.filter(Boolean)}
+                        preview={1}
+                        noun="aliases"
+                        ownerLabel={truncateFingerprint(image.fingerprint)}
+                        emptyLabel="No alias"
+                        itemLabel="alias"
+                      />
                     </TableCell>
                     <TableCell>
                       {image.architecture}
@@ -273,6 +305,15 @@ function ImagesContent() {
           )}
         </CardContent>
       </Card>
+
+      <ImageDetailDialog
+        image={detailImage}
+        instances={detailImage ? instancesByImage.get(detailImage.fingerprint) ?? [] : []}
+        open={!!detailImage}
+        onOpenChange={(next) => {
+          if (!next) setDetailImage(null);
+        }}
+      />
 
       <ImageUploadDialog
         open={uploadOpen}

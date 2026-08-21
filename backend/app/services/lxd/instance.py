@@ -95,6 +95,17 @@ _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="inst
 # (app.services.lxd.health) so every connection path skips the same dead cluster.
 
 
+# note: LXD reports the literal string "none" for an instance on a non-clustered target, not an
+# absent value. Passing that through means the UI prints "none" in a Cluster member field, which
+# reads as a member called none rather than as "this target is not clustered". Normalised once
+# here so neither consumer has to know.
+def _cluster_member(value) -> Optional[str]:
+    text = (value or "").strip()
+    if not text or text.lower() == "none":
+        return None
+    return text
+
+
 class InstanceManager:
     """
     Manages LXD instance operations.
@@ -270,6 +281,7 @@ class InstanceManager:
             expanded_devices=jsonable_lxd(getattr(instance, "expanded_devices", None)) or {},
             profiles=list(instance.profiles) if instance.profiles else [],
             tags=tags,
+            location=_cluster_member(getattr(instance, "location", None)),
         )
     
     async def list_all_vms(self) -> Tuple[List[VMInfo], List[str]]:
@@ -434,6 +446,7 @@ class InstanceManager:
                                 profiles=instance_data.get('profiles', []),
                                 tags=tags,
                                 project=project_name,
+                                location=_cluster_member(instance_data.get('location')),
                             )
                             
                             if vm_info.config is None:

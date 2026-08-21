@@ -1,0 +1,210 @@
+"use client";
+
+import * as React from "react";
+import { Suspense } from "react";
+import { Shield, Users } from "lucide-react";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
+import { TableLink } from "@/components/ui/table-link";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/ui/empty-state";
+import { RecordDetailDialog } from "@/components/detail/detail-dialog";
+import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
+import { CopyableText } from "@/components/detail/copyable-text";
+import { defineTable, fromSort } from "@/lib/table-filter";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { parseLxdReference } from "@/lib/used-by";
+import { referenceKind } from "@/lib/used-by-kinds";
+import { formatLabel } from "@/lib/utils";
+
+export type GroupDetailTab = "overview" | "members" | "permissions";
+
+// One dialog replacing the two the groups page carried. Beyond merging them it adds the two
+// fields the members modal dropped, `description` and `node`, and it stops printing raw
+// resource URLs.
+//
+// important: permission URLs go through parseLxdReference, the same module the used_by dialogs
+// use and a faithful port of the backend's tenant-visibility parser. Writing a second parser
+// here is the mistake that produced the two-dialog split this work removed.
+const PERMISSIONS = defineTable<any>()({
+  id: "perms",
+  searchPlaceholder: "Search permissions",
+  defaultSort: { field: "entity_type", direction: "asc" },
+  columns: [
+    {
+      field: "entity_type",
+      label: "Entity Type",
+      sort: (p) => p.entity_type,
+      facet: (p) => p.entity_type,
+      facetSpec: { primary: true, format: formatLabel },
+    },
+    { field: "url", label: "Resource", sort: (p) => p.url, search: (p) => p.url, filter: fromSort("text") },
+    {
+      field: "entitlement",
+      label: "Entitlement",
+      sort: (p) => p.entitlement,
+      facet: (p) => p.entitlement,
+      facetSpec: { primary: true },
+    },
+  ],
+});
+
+function PermissionsPanelContent({ group }: { group: any }) {
+  const permissions = React.useMemo(() => group?.permissions ?? [], [group]);
+  const filters = useTableFilters(PERMISSIONS, permissions, { syncUrl: false });
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    PERMISSIONS.sortAccessors,
+    PERMISSIONS.defaultSort.field,
+    PERMISSIONS.defaultSort.direction,
+  );
+  const rows = React.useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
+
+  if (permissions.length === 0) {
+    return <EmptyState icon={Shield} title="No permissions" description="This group grants nothing." />;
+  }
+
+  return (
+    <div className="space-y-3">
+      <TableToolbar filters={filters} noun="permissions" />
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <SortableTableHead label="Entity Type" field="entity_type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+              <SortableTableHead label="Resource" field="url" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+              <SortableTableHead label="Entitlement" field="entitlement" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableEmptyRow colSpan={3} title="No permissions match the current filters" />
+            ) : (
+              rows.map((permission: any, index: number) => {
+                const reference = parseLxdReference(permission.url ?? "");
+                const kind = referenceKind(reference);
+                const href = kind.href?.(reference, group?.node);
+                const name = reference.name ?? permission.url;
+                return (
+                  <TableRow key={`${permission.url}-${permission.entitlement}-${index}`}>
+                    <TableCell>{formatLabel(permission.entity_type ?? "")}</TableCell>
+                    <TableCell>
+                      {/* The table used to print the raw URL and stop there, so a permission
+                          named a resource the reader could not follow or even identify. */}
+                      {href ? (
+                        <TableLink href={href} title={`Open ${name} in ${kind.label}s`}>
+                          {name}
+                        </TableLink>
+                      ) : (
+                        <span className="truncate">{name}</span>
+                      )}
+                      <TableSubText>{permission.url}</TableSubText>
+                    </TableCell>
+                    <TableCell>{formatLabel(permission.entitlement ?? "")}</TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+// See the note in components/used-by/usage-panel.tsx: useTableFilters reads the query string
+// even with syncUrl false, so this carries its own boundary rather than relying on its host.
+function PermissionsPanel(props: React.ComponentProps<typeof PermissionsPanelContent>) {
+  return (
+    <Suspense fallback={<Skeleton className="h-64 w-full" />}>
+      <PermissionsPanelContent {...props} />
+    </Suspense>
+  );
+}
+
+function IdentityList({ label, ids }: { label: string; ids: string[] }) {
+  if (!ids?.length) return null;
+  return (
+    <DetailSection title={`${label} (${ids.length})`}>
+      <ul className="divide-y rounded-md border">
+        {ids.map((id) => (
+          <li key={id} className="px-3 py-2">
+            <CopyableText value={id} label={`${label.toLowerCase()} identity ${id}`} />
+          </li>
+        ))}
+      </ul>
+    </DetailSection>
+  );
+}
+
+export function GroupDetailDialog({
+  group,
+  open,
+  onOpenChange,
+  defaultTab = "overview",
+}: {
+  group: any | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  defaultTab?: GroupDetailTab;
+}) {
+  if (!group) return null;
+
+  const tls = group.identities?.tls ?? [];
+  const oidc = group.identities?.oidc ?? [];
+  const memberCount = tls.length + oidc.length;
+
+  return (
+    <RecordDetailDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={group.name}
+      recordId={group.name}
+      recordIdLabel="Group"
+      subtitle={group.node}
+      defaultTab={defaultTab}
+      size="xl"
+      tabs={[
+        {
+          value: "overview",
+          label: "Overview",
+          content: (
+            <DetailGrid cols={3}>
+              {/* Both dropped by the modal this replaces. */}
+              <DetailField label="Description" value={group.description} span="full" />
+              <DetailField label="Node" value={group.node} />
+              <DetailField label="Members" value={memberCount} />
+              <DetailField label="Permissions" value={group.permissions?.length ?? 0} />
+            </DetailGrid>
+          ),
+        },
+        {
+          value: "members",
+          label: `Members (${memberCount})`,
+          content:
+            memberCount === 0 ? (
+              <EmptyState icon={Users} title="No members" description="Nothing is in this group." />
+            ) : (
+              <div className="space-y-4">
+                <IdentityList label="TLS" ids={tls} />
+                <IdentityList label="OIDC" ids={oidc} />
+              </div>
+            ),
+        },
+        {
+          value: "permissions",
+          label: `Permissions (${group.permissions?.length ?? 0})`,
+          content: <PermissionsPanel group={group} />,
+        },
+      ]}
+    />
+  );
+}
