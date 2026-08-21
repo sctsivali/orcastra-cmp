@@ -2,17 +2,23 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
-import loadingAnimation from "../../public/loading-lotttie-orca.json";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
 import { 
   useSimulatedProgress,
   LOADING_MESSAGES,
   DYNAMIC_MESSAGES,
 } from "@/hooks/use-loading-progress";
 
-// Lazy-load Lottie renderer to reduce initial JS bundle (~80KB savings)
-const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
+// Lazy-load the renderer AND the animation JSON together. Both live in
+// loading-lottie-player so neither reaches a route bundle that never renders a loader.
+// note: the fallback matters. This chunk carries the animation payload, so on a cold cache
+// it is what the operator sees first, and an empty box there reads as a broken loader.
+const LottiePlayer = dynamic(() => import("./loading-lottie-player"), {
+  ssr: false,
+  loading: () => <Skeleton className="h-full w-full rounded-full" />,
+});
 
 interface LoadingLottieProps {
   /**
@@ -48,11 +54,7 @@ export function LoadingLottie({
         height: size,
       }}
     >
-      <Lottie
-        animationData={loadingAnimation}
-        loop={true}
-        autoplay={true}
-      />
+      <LottiePlayer />
     </div>
   );
 
@@ -134,11 +136,7 @@ export function LoadingLottiePageEnhanced({
       
       {/* Lottie Animation */}
       <div className="w-24 h-24 mb-6">
-        <Lottie
-          animationData={loadingAnimation}
-          loop={true}
-          autoplay={true}
-        />
+        <LottiePlayer />
       </div>
       
       {/* Progress Container */}

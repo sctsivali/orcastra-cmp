@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { CheckCircle2, XCircle, Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -42,7 +42,7 @@ interface NodeStatusCardProps {
 }
 
 function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatusCardProps) {
-  const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const updateNodeTags = useUpdateNodeTags();
   const updateNodeDisplayName = useUpdateNodeDisplayName();
   const { isReadOnly } = useReadOnlyMode();
@@ -311,7 +311,7 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
               className="w-full gap-2"
               onClick={(e) => {
                 e.stopPropagation();
-                router.push(`/inventory/clustering/members?node=${node.name}`);
+                navigate(`/inventory/clustering/members?node=${node.name}`);
               }}
             >
               <Users className="h-4 w-4" />

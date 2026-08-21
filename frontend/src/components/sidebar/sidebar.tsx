@@ -13,6 +13,7 @@ import { useTheme } from "../theme-provider";
 import { useLayout } from "../layout-provider";
 import { usePersonalization, useCurrentLogo } from "../personalization-provider";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useRouteIntent, linkIntentProps } from "@/components/navigation/route-intent";
 import { NAV_GROUPS, filterGroups, buildPrefetchMap } from "./nav-config";
 import { resolveActiveHref } from "./use-active-path";
 import { NavSection } from "./nav-group";
@@ -49,18 +50,23 @@ export function Sidebar({ className }: SidebarProps) {
   );
   const activeHref = resolveActiveHref([...allHrefs, "/settings"], pathname);
 
-  const handleLinkClick = React.useCallback(() => {
-    // md breakpoint - close the mobile drawer after navigating
-    if (typeof window !== "undefined" && window.innerWidth < 768) {
-      setSidebarOpen(false);
-    }
-  }, [setSidebarOpen]);
+  // important: close the mobile drawer when the route commits, not when the link is clicked.
+  // Closing on click unmounted the <Link> and with it the pending spinner, so a tap gave no
+  // feedback at all for the whole navigation.
+  React.useEffect(() => {
+    setSidebarOpen(false);
+  }, [pathname, setSidebarOpen]);
 
-  const ctx: NavRenderContext = {
-    activeHref,
-    onLinkClick: handleLinkClick,
-    prefetch: (key: string) => prefetchMap[key]?.(),
-  };
+  const intent = useRouteIntent();
+  const warmFor = React.useCallback(
+    (key: string) => () => prefetchMap[key]?.(),
+    [prefetchMap]
+  );
+
+  const ctx: NavRenderContext = React.useMemo(
+    () => ({ activeHref, intent, warmFor }),
+    [activeHref, intent, warmFor]
+  );
 
   // Icon rail only on desktop-collapsed; the mobile drawer (sidebarOpen) is full width.
   const showRail = isCollapsed && !sidebarOpen;
@@ -98,8 +104,8 @@ export function Sidebar({ className }: SidebarProps) {
           <div className="flex h-16 md:h-20 items-center justify-between border-b px-3 md:px-2 shrink-0">
             <Link
               href="/"
-              onClick={handleLinkClick}
-              onMouseEnter={() => ctx.prefetch("/")}
+              prefetch={false}
+              {...linkIntentProps(intent, "/", warmFor("/"))}
               className={cn(
                 "flex items-center justify-center rounded-lg transition-all duration-200 ease-out motion-reduce:transition-none hover:bg-accent",
                 sidebarOpen
@@ -179,7 +185,7 @@ export function Sidebar({ className }: SidebarProps) {
             settingsActive={activeHref === "/settings"}
             theme={theme}
             setTheme={setTheme}
-            onLinkClick={handleLinkClick}
+            ctx={ctx}
           />
         </div>
       </aside>

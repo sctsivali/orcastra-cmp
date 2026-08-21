@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -134,7 +135,10 @@ function ImageSelector({
 }
 
 export function VMCreateForm() {
+  // note: the router is still needed for back(). Forward hops go through navigate() so
+  // the leaving transition raises the global progress bar.
   const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const { data: nodeNames, isLoading: nodesLoading } = useNodeNames();
   const createVM = useCreateVM();
   const [showCloudInit, setShowCloudInit] = React.useState(false);
@@ -185,7 +189,7 @@ export function VMCreateForm() {
         variant: "success",
       });
 
-      router.push("/inventory");
+      navigate("/inventory");
     } catch (error) {
       // Check if error is due to read-only mode
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";

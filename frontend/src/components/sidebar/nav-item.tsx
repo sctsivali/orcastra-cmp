@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { NavItem, NavRenderContext } from "./types";
 import { TerminalMenuItem, ConsoleMenuItem } from "./session-menu-items";
+import { NavItemSpinner } from "./nav-link-status";
+import { linkIntentProps } from "@/components/navigation/route-intent";
 
 interface NavItemRowProps {
   item: NavItem;
@@ -36,17 +38,16 @@ export function NavItemRow({ item, ctx }: NavItemRowProps) {
     >
       <Link
         href={href}
-        // Force a full route prefetch (RSC + JS chunk). These routes are dynamic (middleware auth +
-        // client data fetch), so the default "auto" under-prefetches without a loading.tsx and the
-        // page loads at click time. This warms the route shell so a click commits near-instantly;
-        // data is still warmed on hover below. Prefetches the shell only, not the API data.
-        prefetch={true}
-        onClick={ctx.onLinkClick}
-        onMouseEnter={() => ctx.prefetch(item.prefetchKey ?? href)}
+        // note: no viewport prefetch. Every sidebar leaf prefetching on sight fired one full
+        // RSC request per link on each page load, which saturated the connection budget and
+        // delayed the click the operator actually made. Warming moved to intent below.
+        prefetch={false}
+        {...linkIntentProps(ctx.intent, href, ctx.warmFor(item.prefetchKey ?? href))}
         aria-current={active ? "page" : undefined}
       >
         <Icon className="h-4 w-4 mr-2 shrink-0" />
         {item.label}
+        <NavItemSpinner />
       </Link>
     </Button>
   );

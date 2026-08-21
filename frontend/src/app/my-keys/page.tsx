@@ -60,7 +60,7 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
-import { useRouter } from "next/navigation";
+import { IntentLink } from "@/components/navigation/route-intent";
 import { Input } from "@/components/ui/input";
 import { formatLabel } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -114,7 +114,6 @@ function MyKeysContent() {
   const [keyToDelete, setKeyToDelete] = useState<{ id: string; name: string } | null>(null);
   const { isReadOnly } = useReadOnlyMode();
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
-  const router = useRouter();
 
   // Fetch keys
   const {
@@ -257,15 +256,12 @@ function MyKeysContent() {
       <ReadOnlyBanner />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push("/settings")}
-            className="shrink-0"
-          >
-            <ChevronLeft className="h-4 w-4 mr-1" />
-            <span className="hidden sm:inline">Back to Settings</span>
-            <span className="sm:hidden">Back</span>
+          <Button asChild variant="ghost" size="sm" className="shrink-0">
+            <IntentLink href="/settings">
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              <span className="hidden sm:inline">Back to Settings</span>
+              <span className="sm:hidden">Back</span>
+            </IntentLink>
           </Button>
           <div className="min-w-0">
             <h1 className="text-2xl sm:text-3xl font-bold">

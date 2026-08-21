@@ -22,7 +22,7 @@ import { TableLink } from "@/components/ui/table-link";
 import { Plus, Network as NetworkIcon } from "lucide-react";
 import { useNetworks } from "@/hooks/use-lxd";
 import { Button } from "@/components/ui/button";
-import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import type { NetworkInfo } from "@/types/api";
@@ -106,7 +106,7 @@ function NetworksContent() {
   const { data, isLoading, refreshNow, dataUpdatedAt } = useNetworks();
   const networks: NetworkInfo[] = useMemo(() => (data as any)?.networks || [], [data]);
 
-  const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const { hasRole } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
   const canCreateNetwork = hasRole(Role.PARTNER);
@@ -183,7 +183,7 @@ function NetworksContent() {
           {/* Only Partner+ can create; the create page enforces this too. */}
           {canCreateNetwork && (
             <Button
-              onClick={() => router.push("/inventory/networks/create")}
+              onClick={() => navigate("/inventory/networks/create")}
               disabled={isReadOnly}
               title={isReadOnly ? "Action disabled in read-only mode" : "Create a new network"}
             >

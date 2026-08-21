@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import {
   ArrowLeft,
   Monitor,
@@ -190,7 +190,9 @@ const DEFAULT_FORM: FormState = {
 };
 
 export function InstanceCreateForm() {
-  const router = useRouter();
+  // note: navigate() rather than a bare push, so the leaving transition raises the
+  // global progress bar. These hops follow a mutation and are the slowest in the app.
+  const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const createInstance = useCreateInstance();
   const isSubmitting = createInstance.isPending;
@@ -843,7 +845,7 @@ export function InstanceCreateForm() {
           `Creating ${form.type === "vm" ? "VM" : "container"} "${form.name}" on "${form.selectedNode}"` +
             (startAfterCreate ? " (will start when ready)." : "."),
       });
-      router.push("/inventory/instances");
+      navigate("/inventory/instances");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create instance");
     } finally {
@@ -912,7 +914,7 @@ export function InstanceCreateForm() {
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => router.push("/inventory/instances")}
+          onClick={() => navigate("/inventory/instances")}
           aria-label="Back to instances"
         >
           <ArrowLeft className="h-5 w-5" />
@@ -1951,7 +1953,7 @@ export function InstanceCreateForm() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => router.push("/inventory/instances")}
+            onClick={() => navigate("/inventory/instances")}
             disabled={isSubmitting}
           >
             Cancel

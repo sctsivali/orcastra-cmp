@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 
 import {
   Card,
@@ -58,7 +58,9 @@ const NETWORK_TYPES = [
 ];
 
 export function NetworkCreateForm() {
-  const router = useRouter();
+  // note: navigate() rather than a bare push, so the leaving transition raises the
+  // global progress bar. These hops follow a mutation and are the slowest in the app.
+  const { navigate } = useNavigationProgress();
   const { toast } = useToast();
 
   const { data: nodeNames, isLoading: loadingNodes } = useNodeNames();
@@ -155,7 +157,7 @@ export function NetworkCreateForm() {
         title: "Network created",
         description: `"${name}" created on ${node}.`,
       });
-      router.push("/inventory/networks");
+      navigate("/inventory/networks");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create network");
     } finally {
@@ -340,7 +342,7 @@ export function NetworkCreateForm() {
         )}
         <Button
           variant="outline"
-          onClick={() => router.push("/inventory/networks")}
+          onClick={() => navigate("/inventory/networks")}
         >
           Cancel
         </Button>

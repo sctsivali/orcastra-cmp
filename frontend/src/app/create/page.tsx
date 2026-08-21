@@ -4,19 +4,13 @@ import { ProjectCreateForm } from "@/components/project-create-form";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { RequireRole } from "@/components/permission-guard";
 import { Role } from "@/types/rbac";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
-import { usePermissions } from "@/hooks/use-permissions";
+import { AccessDeniedRedirect } from "@/components/access-denied-redirect";
+import { ConsolePageSkeleton } from "@/components/skeletons/console-page-skeleton";
 
-function AccessDeniedRedirect() {
-  const router = useRouter();
-  useEffect(() => { router.replace("/"); }, [router]);
-  return null;
-}
 
 export default function CreatePage() {
   return (
-    <RequireRole role={Role.PARTNER} fallback={<AccessDeniedRedirect />}>
+    <RequireRole role={Role.PARTNER} fallback={<AccessDeniedRedirect to="/" />} pending={<ConsolePageSkeleton />}>
       <ReadOnlyBanner />
       <ProjectCreateForm />
     </RequireRole>

@@ -7,6 +7,8 @@ import { PersonalizationProvider } from "./personalization-provider";
 import { StorageCleanupProvider } from "./storage-cleanup-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AuthProvider } from "./auth-provider";
+import { NavigationProgressProvider } from "./navigation/navigation-progress";
+import { RouteIntentProvider } from "./navigation/route-intent";
 import { APIError } from "@/types";
 import { onTokenRefreshed } from "@/lib/api";
 
@@ -86,7 +88,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <PersonalizationProvider>
             <ThemeProvider>
               <TooltipProvider delayDuration={150} skipDelayDuration={100}>
-                {children}
+                <NavigationProgressProvider>
+                  <RouteIntentProvider>{children}</RouteIntentProvider>
+                </NavigationProgressProvider>
               </TooltipProvider>
             </ThemeProvider>
           </PersonalizationProvider>

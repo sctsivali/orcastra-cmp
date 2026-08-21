@@ -4,20 +4,13 @@ import { InstanceCreateForm } from "@/components/instance-create-form";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { RequireRole } from "@/components/permission-guard";
 import { Role } from "@/types/rbac";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+import { AccessDeniedRedirect } from "@/components/access-denied-redirect";
+import { ConsolePageSkeleton } from "@/components/skeletons/console-page-skeleton";
 
-function AccessDeniedRedirect() {
-  const router = useRouter();
-  useEffect(() => {
-    router.replace("/inventory/instances");
-  }, [router]);
-  return null;
-}
 
 export default function CreateInstancePage() {
   return (
-    <RequireRole role={Role.PARTNER} fallback={<AccessDeniedRedirect />}>
+    <RequireRole role={Role.PARTNER} fallback={<AccessDeniedRedirect to="/inventory/instances" />} pending={<ConsolePageSkeleton />}>
       <div className="p-8">
         <ReadOnlyBanner />
         <InstanceCreateForm />

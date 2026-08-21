@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -18,7 +18,7 @@ import { api } from "@/lib/api";
 import { Role } from "@/types/rbac";
 
 export default function SettingsPage() {
-  const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const queryClient = useQueryClient();
   const { isAdmin, isPartner, roles } = usePermissions();
   const managesOrganizationBranding = roles.includes(Role.PARTNER);
@@ -115,7 +115,7 @@ export default function SettingsPage() {
           <div className="grid gap-6">
             {/* My Keys Card - Admin + Partner only */}
             {isPartner && (
-            <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => router.push('/my-keys')}>
+            <Card className="hover:shadow-lg transition-shadow cursor-pointer" onClick={() => navigate('/my-keys')}>
               <CardHeader>
                 <CardTitle>
                   My Keys
@@ -135,7 +135,7 @@ export default function SettingsPage() {
                     className="gap-2 mt-2"
                     onClick={(e) => {
                       e.stopPropagation();
-                      router.push('/my-keys');
+                      navigate('/my-keys');
                     }}
                   >
                     Manage Keys

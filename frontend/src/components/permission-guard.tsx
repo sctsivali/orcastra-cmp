@@ -33,6 +33,12 @@ interface PermissionGuardProps {
   fallback?: ReactNode;
   /** If true, disable children instead of hiding (adds opacity + pointer-events:none) */
   disableInsteadOfHide?: boolean;
+  /**
+   * Content shown while the session is still resolving. Defaults to nothing, which is right
+   * for an inline guard around a button but wrong for a guard wrapping a whole page: there it
+   * paints a blank screen after the route has already committed.
+   */
+  pending?: ReactNode;
 }
 
 export function PermissionGuard({
@@ -41,11 +47,12 @@ export function PermissionGuard({
   minRole,
   fallback = null,
   disableInsteadOfHide = false,
+  pending = null,
 }: PermissionGuardProps) {
   const { can, hasRole, isLoading } = usePermissions();
 
   // while loading session, hide guarded content to avoid flash
-  if (isLoading) return null;
+  if (isLoading) return <>{pending}</>;
 
   let allowed = true;
 
@@ -83,13 +90,15 @@ export function RequireRole({
   role,
   children,
   fallback,
+  pending,
 }: {
   role: Role;
   children: ReactNode;
   fallback?: ReactNode;
+  pending?: ReactNode;
 }) {
   return (
-    <PermissionGuard minRole={role} fallback={fallback}>
+    <PermissionGuard minRole={role} fallback={fallback} pending={pending}>
       {children}
     </PermissionGuard>
   );

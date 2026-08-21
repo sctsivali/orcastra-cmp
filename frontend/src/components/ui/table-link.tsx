@@ -1,8 +1,8 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
 import { ExternalLink } from "lucide-react";
+import { IntentLink } from "@/components/navigation/route-intent";
 import { cn } from "@/lib/utils";
 
 // Clickable text inside a table cell.
@@ -77,10 +77,14 @@ export function TableLink(props: TableLinkProps) {
         </a>
       );
     }
+    // important: IntentLink, not a plain Link. A table row is rendered once per record, so a
+    // link on the default prefetch fires one full RSC request per visible row: the networks
+    // table alone issued 26. Warming on hover instead costs one request for the row the
+    // operator is actually reading.
     return (
-      <Link href={props.href} title={title} aria-label={ariaLabel} className={classes}>
+      <IntentLink href={props.href} title={title} aria-label={ariaLabel} className={classes}>
         <span className="min-w-0 truncate">{children}</span>
-      </Link>
+      </IntentLink>
     );
   }
 

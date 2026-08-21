@@ -3,7 +3,9 @@
 import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
-import Link from "next/link";
+// note: the alarm cards point at /inventory/warnings with distinct query strings, which
+// are distinct router cache keys. They warm on intent rather than on sight.
+import { IntentLink as Link } from "@/components/navigation/route-intent";
 import { useRouter } from "next/navigation";
 import {
   Activity,

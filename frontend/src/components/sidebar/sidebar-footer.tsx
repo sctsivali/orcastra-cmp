@@ -10,13 +10,16 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { NavItemSpinner, NavRailIcon } from "./nav-link-status";
+import { linkIntentProps } from "@/components/navigation/route-intent";
+import type { NavRenderContext } from "./types";
 type Theme = "light" | "dark" | "system";
 interface SidebarFooterProps {
   collapsed: boolean;
   settingsActive: boolean;
   theme: Theme;
   setTheme: (theme: Theme) => void;
-  onLinkClick: () => void;
+  ctx: NavRenderContext;
 }
 function ThemeIcon({ theme }: { theme: Theme }) {
   if (theme === "light") return <Sun className="h-5 w-5" />;
@@ -28,7 +31,7 @@ export function SidebarFooter({
   settingsActive,
   theme,
   setTheme,
-  onLinkClick,
+  ctx,
 }: SidebarFooterProps) {
   const themeMenu = (
     <DropdownMenuContent align="start" side="top" className="w-48">
@@ -62,11 +65,12 @@ export function SidebarFooter({
             >
               <Link
                 href="/settings"
+                prefetch={false}
                 aria-label="Settings"
                 aria-current={settingsActive ? "page" : undefined}
-                onClick={onLinkClick}
+                {...linkIntentProps(ctx.intent, "/settings")}
               >
-                <Settings className="h-5 w-5" />
+                <NavRailIcon icon={Settings} />
               </Link>
             </Button>
           </TooltipTrigger>
@@ -92,11 +96,13 @@ export function SidebarFooter({
       >
         <Link
           href="/settings"
-          onClick={onLinkClick}
+          prefetch={false}
           aria-current={settingsActive ? "page" : undefined}
+          {...linkIntentProps(ctx.intent, "/settings")}
         >
           <Settings className="h-5 w-5" />
           <span className="ml-3">Settings</span>
+          <NavItemSpinner />
         </Link>
       </Button>
       <DropdownMenu>

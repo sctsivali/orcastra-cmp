@@ -1,6 +1,7 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { IntentLink } from "@/components/navigation/route-intent";
 import { FolderKanban, Plus, ChevronDown, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +16,6 @@ import { usePermissions } from "@/hooks/use-permissions";
 
 export function Header() {
   const pathname = usePathname();
-  const router = useRouter();
   const { sidebarOpen, setSidebarOpen } = useLayout();
   const { isPartner } = usePermissions();
 
@@ -55,19 +55,21 @@ export function Header() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-48">
-                  <DropdownMenuItem 
-                    className="cursor-pointer"
-                    onClick={() => router.push("/create")}
-                  >
-                    <FolderKanban className="mr-2 h-4 w-4" />
-                    Create Project
+                  {/* note: asChild plus a real link, not a router push on click. As buttons
+                      these had no href, so no keyboard or middle-click semantics, no prefetch,
+                      and the global progress bar could not see them. An open dropdown is a long
+                      dwell window, which makes it a good prefetch opportunity. */}
+                  <DropdownMenuItem asChild className="cursor-pointer">
+                    <IntentLink href="/create">
+                      <FolderKanban className="mr-2 h-4 w-4" />
+                      Create Project
+                    </IntentLink>
                   </DropdownMenuItem>
-                  <DropdownMenuItem 
-                    className="cursor-pointer"
-                    onClick={() => router.push("/register-node")}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    Register Node
+                  <DropdownMenuItem asChild className="cursor-pointer">
+                    <IntentLink href="/register-node">
+                      <Plus className="mr-2 h-4 w-4" />
+                      Register Node
+                    </IntentLink>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -98,19 +100,17 @@ export function Header() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" side="top" className="w-48 mb-2">
-              <DropdownMenuItem 
-                className="cursor-pointer"
-                onClick={() => router.push("/create")}
-              >
-                <FolderKanban className="mr-2 h-4 w-4" />
-                Create Project
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <IntentLink href="/create">
+                  <FolderKanban className="mr-2 h-4 w-4" />
+                  Create Project
+                </IntentLink>
               </DropdownMenuItem>
-              <DropdownMenuItem 
-                className="cursor-pointer"
-                onClick={() => router.push("/register-node")}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                Register Node
+              <DropdownMenuItem asChild className="cursor-pointer">
+                <IntentLink href="/register-node">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Register Node
+                </IntentLink>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

@@ -35,6 +35,7 @@ import { InstanceActionDialogs } from "./components/instance-action-dialogs";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceMonitoringModal } from "@/components/instance-monitoring-modal";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -200,6 +201,7 @@ function InstancesContent() {
     force: boolean;
   }>({ open: false, action: null, name: "", host: "", force: false });
   const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
   // permsLoading matters for the labels below: until the access rules arrive, hasPermission
@@ -403,7 +405,7 @@ function InstancesContent() {
                 bounce a Tenant straight back, so don't show a dead-end button. */}
             {canCreateInstance && (
               <Button
-                onClick={() => router.push("/inventory/instances/create")}
+                onClick={() => navigate("/inventory/instances/create")}
                 disabled={isReadOnly}
                 title={isReadOnly ? "Action disabled in read-only mode" : "Create a new instance"}
               >

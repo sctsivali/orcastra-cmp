@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { IntentLink } from "@/components/navigation/route-intent";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -534,11 +535,10 @@ function WarningsContent() {
                         </TableCell>
                         <TableCell className="whitespace-nowrap">{formatDateTime(warning.expires_at)}</TableCell>
                         <TableCell>
-                          <Button
-                            size="sm"
-                            onClick={() => router.push(`/inventory/clusters/certificates?renew=${warning.cluster_id}`)}
-                          >
-                            Renew
+                          <Button asChild size="sm">
+                            <IntentLink href={`/inventory/clusters/certificates?renew=${warning.cluster_id}`}>
+                              Renew
+                            </IntentLink>
                           </Button>
                         </TableCell>
                       </TableRow>

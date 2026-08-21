@@ -1,6 +1,14 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
-export default function InstancesLoading() {
+interface TablePageSkeletonProps {
+  /** Placeholder row count. Match the page's usual density rather than its maximum. */
+  rows?: number;
+}
+
+// Shared route-loading shape for the inventory table pages: title, toolbar, dense rows.
+// Lifted out of the per-segment loading.tsx files so they stay one line each and the shape
+// does not drift between sixteen near-identical copies.
+export function TablePageSkeleton({ rows = 10 }: TablePageSkeletonProps) {
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
       <div className="flex items-center justify-between">
@@ -12,7 +20,7 @@ export default function InstancesLoading() {
       </div>
       <div className="rounded-lg border bg-card">
         <div className="p-4 space-y-3">
-          {Array.from({ length: 10 }).map((_, i) => (
+          {Array.from({ length: rows }).map((_, i) => (
             <div key={i} className="flex items-center gap-4 py-2">
               <Skeleton className="h-4 w-4" />
               <Skeleton className="h-4 w-40" />

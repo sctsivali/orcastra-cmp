@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import type { RouteIntent } from "@/components/navigation/route-intent";
 
 // Role gate: minimum role required. "tenant" = any authenticated user (everyone),
 // "partner" = Partner or Admin, "admin" = Admin only. Maps to usePermissions() flags.
@@ -34,9 +35,15 @@ export interface PermissionFlags {
   isTenant: boolean;
 }
 
-// Shared rendering context threaded to nav items so they keep mobile-close + hover-prefetch.
+// Shared rendering context threaded to nav items. `intent` is already guarded against the
+// active route and already resolves the React Query warm map, so a renderer never sees either
+// concern.
+// note: there is deliberately no onLinkClick. The mobile drawer and the collapsed flyout used
+// to close on click, which unmounted the <Link> and killed its pending spinner. Both now close
+// when the new route commits, which is what the operator is actually waiting for.
 export interface NavRenderContext {
   activeHref: string | null;
-  onLinkClick: () => void;
-  prefetch: (key: string) => void;
+  intent: RouteIntent;
+  /** Resolves the React Query warm-up for a prefetch key, so renderers stay data-agnostic. */
+  warmFor: (key: string) => () => void;
 }

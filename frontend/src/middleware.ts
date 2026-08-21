@@ -2,6 +2,11 @@ import { auth } from "@/auth";
 import { inspectRequestTarget } from "@/lib/request-security";
 import { NextResponse } from "next/server";
 
+// note: middleware cannot tell a router prefetch from a real navigation. Next strips every
+// FLIGHT_HEADER (RSC, Next-Router-Prefetch, Next-Router-State-Tree, ...) from the request
+// before invoking middleware, deliberately: see server/web/adapter.js, "Headers should only
+// be stripped for middleware". Verified on 15.5.18 by dumping the header names seen here.
+// Anything that needs to treat a prefetch differently has to live outside this chain.
 export default auth((request) => {
   const decision = inspectRequestTarget(
     request.method,

@@ -9,6 +9,7 @@ import { usePersonalization } from "./personalization-provider";
 import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
 import { BreakGlassModal } from "@/components/break-glass/break-glass-modal";
+import { useNavigationProgress } from "./navigation/navigation-progress";
 
 // Dynamically import TerminalManager to avoid SSR issues with xterm
 const TerminalManager = dynamic(
@@ -29,6 +30,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
   const { sidebarCollapsed } = useLayout();
   const { settings } = usePersonalization();
   const pathname = usePathname();
+  const { pending: navPending } = useNavigationProgress();
   const isAuthPage = pathname.startsWith("/auth");
   const isLandingPage = pathname === "/";
   const [mounted, setMounted] = React.useState(false);
@@ -76,7 +78,9 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
       >
         {/* Hide header on full-page terminal/console views */}
         {!isFullPageTerminalOrConsole && <Header />}
-        <main className={cn(
+        <main
+          aria-busy={navPending || undefined}
+          className={cn(
           "flex-1",
           // Full-page terminal/console views need no padding - they manage their own layout
           isFullPageTerminalOrConsole ? "" : "container py-4 px-4 md:py-6 md:px-6 lg:py-8 lg:px-8"

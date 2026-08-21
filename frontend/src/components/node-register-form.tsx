@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -95,7 +96,10 @@ const nodeRegisterSchema = z.object({
 type NodeRegisterFormData = z.infer<typeof nodeRegisterSchema>;
 
 export function NodeRegisterForm() {
+  // note: the router is still needed for back(). Forward hops go through navigate() so
+  // the leaving transition raises the global progress bar.
   const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const containerRef = React.useRef<HTMLDivElement>(null);
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [isCheckingAuth, setIsCheckingAuth] = React.useState(false);
@@ -179,7 +183,7 @@ export function NodeRegisterForm() {
         } : null);
         
         setTimeout(() => {
-          router.push("/inventory");
+          navigate("/inventory");
         }, 1000);
       } else {
         toast({

@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { IntentLink } from "@/components/navigation/route-intent";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import {
   CheckCircle,
@@ -152,7 +152,6 @@ function certToTime(value: string | null | undefined): number | null {
 }
 
 function CertificatesContent() {
-  const router = useRouter();
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useCertificates();
   const certificates = data?.certificates || [];
   const { isReadOnly } = useReadOnlyMode();
@@ -308,15 +307,12 @@ function CertificatesContent() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => router.push("/inventory/clusters")}
-            className="shrink-0"
-          >
-            <ChevronLeft className="h-4 w-4 mr-1" />
-            <span className="hidden sm:inline">Back to Clusters</span>
-            <span className="sm:hidden">Back</span>
+          <Button asChild variant="ghost" size="sm" className="shrink-0">
+            <IntentLink href="/inventory/clusters">
+              <ChevronLeft className="h-4 w-4 mr-1" />
+              <span className="hidden sm:inline">Back to Clusters</span>
+              <span className="sm:hidden">Back</span>
+            </IntentLink>
           </Button>
           <div className="min-w-0">
             <h1 className="text-2xl md:text-3xl font-bold">

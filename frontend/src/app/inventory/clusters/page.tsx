@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { IntentLink } from "@/components/navigation/route-intent";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { formatHypervisorType } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -117,7 +118,7 @@ const CLUSTERS = defineTable<any>()({
   ] });
 
 function ClustersContent() {
-  const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useClusters();
   const clusters = (data as any)?.clusters || [];
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
@@ -389,17 +390,14 @@ EOF`}
           </p>
         </div>
         <div className="flex gap-2">
-          <Button
-            variant="outline"
-            onClick={() => router.push("/inventory/clusters/certificates")}
-            className="gap-2 shrink-0"
-            size="sm"
-          >
-            <Shield className="h-4 w-4" />
-            <span className="hidden sm:inline">Certificates</span>
+          <Button asChild variant="outline" className="gap-2 shrink-0" size="sm">
+            <IntentLink href="/inventory/clusters/certificates">
+              <Shield className="h-4 w-4" />
+              <span className="hidden sm:inline">Certificates</span>
+            </IntentLink>
           </Button>
           <Button
-            onClick={() => router.push("/register-node")}
+            onClick={() => navigate("/register-node")}
             className="gap-2 shrink-0"
             size="sm"
             disabled={isReadOnly}
@@ -432,12 +430,11 @@ EOF`}
               <p className="text-muted-foreground mb-4">
                 Get started by registering your first hypervisor cluster
               </p>
-              <Button
-                onClick={() => router.push("/register-node")}
-                className="gap-2"
-              >
-                <Plus className="h-4 w-4" />
-                Register First Cluster
+              <Button asChild className="gap-2">
+                <IntentLink href="/register-node">
+                  <Plus className="h-4 w-4" />
+                  Register First Cluster
+                </IntentLink>
               </Button>
             </div>
           ) : (
@@ -510,13 +507,10 @@ EOF`}
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
                           {cluster.cluster_type === "MicroCloud" && cluster.status === "online" && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => router.push(`/inventory/clustering/members?node=${cluster.cluster_id}`)}
-                              title="View Cluster Members"
-                            >
-                              <Users className="h-4 w-4" />
+                            <Button asChild variant="outline" size="sm" title="View Cluster Members">
+                              <IntentLink href={`/inventory/clustering/members?node=${cluster.cluster_id}`}>
+                                <Users className="h-4 w-4" />
+                              </IntentLink>
                             </Button>
                           )}
                           {cluster.status === ClusterStatus.NOT_AUTHORIZED && (

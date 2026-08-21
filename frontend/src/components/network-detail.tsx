@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import Link from "next/link";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { IntentLink as Link } from "@/components/navigation/route-intent";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -68,7 +68,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 export function NetworkDetail({ name, host }: NetworkDetailProps) {
-  const router = useRouter();
+  // note: navigate() rather than a bare push, so the leaving transition raises the
+  // global progress bar. These hops follow a mutation and are the slowest in the app.
+  const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const { data, isLoading, error } = useNetwork(name, host);
   const network = data as NetworkInfo | undefined;
@@ -114,7 +116,7 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
     try {
       await deleteNetwork.mutateAsync({ name, host });
       toast({ title: "Network deleted", description: `"${name}" was deleted.` });
-      router.push("/inventory/networks");
+      navigate("/inventory/networks");
     } catch (e) {
       toast({
         title: "Failed to delete network",

@@ -16,6 +16,17 @@ const nextConfig = {
       '@radix-ui/react-icons',
       'date-fns',
     ],
+    // Client router cache. `dynamic` is how long an already-rendered segment is reused on a
+    // return visit (Next default 0, so every back-and-forth refetched the RSC payload and
+    // re-ran the auth middleware). `static` is how long a full prefetch stays reusable.
+    // important: safe only because no page fetches on the server. Every app/**/page.tsx is a
+    // client component or a thin shim around one, so the cached payload is chrome and never
+    // cluster data, and React Query stays the single freshness authority (lib/query-config.ts).
+    // If data fetching ever moves into a server component, revisit this.
+    staleTimes: {
+      dynamic: 30,
+      static: 180,
+    },
   },
   images: {
     remotePatterns: [{

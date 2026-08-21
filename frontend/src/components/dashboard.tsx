@@ -1,7 +1,10 @@
 "use client";
 
 import * as React from "react";
-import Link from "next/link";
+// note: these alert cards all point at /inventory/warnings with distinct query strings,
+// which are distinct router cache keys. Prefetching them on sight cost seven RSC requests
+// on every dashboard paint, so they warm on intent like the sidebar does.
+import { IntentLink as Link } from "@/components/navigation/route-intent";
 import { FolderKanban, ChevronDown, ChevronUp, Server, Container, Play, Square, RotateCw, Trash2, MoreVertical, Cpu, HardDrive, MemoryStick, Settings, Terminal, AlertTriangle, Info, Flame, ShieldAlert, Shield, WifiOff, ChevronRight, Monitor, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoadingLottieMediumEnhanced, LoadingLottiePageEnhanced } from "@/components/loading-lottie";

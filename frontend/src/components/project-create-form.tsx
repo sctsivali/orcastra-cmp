@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -48,7 +49,10 @@ const projectCreateSchema = z.object({
 type ProjectCreateFormData = z.infer<typeof projectCreateSchema>;
 
 export function ProjectCreateForm() {
+  // note: the router is still needed for back(). Forward hops go through navigate() so
+  // the leaving transition raises the global progress bar.
   const router = useRouter();
+  const { navigate } = useNavigationProgress();
   const { data: nodeNames, isLoading: nodesLoading, error } = useNodeNames();
   const createProject = useCreateProject();
   const [nodeResources, setNodeResources] = React.useState<any>(null);
@@ -223,7 +227,7 @@ export function ProjectCreateForm() {
         variant: "success",
       });
 
-      router.push("/inventory");
+      navigate("/inventory");
     } catch (error) {
       // Check if error is due to read-only mode
       const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";

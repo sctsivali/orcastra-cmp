@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -10,6 +11,8 @@ import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import type { NavGroup, NavItem, NavRenderContext } from "./types";
 import { NavItemRow } from "./nav-item";
+import { NavRailIcon } from "./nav-link-status";
+import { linkIntentProps } from "@/components/navigation/route-intent";
 
 // A pinned leaf icon on the collapsed rail: icon-only link with a tooltip label.
 function RailLeaf({ item, ctx }: { item: NavItem; ctx: NavRenderContext }) {
@@ -27,13 +30,12 @@ function RailLeaf({ item, ctx }: { item: NavItem; ctx: NavRenderContext }) {
         >
           <Link
             href={item.href}
-            prefetch={true}
+            prefetch={false}
             aria-label={item.label}
             aria-current={active ? "page" : undefined}
-            onClick={ctx.onLinkClick}
-            onMouseEnter={() => ctx.prefetch(item.prefetchKey ?? item.href!)}
+            {...linkIntentProps(ctx.intent, item.href, ctx.warmFor(item.prefetchKey ?? item.href))}
           >
-            <Icon className="h-5 w-5" />
+            <NavRailIcon icon={Icon} />
           </Link>
         </Button>
       </TooltipTrigger>
@@ -47,6 +49,7 @@ function RailLeaf({ item, ctx }: { item: NavItem; ctx: NavRenderContext }) {
 // focus, and on keyboard or click with focus moving into the flyout.
 function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext }) {
   const [open, setOpen] = React.useState(false);
+  const pathname = usePathname();
   const interaction = React.useRef<"mouse" | "keyboard">("mouse");
   const closeTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -82,18 +85,17 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
     closeSoon();
   };
 
+  // important: close on route commit, not on click. Closing on click unmounted the <Link>
+  // and killed its pending spinner, so the flyout vanished and nothing replaced it until the
+  // page arrived. Clicking outside still closes it if a navigation stalls.
+  React.useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
   const groupActive = group.items.some((i) => i.href && i.href === ctx.activeHref);
   const flyItems = group.items.filter((i) => !i.render);
   const Icon = group.icon ?? group.items[0]?.icon;
 
-  // Inside the flyout, close it after navigating.
-  const flyoutCtx: NavRenderContext = {
-    ...ctx,
-    onLinkClick: () => {
-      setOpen(false);
-      ctx.onLinkClick();
-    },
-  };
 
   const triggerLabel =
     badge > 0 ? `${group.label}, ${badge} active session${badge === 1 ? "" : "s"}` : group.label;
@@ -142,7 +144,7 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
           {group.label}
         </p>
         {flyItems.map((item) => (
-          <NavItemRow key={item.id} item={{ ...item, indent: false }} ctx={flyoutCtx} />
+          <NavItemRow key={item.id} item={{ ...item, indent: false }} ctx={ctx} />
         ))}
       </PopoverContent>
     </Popover>
