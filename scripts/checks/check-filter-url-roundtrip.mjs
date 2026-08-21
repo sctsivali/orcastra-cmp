@@ -51,10 +51,13 @@ function eq(name, got, want) {
 // with the job. The cost was that THIS guard never ran in CI at all, not that it silenced
 // its neighbours.
 //
-// The fallback is pinned to the major the app declares. An unpinned `npx -p typescript`
-// fetches whatever is newest, and the first attempt at this fix failed in CI on TS6's
-// error TS5112 while passing locally on the repo's 5.9. Compile the guard with the same
-// major the product compiles with, or the guard is testing a different compiler.
+// The fallback is pinned to the major the app declares (package.json asks for ^5.3.3). An
+// unpinned `npx -p typescript` fetches whatever is newest, which today resolves to 7.0.2,
+// and the first attempt at this fix failed in CI on error TS5112 while passing locally on
+// the repo's 5.9. The run log records the error and not the version, so the exact major CI
+// pulled is not evidenced, only that it was newer than 5.9 and raises TS5112. Compile the
+// guard with the same major the product compiles with, or the guard is testing a different
+// compiler than the one that ships the code.
 const localTsc = resolve(frontend, 'node_modules', '.bin', 'tsc');
 const [cmd, leadingArgs] = existsSync(localTsc)
   ? [localTsc, []]
@@ -62,9 +65,10 @@ const [cmd, leadingArgs] = existsSync(localTsc)
 
 // important: compile from the temp directory, not from frontend/. TS5112 rejects naming a
 // file on the command line while a tsconfig.json sits in the working directory, and
-// frontend/ has one. Copying the source out also makes "standalone" literal: if the codec
-// ever grows an alias or a runtime import, it fails here rather than silently resolving
-// through the app's config.
+// frontend/ has one. `--ignoreConfig`, which the error text suggests, is not an option on
+// 5.x (TS5023), so moving the file is the fix that works on the pinned major. Copying the
+// source out also makes "standalone" literal: if the codec ever grows an alias or a runtime
+// import, it fails here rather than silently resolving through the app's config.
 copyFileSync(resolve(frontend, 'src', 'lib', 'filter-url.ts'), join(out, 'filter-url.ts'));
 
 try {
