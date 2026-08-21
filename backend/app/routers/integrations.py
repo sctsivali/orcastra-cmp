@@ -44,6 +44,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
+from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
 
 logger = logging.getLogger(__name__)
@@ -2941,7 +2942,23 @@ async def provision_tenant_access(
             created_by=api_key.get("created_by") or "orcahub-provisioning",
         )
         db.add(org)
-        await db.flush()
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            # important: the lookup above keys on (source, external_id, api_key_id), but slug
+            # carries its own unique index. A slug already held by a different external_id
+            # misses that lookup and violates ix_organizations_slug on INSERT, which escaped
+            # as a 500 with an asyncpg traceback. Roll back explicitly: the request ends here,
+            # so a savepoint would buy nothing and the session must not stay poisoned.
+            await db.rollback()
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Organization slug '{body.organization_slug}' already belongs to a "
+                    "different organization. Slugs are unique across the control plane, so "
+                    "provisioning cannot claim one that is taken."
+                ),
+            ) from exc
         org_created = True
         logger.info(f"Auto-created org {body.organization_slug} (external_id={body.organization_external_id})")
 
