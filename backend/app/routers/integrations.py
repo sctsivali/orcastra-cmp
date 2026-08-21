@@ -3283,12 +3283,35 @@ async def revoke_tenant_access(
             pass
 
     # Resolve org as provision does; absent org = nothing to revoke (idempotent success).
+    caller_key_id = api_key.get("id", "")
     org = (await db.execute(select(Organization).where(and_(
         Organization.source == "orcahub",
         Organization.external_id == body.organization_external_id,
-        Organization.api_key_id == api_key.get("id", ""),
+        Organization.api_key_id == caller_key_id,
     )))).scalar_one_or_none()
     if not org:
+        # important: that lookup folds api_key_id in, so it misses for two different
+        # reasons and the single `if not org` merged them. No such organisation is an
+        # idempotent success and stays one. An organisation owned by another key is not:
+        # answering 200 told the caller a revoke succeeded while nothing was touched.
+        # provision refuses this exact condition by name, so revoke must agree with it.
+        owner = (await db.execute(select(Organization).where(and_(
+            Organization.source == "orcahub",
+            Organization.external_id == body.organization_external_id,
+        )))).scalar_one_or_none()
+        if owner is not None and owner.api_key_id and owner.api_key_id != caller_key_id:
+            logger.warning(
+                "Refusing revoke of organization %s (external_id=%s): owned by api key %s, "
+                "caller is %s",
+                owner.slug, body.organization_external_id, owner.api_key_id, caller_key_id,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Organization '{owner.slug}' is owned by a different integration key. "
+                    "A key may only revoke for organizations it already owns."
+                ),
+            )
         return RevokeTenantAccessResponse()
 
     policy_name = f"auto:{body.project_name}"

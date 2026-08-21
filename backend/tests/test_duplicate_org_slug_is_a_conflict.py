@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from app.routers.integrations import provision_tenant_access
+from app.routers.integrations import provision_tenant_access, revoke_tenant_access
 
 
 class _NoResult:
@@ -203,6 +203,40 @@ class ForeignKeyOwnershipTests(unittest.TestCase):
             asyncio.run(provision_tenant_access(body=_Body(), api_key=_api_key(), db=db))
 
         self.assertNotIn("different integration key", str(caught.exception.detail))
+
+
+
+class RevokeOwnershipTests(unittest.TestCase):
+    """Revoke must agree with provision, and keep its idempotency.
+
+    `revoke_tenant_access` folds `api_key_id` into the same lookup, so it missed for two
+    different reasons and one `if not org` merged them. No such organisation is an
+    idempotent success and stays one. An organisation owned by another key is not: the
+    empty 200 told the caller a revoke had succeeded while nothing was touched, and after
+    the provision guard the pair disagreed on the identical condition.
+
+    Code-read finding rather than an observed failure: nothing in the log shows revoke
+    being called, so this is a reachable path that is not currently exercised.
+    """
+
+    def test_an_org_owned_by_another_key_is_refused(self):
+        owner = _ExistingOrg(slug="suka-hati", api_key_id="oak_someone_else")
+        db = _OwnedElsewhereSession(owner)
+
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(revoke_tenant_access(body=_Body(), api_key=_api_key(), db=db))
+
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("suka-hati", str(caught.exception.detail))
+
+    def test_no_such_org_is_still_an_idempotent_success(self):
+        """The case the merge was protecting must survive: revoking nothing is fine."""
+        db = _SlugTakenSession()  # every lookup misses, so no owner is found either
+
+        result = asyncio.run(revoke_tenant_access(body=_Body(), api_key=_api_key(), db=db))
+
+        self.assertIsNotNone(result, "an absent organisation must stay an empty success")
+        self.assertEqual(db.added, [], "revoke must not create anything")
 
 
 if __name__ == "__main__":
