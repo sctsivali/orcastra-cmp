@@ -195,14 +195,24 @@ async def register_cluster(
                 # partner with no synced org yet: still record ownership (org_id NULL)
                 # so the registrant can see and grant API-key access to their own cluster.
                 # reconcile_personal_clusters binds it to their org once it is synced.
+                # important: match the constraint, not more than it. uq_org_cluster_null is a
+                # partial unique index on cluster_id alone where organization_id IS NULL, so
+                # filtering on registered_by too made this miss a row another user already
+                # holds. The INSERT then violated the index, the broad handler below swallowed
+                # it, and registration returned success while recording no ownership at all.
                 existing = await db.execute(
-                    sa_select(OrganizationCluster.id).where(
+                    sa_select(OrganizationCluster.registered_by).where(
                         OrganizationCluster.organization_id.is_(None),
                         OrganizationCluster.cluster_id == cluster_id,
-                        OrganizationCluster.registered_by == _rbac.email,
                     )
                 )
-                if not existing.scalar_one_or_none():
+                holder = existing.scalar_one_or_none()
+                if holder is not None and holder != _rbac.email:
+                    logger.warning(
+                        f"Cluster {cluster_id} already has unbound ownership recorded for "
+                        f"{holder}; not recording a second claim for {_rbac.email}"
+                    )
+                elif holder is None:
                     db.add(OrganizationCluster(
                         organization_id=None,
                         cluster_id=cluster_id,
