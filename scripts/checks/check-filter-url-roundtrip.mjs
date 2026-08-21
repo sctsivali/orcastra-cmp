@@ -11,7 +11,7 @@
 // Run: node scripts/checks/check-filter-url-roundtrip.mjs [repo-root]
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -38,10 +38,27 @@ function eq(name, got, want) {
   check(name, JSON.stringify(got) === JSON.stringify(want), `${JSON.stringify(got)} != ${JSON.stringify(want)}`);
 }
 
+// important: `npx tsc` is not the TypeScript compiler. `tsc` is a separate, unrelated
+// package on npm, and npx fetches it whenever the workspace has no local binary. That is
+// exactly the Structural guards job, which is checkout plus setup-node with no install by
+// design, so this step failed with "This is not the tsc command you are looking for" on
+// every run from ef847d1 onward. It passed locally the whole time because
+// frontend/node_modules/.bin/tsc exists there.
+//
+// Scope of that outage, read off the runs rather than inferred: the steps before this one
+// all executed and passed every time, so no other guard was skipped while this was the last
+// step. From c49df53, when a step was appended after it, exactly one check is taken down
+// with the job. The cost was that THIS guard never ran in CI at all, not that it silenced
+// its neighbours.
+const localTsc = resolve(frontend, 'node_modules', '.bin', 'tsc');
+const [cmd, leadingArgs] = existsSync(localTsc)
+  ? [localTsc, []]
+  : ['npx', ['-p', 'typescript', 'tsc']];
+
 try {
   execFileSync(
-    'npx',
-    ['tsc', 'src/lib/filter-url.ts', '--outDir', out, '--module', 'esnext', '--target', 'es2020',
+    cmd,
+    [...leadingArgs, 'src/lib/filter-url.ts', '--outDir', out, '--module', 'esnext', '--target', 'es2020',
      '--moduleResolution', 'bundler', '--strict'],
     { cwd: frontend, stdio: 'pipe' },
   );
