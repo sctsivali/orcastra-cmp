@@ -11,7 +11,7 @@
 // Run: node scripts/checks/check-filter-url-roundtrip.mjs [repo-root]
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -50,17 +50,29 @@ function eq(name, got, want) {
 // step. From c49df53, when a step was appended after it, exactly one check is taken down
 // with the job. The cost was that THIS guard never ran in CI at all, not that it silenced
 // its neighbours.
+//
+// The fallback is pinned to the major the app declares. An unpinned `npx -p typescript`
+// fetches whatever is newest, and the first attempt at this fix failed in CI on TS6's
+// error TS5112 while passing locally on the repo's 5.9. Compile the guard with the same
+// major the product compiles with, or the guard is testing a different compiler.
 const localTsc = resolve(frontend, 'node_modules', '.bin', 'tsc');
 const [cmd, leadingArgs] = existsSync(localTsc)
   ? [localTsc, []]
-  : ['npx', ['-p', 'typescript', 'tsc']];
+  : ['npx', ['-p', 'typescript@5', 'tsc']];
+
+// important: compile from the temp directory, not from frontend/. TS5112 rejects naming a
+// file on the command line while a tsconfig.json sits in the working directory, and
+// frontend/ has one. Copying the source out also makes "standalone" literal: if the codec
+// ever grows an alias or a runtime import, it fails here rather than silently resolving
+// through the app's config.
+copyFileSync(resolve(frontend, 'src', 'lib', 'filter-url.ts'), join(out, 'filter-url.ts'));
 
 try {
   execFileSync(
     cmd,
-    [...leadingArgs, 'src/lib/filter-url.ts', '--outDir', out, '--module', 'esnext', '--target', 'es2020',
+    [...leadingArgs, 'filter-url.ts', '--outDir', '.', '--module', 'esnext', '--target', 'es2020',
      '--moduleResolution', 'bundler', '--strict'],
-    { cwd: frontend, stdio: 'pipe' },
+    { cwd: out, stdio: 'pipe' },
   );
 } catch (error) {
   console.error('filter-url codec failed to compile standalone:');
