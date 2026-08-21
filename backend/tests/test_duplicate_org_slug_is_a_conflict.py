@@ -72,6 +72,36 @@ class _SlugTakenSession:
         raise AssertionError("commit must not run after the insert failed")
 
 
+class _ExistingOrg:
+    def __init__(self, slug: str, api_key_id: Optional[str]) -> None:
+        self.slug = slug
+        self.api_key_id = api_key_id
+        self.id = 1
+
+
+class _OwnedElsewhereSession(_SlugTakenSession):
+    """First lookup (by external_id + api_key_id) misses; the ownership lookup finds a row."""
+
+    def __init__(self, owner: _ExistingOrg) -> None:
+        super().__init__()
+        self._owner = owner
+        self._calls = 0
+
+    async def execute(self, *_args: Any, **_kwargs: Any):
+        self._calls += 1
+        if self._calls == 2:
+            return _Found(self._owner)
+        return _NoResult()
+
+
+class _Found:
+    def __init__(self, obj: Any) -> None:
+        self._obj = obj
+
+    def scalar_one_or_none(self) -> Any:
+        return self._obj
+
+
 class _Body:
     cluster_id = "nuc2"
     project_name = "default"
@@ -128,6 +158,51 @@ class DuplicateOrgSlugTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.status_code, 403)
         self.assertEqual(db.added, [], "nothing may be staged before the allow-list passes")
+
+
+
+class ForeignKeyOwnershipTests(unittest.TestCase):
+    """The refusal must name the real reason: another integration owns the organisation.
+
+    `provision_tenant_access` folds `api_key_id` into its lookup, so a caller whose key does
+    not own an existing org misses it and falls through to the create. The database then
+    refuses on `uq_org_source_external_id` or `ix_organizations_slug`. That is the right
+    outcome by the wrong route, and the caller was told a slug was taken when the actual
+    reason is ownership. Observed live: `/integrations/sync` answered 200 eight times while
+    logging "Refusing sync of organization suka-hati ... owned by api key X, caller is Y",
+    and `provision-tenant-access` answered 500 three times on the same organisation in the
+    same window, because it has no equivalent guard.
+
+    This denies nothing the constraints did not already deny. It only replaces a misleading
+    conflict with an accurate one.
+    """
+
+    def test_an_org_owned_by_another_key_is_refused_by_name(self):
+        owner = _ExistingOrg(slug="suka-hati", api_key_id="oak_someone_else")
+        db = _OwnedElsewhereSession(owner)
+
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(provision_tenant_access(body=_Body(), api_key=_api_key(), db=db))
+
+        detail = str(caught.exception.detail)
+        self.assertEqual(caught.exception.status_code, 409)
+        self.assertIn("suka-hati", detail)
+        self.assertIn("different integration key", detail)
+        self.assertEqual(
+            db.added, [], "nothing may be staged once the organisation is known to be owned"
+        )
+
+    def test_an_unclaimed_org_still_provisions(self):
+        """A row no key has claimed must not be refused, which is sync's rule too."""
+        owner = _ExistingOrg(slug="suka-hati", api_key_id=None)
+        db = _OwnedElsewhereSession(owner)
+
+        # Reaches the create, so the fake's flush raises the duplicate-slug IntegrityError
+        # and we land on the conflict path rather than the ownership one.
+        with self.assertRaises(HTTPException) as caught:
+            asyncio.run(provision_tenant_access(body=_Body(), api_key=_api_key(), db=db))
+
+        self.assertNotIn("different integration key", str(caught.exception.detail))
 
 
 if __name__ == "__main__":

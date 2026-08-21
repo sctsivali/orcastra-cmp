@@ -2930,6 +2930,35 @@ async def provision_tenant_access(
                     "Provide organization_name and organization_slug for auto-creation."
                 ),
             )
+        # important: the lookup above folds api_key_id in, so a caller whose key does not own
+        # an existing org simply misses it and falls through to this create. The database
+        # then refuses on uq_org_source_external_id or ix_organizations_slug, which is the
+        # right outcome by the wrong route: the caller gets a conflict about a slug when the
+        # actual reason is that another integration owns the organisation. sync() states this
+        # plainly at its own ownership guard, so state it here too rather than letting the
+        # constraint speak for it. This denies nothing new, the constraints already did.
+        owner_stmt = select(Organization).where(
+            and_(
+                Organization.source == "orcahub",
+                Organization.external_id == body.organization_external_id,
+            )
+        )
+        owner = (await db.execute(owner_stmt)).scalar_one_or_none()
+        if owner is not None and owner.api_key_id and owner.api_key_id != api_key_id:
+            logger.warning(
+                "Refusing provision of organization %s (external_id=%s): owned by api key %s, "
+                "caller is %s",
+                owner.slug, body.organization_external_id, owner.api_key_id, api_key_id,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Organization '{owner.slug}' is owned by a different integration key. "
+                    "A key may only provision for organizations it already owns, or ones no "
+                    "key has claimed."
+                ),
+            )
+
         org = Organization(
             name=body.organization_name,
             slug=body.organization_slug,
