@@ -1892,12 +1892,61 @@ async def sync_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _integration_hardware_totals(
+    lxd_service: LXDService, allowed_clusters: set
+) -> Dict[str, int]:
+    """Real hardware totals for the clusters an API key may see.
+
+    important: this reaches the clusters, so it is cached and threaded. The result is keyed by
+    the cluster set rather than by the key id, so two keys with the same access share one
+    result. Unreachable clusters contribute nothing instead of blocking the response: the
+    shared circuit breaker returns them immediately.
+
+    The GPU total counts compute GPUs, matching every internal surface. This endpoint used to
+    return a hardcoded zero for every total, which told partners their GPUs did not exist.
+    """
+    empty = {"cpu": 0, "memory": 0, "storage": 0, "gpu": 0, "gpu_cards": 0}
+    if not allowed_clusters:
+        return empty
+
+    cache = get_cache_manager()
+    cache_key = "integration:hardware:" + ",".join(sorted(allowed_clusters))
+    cached = cache.get("api_responses", cache_key)
+    if cached is not None:
+        return cached
+
+    def _collect() -> Dict[str, int]:
+        totals = dict(empty)
+        for cluster_id in sorted(allowed_clusters):
+            try:
+                status = lxd_service.check_node_status(cluster_id)
+            except Exception as e:
+                logger.debug(f"Could not read hardware for {cluster_id}: {e}")
+                continue
+            resources = status.resources if status.connected else None
+            if not resources:
+                continue
+            totals["cpu"] += resources.cpu_total
+            totals["memory"] += resources.memory_total
+            totals["storage"] += resources.storage_total
+            totals["gpu"] += resources.gpu_total
+            totals["gpu_cards"] += resources.gpu_cards_total
+        return totals
+
+    totals = await asyncio.to_thread(_collect)
+    cache.set("api_responses", cache_key, totals, ttl=120)
+    return totals
+
+
 @external_router.get(
     "/regions",
     summary="Get integration region coordinates",
     description="Return non-sensitive geographic region coordinates for clusters allowed by the API key.",
 )
-async def get_integration_regions(api_key: Dict[str, Any] = Depends(validate_api_key)):
+async def get_integration_regions(
+    api_key: Dict[str, Any] = Depends(validate_api_key),
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
     """Expose real cluster location metadata to external integrations using API-key auth."""
     try:
         settings = get_settings()
@@ -1944,14 +1993,20 @@ async def get_integration_regions(api_key: Dict[str, Any] = Depends(validate_api
                 except Exception as e:
                     logger.warning(f"Could not get region info for {cluster_id}: {e}")
 
+        totals = await _integration_hardware_totals(lxd_service, allowed_clusters)
+
         return {
             "regions": list(regions.values()),
             "total_nodes": sum(region["node_count"] for region in regions.values()),
+            # note: this endpoint reports hardware, not workload. Instance counts come from a
+            # different source and are not enumerated here, so the key stays 0 rather than
+            # carrying a number this handler cannot support.
             "total_instances": 0,
-            "total_cpu": 0,
-            "total_memory": 0,
-            "total_storage": 0,
-            "total_gpu": 0,
+            "total_cpu": totals["cpu"],
+            "total_memory": totals["memory"],
+            "total_storage": totals["storage"],
+            "total_gpu": totals["gpu"],
+            "total_gpu_cards": totals["gpu_cards"],
         }
     except Exception as e:
         logger.error(f"Error loading integration regions: {e}", exc_info=True)

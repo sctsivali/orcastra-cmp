@@ -285,23 +285,6 @@ class ImageListResponse(BaseModel):
     )
 
 
-class GpuCardInfo(BaseModel):
-    """A physical GPU on a node (from the LXD resources API)."""
-    vendor: str = ""
-    vendor_id: str = ""
-    product: str = ""
-    product_id: str = ""
-    driver: str = ""
-    driver_version: str = ""
-    pci_address: str = ""
-    id: Optional[int] = None  # DRM card id
-
-
-class GpuCardListResponse(BaseModel):
-    """Response for listing a node's GPUs."""
-    host: str
-    gpus: List[GpuCardInfo]
-    total: int
 
 
 class RemoteImageInfo(BaseModel):
@@ -368,7 +351,8 @@ class GPUMdevProfile(BaseModel):
 class GPUCardInfo(BaseModel):
     """Detailed GPU card information from LXD resources."""
     # Core identification
-    index: int = Field(0, description="GPU card index")
+    index: int = Field(0, description="Position in the reported card list, not a device selector")
+    id: Optional[int] = Field(None, description="DRM card id: the value LXD accepts as a gpu device 'id'")
     driver: Optional[str] = Field(None, description="Kernel driver (ex;, 'nvidia', 'i915', 'amdgpu')")
     driver_version: Optional[str] = Field(None, description="Driver version")
     pci_address: Optional[str] = Field(None, description="PCI address (ex;, '0000:00:02.0')")
@@ -390,9 +374,10 @@ class GPUCardInfo(BaseModel):
     # Classification (compute vs display; integrated/unified-memory) for accurate, sellable counts.
     # A Tegra/Jetson iGPU enumerates TWO DRM cards (display controller + compute), so only the
     # compute card is allocatable capacity.
-    gpu_class: str = Field("unknown", description="'compute' | 'display' | 'unknown'")
+    gpu_class: str = Field("unknown", description="'compute' | 'integrated' | 'display' | 'unknown'")
     is_compute: bool = Field(False, description="True for a compute-capable (sellable) GPU")
-    is_integrated: bool = Field(False, description="True for an integrated/unified-memory iGPU (no separate VRAM)")
+    is_integrated: bool = Field(False, description="True when the GPU shares system RAM; orthogonal to gpu_class")
+    attachable: bool = Field(False, description="True when an operator may pass this card into an instance")
     model_name: Optional[str] = Field(None, description="Human GPU model (ex; 'NVIDIA Jetson Orin NX')")
     memory_total: Optional[int] = Field(None, description="GPU memory in bytes (for integrated GPUs, equals system RAM)")
     memory_shared: bool = Field(False, description="True when GPU memory is unified/shared with system RAM")
@@ -410,6 +395,14 @@ class GPUCardInfo(BaseModel):
     mdev_profiles: List[GPUMdevProfile] = Field(default_factory=list, description="Available mdev profiles for vGPU")
 
 
+
+class GpuCardListResponse(BaseModel):
+    """Response for listing a node's GPUs (instance-create passthrough picker)."""
+    host: str
+    gpus: List[GPUCardInfo] = Field(default_factory=list, description="Every detected card, incl. display controllers")
+    total: int = Field(0, description="Total cards detected")
+    compute_total: int = Field(0, description="Cards that count as compute capacity")
+
 class NodeResources(BaseModel):
     """Node available resources information."""
     cpu_total: int = Field(0, description="Total CPU cores")
@@ -424,6 +417,12 @@ class NodeResources(BaseModel):
     gpu_available: int = Field(0, description="Available compute GPUs")
     gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information (all cards, incl. display)")
     gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
+    gpu_integrated_total: int = Field(0, description="Integrated graphics cards: attachable, not counted as capacity")
+    gpu_display_total: int = Field(0, description="Display-only controllers detected")
+    gpu_unknown_total: int = Field(0, description="Cards whose driver could not be classified")
+    gpu_vendors: List[str] = Field(default_factory=list, description="Vendors of the compute GPUs")
+    gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
+    gpu_utilization_supported: bool = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
@@ -445,6 +444,12 @@ class MemberResources(BaseModel):
     gpu_available: int = Field(0, description="Available compute GPUs")
     gpu_cards: List[GPUCardInfo] = Field(default_factory=list, description="Detailed GPU card information (all cards, incl. display)")
     gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
+    gpu_integrated_total: int = Field(0, description="Integrated graphics cards: attachable, not counted as capacity")
+    gpu_display_total: int = Field(0, description="Display-only controllers detected")
+    gpu_unknown_total: int = Field(0, description="Cards whose driver could not be classified")
+    gpu_vendors: List[str] = Field(default_factory=list, description="Vendors of the compute GPUs")
+    gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
+    gpu_utilization_supported: bool = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_used: int = Field(0, description="Used storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
@@ -487,6 +492,7 @@ class NodeStatus(BaseModel):
     @property
     def gpus(self) -> Optional[int]:
         """Total GPU cards (computed from resources)."""
+        # note: compute GPUs, not detected cards. gpu_cards_total carries the card count.
         return self.resources.gpu_total if self.resources else None
 
 
@@ -917,8 +923,13 @@ class ClusterMonitoringMetrics(BaseModel):
     storage_usage_percent: float = Field(0.0, description="Storage usage percentage")
     
     # GPU Metrics
-    gpu_total: int = Field(0, description="Total GPUs")
-    gpu_used: int = Field(0, description="Used GPUs")
+    gpu_total: int = Field(0, description="Compute GPUs on this node")
+    gpu_used: int = Field(0, description="Compute GPUs allocated to running instances")
+    gpu_available: int = Field(0, description="Compute GPUs free on this node")
+    gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
+    gpu_integrated_total: int = Field(0, description="Integrated graphics cards: attachable, not capacity")
+    gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
+    gpu_utilization_supported: bool = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
     
     # Instance counts
     instance_count: int = Field(0, description="Total instances on this node")
@@ -1019,7 +1030,8 @@ class MonitoringDashboardResponse(BaseModel):
     used_storage_bytes: int = Field(0, description="Used storage bytes")
     storage_usage_percent: float = Field(0.0, description="Overall storage usage percentage")
     
-    total_gpu: int = Field(0, description="Total GPUs")
+    total_gpu: int = Field(0, description="Total compute GPUs across connected nodes")
+    total_gpu_cards: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
     used_gpu: int = Field(0, description="Used GPUs")
     
     # Detailed Per-Node Metrics
@@ -1238,9 +1250,11 @@ class ExtendedHardwareInfo(BaseModel):
     memory_used: int = Field(0, description="Used memory in bytes")
     
     # GPU
-    gpu_total: int = Field(0, description="Total GPU cards")
-    gpu_vendors: List[str] = Field(default_factory=list, description="GPU vendors")
-    gpu_models: List[str] = Field(default_factory=list, description="GPU models")
+    gpu_total: int = Field(0, description="Compute GPUs (sellable; excludes display-only DRM cards)")
+    gpu_cards_total: int = Field(0, description="Total DRM/GPU cards detected (incl. display controllers)")
+    gpu_integrated_total: int = Field(0, description="Integrated graphics cards: attachable, not capacity")
+    gpu_vendors: List[str] = Field(default_factory=list, description="Vendors of the compute GPUs")
+    gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
     
     # Storage
     storage_total: int = Field(0, description="Total storage in bytes")
@@ -1295,6 +1309,8 @@ class RegionsOverviewResponse(BaseModel):
     total_memory: int = Field(0)
     total_storage: int = Field(0)
     total_gpu: int = Field(0)
+    total_gpu_cards: int = Field(0)
+    total_gpu_integrated: int = Field(0)
 
 
 class UserTagVisibilitySettings(BaseModel):

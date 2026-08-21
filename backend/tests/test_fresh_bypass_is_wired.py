@@ -1264,6 +1264,8 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             "regions:overview": 120,
             "storage_pool_resources:all": 60,
         }
+        from app.core import cache as cache_module
+
         seen = {}
         for call in ast.walk(tree):
             if not (isinstance(call, ast.Call) and getattr(call.func, "attr", None) == "_prewarm_single_cache"):
@@ -1271,7 +1273,20 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
             key_arg = call.args[1] if len(call.args) > 1 else None
             if not (isinstance(key_arg, ast.Call) and key_arg.args):
                 continue
-            key = key_arg.args[0].value
+            # A key may be a literal or one of the versioned constants in app.core.cache
+            # (RESOURCE_SCHEMA_VERSION), which is how a prewarm stays pinned to the key its
+            # endpoint actually writes when that key gains a schema version.
+            key_node = key_arg.args[0]
+            if isinstance(key_node, ast.Constant):
+                key = key_node.value
+            elif isinstance(key_node, ast.Name):
+                key = getattr(cache_module, key_node.id, None)
+                self.assertIsInstance(
+                    key, str,
+                    f"prewarm key {key_node.id} must be a string constant in app.core.cache",
+                )
+            else:
+                continue
             ttl = next((kw.value.value for kw in call.keywords if kw.arg == "ttl"), None)
             seen[next((p for p in expected if key.startswith(p)), key)] = ttl
         self.assertEqual(seen, expected)

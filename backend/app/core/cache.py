@@ -14,6 +14,16 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
+# Bump when the SHAPE or the MEANING of a cached resource payload changes. A freshly deployed
+# backend must not keep serving a pre-change body for the rest of its TTL: gpu_total went from
+# "every DRM card" to "compute GPUs only", so an old body shows 2 where the new UI says 1.
+# Old keys are never read again and expire on their own.
+RESOURCE_SCHEMA_VERSION = "v2"
+NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
+REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
+MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
+MICROCLOUD_RESOURCES_CACHE_PREFIX = f"microcloud_resources:{RESOURCE_SCHEMA_VERSION}"
+
 # Lazy import encryption to avoid circular imports
 _encryption_module = None
 

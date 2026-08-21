@@ -26,6 +26,7 @@ from app.core.config import get_settings
 from app.core.vault_client import get_vault_client
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
 from app.core.dependencies import check_read_only_mode, require_partner, require_tenant, AuthenticatedUser
+from app.core.cache import NODES_STATUS_CACHE_KEY, REGIONS_OVERVIEW_CACHE_KEY
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
 from app.services.activity_logger import get_activity_logger
@@ -242,8 +243,8 @@ async def register_cluster(
             vault_list_path = settings.vault_clusters_path.replace("/data/", "/metadata/")
             cache.delete("vault_list", vault_list_path)
             # Invalidate nodes status cache
-            cache.delete("api_responses", get_scope_cache_key("nodes:status:all"))
-            cache.delete("api_responses", "nodes:status:all:scope=all")
+            cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
+            cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
             # Invalidate regions overview (all scopes) so the inventory/monitoring
             # overview reflects the new cluster without a manual refresh
             cache.delete_pattern("api_responses", "regions:*")
@@ -902,8 +903,8 @@ async def delete_cluster(
                 cache.delete("vault_list", list_path)
                 
                 # Clear nodes status cache to ensure UI updates immediately
-                cache.delete("api_responses", get_scope_cache_key("nodes:status:all"))
-                cache.delete("api_responses", "nodes:status:all:scope=all")
+                cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
+                cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
                 cache.delete("api_responses", get_scope_cache_key("nodes:status"))
                 cache.delete("api_responses", "nodes:status:scope=all")
                 
@@ -1127,8 +1128,8 @@ async def update_cluster_location(
             # CRITICAL: Invalidate clusters list cache (scoped + admin)
             cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
             cache.delete("api_responses", "clusters:list:all:scope=all")
-            cache.delete("api_responses", get_scope_cache_key("regions:overview"))
-            cache.delete("api_responses", "regions:overview:scope=all")
+            cache.delete("api_responses", get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY))
+            cache.delete("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}:scope=all")
             # Also invalidate individual cluster cache if exists
             cache.invalidate_cluster_cache(cluster_id)
         

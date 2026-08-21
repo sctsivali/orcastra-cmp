@@ -11,10 +11,14 @@ from concurrent.futures import ThreadPoolExecutor
 from app.models.schemas import (
     VMInfo,
     ImageInfo,
+    NodeResources,
     NodeStatus,
     InstanceMetrics,
 )
+from .availability import require_client
 from .connection import LXDConnectionManager
+from .gpu import GpuInventory, build_gpu_inventory
+from .node_resources import build_node_resources
 from .resources import ResourceManager
 from .instance import InstanceManager
 from .projects import ProjectManager
@@ -143,6 +147,14 @@ class LXDService:
         
         return statuses
     
+    def check_node_status(self, node_name: str) -> NodeStatus:
+        """Probe one node and return its status, resources included.
+
+        The public entry point for callers outside the fan-out, which need one node rather than
+        the whole fleet.
+        """
+        return self._check_single_node_status(node_name, get_settings())
+
     def _check_single_node_status(self, node_name: str, settings) -> NodeStatus:
         """Check status for a single node (internal helper)."""
         from app.services.lxd import health
@@ -236,9 +248,25 @@ class LXDService:
         client = self.connection_manager.get_client(node_name)
         return self.resource_manager.get_node_resources(client, node_name)
 
-    def get_node_gpus(self, node_name: str) -> List[Dict[str, Any]]:
-        """List the physical GPUs on a specific node."""
-        client = self.connection_manager.get_client(node_name)
+    def get_node_resources_detail(self, node_name: str) -> NodeResources:
+        """Full NodeResources for one node, GPU included.
+
+        important: GET /nodes/{node}/resources is typed as NodeResources but was built from
+        the CPU/memory/storage dict alone, so every GPU field it declared was served as its
+        default. The endpoint reported zero GPUs on hardware that has one.
+        """
+        client = require_client(self.connection_manager.get_client(node_name), node_name)
+        data = self.resource_manager.get_node_resources(client, node_name)
+        gpu = GpuInventory.empty()
+        try:
+            gpu = build_gpu_inventory(client.resources, client.instances.all())
+        except Exception as e:
+            logger.debug(f"Could not read GPU inventory for {node_name}: {e}")
+        return build_node_resources(data, gpu)
+
+    def get_node_gpus(self, node_name: str) -> GpuInventory:
+        """List the GPUs on a specific node, with their class and allocation state."""
+        client = require_client(self.connection_manager.get_client(node_name), node_name)
         return self.resource_manager.get_node_gpus(client, node_name)
     
     # Instance/VM operations

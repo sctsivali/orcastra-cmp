@@ -14,16 +14,17 @@ from app.services.lxd_service import (
 )
 from pydantic import BaseModel, Field
 from app.core.single_flight import single_flight_on_fresh
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, MEMBER_RESOURCES_CACHE_PREFIX
 from app.core.config import get_settings
 from app.models.schemas import (
     MemberResources, 
-    GPUCardInfo,
 )
 
-logger = logging.getLogger(__name__)
+from app.services.lxd.gpu import build_gpu_inventory
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/cluster-members",
@@ -53,21 +54,6 @@ class ClusterMembersResponse(BaseModel):
     cluster_enabled: bool = Field(..., description="Whether clustering is enabled")
     members: List[ClusterMember] = Field(default_factory=list, description="List of cluster members")
     total: int = Field(0, description="Total number of members")
-
-
-def parse_gpu_cards(
-    gpu_cards_raw: list,
-    gpu_usage_map: dict = None,
-    system_memory_total: int = None,
-    system_product: str = None,
-) -> List[GPUCardInfo]:
-    """Parse GPU cards via the canonical ResourceManager parser so compute/display
-    classification, device model (incl. system.product for an integrated iGPU) and unified-memory
-    enrichment stay consistent with the /nodes view (single source of truth)."""
-    from app.services.lxd.resources import ResourceManager
-    return ResourceManager()._parse_gpu_cards(
-        gpu_cards_raw, gpu_usage_map, system_memory_total, system_product
-    )
 
 
 @router.get(
@@ -297,7 +283,7 @@ async def get_member_resources(
     cache_ttl = settings.cache_ttl_lxd_data
     
     # Check cache first
-    cache_key = get_scope_cache_key(f"member_resources:{node}:{member_name}")
+    cache_key = get_scope_cache_key(f"{MEMBER_RESOURCES_CACHE_PREFIX}:{node}:{member_name}")
     cached_resources = None if fresh else cache.get("lxd_resources", cache_key)
     if cached_resources is not None:
         logger.info(f"Cache HIT for member resources: {node}/{member_name}")
@@ -322,10 +308,6 @@ async def get_member_resources(
         memory_used = memory_info.get("used", 0)
         memory_available = memory_total - memory_used
         
-        # Extract GPU resources
-        gpu_info = member_resources.get("gpu", {})
-        gpu_cards_raw = gpu_info.get("cards", [])
-        gpu_total = len(gpu_cards_raw)
         
         # Get storage pools from separate endpoint
         storage_total = 0
@@ -386,11 +368,10 @@ async def get_member_resources(
         
         # Get CPU and GPU usage by counting instances on this member
         cpu_used = 0
-        gpu_used = 0
         instances_count = 0
         instances_running = 0
-        gpu_usage_map = {}  # Map GPU identifiers to instance names
-        
+        instances = []
+
         try:
             instances = client.instances.all()
             for instance in instances:
@@ -420,24 +401,13 @@ async def get_member_resources(
                         else:
                             cpu_used += 1
                         
-                        # Count GPU and build usage map
-                        devices = getattr(instance, 'devices', {}) or {}
-                        for device_name, device_config in devices.items():
-                            if device_config.get('type') == 'gpu':
-                                gpu_used += 1
-                                # Map GPU identifiers to instance
-                                pci = device_config.get('pci', '')
-                                gpu_id = device_config.get('id', '')
-                                if pci:
-                                    gpu_usage_map[pci] = instance.name
-                                if gpu_id:
-                                    gpu_usage_map[gpu_id] = instance.name
-                                break
         except Exception as usage_err:
             logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
         
-        # Parse detailed GPU cards
-        gpu_cards_detailed = parse_gpu_cards(gpu_cards_raw, gpu_usage_map, memory_total, (member_resources.get("system", {}) or {}).get("product"))
+        # GPU capacity, allocation and card detail from the canonical inventory, scoped to
+        # this member. Counting cards here by hand is what made this endpoint report two GPUs
+        # on a Jetson while the rest of the product reported one.
+        gpu_inv = build_gpu_inventory(member_resources, instances, member=member_name)
         
         # Calculate percentages
         cpu_usage_percent = round((cpu_used / cpu_total * 100), 2) if cpu_total > 0 else 0.0
@@ -455,10 +425,17 @@ async def get_member_resources(
             memory_used=memory_used,
             memory_available=memory_available,
             memory_usage_percent=memory_usage_percent,
-            gpu_total=gpu_total,
-            gpu_used=gpu_used,
-            gpu_available=gpu_total - gpu_used,
-            gpu_cards=gpu_cards_detailed,
+            gpu_total=gpu_inv.gpu_total,
+            gpu_used=gpu_inv.gpu_used,
+            gpu_available=gpu_inv.gpu_available,
+            gpu_cards=gpu_inv.cards,
+            gpu_cards_total=gpu_inv.gpu_cards_total,
+            gpu_integrated_total=gpu_inv.gpu_integrated_total,
+            gpu_display_total=gpu_inv.gpu_display_total,
+            gpu_unknown_total=gpu_inv.gpu_unknown_total,
+            gpu_vendors=gpu_inv.vendors,
+            gpu_models=gpu_inv.models,
+            gpu_utilization_supported=gpu_inv.utilization_supported,
             storage_total=storage_total,
             storage_used=storage_used,
             storage_available=storage_available,
@@ -473,7 +450,8 @@ async def get_member_resources(
         logger.info(
             f"Member {member_name} resources: CPU={cpu_total} cores ({cpu_used} used), "
             f"RAM={memory_total / 1024 / 1024 / 1024:.1f} GB ({memory_used / 1024 / 1024 / 1024:.1f} GB used), "
-            f"GPU={gpu_total} cards ({gpu_used} used), {instances_running}/{instances_count} instances running"
+            f"GPU={gpu_inv.gpu_total} compute of {gpu_inv.gpu_cards_total} cards "
+            f"({gpu_inv.gpu_used} used), {instances_running}/{instances_count} instances running"
         )
         
         return resources

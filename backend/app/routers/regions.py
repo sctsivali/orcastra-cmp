@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.core.config import get_settings
-from app.core.cache import get_cache_manager
+from app.core.cache import get_cache_manager, REGIONS_OVERVIEW_CACHE_KEY
 from app.models.schemas import (
     ExtendedHardwareInfo,
     RegionNodeInfo,
@@ -19,6 +19,8 @@ from app.models.schemas import (
     RegionsOverviewResponse,
     ClusterStatus,
 )
+
+from app.services.lxd.gpu import build_gpu_inventory
 
 logger = logging.getLogger(__name__)
 from app.core.dependencies import require_tenant
@@ -112,6 +114,8 @@ def aggregate_hardware_info(nodes_hardware: List[ExtendedHardwareInfo]) -> Exten
     total_memory = 0
     total_memory_used = 0
     total_gpu = 0
+    total_gpu_cards = 0
+    total_gpu_integrated = 0
     total_storage = 0
     total_storage_used = 0
     
@@ -121,6 +125,8 @@ def aggregate_hardware_info(nodes_hardware: List[ExtendedHardwareInfo]) -> Exten
         total_memory += hw.memory_total
         total_memory_used += hw.memory_used
         total_gpu += hw.gpu_total
+        total_gpu_cards += hw.gpu_cards_total
+        total_gpu_integrated += hw.gpu_integrated_total
         total_storage += hw.storage_total
         total_storage_used += hw.storage_used
         
@@ -144,6 +150,8 @@ def aggregate_hardware_info(nodes_hardware: List[ExtendedHardwareInfo]) -> Exten
         memory_total=total_memory,
         memory_used=total_memory_used,
         gpu_total=total_gpu,
+        gpu_cards_total=total_gpu_cards,
+        gpu_integrated_total=total_gpu_integrated,
         gpu_vendors=list(sorted(all_gpu_vendors)),
         gpu_models=list(sorted(all_gpu_models)),
         storage_total=total_storage,
@@ -178,7 +186,7 @@ async def get_regions_overview(
     settings = get_settings()
     
     # Check cache first (2 minute TTL)
-    cache_key = get_scope_cache_key("regions:overview")
+    cache_key = get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY)
     cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug("Returning cached regions overview")
@@ -288,25 +296,11 @@ async def get_regions_overview(
                                     memory_total = memory_info.get("total", 0)
                                     memory_used = memory_info.get("used", 0)
                             
-                                    gpu_info = resources.get("gpu", {})
-                                    gpu_cards = gpu_info.get("cards", [])
-                                    gpu_total = len(gpu_cards)
-                                    gpu_vendors: Set[str] = set()
-                                    gpu_models: Set[str] = set()
-                                    for card in gpu_cards:
-                                        vendor = card.get("vendor", "")
-                                        product = card.get("product", "")
-                                        if vendor:
-                                            if "nvidia" in vendor.lower():
-                                                gpu_vendors.add("NVIDIA")
-                                            elif "amd" in vendor.lower():
-                                                gpu_vendors.add("AMD")
-                                            elif "intel" in vendor.lower():
-                                                gpu_vendors.add("Intel")
-                                            else:
-                                                gpu_vendors.add(vendor)
-                                        if product:
-                                            gpu_models.add(product)
+                                    # note: counting cards here would double-count a Tegra
+                                    # iGPU, which enumerates a display node beside its compute
+                                    # node, and the old vendor bucketing produced nothing at
+                                    # all on hardware that reports no vendor string.
+                                    gpu_inv = build_gpu_inventory(resources)
                             
                                     disk_info = resources.get("storage", {})
                                     storage_types = get_storage_types_from_disks(disk_info)
@@ -360,7 +354,10 @@ async def get_regions_overview(
                                         cpu_total=cpu_total, cpu_sockets=cpu_sockets,
                                         cpu_architecture=cpu_architecture, cpu_vendor=cpu_vendor, cpu_model=cpu_model,
                                         memory_total=memory_total, memory_used=memory_used,
-                                        gpu_total=gpu_total, gpu_vendors=list(gpu_vendors), gpu_models=list(gpu_models),
+                                        gpu_total=gpu_inv.gpu_total,
+                                        gpu_cards_total=gpu_inv.gpu_cards_total,
+                                        gpu_integrated_total=gpu_inv.gpu_integrated_total,
+                                        gpu_vendors=gpu_inv.vendors, gpu_models=gpu_inv.models,
                                         storage_total=storage_total, storage_used=storage_used,
                                         storage_types=storage_types, storage_drivers=list(storage_drivers),
                                         network_interfaces=network_interfaces,
@@ -397,6 +394,8 @@ async def get_regions_overview(
                 total_memory = 0
                 total_storage = 0
                 total_gpu = 0
+                total_gpu_cards = 0
+                total_gpu_integrated = 0
         
                 for result in results:
                     if isinstance(result, Exception) or result is None:
@@ -431,6 +430,8 @@ async def get_regions_overview(
                     total_memory += node_info.hardware.memory_total
                     total_storage += node_info.hardware.storage_total
                     total_gpu += node_info.hardware.gpu_total
+                    total_gpu_cards += node_info.hardware.gpu_cards_total
+                    total_gpu_integrated += node_info.hardware.gpu_integrated_total
         
                 # aggregate hardware per region
                 for region in regions_map.values():
@@ -441,6 +442,7 @@ async def get_regions_overview(
                     total_nodes=total_nodes, total_instances=total_instances,
                     total_cpu=total_cpu, total_memory=total_memory,
                     total_storage=total_storage, total_gpu=total_gpu,
+                    total_gpu_cards=total_gpu_cards, total_gpu_integrated=total_gpu_integrated,
                 )
         
                 cache.set("api_responses", cache_key, response.model_dump(), ttl=120)

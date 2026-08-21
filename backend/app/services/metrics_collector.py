@@ -182,6 +182,7 @@ class MetricsCollector:
             # build theirs. Without get_scope_cache_key() they lacked the
             # ":scope=all" suffix, so nothing ever read them and every request
             # after a TTL expiry still paid the full cold cost.
+            from app.core.cache import REGIONS_OVERVIEW_CACHE_KEY
             from app.core.org_scope import get_scope_cache_key
             
             cache = get_cache_manager()
@@ -210,7 +211,7 @@ class MetricsCollector:
             # Pre-warm regions cache (slowest endpoint, 15-45s cold)
             await self._prewarm_single_cache(
                 cache,
-                get_scope_cache_key("regions:overview"),
+                get_scope_cache_key(REGIONS_OVERVIEW_CACHE_KEY),
                 self._fetch_regions,
                 ttl=120,
             )

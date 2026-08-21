@@ -13,6 +13,19 @@ from app.models.schemas import VMStatus
 logger = logging.getLogger(__name__)
 
 
+def normalize_cluster_member(value: Any) -> Optional[str]:
+    """Normalize an LXD member/location field to a member name or None.
+
+    A standalone (unclustered) host reports its instance location as the string "none", not
+    as null, so callers that compare locations must treat "none" and "" as "no cluster
+    member" or they silently drop every instance on a standalone host.
+    """
+    text = (value or "").strip()
+    if not text or text.lower() == "none":
+        return None
+    return text
+
+
 def parse_vm_status(status: str, status_code: int) -> VMStatus:
     """Convert LXD status string to VMStatus enum."""
     status_map = {

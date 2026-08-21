@@ -4,26 +4,21 @@ Handles resource usage tracking, node resources, and instance metrics.
 """
 
 import logging
-import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import time
 import pylxd
 
 from app.models.schemas import (
     ResourceUsage,
-    NodeResources,
     NodeStatus,
     InstanceMetrics,
-    GPUCardInfo,
-    GPUDRMInfo,
-    GPUNvidiaInfo,
-    GPUSRIOVInfo,
-    GPUMdevProfile,
 )
 from app.core.node_metadata import get_node_metadata_store
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_node_type
 from .utils import parse_vm_status, find_instance_in_projects
+from .gpu import GpuInventory, build_gpu_inventory
+from .node_resources import aggregate_microcloud_resources, build_node_resources
 from .exceptions import LXDOperationError
 
 logger = logging.getLogger(__name__)
@@ -38,237 +33,6 @@ class ResourceManager:
         # CPU usage tracking: {"host:instance": {"usage_ns": int, "timestamp": float}}
         self._cpu_history: Dict[str, Dict[str, any]] = {}
     
-    # Drivers that expose a compute-capable GPU vs a display-only controller. A Tegra/Jetson iGPU
-    # enumerates BOTH (driver "nv_platform"/"nvidia" = compute, driver "drm"/"tegra" = display), so
-    # a naive card count double-counts. Classification is driver-first since the Jetson cards carry
-    # no "nvidia" info block.
-    _GPU_COMPUTE_DRIVERS = {"nvidia", "nv_platform", "nvgpu"}
-    _GPU_DISPLAY_DRIVERS = {"drm", "tegra", "tegra-drm"}
-
-    def _classify_gpu_card(self, card: dict) -> tuple:
-        """Return (gpu_class, is_compute, is_integrated) for one raw LXD gpu card."""
-        driver = (card.get("driver") or "").lower()
-        driver_version = (card.get("driver_version") or "").lower()
-        has_nvidia = bool(card.get("nvidia"))
-        if driver in self._GPU_COMPUTE_DRIVERS or has_nvidia:
-            is_integrated = driver == "nv_platform" or "tegra" in driver or "tegra" in driver_version
-            return ("compute", True, is_integrated)
-        if driver in self._GPU_DISPLAY_DRIVERS:
-            return ("display", False, False)
-        # fail-closed: never count an unrecognized card as sellable compute capacity
-        return ("unknown", False, False)
-
-    def _parse_gpu_cards(
-        self,
-        gpu_cards_raw: list,
-        gpu_usage_map: Dict[str, str] = None,
-        system_memory_total: int = None,
-        system_product: str = None,
-    ) -> list[GPUCardInfo]:
-        """
-        Parse detailed GPU card information from LXD resources API.
-        """
-        if not gpu_cards_raw:
-            return []
-        
-        if gpu_usage_map is None:
-            gpu_usage_map = {}
-        
-        gpu_cards = []
-        for index, card in enumerate(gpu_cards_raw):
-            try:
-                # Parse DRM info
-                drm_info = None
-                drm_raw = card.get("drm")
-                if drm_raw:
-                    drm_info = GPUDRMInfo(
-                        id=drm_raw.get("id"),
-                        card_name=drm_raw.get("card_name"),
-                        card_device=drm_raw.get("card_device"),
-                        control_name=drm_raw.get("control_name"),
-                        control_device=drm_raw.get("control_device"),
-                        render_name=drm_raw.get("render_name"),
-                        render_device=drm_raw.get("render_device"),
-                    )
-                
-                # Parse NVIDIA-specific info
-                nvidia_info = None
-                nvidia_raw = card.get("nvidia")
-                if nvidia_raw:
-                    nvidia_info = GPUNvidiaInfo(
-                        cuda_version=nvidia_raw.get("cuda_version"),
-                        nvrm_version=nvidia_raw.get("nvrm_version"),
-                        brand=nvidia_raw.get("brand"),
-                        model=nvidia_raw.get("model"),
-                        uuid=nvidia_raw.get("uuid"),
-                        architecture=nvidia_raw.get("architecture"),
-                        card_name=nvidia_raw.get("card_name"),
-                        card_device=nvidia_raw.get("card_device"),
-                    )
-                
-                # Parse SR-IOV info
-                sriov_info = None
-                sriov_raw = card.get("sriov")
-                if sriov_raw:
-                    vfs = sriov_raw.get("vfs", [])
-                    sriov_info = GPUSRIOVInfo(
-                        current_vfs=sriov_raw.get("current_vfs", 0),
-                        maximum_vfs=sriov_raw.get("maximum_vfs", 0),
-                        vfs_count=len(vfs) if isinstance(vfs, list) else 0,
-                    )
-                
-                # Parse mdev profiles
-                mdev_profiles = []
-                mdev_raw = card.get("mdev")
-                if mdev_raw and isinstance(mdev_raw, dict):
-                    for profile_name, profile_data in mdev_raw.items():
-                        if isinstance(profile_data, dict):
-                            mdev_profiles.append(GPUMdevProfile(
-                                name=profile_data.get("name", profile_name),
-                                api=profile_data.get("api"),
-                                available=profile_data.get("available", 0),
-                                description=profile_data.get("description"),
-                                devices=profile_data.get("devices", []),
-                            ))
-                
-                # Determine if GPU is in use
-                pci_address = card.get("pci_address", "")
-                usb_address = card.get("usb_address", "")
-                nvidia_uuid = nvidia_raw.get("uuid") if nvidia_raw else None
-                
-                # Check usage by various identifiers
-                in_use = False
-                used_by = None
-                for identifier in [pci_address, usb_address, nvidia_uuid, str(index)]:
-                    if identifier and identifier in gpu_usage_map:
-                        in_use = True
-                        used_by = gpu_usage_map[identifier]
-                        break
-
-                # Classify compute vs display, and derive an accurate model + memory for iGPUs.
-                gpu_class, is_compute, is_integrated = self._classify_gpu_card(card)
-                model_name = (nvidia_raw.get("model") if nvidia_raw else None) or card.get("product")
-                if not model_name and is_integrated:
-                    # Tegra iGPU has no card-level product; the host system block names the device
-                    # exactly (LXD /1.0/resources system.product). Fall back to a generic label.
-                    model_name = system_product or "NVIDIA Jetson (Tegra iGPU)"
-                memory_total = None
-                memory_shared = False
-                if is_integrated and system_memory_total:
-                    # Unified memory: the iGPU shares system RAM (no separate VRAM).
-                    memory_total = system_memory_total
-                    memory_shared = True
-
-                gpu_card = GPUCardInfo(
-                    index=index,
-                    driver=card.get("driver"),
-                    driver_version=card.get("driver_version"),
-                    pci_address=pci_address or None,
-                    usb_address=usb_address or None,
-                    vendor=card.get("vendor"),
-                    vendor_id=card.get("vendor_id"),
-                    product=card.get("product"),
-                    product_id=card.get("product_id"),
-                    numa_node=card.get("numa_node"),
-                    in_use=in_use,
-                    used_by=used_by,
-                    gpu_class=gpu_class,
-                    is_compute=is_compute,
-                    is_integrated=is_integrated,
-                    model_name=model_name,
-                    memory_total=memory_total,
-                    memory_shared=memory_shared,
-                    drm=drm_info,
-                    nvidia=nvidia_info,
-                    sriov=sriov_info,
-                    mdev_profiles=mdev_profiles,
-                )
-                gpu_cards.append(gpu_card)
-                
-            except Exception as e:
-                logger.warning(f"Failed to parse GPU card {index}: {e}")
-                # Add a minimal entry for failed cards
-                gpu_cards.append(GPUCardInfo(
-                    index=index,
-                    vendor=card.get("vendor", "Unknown"),
-                    product=card.get("product", "Unknown GPU"),
-                ))
-        
-        return gpu_cards
-    
-    def _get_gpu_usage_map(self, client: pylxd.Client) -> Dict[str, str]:
-        """
-        Build a mapping of GPU identifiers to instance names.
-        """
-        usage_map = {}
-        try:
-            instances = client.instances.all()
-            for instance in instances:
-                if instance.status == "Running":
-                    devices = getattr(instance, 'devices', {}) or {}
-                    for device_name, device_config in devices.items():
-                        if device_config.get('type') == 'gpu':
-                            # Map various GPU identifiers to this instance
-                            pci_address = device_config.get('pci')
-                            gpu_id = device_config.get('id')
-                            gpu_vendorid = device_config.get('vendorid')
-                            gpu_productid = device_config.get('productid')
-                            
-                            if pci_address:
-                                usage_map[pci_address] = instance.name
-                            if gpu_id:
-                                usage_map[gpu_id] = instance.name
-                            # Also track by vendor:product combo
-                            if gpu_vendorid and gpu_productid:
-                                usage_map[f"{gpu_vendorid}:{gpu_productid}"] = instance.name
-        except Exception as e:
-            logger.debug(f"Could not build GPU usage map: {e}")
-
-        return usage_map
-
-    # Compute-GPU device-node markers - matches an instance that gets the GPU via raw unix-char
-    # passthrough rather than a `type: gpu` device (the shape our GPU containers use).
-    _COMPUTE_GPU_NODE_RE = re.compile(
-        r"/dev/(nvidia\d*|nvidiactl|nvmap|nvgpu/|nvhost-[a-z\-]*gpu|dri/renderD\d+)", re.IGNORECASE
-    )
-
-    def _count_compute_gpu_instances(self, client: pylxd.Client) -> int:
-        """
-        Count DISTINCT running instances that hold a compute GPU. Detects all three allocation
-        shapes: a `type: gpu` device, `nvidia.runtime`/`nvidia.driver.capabilities` config, OR
-        unix-char devices pointing at compute GPU nodes. Without the latter two, a GPU container
-        provisioned via raw passthrough would not be counted and the single GPU could be oversold.
-        """
-        names = set()
-        try:
-            for instance in client.instances.all():
-                if getattr(instance, "status", "") != "Running":
-                    continue
-                cfg = getattr(instance, "config", {}) or {}
-                ld = str(cfg.get("environment.LD_LIBRARY_PATH", "")).lower()
-                holds = (
-                    str(cfg.get("nvidia.runtime", "")).lower() in ("true", "1")
-                    or bool(cfg.get("nvidia.driver.capabilities"))
-                    or "/tegra" in ld or "/nvidia" in ld
-                )
-                if not holds:
-                    devices = getattr(instance, "devices", {}) or {}
-                    for dev in devices.values():
-                        if not isinstance(dev, dict):
-                            continue
-                        if dev.get("type") == "gpu":
-                            holds = True
-                            break
-                        ref = f"{dev.get('source', '')} {dev.get('path', '')}"
-                        if self._COMPUTE_GPU_NODE_RE.search(ref):
-                            holds = True
-                            break
-                if holds:
-                    names.add(instance.name)
-        except Exception as e:
-            logger.debug(f"Could not count compute GPU instances: {e}")
-        return len(names)
-
     def get_resource_usage(self, instance) -> Optional[ResourceUsage]:
         """Get resource usage for a running instance."""
         try:
@@ -322,32 +86,21 @@ class ResourceManager:
             logger.debug(f"Could not get resources for {instance.name}: {e}")
             return None
     
-    def get_node_gpus(self, client: pylxd.Client, node_name: str) -> List[Dict[str, Any]]:
-        """List the physical GPUs on a node (from the LXD resources API)."""
+    def get_node_gpus(self, client: pylxd.Client, node_name: str) -> GpuInventory:
+        """List the GPUs on a node for the instance-create passthrough picker.
+
+        important: this raises on an unreachable host rather than returning an empty list. An
+        empty list means "this host has no GPU", and telling the picker that about a host we
+        could not reach is a lie the operator cannot see. LXDService.get_node_gpus guards the
+        client with require_client, so a breaker-tripped cluster surfaces as a 503.
+
+        Every detected card is returned, including display controllers, each carrying its
+        class and an `attachable` flag: hiding a device an operator can see in LXD generates
+        the support ticket it was meant to prevent.
+        """
         try:
-            cards = ((client.resources.get("gpu", {}) or {}).get("cards", []) or [])
-            gpus = []
-            for c in cards:
-                drm = c.get("drm") or {}
-                gpus.append({
-                    "vendor": c.get("vendor", ""),
-                    "vendor_id": c.get("vendor_id", ""),
-                    "product": c.get("product", ""),
-                    "product_id": c.get("product_id", ""),
-                    "driver": c.get("driver", ""),
-                    "driver_version": c.get("driver_version", ""),
-                    "pci_address": c.get("pci_address", ""),
-                    "id": drm.get("id"),
-                })
-            return gpus
+            return build_gpu_inventory(client.resources, client.instances.all())
         except Exception as e:
-            # important: WARNING, not ERROR. The caller passes whatever get_client returned,
-            # which is None for a breaker-tripped cluster, so this is the ordinary shape of an
-            # offline host rather than a fault. It deliberately still returns an empty list:
-            # the only caller, GET /nodes, reports that node's reachability through its own
-            # `connected` field, so an empty GPU list there is not a claim that the node has
-            # none. Raising instead would turn a partially-dead fleet into a 503 on the most
-            # used endpoint in the product.
             logger.warning(f"Error listing GPUs for {node_name}: {e}")
             raise LXDOperationError(f"Failed to list GPUs: {str(e)}")
 
@@ -521,106 +274,40 @@ class ResourceManager:
             try:
                 resources_data = self.get_node_resources(client, node_name)
                 
-                # Get GPU information with detailed card info
-                gpu_total = 0
-                gpu_used = 0
-                gpu_cards_total = 0
-                gpu_cards_detailed = []
+                # GPU capacity, usage and card detail, all from the canonical inventory.
+                gpu_inv = GpuInventory.empty()
                 try:
-                    raw_resources = client.resources
-                    gpu_info = raw_resources.get("gpu", {})
-                    gpu_cards_raw = gpu_info.get("cards", [])
-                    gpu_cards_total = len(gpu_cards_raw)
-                    sys_mem_total = (raw_resources.get("memory", {}) or {}).get("total")
-                    sys_product = (raw_resources.get("system", {}) or {}).get("product")
-
-                    # Per-card in_use flags (by pci/uuid) for the detail view.
-                    gpu_usage_map = self._get_gpu_usage_map(client)
-
-                    # Parse detailed GPU card information (with compute/display classification).
-                    gpu_cards_detailed = self._parse_gpu_cards(gpu_cards_raw, gpu_usage_map, sys_mem_total, sys_product)
-
-                    # Capacity = COMPUTE GPUs only (exclude display controllers). Used = distinct
-                    # running instances holding a compute GPU (catches nvidia.runtime/unix-char).
-                    gpu_total = sum(1 for c in gpu_cards_detailed if c.is_compute)
-                    gpu_used = min(gpu_total, self._count_compute_gpu_instances(client))
-
+                    gpu_inv = build_gpu_inventory(client.resources, client.instances.all())
                 except Exception as gpu_err:
+                    # A GPU read failure must not zero the node's CPU and memory.
                     logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")
                 
                 # If this is a MicroCloud cluster, aggregate resources from all members
                 if status.node_type == "microcloud":
                     logger.info(f"Detected MicroCloud cluster {node_name}, aggregating resources from all members...")
                     try:
-                        aggregated_resources = self._aggregate_microcloud_resources(
+                        aggregated_resources = aggregate_microcloud_resources(
                             client=client,
                             node_name=node_name,
                             base_resources=resources_data,
-                            base_gpu_total=gpu_total,
-                            base_gpu_used=gpu_used
                         )
                         if aggregated_resources:
                             status.resources = aggregated_resources
                             logger.info(f"MicroCloud {node_name} aggregated resources: "
                                       f"CPU={aggregated_resources.cpu_total} cores, "
                                       f"RAM={aggregated_resources.memory_total / 1024 / 1024 / 1024:.1f} GB, "
-                                      f"GPU={aggregated_resources.gpu_total} cards")
+                                      f"GPU={aggregated_resources.gpu_total} compute "
+                                      f"of {aggregated_resources.gpu_cards_total} cards")
                         else:
                             # Fallback to single node resources if aggregation fails
-                            status.resources = NodeResources(
-                                cpu_total=resources_data.get("cpu_total", 0),
-                                cpu_used=resources_data.get("cpu_total", 0) - resources_data.get("cpu_available", 0),
-                                cpu_available=resources_data.get("cpu_available", 0),
-                                cpu_sockets=resources_data.get("cpu_sockets", 0),
-                                memory_total=resources_data.get("memory_total", 0),
-                                memory_used=resources_data.get("memory_total", 0) - resources_data.get("memory_available", 0),
-                                memory_available=resources_data.get("memory_available", 0),
-                                gpu_total=gpu_total,
-                                gpu_used=gpu_used,
-                                gpu_available=gpu_total - gpu_used,
-                                gpu_cards=gpu_cards_detailed,
-                                gpu_cards_total=gpu_cards_total,
-                                storage_total=resources_data.get("storage_total", 0),
-                                storage_available=resources_data.get("storage_available", 0),
-                                storage_pools=resources_data.get("storage_pools", []),
-                            )
+                            status.resources = build_node_resources(resources_data, gpu_inv)
                     except Exception as agg_err:
                         logger.warning(f"Failed to aggregate MicroCloud resources: {agg_err}")
                         # Fallback to single node resources
-                        status.resources = NodeResources(
-                            cpu_total=resources_data.get("cpu_total", 0),
-                            cpu_used=resources_data.get("cpu_total", 0) - resources_data.get("cpu_available", 0),
-                            cpu_available=resources_data.get("cpu_available", 0),
-                            cpu_sockets=resources_data.get("cpu_sockets", 0),
-                            memory_total=resources_data.get("memory_total", 0),
-                            memory_used=resources_data.get("memory_total", 0) - resources_data.get("memory_available", 0),
-                            memory_available=resources_data.get("memory_available", 0),
-                            gpu_total=gpu_total,
-                            gpu_used=gpu_used,
-                            gpu_available=gpu_total - gpu_used,
-                            gpu_cards=gpu_cards_detailed,
-                            storage_total=resources_data.get("storage_total", 0),
-                            storage_available=resources_data.get("storage_available", 0),
-                            storage_pools=resources_data.get("storage_pools", []),
-                        )
+                        status.resources = build_node_resources(resources_data, gpu_inv)
                 else:
                     # Standard LXD node - use single node resources
-                    status.resources = NodeResources(
-                        cpu_total=resources_data.get("cpu_total", 0),
-                        cpu_used=resources_data.get("cpu_total", 0) - resources_data.get("cpu_available", 0),
-                        cpu_available=resources_data.get("cpu_available", 0),
-                        cpu_sockets=resources_data.get("cpu_sockets", 0),
-                        memory_total=resources_data.get("memory_total", 0),
-                        memory_used=resources_data.get("memory_total", 0) - resources_data.get("memory_available", 0),
-                        memory_available=resources_data.get("memory_available", 0),
-                        gpu_total=gpu_total,
-                        gpu_used=gpu_used,
-                        gpu_available=gpu_total - gpu_used,
-                        gpu_cards=gpu_cards_detailed,
-                        storage_total=resources_data.get("storage_total", 0),
-                        storage_available=resources_data.get("storage_available", 0),
-                        storage_pools=resources_data.get("storage_pools", []),
-                    )
+                    status.resources = build_node_resources(resources_data, gpu_inv)
                 # Only set connected=True if we successfully got resources (authenticated)
                 status.connected = True
             except Exception as res_err:
@@ -635,314 +322,6 @@ class ResourceManager:
             logger.warning(f"Node {node_name} health check failed: {e}")
         
         return status
-    
-    def _aggregate_microcloud_resources(
-        self,
-        client: pylxd.Client,
-        node_name: str,
-        base_resources: Dict[str, Any],
-        base_gpu_total: int,
-        base_gpu_used: int
-    ) -> Optional[NodeResources]:
-        """
-        Aggregate resources from all MicroCloud cluster members.
-        Returns NodeResources with total resources from all members.
-        
-        This method queries each cluster member and sums up their individual resources
-        to give a complete picture of the entire MicroCloud cluster capacity.
-        
-        Results are cached to minimize API calls to cluster members.
-        """
-        try:
-            # Try to get from cache first
-            from app.core.cache import get_cache_manager
-            from app.core.config import get_settings
-            
-            cache = get_cache_manager()
-            settings = get_settings()
-            cache_key = f"microcloud_resources:{node_name}"
-            cache_ttl = settings.cache_ttl_lxd_data  # Use configured TTL (default: 60s)
-            
-            cached_resources = cache.get("lxd_resources", cache_key)
-            if cached_resources is not None:
-                logger.info(f"Cache HIT for MicroCloud resources: {node_name}")
-                return NodeResources(**cached_resources)
-            
-            logger.info(f"Cache MISS for MicroCloud resources: {node_name}, aggregating from members")
-            
-            # Check if node is clustered
-            host_info = client.host_info
-            environment = host_info.get("environment", {})
-            is_clustered = environment.get("server_clustered", False)
-            
-            if not is_clustered:
-                logger.warning(f"{node_name} is not clustered, cannot aggregate resources")
-                return None
-            
-            # Get cluster members using LXD API
-            try:
-                response = client.api.cluster.members.get(params={"recursion": 1})
-                response_data = response.json()
-                
-                # Handle different response formats
-                if isinstance(response_data, dict):
-                    members_data = response_data.get("metadata", [])
-                elif isinstance(response_data, list):
-                    members_data = response_data
-                else:
-                    logger.warning(f"Unexpected cluster members response format: {type(response_data)}")
-                    return None
-                
-                if not members_data:
-                    logger.warning(f"No cluster members found for {node_name}")
-                    return None
-                
-                # Filter only online members
-                online_members = [m for m in members_data if isinstance(m, dict) and m.get("status") == "Online"]
-                
-                if not online_members:
-                    logger.warning(f"No online members found in cluster {node_name}")
-                    return None
-                
-                logger.info(f"Found {len(online_members)} online members in MicroCloud cluster {node_name}")
-                
-                # Initialize aggregated counters
-                total_cpu_cores = 0
-                total_cpu_used = 0
-                total_cpu_sockets = 0
-                total_memory = 0
-                total_memory_used = 0
-                total_gpu = 0
-                total_gpu_used = 0
-                total_storage = 0
-                total_storage_available = 0
-                storage_pools_map = {}
-                all_gpu_cards = []  # Collect all GPU cards from all members
-                
-                successful_members = 0
-                
-                # Get current server name to identify which member we're connected to
-                _current_server = environment.get("server_name", "")
-                
-                # Iterate through each online member and aggregate resources
-                for member_data in online_members:
-                    member_name = member_data.get("server_name", "unknown")
-                    _member_url = member_data.get("url", "")
-                    
-                    try:
-                        # Query member-specific resources via cluster API
-                        # In LXD clusters, we need to target specific members using `?target=parameter`
-                        # Or we can use `/1.0/resources?target=<member_name>`
-                        try:
-                            # Get resources for this specific member by targeting it
-                            # The LXD API allows targeting specific cluster members
-                            member_resources_response = client.api.resources.get(params={"target": member_name})
-                            member_resources = member_resources_response.json().get("metadata", {})
-                            
-                            # Extract CPU resources
-                            cpu_info = member_resources.get("cpu", {})
-                            member_cpu_total = cpu_info.get("total", 0)
-                            
-                            # Extract memory resources
-                            memory_info = member_resources.get("memory", {})
-                            member_memory_total = memory_info.get("total", 0)
-                            member_memory_used = memory_info.get("used", 0)
-                            
-                            # Extract GPU resources
-                            gpu_info = member_resources.get("gpu", {})
-                            gpu_cards_raw = gpu_info.get("cards", [])
-                            _member_gpu_cards_total = len(gpu_cards_raw)
-                            member_sys_mem = memory_info.get("total")
-                            member_sys_product = (member_resources.get("system", {}) or {}).get("product")
-                            
-                            # Parse detailed GPU cards for this member
-                            # Build member-specific GPU usage map
-                            member_gpu_usage = {}
-                            try:
-                                instances = client.instances.all()
-                                for inst in instances:
-                                    inst_location = getattr(inst, 'location', '')
-                                    if inst_location == member_name and inst.status == "Running":
-                                        devices = getattr(inst, 'devices', {}) or {}
-                                        for dev_name, dev_config in devices.items():
-                                            if dev_config.get('type') == 'gpu':
-                                                pci = dev_config.get('pci', '')
-                                                if pci:
-                                                    member_gpu_usage[pci] = inst.name
-                            except Exception:
-                                pass
-                            
-                            member_gpu_cards = self._parse_gpu_cards(gpu_cards_raw, member_gpu_usage, member_sys_mem, member_sys_product)
-                            # COMPUTE GPUs only are sellable capacity (exclude display controllers).
-                            member_gpu_total = sum(1 for c in member_gpu_cards if c.is_compute)
-                            # Adjust indices to be unique across cluster
-                            base_index = len(all_gpu_cards)
-                            for card in member_gpu_cards:
-                                card.index = base_index + card.index
-                            all_gpu_cards.extend(member_gpu_cards)
-                            
-                            # Extract storage resources from storage pools
-                            storage_info = member_resources.get("storage", {})
-                            storage_pools_raw = storage_info.get("pools", [])
-                            
-                            member_storage_total = 0
-                            member_storage_available = 0
-                            
-                            for pool in storage_pools_raw:
-                                pool_name = pool.get("name", "")
-                                pool_driver = pool.get("driver", "unknown")
-                                space = pool.get("space", {})
-                                space_total = space.get("total", 0)
-                                space_used = space.get("used", 0)
-                                space_available = space_total - space_used
-                                
-                                member_storage_total += space_total
-                                member_storage_available += space_available
-                                
-                                # Aggregate storage pools
-                                pool_key = f"{pool_name}_{pool_driver}"
-                                if pool_key not in storage_pools_map:
-                                    storage_pools_map[pool_key] = {
-                                        "name": pool_name,
-                                        "driver": pool_driver,
-                                        "space_total": 0,
-                                        "space_used": 0,
-                                        "space_available": 0,
-                                    }
-                                storage_pools_map[pool_key]["space_total"] += space_total
-                                storage_pools_map[pool_key]["space_used"] += space_used
-                                storage_pools_map[pool_key]["space_available"] += space_available
-                            
-                            # For CPU sockets, we'll sum them up (each member has its own sockets)
-                            cpu_sockets_data = cpu_info.get("sockets", [])
-                            cpu_sockets = len(cpu_sockets_data) if isinstance(cpu_sockets_data, list) else 0
-                            
-                            # Get CPU usage by counting instances on this member
-                            member_cpu_used = 0
-                            member_gpu_used = 0
-                            try:
-                                # Get all instances and filter by location (member)
-                                instances = client.instances.all()
-                                for instance in instances:
-                                    # Check if instance is on this specific member
-                                    instance_location = getattr(instance, 'location', '')
-                                    if instance_location == member_name and instance.status == "Running":
-                                        # Count CPU
-                                        config = getattr(instance, 'config', {}) or {}
-                                        limits_cpu = config.get('limits.cpu')
-                                        if limits_cpu:
-                                            try:
-                                                if '-' in str(limits_cpu):
-                                                    # Range like "0-3"
-                                                    parts = str(limits_cpu).split('-')
-                                                    member_cpu_used += int(parts[1]) - int(parts[0]) + 1
-                                                elif ',' in str(limits_cpu):
-                                                    # List like "0,1,2"
-                                                    member_cpu_used += len(str(limits_cpu).split(','))
-                                                else:
-                                                    # Single number
-                                                    member_cpu_used += int(limits_cpu)
-                                            except:
-                                                member_cpu_used += 1
-                                        else:
-                                            member_cpu_used += 1
-                                        
-                                        # Count compute GPU: a type:gpu device OR nvidia.runtime /
-                                        # unix-char passthrough (the shape our GPU containers use).
-                                        cfg_ld = str(config.get('environment.LD_LIBRARY_PATH', '')).lower()
-                                        holds_gpu = (
-                                            str(config.get('nvidia.runtime', '')).lower() in ('true', '1')
-                                            or bool(config.get('nvidia.driver.capabilities'))
-                                            or '/tegra' in cfg_ld or '/nvidia' in cfg_ld
-                                        )
-                                        if not holds_gpu:
-                                            devices = getattr(instance, 'devices', {}) or {}
-                                            for dev in devices.values():
-                                                if isinstance(dev, dict) and (
-                                                    dev.get('type') == 'gpu'
-                                                    or self._COMPUTE_GPU_NODE_RE.search(f"{dev.get('source','')} {dev.get('path','')}")
-                                                ):
-                                                    holds_gpu = True
-                                                    break
-                                        if holds_gpu:
-                                            member_gpu_used += 1
-                            except Exception as usage_err:
-                                logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
-                            
-                            # Aggregate totals (clamp GPU used to the member's compute capacity)
-                            member_gpu_used = min(member_gpu_used, member_gpu_total)
-                            total_cpu_cores += member_cpu_total
-                            total_cpu_used += member_cpu_used
-                            total_cpu_sockets += cpu_sockets
-                            total_memory += member_memory_total
-                            total_memory_used += member_memory_used
-                            total_gpu += member_gpu_total
-                            total_gpu_used += member_gpu_used
-                            total_storage += member_storage_total
-                            total_storage_available += member_storage_available
-                            
-                            successful_members += 1
-                            logger.debug(
-                                f"Member {member_name}: "
-                                f"CPU={member_cpu_total} cores (used={member_cpu_used}), "
-                                f"RAM={member_memory_total / 1024 / 1024 / 1024:.1f} GB (used={member_memory_used / 1024 / 1024 / 1024:.1f} GB), "
-                                f"GPU={member_gpu_total} cards (used={member_gpu_used})"
-                            )
-                            
-                        except Exception as member_api_err:
-                            logger.warning(f"Could not get state for member {member_name}: {member_api_err}")
-                            continue
-                        
-                    except Exception as member_err:
-                        logger.warning(f"Failed to process member {member_name}: {member_err}")
-                        continue
-                
-                if successful_members == 0:
-                    logger.warning(f"No member resources could be aggregated for {node_name}")
-                    return None
-                
-                # Convert storage pools map to list
-                storage_pools_list = list(storage_pools_map.values())
-                
-                # Create aggregated NodeResources
-                aggregated = NodeResources(
-                    cpu_total=total_cpu_cores,
-                    cpu_used=total_cpu_used,
-                    cpu_available=total_cpu_cores - total_cpu_used,
-                    cpu_sockets=total_cpu_sockets,
-                    memory_total=total_memory,
-                    memory_used=total_memory_used,
-                    memory_available=total_memory - total_memory_used,
-                    gpu_total=total_gpu,
-                    gpu_used=total_gpu_used,
-                    gpu_available=total_gpu - total_gpu_used,
-                    gpu_cards=all_gpu_cards,
-                    gpu_cards_total=len(all_gpu_cards),
-                    storage_total=total_storage,
-                    storage_available=total_storage_available,
-                    storage_pools=storage_pools_list,
-                )
-                
-                logger.info(
-                    f"Successfully aggregated resources from {successful_members}/{len(online_members)} online members in {node_name}: "
-                    f"Total CPU={total_cpu_cores} cores (used={total_cpu_used}), "
-                    f"RAM={total_memory / 1024 / 1024 / 1024:.1f} GB (used={total_memory_used / 1024 / 1024 / 1024:.1f} GB), "
-                    f"GPU={total_gpu} cards (used={total_gpu_used})"
-                )
-                
-                # Cache the aggregated result
-                cache.set("lxd_resources", cache_key, aggregated.model_dump(), ttl=cache_ttl)
-                logger.debug(f"Cached MicroCloud resources for {node_name} (TTL: {cache_ttl}s)")
-                
-                return aggregated
-                
-            except Exception as cluster_err:
-                logger.error(f"Failed to fetch cluster members for {node_name}: {cluster_err}")
-                return None
-            
-        except Exception as e:
-            logger.error(f"Error aggregating MicroCloud resources: {e}")
-            return None
     
     def get_instance_metrics(
         self, 

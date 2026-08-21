@@ -3,7 +3,7 @@ API Router for LXD node status and health checks.
 Provides endpoints for monitoring node connectivity.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +14,6 @@ from app.models.schemas import (
     NodeResources,
     NodeUpdateRequest,
     NodeUpdateResponse,
-    GpuCardInfo,
     GpuCardListResponse,
 )
 from app.services.lxd_service import (
@@ -27,7 +26,11 @@ from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.vault_client import get_vault_client
-from app.core.cache import get_cache_manager
+from app.core.cache import (
+    get_cache_manager,
+    MICROCLOUD_RESOURCES_CACHE_PREFIX,
+    NODES_STATUS_CACHE_KEY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +62,7 @@ async def get_nodes_status(
     
     # Try to get from cache first (180 second cache)
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key("nodes:status:all")
+    cache_key = get_scope_cache_key(NODES_STATUS_CACHE_KEY)
     cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached nodes status")
@@ -217,10 +220,10 @@ async def get_node_resources(
     """Get available resources for a specific node."""
     verify_cluster_access(node_name)
     try:
-        resources = lxd_service.get_node_resources(node_name)
-        return NodeResources(**resources)
+        return await asyncio.to_thread(lxd_service.get_node_resources_detail, node_name)
+    except HTTPException:
+        raise
     except LXDOperationError as e:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -234,18 +237,23 @@ async def get_node_gpus(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """List the physical GPUs on a specific node."""
+    """List the GPUs on a specific node, classified for the passthrough picker."""
     verify_cluster_access(node_name)
     try:
         # get_node_gpus makes blocking LXD calls; keep them off the event loop.
-        gpus = await asyncio.to_thread(lxd_service.get_node_gpus, node_name)
+        inventory = await asyncio.to_thread(lxd_service.get_node_gpus, node_name)
+        # note: every detected card is returned, display controllers included. Each carries
+        # its class and an `attachable` flag so the picker can rank and mark them rather than
+        # hide hardware the operator can see in LXD.
         return GpuCardListResponse(
             host=node_name,
-            gpus=[GpuCardInfo(**g) for g in gpus],
-            total=len(gpus),
+            gpus=inventory.cards,
+            total=inventory.gpu_cards_total,
+            compute_total=inventory.gpu_total,
         )
+    except HTTPException:
+        raise
     except LXDOperationError as e:
-        from fastapi import HTTPException
         raise HTTPException(status_code=400, detail=str(e))
 
 
@@ -347,8 +355,8 @@ async def update_node(
         if cache:
             cache.delete("api_responses", get_scope_cache_key("clusters:list:all"))
             cache.delete("api_responses", "clusters:list:all:scope=all")
-            cache.delete("api_responses", get_scope_cache_key("nodes:status:all"))
-            cache.delete("api_responses", "nodes:status:all:scope=all")
+            cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
+            cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
             cache.invalidate_cluster_cache(node_name)
             logger.info(f"Invalidated caches after updating node {node_name}")
         
@@ -384,8 +392,8 @@ async def invalidate_node_cache(
         cache = get_cache_manager()
         
         # Invalidate various cache keys for this node (pattern match for all scope variants)
-        cache.delete_pattern("api_responses", "nodes:status:all*")
-        cache.delete("lxd_resources", f"microcloud_resources:{node_name}")
+        cache.delete_pattern("api_responses", f"{NODES_STATUS_CACHE_KEY}*")
+        cache.delete("lxd_resources", f"{MICROCLOUD_RESOURCES_CACHE_PREFIX}:{node_name}")
         cache.delete_pattern("api_responses", f"cluster_members:list:host={node_name}*")
         
         logger.info(f"Invalidated all cache entries for node: {node_name}")
@@ -419,7 +427,7 @@ async def invalidate_all_nodes_cache(
         cache = get_cache_manager()
         
         # Clear all nodes status cache (all scope variants)
-        cache.delete_pattern("api_responses", "nodes:status:all*")
+        cache.delete_pattern("api_responses", f"{NODES_STATUS_CACHE_KEY}*")
         
         # Clear all LXD resources cache (pattern delete)
         cache.delete_pattern("lxd_resources", "*")

@@ -18,6 +18,7 @@ from .utils import (
     extract_ip_addresses,
     find_instance_in_projects,
     jsonable_lxd,
+    normalize_cluster_member,
 )
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
@@ -99,11 +100,8 @@ _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="inst
 # absent value. Passing that through means the UI prints "none" in a Cluster member field, which
 # reads as a member called none rather than as "this target is not clustered". Normalised once
 # here so neither consumer has to know.
-def _cluster_member(value) -> Optional[str]:
-    text = (value or "").strip()
-    if not text or text.lower() == "none":
-        return None
-    return text
+# Kept as a local name: the helper is shared with the GPU inventory (see utils).
+_cluster_member = normalize_cluster_member
 
 
 class InstanceManager:

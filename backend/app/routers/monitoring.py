@@ -286,6 +286,9 @@ def _build_history_point(
             "network_rx_bytes": sum(m.get('network_rx', 0) for m in node_instances),
             "network_tx_bytes": sum(m.get('network_tx', 0) for m in node_instances),
             "running_instances": len(node_instances),
+            # note: readers must use .get(), points written before this change lack the keys.
+            "gpu_total": node_metric.gpu_total,
+            "gpu_used": node_metric.gpu_used,
         }
 
     return {
@@ -492,6 +495,7 @@ async def get_monitoring_dashboard(
         total_storage = 0
         used_storage = 0
         total_gpu = 0
+        total_gpu_cards = 0
         used_gpu = 0
         
         storage_pools_list: List[StoragePoolMetrics] = []
@@ -512,6 +516,7 @@ async def get_monitoring_dashboard(
                     total_storage += resources.storage_total
                     used_storage += resources.storage_total - resources.storage_available
                     total_gpu += resources.gpu_total
+                    total_gpu_cards += resources.gpu_cards_total
                     used_gpu += resources.gpu_used
                     
                     # Aggregate storage pools
@@ -552,6 +557,11 @@ async def get_monitoring_dashboard(
                         ),
                         gpu_total=resources.gpu_total,
                         gpu_used=resources.gpu_used,
+                        gpu_available=resources.gpu_available,
+                        gpu_cards_total=resources.gpu_cards_total,
+                        gpu_integrated_total=resources.gpu_integrated_total,
+                        gpu_models=resources.gpu_models,
+                        gpu_utilization_supported=resources.gpu_utilization_supported,
                         instance_count=len([vm for vm in all_vms if vm.host == node.name]),
                         running_instances=len([vm for vm in all_vms if vm.host == node.name and vm.status.value == "Running"]),
                     ))
@@ -590,8 +600,14 @@ async def get_monitoring_dashboard(
                     storage_total_bytes=0,
                     storage_used_bytes=0,
                     storage_usage_percent=0,
+                    # important: an offline node contributes zero GPU, exactly as it
+                    # contributes zero CPU and memory above. Do not "fix" this into a
+                    # remembered number: the fleet total must only count hardware we can
+                    # currently see, and a stale count reads as available capacity.
                     gpu_total=0,
                     gpu_used=0,
+                    gpu_available=0,
+                    gpu_cards_total=0,
                     instance_count=0,
                     running_instances=0,
                 ))
@@ -761,6 +777,7 @@ async def get_monitoring_dashboard(
             storage_usage_percent=storage_usage_percent,
             
             total_gpu=total_gpu,
+            total_gpu_cards=total_gpu_cards,
             used_gpu=used_gpu,
             
             # Detailed Metrics
@@ -921,6 +938,11 @@ async def get_node_metrics(
             ),
             gpu_total=resources.gpu_total,
             gpu_used=resources.gpu_used,
+            gpu_available=resources.gpu_available,
+            gpu_cards_total=resources.gpu_cards_total,
+            gpu_integrated_total=resources.gpu_integrated_total,
+            gpu_models=resources.gpu_models,
+            gpu_utilization_supported=resources.gpu_utilization_supported,
             instance_count=len(node_instances),
             running_instances=len([vm for vm in node_instances if vm.status.value == "Running"]),
         )
