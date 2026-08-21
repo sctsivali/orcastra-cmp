@@ -12,6 +12,7 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { formatLabel } from "@/lib/utils";
+import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE } from "@/lib/gpu";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -81,6 +82,10 @@ function getStatusColor(status: ClusterStatus): string {
 
 // Hardware summary component
 function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHardwareInfo; compact?: boolean }) {
+  // Compute GPUs and detected cards are different numbers about the same hardware, so the
+  // card count only appears when it says something the GPU count did not.
+  const cardsTotal = hardware.gpu_cards_total ?? hardware.gpu_total;
+  const extraCards = Math.max(0, cardsTotal - hardware.gpu_total);
   if (compact) {
     return (
       <div className="flex flex-wrap gap-2 text-xs">
@@ -142,13 +147,27 @@ function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHard
         <div className="pl-6 text-sm text-muted-foreground">
           {hardware.gpu_total > 0 ? (
             <>
-              <p>{hardware.gpu_total} cards</p>
+              <p>
+                {hardware.gpu_total} compute {hardware.gpu_total === 1 ? "GPU" : "GPUs"}
+              </p>
               {hardware.gpu_vendors.length > 0 && (
                 <p>{hardware.gpu_vendors.join(", ")}</p>
               )}
+              {hardware.gpu_models.length > 0 && (
+                <p className="truncate" title={hardware.gpu_models.join(", ")}>
+                  {hardware.gpu_models.slice(0, 2).join(", ")}
+                  {hardware.gpu_models.length > 2 && ` +${hardware.gpu_models.length - 2} more`}
+                </p>
+              )}
+              {extraCards > 0 && <p className="text-xs">{cardsTotal} cards detected</p>}
+            </>
+          ) : cardsTotal > 0 ? (
+            <>
+              <p>{GPU_NO_COMPUTE_TITLE}</p>
+              <p className="text-xs">{cardsTotal} cards detected</p>
             </>
           ) : (
-            <p className="text-muted-foreground/50">No GPU</p>
+            <p>{GPU_EMPTY_TITLE}</p>
           )}
         </div>
       </div>
@@ -480,9 +499,14 @@ function RegionsContent() {
             <CardContent className="pt-4">
               <div className="flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm text-muted-foreground">GPUs</span>
+                <span className="text-sm text-muted-foreground">Compute GPUs</span>
               </div>
               <p className="text-2xl font-bold mt-1">{data.total_gpu}</p>
+              {(data.total_gpu_cards ?? 0) > data.total_gpu && (
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {data.total_gpu_cards} cards detected
+                </p>
+              )}
             </CardContent>
           </Card>
         </div>

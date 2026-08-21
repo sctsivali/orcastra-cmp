@@ -17,7 +17,10 @@ import {
 } from "./ui/dialog";
 import { Badge } from "./ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/card";
+import { EmptyState } from "./ui/empty-state";
+import { GpuPanel } from "./gpu";
+import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { NodeStatus } from "@/types";
 import { cn, formatLabel } from "@/lib/utils";
 
@@ -286,240 +289,19 @@ export function NodeDetailModal({
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Sparkles className="h-5 w-5" />
-                  GPU Information
+                  GPU
                 </CardTitle>
+                <CardDescription>{GPU_UTILIZATION_NOTE}</CardDescription>
               </CardHeader>
               <CardContent>
-                {node.resources && node.resources.gpu_total > 0 ? (
-                  <div className="space-y-4">
-                    {/* Summary */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground">
-                          Total GPU Cards
-                        </p>
-                        <p className="text-lg font-semibold">
-                          {node.resources.gpu_total}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-muted-foreground">
-                          Available Cards
-                        </p>
-                        <p className="text-lg font-semibold">
-                          {node.resources.gpu_available}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="pt-4 border-t">
-                      <h4 className="text-sm font-semibold mb-3">
-                        Resource Usage
-                      </h4>
-                      <div className="space-y-3">
-                        <div>
-                          <div className="flex justify-between text-sm mb-1">
-                            <span className="text-muted-foreground">Used</span>
-                            <span className="font-semibold">
-                              {node.resources.gpu_used} /{" "}
-                              {node.resources.gpu_total} cards (
-                              {getUsagePercentage(
-                                node.resources.gpu_used,
-                                node.resources.gpu_total
-                              )}
-                              %)
-                            </span>
-                          </div>
-                          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
-                            <div
-                              className="bg-purple-600 h-2.5 rounded-full"
-                              style={{
-                                width: `${getUsagePercentage(
-                                  node.resources.gpu_used,
-                                  node.resources.gpu_total
-                                )}%`,
-                              }}
-                            ></div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Detailed GPU Cards */}
-                    {node.resources.gpu_cards && node.resources.gpu_cards.length > 0 && (
-                      <div className="pt-4 border-t">
-                        <h4 className="text-sm font-semibold mb-3">
-                          GPU Cards Detail
-                        </h4>
-                        <div className="space-y-4">
-                          {node.resources.gpu_cards.map((gpu, index) => (
-                            <div
-                              key={index}
-                              className={cn(
-                                "border rounded-lg p-4 space-y-3",
-                                gpu.in_use
-                                  ? "border-purple-500/50 bg-purple-500/5"
-                                  : "border-border"
-                              )}
-                            >
-                              {/* GPU Header */}
-                              <div className="flex justify-between items-start">
-                                <div className="flex-1">
-                                  <p className="font-semibold text-base">
-                                    {gpu.model_name || gpu.nvidia?.model || gpu.product || `GPU ${gpu.index}`}
-                                  </p>
-                                  {gpu.vendor && (
-                                    <p className="text-sm text-muted-foreground">
-                                      {gpu.vendor}
-                                    </p>
-                                  )}
-                                  {gpu.used_by && (
-                                    <p className="text-xs text-purple-500 mt-1">
-                                      Used by: {gpu.used_by}
-                                    </p>
-                                  )}
-                                </div>
-                                {gpu.nvidia?.brand && (
-                                  <Badge variant="outline" className="text-xs">
-                                    {gpu.nvidia.brand}
-                                  </Badge>
-                                )}
-                              </div>
-
-                              {/* GPU Details Grid */}
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
-                                {gpu.driver && (
-                                  <div>
-                                    <p className="text-muted-foreground text-xs">Driver</p>
-                                    <p className="font-medium">{gpu.driver}</p>
-                                    {gpu.driver_version && (
-                                      <p className="text-xs text-muted-foreground">v{gpu.driver_version}</p>
-                                    )}
-                                  </div>
-                                )}
-                                {gpu.pci_address && (
-                                  <div>
-                                    <p className="text-muted-foreground text-xs">PCI Address</p>
-                                    <p className="font-mono text-xs">{gpu.pci_address}</p>
-                                  </div>
-                                )}
-                                {gpu.vendor_id && gpu.product_id && (
-                                  <div>
-                                    <p className="text-muted-foreground text-xs">Device ID</p>
-                                    <p className="font-mono text-xs">{gpu.vendor_id}:{gpu.product_id}</p>
-                                  </div>
-                                )}
-                                {gpu.numa_node !== undefined && gpu.numa_node !== null && (
-                                  <div>
-                                    <p className="text-muted-foreground text-xs">NUMA Node</p>
-                                    <p className="font-medium">{gpu.numa_node}</p>
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Classification + memory (unified vs dedicated) */}
-                              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-2 border-t border-dashed">
-                                <div>
-                                  <p className="text-muted-foreground text-xs">Type</p>
-                                  <p className="font-medium">{(gpu.gpu_class === "display" || gpu.is_compute === false) ? "Display controller" : (gpu.is_integrated ? "Compute (integrated)" : "Compute")}</p>
-                                </div>
-                                {gpu.memory_total ? (
-                                  <div>
-                                    <p className="text-muted-foreground text-xs">Memory</p>
-                                    <p className="font-medium">{formatBytes(gpu.memory_total)}{gpu.memory_shared ? " (unified)" : ""}</p>
-                                    {gpu.memory_shared && (<p className="text-xs text-muted-foreground">shared with system RAM</p>)}
-                                  </div>
-                                ) : null}
-                              </div>
-
-                              {/* NVIDIA-specific info */}
-                              {gpu.nvidia && (
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm pt-2 border-t border-dashed">
-                                  {gpu.nvidia.cuda_version && (
-                                    <div>
-                                      <p className="text-muted-foreground text-xs">CUDA</p>
-                                      <p className="font-medium">{gpu.nvidia.cuda_version}</p>
-                                    </div>
-                                  )}
-                                  {gpu.nvidia.architecture && (
-                                    <div>
-                                      <p className="text-muted-foreground text-xs">Architecture</p>
-                                      <p className="font-medium">{gpu.nvidia.architecture}</p>
-                                    </div>
-                                  )}
-                                  {gpu.nvidia.nvrm_version && (
-                                    <div>
-                                      <p className="text-muted-foreground text-xs">NVRM Version</p>
-                                      <p className="font-mono text-xs">{gpu.nvidia.nvrm_version}</p>
-                                    </div>
-                                  )}
-                                  {gpu.nvidia.uuid && (
-                                    <div className="col-span-2 md:col-span-4">
-                                      <p className="text-muted-foreground text-xs">UUID</p>
-                                      <p className="font-mono text-xs break-all">{gpu.nvidia.uuid}</p>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* DRM info */}
-                              {gpu.drm && gpu.drm.card_name && (
-                                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm pt-2 border-t border-dashed">
-                                  <div>
-                                    <p className="text-muted-foreground text-xs">DRM Card</p>
-                                    <p className="font-mono text-xs">{gpu.drm.card_name}</p>
-                                  </div>
-                                  {gpu.drm.render_name && (
-                                    <div>
-                                      <p className="text-muted-foreground text-xs">Render Device</p>
-                                      <p className="font-mono text-xs">{gpu.drm.render_name}</p>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* SR-IOV info */}
-                              {gpu.sriov && gpu.sriov.maximum_vfs > 0 && (
-                                <div className="grid grid-cols-3 gap-3 text-sm pt-2 border-t border-dashed">
-                                  <div>
-                                    <p className="text-muted-foreground text-xs">SR-IOV VFs</p>
-                                    <p className="font-medium">{gpu.sriov.current_vfs} / {gpu.sriov.maximum_vfs}</p>
-                                  </div>
-                                  {gpu.sriov.vfs_count > 0 && (
-                                    <div>
-                                      <p className="text-muted-foreground text-xs">Active VFs</p>
-                                      <p className="font-medium">{gpu.sriov.vfs_count}</p>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-
-                              {/* mdev profiles */}
-                              {gpu.mdev_profiles && gpu.mdev_profiles.length > 0 && (
-                                <div className="pt-2 border-t border-dashed">
-                                  <p className="text-muted-foreground text-xs mb-2">vGPU Profiles</p>
-                                  <div className="flex flex-wrap gap-2">
-                                    {gpu.mdev_profiles.map((profile, pIdx) => (
-                                      <Badge key={pIdx} variant="outline" className="text-xs">
-                                        {profile.name} ({profile.available} available)
-                                      </Badge>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                {node.resources ? (
+                  <GpuPanel src={node.resources} />
                 ) : (
-                  <div className="text-center py-8">
-                    <Sparkles className="h-12 w-12 text-muted-foreground mx-auto mb-3" />
-                    <p className="text-muted-foreground">
-                      No GPU cards detected on this node
-                    </p>
-                  </div>
+                  <EmptyState
+                    icon={Sparkles}
+                    title="Resources unavailable"
+                    description={`${node.display_name || node.name} did not report its hardware, so its GPUs cannot be listed. This does not mean it has none.`}
+                  />
                 )}
               </CardContent>
             </Card>

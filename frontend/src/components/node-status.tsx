@@ -1,6 +1,14 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import {
+  GPU_EMPTY_TITLE,
+  GPU_NO_COMPUTE_TITLE,
+  gpuCardsCaption,
+  gpuDenseRatio,
+  summarizeGpus,
+} from "@/lib/gpu";
+
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { CheckCircle2, XCircle, Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -268,17 +276,29 @@ function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: NodeStatus
                 <Sparkles className="h-3.5 w-3.5" />
                 <span className="font-medium">GPU</span>
               </div>
-              <div className="text-xs">
-                <div className="font-semibold text-foreground">
-                  {node.resources.gpu_used} / {node.resources.gpu_total} cards
-                </div>
-                <div className="text-muted-foreground">
-                  {node.resources.gpu_total > 0 
-                    ? `${getUsagePercentage(node.resources.gpu_used, node.resources.gpu_total)}% used`
-                    : "No GPU"
-                  }
-                </div>
-              </div>
+              {(() => {
+                const gpu = summarizeGpus(node.resources);
+                return (
+                  <div className="text-xs">
+                    <div className="font-semibold text-foreground">
+                      {gpu.hasCompute
+                        ? gpuDenseRatio(gpu)
+                        : gpu.hasCards
+                          ? GPU_NO_COMPUTE_TITLE
+                          : "None"}
+                    </div>
+                    <div className="text-muted-foreground">
+                      {gpu.hasCompute
+                        ? `${(gpu.allocationPercent ?? 0).toFixed(1)}% allocated${
+                            gpu.extraCards > 0 ? ` • ${gpu.cardsTotal} cards` : ""
+                          }`
+                        : gpu.hasCards
+                          ? gpuCardsCaption(gpu)
+                          : GPU_EMPTY_TITLE}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}

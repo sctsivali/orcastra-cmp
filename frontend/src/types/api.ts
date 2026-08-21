@@ -112,22 +112,14 @@ export interface InstanceCreateRequest extends Omit<VMCreateRequest, "image"> {
   source_type?: "image" | "none";
 }
 
-// A physical GPU on a node (from the LXD resources API)
-export interface GpuCardInfo {
-  vendor: string;
-  vendor_id: string;
-  product: string;
-  product_id: string;
-  driver: string;
-  driver_version: string;
-  pci_address: string;
-  id: number | null;
-}
-
 export interface GpuCardListResponse {
   host: string;
-  gpus: GpuCardInfo[];
+  /** Every detected card, display controllers included. */
+  gpus: GPUCardInfo[];
+  /** Cards detected. */
   total: number;
+  /** Cards that count as compute capacity. */
+  compute_total?: number;
 }
 
 // A browsable image from a remote (simplestreams) catalog — one row per
@@ -249,7 +241,10 @@ export interface GPUMdevProfile {
 // Detailed GPU Card Information
 export interface GPUCardInfo {
   // Core identification
+  /** Position in the reported list. NOT a device selector. */
   index: number;
+  /** DRM card id: the value LXD accepts as a gpu device `id`. */
+  id?: number | null;
   driver?: string;
   driver_version?: string;
   pci_address?: string;
@@ -269,9 +264,12 @@ export interface GPUCardInfo {
   used_by?: string;
   
   // Classification + enrichment (compute vs display, device model, unified memory) - backend-set.
-  gpu_class?: "compute" | "display" | "unknown";
+  gpu_class?: "compute" | "integrated" | "display" | "unknown";
   is_compute?: boolean;
+  /** Shares system RAM. Orthogonal to gpu_class: a Jetson iGPU is compute and integrated. */
   is_integrated?: boolean;
+  /** An operator may pass this card into an instance. */
+  attachable?: boolean;
   model_name?: string;
   memory_total?: number;
   memory_shared?: boolean;
@@ -296,6 +294,14 @@ export interface NodeResources {
   gpu_used: number;
   gpu_available: number;
   gpu_cards: GPUCardInfo[];
+  gpu_cards_total?: number;
+  gpu_integrated_total?: number;
+  gpu_display_total?: number;
+  gpu_unknown_total?: number;
+  gpu_vendors?: string[];
+  gpu_models?: string[];
+  /** LXD reports allocation only. There is no GPU telemetry. */
+  gpu_utilization_supported?: boolean;
   storage_total: number;
   storage_available: number;
   storage_pools: Array<{
@@ -733,6 +739,13 @@ export interface MemberResources {
   gpu_used: number;
   gpu_available: number;
   gpu_cards: GPUCardInfo[];
+  gpu_cards_total?: number;
+  gpu_integrated_total?: number;
+  gpu_display_total?: number;
+  gpu_unknown_total?: number;
+  gpu_vendors?: string[];
+  gpu_models?: string[];
+  gpu_utilization_supported?: boolean;
   storage_total: number;
   storage_used: number;
   storage_available: number;
@@ -983,6 +996,11 @@ export interface ClusterMonitoringMetrics {
   storage_usage_percent: number;
   gpu_total: number;
   gpu_used: number;
+  gpu_available?: number;
+  gpu_cards_total?: number;
+  gpu_integrated_total?: number;
+  gpu_models?: string[];
+  gpu_utilization_supported?: boolean;
   instance_count: number;
   running_instances: number;
 }
@@ -1085,6 +1103,7 @@ export interface MonitoringDashboardResponse {
   storage_usage_percent: number;
   
   total_gpu: number;
+  total_gpu_cards?: number;
   used_gpu: number;
   
   // Detailed Metrics
@@ -1639,9 +1658,13 @@ export interface ExtendedHardwareInfo {
   memory_used: number;
   
   // GPU
+  /** Compute GPUs: sellable capacity, display controllers excluded. */
   gpu_total: number;
-  gpu_vendors: string[];  // e.g., ["NVIDIA", "AMD"]
-  gpu_models: string[];   // e.g., ["RTX 4090", "A100"]
+  /** Every DRM card detected, display controllers included. */
+  gpu_cards_total?: number;
+  gpu_integrated_total?: number;
+  gpu_vendors: string[];
+  gpu_models: string[];
   
   // Storage
   storage_total: number;
@@ -1691,6 +1714,8 @@ export interface RegionsOverviewResponse {
   total_memory: number;
   total_storage: number;
   total_gpu: number;
+  total_gpu_cards?: number;
+  total_gpu_integrated?: number;
 }
 
 // Cluster location update

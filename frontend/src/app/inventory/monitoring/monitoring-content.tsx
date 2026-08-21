@@ -229,198 +229,6 @@ const MetricCard = memo(function MetricCard({
 });
 
 // Gauge Chart Component
-interface GaugeChartProps {
-  value: number;
-  max?: number;
-  label: string;
-  color?: string;
-  size?: number;
-  statusMessage?: string; // Optional status message to show on hover when value is 0
-}
-
-function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120, statusMessage }: GaugeChartProps) {
-  const percentage = Math.min((value / max) * 100, 100);
-  const strokeWidth = 12;
-  const radius = (size - strokeWidth) / 2;
-  const circumference = radius * Math.PI; // Half circle
-  const offset = circumference - (percentage / 100) * circumference;
-  
-  // Determine color based on percentage
-  const getColor = () => {
-    if (percentage >= 90) return "#ef4444"; // red
-    if (percentage >= 75) return "#f59e0b"; // amber
-    return color;
-  };
-
-  // Show tooltip only when value is 0 and we have a status message
-  const showTooltip = percentage === 0 && statusMessage;
-
-  const gaugeContent = (
-    <div className="flex flex-col items-center">
-      <svg width={size} height={size / 2 + 20} className="transform">
-        {/* Background arc */}
-        <path
-          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={strokeWidth}
-          className="text-muted"
-        />
-        {/* Value arc */}
-        <path
-          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
-          fill="none"
-          stroke={getColor()}
-          strokeWidth={strokeWidth}
-          strokeDasharray={circumference}
-          strokeDashoffset={offset}
-          strokeLinecap="round"
-          className="transition-all duration-500"
-        />
-        {/* Value text */}
-        <text
-          x={size / 2}
-          y={size / 2}
-          textAnchor="middle"
-          className="fill-foreground text-xl font-bold"
-        >
-          {percentage.toFixed(1)}%
-        </text>
-      </svg>
-      <span className="text-sm font-medium text-muted-foreground mt-1">{label}</span>
-    </div>
-  );
-
-  if (showTooltip) {
-    return (
-      <UITooltip>
-        <TooltipTrigger asChild>
-          <div className="cursor-help">
-            {gaugeContent}
-          </div>
-        </TooltipTrigger>
-        <TooltipContent className="max-w-xs">
-          <p className="text-sm">{statusMessage}</p>
-        </TooltipContent>
-      </UITooltip>
-    );
-  }
-
-  return gaugeContent;
-}
-
-// Node Card Component
-interface NodeCardProps {
-  node: ClusterMonitoringMetrics;
-}
-
-const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
-  // Determine status badge color and text based on cluster_status
-  const getStatusBadge = () => {
-    if (node.is_online) {
-      return <Badge variant="default">Online</Badge>;
-    }
-    
-    switch (node.cluster_status) {
-      case "pending_trust":
-        return <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Pending Trust</Badge>;
-      case "offline":
-        return <Badge variant="destructive">Offline</Badge>;
-      case "error":
-        return <Badge variant="destructive">Error</Badge>;
-      default:
-        return <Badge variant="secondary">Offline</Badge>;
-    }
-  };
-
-  return (
-    <Card className={cn(
-      "transition-all hover:shadow-md",
-      !node.is_online && "opacity-60"
-    )}>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Server className="h-5 w-5 text-muted-foreground" />
-            <CardTitle className="text-base">{node.node_name}</CardTitle>
-          </div>
-          {node.status_message && !node.is_online ? (
-            <UITooltip>
-              <TooltipTrigger asChild>
-                <div className="cursor-help">
-                  {getStatusBadge()}
-                </div>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                <p className="text-sm">{node.status_message}</p>
-              </TooltipContent>
-            </UITooltip>
-          ) : (
-            getStatusBadge()
-          )}
-        </div>
-        <CardDescription>
-          {formatHypervisorType(node.node_type)} • {node.instance_count} instances
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {node.is_online ? (
-          <>
-            {/* CPU */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">CPU</span>
-                <span className="font-medium">{node.cpu_used} / {node.cpu_total} cores</span>
-              </div>
-              <Progress value={node.cpu_usage_percent} className="h-2" />
-              <p className="text-xs text-muted-foreground text-right">{node.cpu_usage_percent.toFixed(1)}%</p>
-            </div>
-            
-            {/* Memory */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Memory</span>
-                <span className="font-medium">{formatBytes(node.memory_used_bytes)} / {formatBytes(node.memory_total_bytes)}</span>
-              </div>
-              <Progress value={node.memory_usage_percent} className="h-2" />
-              <p className="text-xs text-muted-foreground text-right">{node.memory_usage_percent.toFixed(1)}%</p>
-            </div>
-            
-            {/* Storage */}
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Storage</span>
-                <span className="font-medium">{formatBytes(node.storage_used_bytes)} / {formatBytes(node.storage_total_bytes)}</span>
-              </div>
-              <Progress value={node.storage_usage_percent} className="h-2" />
-              <p className="text-xs text-muted-foreground text-right">{node.storage_usage_percent.toFixed(1)}%</p>
-            </div>
-            
-            {/* Instances */}
-            <div className="flex items-center justify-between pt-2 border-t">
-              <span className="text-sm text-muted-foreground">Running</span>
-              <div className="flex items-center gap-1">
-                <Play className="h-3 w-3 text-green-500" />
-                <span className="text-sm font-medium">{node.running_instances} / {node.instance_count}</span>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="text-center py-4 text-muted-foreground">
-            <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm font-medium">
-              {node.cluster_status === "pending_trust" ? "Pending Trust" : "Node is offline"}
-            </p>
-            {node.status_message && (
-              <p className="text-xs mt-1 max-w-[200px] mx-auto">{node.status_message}</p>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-});
-
 // Top Consumer Card
 interface TopConsumerCardProps {
   instance: InstanceMonitoringSummary;
@@ -541,12 +349,17 @@ function LoadingSkeleton() {
 }
 
 // Colors for charts
+import { GaugeChart } from "@/components/monitoring/gauge-chart";
+import { GpuAllocationGauge } from "@/components/monitoring/gpu-allocation-gauge";
+import { NodeCard } from "@/components/monitoring/node-card";
+
 const CHART_COLORS = {
   cpu: "#3b82f6",    // blue
   memory: "#10b981", // green
   storage: "#f59e0b", // amber
   storageRead: "#f59e0b", // amber
   storageWrite: "#ef4444", // red
+  gpu: "#8b5cf6", // violet
   network: "#8b5cf6", // purple (RX/In)
   networkTx: "#ec4899", // pink (TX/Out)
 };
@@ -1259,6 +1072,7 @@ export default function MonitoringContent() {
         total_storage_bytes: dashboardData.total_storage_bytes,
         used_storage_bytes: dashboardData.used_storage_bytes,
         total_gpu: dashboardData.total_gpu,
+        total_gpu_cards: dashboardData.total_gpu_cards,
         used_gpu: dashboardData.used_gpu,
         warnings: dashboardData.warnings,
         cluster_status: singleNode?.cluster_status,
@@ -1299,6 +1113,7 @@ export default function MonitoringContent() {
       total_storage_bytes: node.storage_total_bytes || 0,
       used_storage_bytes: node.storage_used_bytes || 0,
       total_gpu: node.gpu_total || 0,
+      total_gpu_cards: node.gpu_cards_total,
       used_gpu: node.gpu_used || 0,
       warnings: dashboardData.warnings, // Keep global warnings
       // Status message for troubleshooting when metrics are 0
@@ -1859,15 +1674,11 @@ export default function MonitoringContent() {
               </p>
             </div>
             <div className="text-center">
-              <GaugeChart 
-                value={(filteredStats.used_gpu / Math.max(filteredStats.total_gpu, 1)) * 100} 
-                label="GPU Allocation" 
-                color="#8b5cf6"
-                statusMessage={filteredStats.used_gpu === 0 && filteredStats.total_gpu === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
+              <GpuAllocationGauge
+                stats={filteredStats}
+                scope={selectedNode}
+                color={CHART_COLORS.gpu}
               />
-              <p className="text-sm text-muted-foreground mt-2">
-                {filteredStats.used_gpu} / {filteredStats.total_gpu} GPUs
-              </p>
             </div>
           </div>
         </CardContent>

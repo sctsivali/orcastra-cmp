@@ -2,7 +2,8 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Cpu, HardDrive, Server, Database, Network, Package, Info, Monitor } from "lucide-react";
+import { Cpu, HardDrive, Server, Database, Network, Package, Info, Sparkles } from "lucide-react";
+import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
@@ -177,10 +178,35 @@ export default function TechnologiesPage() {
       return sum + (node.resources?.storage_available || 0);
     }, 0);
 
-    // Get GPU totals
+    // Compute GPUs (sellable capacity) and detected cards are different numbers about the
+    // same hardware. Both are derived from /nodes, the endpoint this page already reads: two
+    // endpoints for one fact is how the counts came to disagree in the first place.
     const totalGPUs = nodes.reduce((sum: number, node: NodeStatus) => {
       return sum + (node.resources?.gpu_total || 0);
     }, 0);
+    const totalGpuCards = nodes.reduce((sum: number, node: NodeStatus) => {
+      return sum + (node.resources?.gpu_cards_total ?? node.resources?.gpu_cards?.length ?? 0);
+    }, 0);
+    const gpuVendors = Array.from(
+      new Set(
+        nodes.flatMap((node: NodeStatus) =>
+          (node.resources?.gpu_cards ?? [])
+            .filter((card) => card.is_compute)
+            .map((card) => card.vendor)
+            .filter((vendor): vendor is string => !!vendor)
+        )
+      )
+    );
+    const gpuModels = Array.from(
+      new Set(
+        nodes.flatMap((node: NodeStatus) =>
+          (node.resources?.gpu_cards ?? [])
+            .filter((card) => card.is_compute)
+            .map((card) => card.model_name || card.product)
+            .filter((model): model is string => !!model)
+        )
+      )
+    );
 
     const storageBackends = new Set<string>(
       nodes.flatMap((node: NodeStatus) =>
@@ -287,31 +313,33 @@ export default function TechnologiesPage() {
       },
     ];
 
-    // Add GPU category if GPUs are available
-    if (totalGPUs > 0) {
-      categories.push({
-        icon: Monitor,
-        title: "GPU Resources",
-        description: "Graphics processing units for acceleration",
-        items: [
-          {
-            label: "Total GPUs",
-            value: totalGPUs.toString(),
-            detail: "Aggregate across all nodes",
-          },
-          {
-            label: "GPU Type",
-            value: "NVIDIA/AMD",
-            detail: "Supported GPU vendors",
-          },
-          {
-            label: "Use Cases",
-            value: "AI/ML, Rendering, HPC",
-            detail: "Accelerated computing workloads",
-          },
-        ],
-      });
-    }
+    categories.push({
+      icon: Sparkles,
+      title: "GPU Resources",
+      description: "Graphics processing units for acceleration",
+      items: [
+        {
+          label: "Compute GPUs",
+          value: totalGPUs.toString(),
+          detail: "Allocatable across all nodes",
+        },
+        {
+          label: "Cards Detected",
+          value: totalGpuCards.toString(),
+          detail: "Includes display controllers",
+        },
+        {
+          label: "Vendors",
+          value: gpuVendors.length > 0 ? gpuVendors.join(", ") : EMPTY_VALUE,
+          detail: "Reported by the nodes",
+        },
+        {
+          label: "Models",
+          value: gpuModels.length > 0 ? gpuModels.join(", ") : EMPTY_VALUE,
+          detail: "Reported by the nodes",
+        },
+      ],
+    });
 
     return categories;
   }, [nodes]);

@@ -106,12 +106,17 @@ function formatBytes(bytes: number): string {
 
 // Create popup content for a region
 function createPopupContent(region: RegionSummary): string {
-  const gpuSection = region.hardware.gpu_total > 0 
-    ? `<div style="display: flex; justify-content: space-between;">
-         <span>GPU:</span>
-         <span style="font-weight: 500;">${region.hardware.gpu_total} cards</span>
-       </div>`
-    : "";
+  const cardsTotal = region.hardware.gpu_cards_total ?? region.hardware.gpu_total;
+  const row = (label: string, value: string | number) =>
+    `<div style="display: flex; justify-content: space-between;">
+         <span>${label}:</span>
+         <span style="font-weight: 500;">${value}</span>
+       </div>`;
+  const gpuSection =
+    region.hardware.gpu_total > 0
+      ? row("Compute GPUs", region.hardware.gpu_total) +
+        (cardsTotal > region.hardware.gpu_total ? row("Cards detected", cardsTotal) : "")
+      : "";
 
   const facilitySection = region.facility_name
     ? `<p style="font-size: 11px; color: #888; margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">

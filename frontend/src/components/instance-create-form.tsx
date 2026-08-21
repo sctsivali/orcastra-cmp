@@ -23,6 +23,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { GpuPickerDialog } from "@/components/instance-create/gpu-picker-dialog";
+import {
+  gpuCardLabel,
+  gpuClassOf,
+  gpuIdentifier,
+  type GpuClass,
+} from "@/lib/gpu";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -84,8 +91,7 @@ import type {
   NetworkInfo,
   NetworkListResponse,
   ProfileInfo,
-  GpuCardInfo,
-  GpuCardListResponse,
+  GPUCardInfo,
   RemoteImageInfo,
 } from "@/types/api";
 
@@ -101,8 +107,11 @@ type GpuDevice = {
   id: string; // react key
   name: string; // LXD device name
   identifyBy: "pci" | "id";
-  pci: string; // PCI address, e.g. 0000:11:00.0
+  pci: string; // PCI address, ex; 0000:11:00.0
   gid: string; // GPU id (the "id" device key)
+  // Local only, never sent: what the operator saw when they picked this card.
+  label?: string;
+  gpuClass?: GpuClass;
 };
 
 // An additional disk device attached at create time.
@@ -354,24 +363,27 @@ export function InstanceCreateForm() {
   // --- GPU passthrough --------------------------------------------------------
   const [gpus, setGpus] = useState<GpuDevice[]>([]);
   const [gpuPickerOpen, setGpuPickerOpen] = useState(false);
-  const { data: gpusResp, isLoading: loadingGpus } = useNodeGpus(
-    form.selectedNode,
-  );
-  const availableGpus =
-    ((gpusResp as unknown as GpuCardListResponse | undefined)?.gpus ??
-      []) as GpuCardInfo[];
-  // Add a GPU from the node's detected list (identified by PCI address).
-  const addGpuFromCard = (card: GpuCardInfo) => {
+  const {
+    data: gpusResp,
+    isLoading: loadingGpus,
+    isError: gpusFailed,
+    refetch: refetchGpus,
+  } = useNodeGpus(form.selectedNode);
+  const availableGpus = gpusResp?.gpus ?? [];
+  // Add a GPU from the node's detected list. The label and class travel with it so a wrong
+  // pick is visible on the form before submit, without reopening the picker.
+  const addGpuFromCard = (card: GPUCardInfo) => {
+    const identifier = gpuIdentifier(card);
     setGpus((g) => [
       ...g,
       {
         id: safeRandomUUID(),
         name: `gpu${g.length}`,
-        // Prefer PCI when the card exposes an address; otherwise identify by DRM
-        // id (picking "pci" for an address-less card makes the row invalid).
-        identifyBy: card.pci_address ? "pci" : "id",
-        pci: card.pci_address || "",
-        gid: card.id != null ? String(card.id) : "",
+        identifyBy: identifier.by,
+        pci: identifier.by === "pci" ? identifier.value : "",
+        gid: identifier.by === "id" ? identifier.value : "",
+        label: gpuCardLabel(card),
+        gpuClass: gpuClassOf(card),
       },
     ]);
     setGpuPickerOpen(false);
@@ -1760,6 +1772,12 @@ export function InstanceCreateForm() {
                         placeholder="gpu0"
                         className="w-40"
                       />
+                      {gpu.label && (
+                        <span className="text-sm truncate">{gpu.label}</span>
+                      )}
+                      {gpu.gpuClass === "display" && (
+                        <Badge variant="warning">Display only</Badge>
+                      )}
                       <span className="text-xs text-muted-foreground">
                         physical
                       </span>
@@ -1973,79 +1991,20 @@ export function InstanceCreateForm() {
         </div>
       </form>
 
-      {/* Select GPU dialog — lists the node's detected GPUs */}
-      <Dialog open={gpuPickerOpen} onOpenChange={setGpuPickerOpen}>
-        <DialogContent className="sm:max-w-[48rem] max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Select GPU</DialogTitle>
-            <DialogDescription>
-              Physical GPUs detected on {form.selectedNode || "the node"}.
-            </DialogDescription>
-          </DialogHeader>
-
-          {loadingGpus ? (
-            <p className="text-sm text-muted-foreground py-4">Loading GPUs…</p>
-          ) : availableGpus.length === 0 ? (
-            <div className="space-y-3 py-2">
-              <p className="text-sm text-muted-foreground">
-                No GPUs detected on this node.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  addGpu();
-                  setGpuPickerOpen(false);
-                }}
-              >
-                <Plus className="h-4 w-4 mr-1" />
-                Add custom GPU device
-              </Button>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Vendor</TableHead>
-                  <TableHead>Driver</TableHead>
-                  <TableHead>PCI address</TableHead>
-                  <TableHead>ID</TableHead>
-                  <TableHead />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {availableGpus.map((card) => (
-                  <TableRow key={card.pci_address || String(card.id)}>
-                    <TableCell>{card.vendor || "—"}</TableCell>
-                    <TableCell>
-                      {card.driver}
-                      {card.driver_version ? (
-                        <span className="text-muted-foreground">
-                          {" "}
-                          {card.driver_version}
-                        </span>
-                      ) : null}
-                    </TableCell>
-                    <TableCell>{card.pci_address || "—"}</TableCell>
-                    <TableCell>{card.id ?? "—"}</TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        onClick={() => addGpuFromCard(card)}
-                      >
-                        Select
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </DialogContent>
-      </Dialog>
+      <GpuPickerDialog
+        open={gpuPickerOpen}
+        onOpenChange={setGpuPickerOpen}
+        nodeName={form.selectedNode}
+        cards={availableGpus}
+        isLoading={loadingGpus}
+        isError={gpusFailed}
+        onRetry={() => void refetchGpus()}
+        onSelect={addGpuFromCard}
+        onAddCustom={() => {
+          addGpu();
+          setGpuPickerOpen(false);
+        }}
+      />
 
       {/* Select base image dialog — Local + Custom + Ubuntu catalogs */}
       <Dialog open={imageDialogOpen} onOpenChange={setImageDialogOpen}>

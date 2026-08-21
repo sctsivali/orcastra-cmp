@@ -1,0 +1,85 @@
+import {
+  Tooltip as UITooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
+interface GaugeChartProps {
+  value: number;
+  max?: number;
+  label: string;
+  color?: string;
+  size?: number;
+  statusMessage?: string; // Optional status message to show on hover when value is 0
+}
+
+export function GaugeChart({ value, max = 100, label, color = "#3b82f6", size = 120, statusMessage }: GaugeChartProps) {
+  const percentage = Math.min((value / max) * 100, 100);
+  const strokeWidth = 12;
+  const radius = (size - strokeWidth) / 2;
+  const circumference = radius * Math.PI; // Half circle
+  const offset = circumference - (percentage / 100) * circumference;
+  
+  // Determine color based on percentage
+  const getColor = () => {
+    if (percentage >= 90) return "#ef4444"; // red
+    if (percentage >= 75) return "#f59e0b"; // amber
+    return color;
+  };
+
+  // Show tooltip only when value is 0 and we have a status message
+  const showTooltip = percentage === 0 && statusMessage;
+
+  const gaugeContent = (
+    <div className="flex flex-col items-center">
+      <svg width={size} height={size / 2 + 20} className="transform">
+        {/* Background arc */}
+        <path
+          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={strokeWidth}
+          className="text-muted"
+        />
+        {/* Value arc */}
+        <path
+          d={`M ${strokeWidth / 2} ${size / 2} A ${radius} ${radius} 0 0 1 ${size - strokeWidth / 2} ${size / 2}`}
+          fill="none"
+          stroke={getColor()}
+          strokeWidth={strokeWidth}
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          strokeLinecap="round"
+          className="transition-all duration-500"
+        />
+        {/* Value text */}
+        <text
+          x={size / 2}
+          y={size / 2}
+          textAnchor="middle"
+          className="fill-foreground text-xl font-bold"
+        >
+          {percentage.toFixed(1)}%
+        </text>
+      </svg>
+      <span className="text-sm font-medium text-muted-foreground mt-1">{label}</span>
+    </div>
+  );
+
+  if (showTooltip) {
+    return (
+      <UITooltip>
+        <TooltipTrigger asChild>
+          <div className="cursor-help">
+            {gaugeContent}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-xs">
+          <p className="text-sm">{statusMessage}</p>
+        </TooltipContent>
+      </UITooltip>
+    );
+  }
+
+  return gaugeContent;
+}
