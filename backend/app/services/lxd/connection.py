@@ -211,24 +211,32 @@ class LXDConnectionManager:
         Clean up temporary certificate files.
         Overwrites file content before deletion.
         """
-        if cluster_id in self._temp_cert_paths:
-            cert_path, key_path = self._temp_cert_paths[cluster_id]
-            try:
-                for path in [cert_path, key_path]:
-                    if os.path.exists(path):
-                        try:
-                            size = os.path.getsize(path)
-                            with open(path, 'wb') as f:
-                                f.write(b'\x00' * size)
-                                f.flush()
-                                os.fsync(f.fileno())
-                        except Exception:
-                            pass
-                        os.unlink(path)
-                logger.debug(f"Cleaned temp cert files for {cluster_id}")
-            except Exception as e:
-                logger.debug(f"Error cleaning temp files for {cluster_id}: {e}")
-            del self._temp_cert_paths[cluster_id]
+        # important: claim the entry atomically. This used to test membership, unlink the
+        # files, then `del`, and `_temp_cert_paths` is a plain dict with no lock while
+        # get_client runs in a thread pool. Two threads cleaning the same cluster both
+        # passed the test, and the loser raised KeyError from inside _auto_reconnect's own
+        # failure handler, so a cluster that merely could not be reached answered 500.
+        # pop is the entire fix: exactly one caller receives the paths.
+        paths = self._temp_cert_paths.pop(cluster_id, None)
+        if paths is None:
+            return
+
+        cert_path, key_path = paths
+        try:
+            for path in [cert_path, key_path]:
+                if os.path.exists(path):
+                    try:
+                        size = os.path.getsize(path)
+                        with open(path, 'wb') as f:
+                            f.write(b'\x00' * size)
+                            f.flush()
+                            os.fsync(f.fileno())
+                    except Exception:
+                        pass
+                    os.unlink(path)
+            logger.debug(f"Cleaned temp cert files for {cluster_id}")
+        except Exception as e:
+            logger.debug(f"Error cleaning temp files for {cluster_id}: {e}")
     
     def _cleanup_all_temp_files(self) -> None:
         """Clean up all temporary certificate files (called on exit)."""
