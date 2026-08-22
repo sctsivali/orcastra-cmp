@@ -13,6 +13,7 @@ from app.services.lxd_service import (
     require_client,
 )
 from pydantic import BaseModel, Field
+from pylxd.exceptions import LXDAPIException
 from app.core.single_flight import single_flight_on_fresh
 from app.core.cache import get_cache_manager, MEMBER_RESOURCES_CACHE_PREFIX
 from app.core.config import get_settings
@@ -457,10 +458,25 @@ async def get_member_resources(
         return resources
         
     except HTTPException:
-        # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
-        # so an offline cluster does not read as a server fault.
+        # important: let require_client's 503 through, so an offline cluster does not read as a
+        # server fault. Without this the broad handler below converts it into a 500.
         raise
+    except LXDAPIException as e:
+        # important: LXD answers 404 for `?target=<name>` on a host that is not clustered, and
+        # for a member name that does not exist. Neither is a server fault, and reporting them
+        # as 500 sent an operator looking for a backend bug that was not there.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status == 404:
+            logger.info(f"No cluster member '{member_name}' on {node}: {e}")
+            raise HTTPException(
+                status_code=404,
+                detail=f"'{member_name}' is not a cluster member of '{node}'",
+            )
+        logger.error(f"Error getting resources for member {member_name} from {node}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Cluster '{node}' rejected the member resource request: {str(e)}",
+        )
     except Exception as e:
         logger.error(f"Error getting resources for member {member_name} from {node}: {e}")
         raise HTTPException(

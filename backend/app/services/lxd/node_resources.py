@@ -219,9 +219,9 @@ def aggregate_microcloud_resources(
                         # Get CPU usage by counting instances on this member
                         member_cpu_used = 0
                         try:
-                            # Get all instances and filter by location (member)
-                            instances = client.instances.all()
-                            for instance in instances:
+                            # Reuse the cluster-wide list fetched once above rather than
+                            # re-listing every instance for every member.
+                            for instance in cluster_instances:
                                 # Check if instance is on this specific member
                                 instance_location = getattr(instance, 'location', '')
                                 if instance_location == member_name and instance.status == "Running":

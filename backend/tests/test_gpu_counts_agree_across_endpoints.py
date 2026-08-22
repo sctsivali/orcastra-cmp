@@ -134,3 +134,18 @@ def test_the_picker_payload_keeps_what_the_create_form_reads() -> None:
 def test_the_inventory_exposes_one_public_surface() -> None:
     for name in ("build_gpu_inventory", "classify_gpu_card", "parse_gpu_cards", "GpuInventory"):
         assert name in gpu_module.__all__, f"{name} is part of the GPU API"
+
+
+def test_member_resources_tells_a_missing_member_apart_from_a_fault() -> None:
+    """LXD answers 404 for `?target=` on a host that is not clustered.
+
+    The handler turned every exception into a 500, so asking a standalone host for its member
+    resources reported a server fault. Verified live on `pandora`: it answered 500 before and
+    404 after.
+    """
+    source = (ROUTERS / "cluster_members.py").read_text()
+    handler = source[source.index("async def get_member_resources") :]
+
+    assert "except LXDAPIException" in handler, "the LXD error must be classified, not swallowed"
+    assert "status_code=404" in handler, "a member that does not exist is a 404"
+    assert "status_code=502" in handler, "a cluster that rejects the call is not our fault either"
