@@ -6,6 +6,7 @@ import { Cpu, HardDrive, Server, Database, Network, Package, Info, Sparkles } fr
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
@@ -229,7 +230,7 @@ export default function TechnologiesPage() {
           },
           {
             label: "Architectures",
-            value: cpuArchitectures.size > 0 ? Array.from(cpuArchitectures).join(", ") : "x86_64",
+            value: cpuArchitectures.size > 0 ? Array.from(cpuArchitectures).join(", ") : EMPTY_VALUE,
             detail: "Supported CPU architectures",
           },
           {
@@ -250,13 +251,8 @@ export default function TechnologiesPage() {
             detail: "Aggregate across all nodes",
           },
           {
-            label: "Memory Type",
-            value: "DDR4/DDR5",
-            detail: "Modern high-performance RAM",
-          },
-          {
             label: "Memory per Node",
-            value: connectedNodes.length > 0 ? `~${(totalMemory / connectedNodes.length / (1024 ** 3)).toFixed(2)} GB` : "N/A",
+            value: connectedNodes.length > 0 ? `~${(totalMemory / connectedNodes.length / (1024 ** 3)).toFixed(2)} GB` : EMPTY_VALUE,
             detail: "Average memory allocation",
           },
         ],
@@ -268,7 +264,7 @@ export default function TechnologiesPage() {
         items: [
           {
             label: "Storage Backends",
-            value: storageBackends.size > 0 ? Array.from(storageBackends).join(", ") : "dir, zfs, btrfs",
+            value: storageBackends.size > 0 ? Array.from(storageBackends).join(", ") : EMPTY_VALUE,
             detail: "Available storage types",
           },
           {
@@ -281,33 +277,6 @@ export default function TechnologiesPage() {
               )
               .toString(),
             detail: "Total configured storage pools",
-          },
-          {
-            label: "Features",
-            value: "Snapshots, Clones, Compression",
-            detail: "Advanced storage capabilities",
-          },
-        ],
-      },
-      {
-        icon: Network,
-        title: "Network",
-        description: "Network infrastructure and connectivity",
-        items: [
-          {
-            label: "Network Type",
-            value: "Software-Defined Networking",
-            detail: "Flexible virtual network infrastructure",
-          },
-          {
-            label: "Protocol Support",
-            value: "TCP/IP, IPv4/IPv6",
-            detail: "Standard network protocols",
-          },
-          {
-            label: "Virtual Networks",
-            value: "OVS, Bridge",
-            detail: "Network virtualization technologies",
           },
         ],
       },
@@ -369,24 +338,8 @@ export default function TechnologiesPage() {
 
         {/* Hardware Tab */}
         <TabsContent value="hardware" className="space-y-6 mt-6">
-          <Card className="bg-muted/50">
-            <CardContent className="p-6">
-              <div className="flex items-start gap-3">
-                <Info className="h-5 w-5 text-blue-500 mt-0.5" />
-                <div>
-                  <p className="text-sm font-medium mb-1">
-                    Real-time Data from Production Cluster
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    The hardware information below is aggregated from live data collected across all nodes in the Orcastra cluster. This ensures accurate, up-to-date resource information.
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {hardwareInfo && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {hardwareInfo ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
               {hardwareInfo.map((category) => {
                 const Icon = category.icon;
                 return (
@@ -428,43 +381,17 @@ export default function TechnologiesPage() {
                 );
               })}
             </div>
+          ) : (
+            <Card>
+              <CardContent className="pt-6">
+                <EmptyState
+                  icon={Server}
+                  title="No node data yet"
+                  description="Hardware figures appear here once a node is connected and reporting its resources."
+                />
+              </CardContent>
+            </Card>
           )}
-
-          {/* Hardware Brands & Vendors */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Available Hardware</CardTitle>
-              <CardDescription>
-                Compatible with industry-standard server hardware
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { name: "Intel", logo: "/brands/intel.png" },
-                  { name: "AMD", logo: "/brands/amd.png" },
-                  { name: "Dell", logo: "/brands/dell.png" },
-                  { name: "HP", logo: "/brands/hp.png" },
-                  { name: "Supermicro", logo: "/brands/supermicro.png" },
-                  { name: "Lenovo", logo: "/brands/lenovo.png" },
-                  { name: "Cisco", logo: "/brands/cisco.png" },
-                  { name: "Western Digital", logo: "/brands/wd.png" },
-                ].map((brand) => (
-                  <div
-                    key={brand.name}
-                    className="flex items-center justify-center p-6 rounded-lg border bg-card hover:bg-muted/50 hover:border-primary/20 transition-all duration-200 group"
-                  >
-                    <img
-                      src={brand.logo}
-                      alt={brand.name}
-                      className="h-8 w-auto object-contain brightness-0 dark:invert opacity-70 group-hover:opacity-100 transition-opacity"
-                      title={brand.name}
-                    />
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
         </TabsContent>
 
         {/* Software Tab */}
