@@ -407,7 +407,7 @@ EOF`}
             title={isReadOnly ? "Disabled in read-only mode" : undefined}
           >
             <Plus className="h-4 w-4" />
-            <span className="hidden sm:inline">Register Cluster</span>
+            <span className="hidden sm:inline">Register Node</span>
             <span className="sm:hidden">Register</span>
           </Button>
         </div>
@@ -436,7 +436,7 @@ EOF`}
               <Button asChild className="gap-2">
                 <IntentLink href="/register-node">
                   <Plus className="h-4 w-4" />
-                  Register First Cluster
+                  Register Node
                 </IntentLink>
               </Button>
             </div>
