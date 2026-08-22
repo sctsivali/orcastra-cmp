@@ -12,6 +12,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
@@ -67,9 +68,9 @@ export function NodeDetailModal({
                 </Badge>
               )}
             </DialogTitle>
-            <p className="text-sm text-muted-foreground font-mono">
+            <DialogDescription className="font-mono">
               {node.endpoint}
-            </p>
+            </DialogDescription>
           </div>
         </DialogHeader>
 
