@@ -190,6 +190,20 @@ def test_server_info_is_503_not_500():
     _assert_unreachable(r, "GET /server/{host}")
 
 
+def test_server_resources_is_503_not_500():
+    """The sibling of the route above, and it was missing both halves of the guard.
+
+    lxd_service.get_node_resources called get_client without require_client, so an unreachable
+    cluster arrived as a None dereference, and the route had no `except HTTPException: raise`
+    to let a 503 past its broad handler. Fixing only one half accomplishes nothing, which is
+    why this asserts through the real route rather than at the service.
+    """
+    from app.routers import lxd_server
+
+    r = _app(lxd_server).get(f"/server/{HOST}/resources")
+    _assert_unreachable(r, "GET /server/{host}/resources")
+
+
 def test_operation_detail_does_not_claim_the_operation_is_missing():
     from app.routers import lxd_operations
 

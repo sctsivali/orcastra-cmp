@@ -4,7 +4,7 @@ Provides endpoints for viewing nodes grouped by geographic region with hardware 
 """
 
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Dict, Any, Optional, Set, Tuple
+from typing import List, Dict, Optional, Set, Tuple
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -24,6 +24,11 @@ from app.services.lxd.gpu import build_gpu_inventory
 
 logger = logging.getLogger(__name__)
 from app.core.dependencies import require_tenant
+from app.services.lxd.hardware import (
+    cpu_model_from_sockets,
+    cpu_vendor_from_sockets,
+    storage_types_from_disks,
+)
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_cluster_filter, get_tenant_acl
 import time
 from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
@@ -36,64 +41,10 @@ router = APIRouter(
 )
 
 
-def get_cpu_vendor_from_info(cpu_info: Dict[str, Any]) -> Optional[str]:
-    """Extract CPU vendor from LXD resources CPU info."""
-    sockets = cpu_info.get("sockets", [])
-    if sockets:
-        # Get vendor from first socket
-        socket = sockets[0]
-        vendor = socket.get("vendor", "")
-        # Normalize vendor names
-        vendor_lower = vendor.lower()
-        if "intel" in vendor_lower:
-            return "Intel"
-        elif "amd" in vendor_lower or "advanced micro" in vendor_lower:
-            return "AMD"
-        elif "apple" in vendor_lower:
-            return "Apple"
-        elif "arm" in vendor_lower:
-            return "ARM"
-        elif vendor:
-            return vendor
-    return None
-
-
-def get_cpu_model_from_info(cpu_info: Dict[str, Any]) -> Optional[str]:
-    """Extract CPU model from LXD resources CPU info."""
-    sockets = cpu_info.get("sockets", [])
-    if sockets:
-        socket = sockets[0]
-        return socket.get("name", None)
-    return None
-
-
-def get_storage_types_from_disks(disk_info: Dict[str, Any]) -> List[str]:
-    """Extract storage types (NVMe, SATA, SSD, HDD) from LXD resources disk info."""
-    storage_types: Set[str] = set()
-    
-    disks = disk_info.get("disks", [])
-    for disk in disks:
-        # Check type field
-        disk_type = disk.get("type", "").lower()
-        
-        # Check for NVMe
-        if disk_type == "nvme" or "nvme" in disk.get("device", "").lower():
-            storage_types.add("NVMe")
-        # Check for SATA
-        elif disk_type == "sata" or "sd" in disk.get("device", "").lower():
-            # Check if rotational (HDD) or not (SSD)
-            if disk.get("rotational", False):
-                storage_types.add("HDD")
-            else:
-                storage_types.add("SATA SSD")
-        # Check for other types
-        elif disk_type == "scsi":
-            storage_types.add("SCSI")
-        elif disk_type == "virtio":
-            storage_types.add("VirtIO")
-    
-    return list(storage_types) if storage_types else ["Unknown"]
-
+# note: the CPU and disk helpers these three names used to hold now live in
+# services/lxd/hardware.py, so the region rollup and the per-node profile read the same
+# code. The disk classifier gained a fix on the way: it used to branch on a `rotational`
+# key LXD does not emit, so every SATA disk was reported as an SSD.
 
 def aggregate_hardware_info(nodes_hardware: List[ExtendedHardwareInfo]) -> ExtendedHardwareInfo:
     """Aggregate hardware info from multiple nodes into a summary."""
@@ -289,8 +240,8 @@ async def get_regions_overview(
                                     cpu_total = cpu_info.get("total", 0)
                                     cpu_sockets = len(cpu_info.get("sockets", []))
                                     cpu_architecture = cpu_info.get("architecture", "x86_64")
-                                    cpu_vendor = get_cpu_vendor_from_info(cpu_info)
-                                    cpu_model = get_cpu_model_from_info(cpu_info)
+                                    cpu_vendor = cpu_vendor_from_sockets(cpu_info)
+                                    cpu_model = cpu_model_from_sockets(cpu_info)
                             
                                     memory_info = resources.get("memory", {})
                                     memory_total = memory_info.get("total", 0)
@@ -303,7 +254,7 @@ async def get_regions_overview(
                                     gpu_inv = build_gpu_inventory(resources)
                             
                                     disk_info = resources.get("storage", {})
-                                    storage_types = get_storage_types_from_disks(disk_info)
+                                    storage_types = storage_types_from_disks(disk_info)
                             
                                     storage_total = 0
                                     storage_used = 0

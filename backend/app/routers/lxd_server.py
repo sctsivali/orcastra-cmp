@@ -261,6 +261,11 @@ async def get_server_resources(
     verify_cluster_access(node_name)
     try:
         return lxd_service.get_node_resources(node_name)
+    except HTTPException:
+        # important: let require_client's 503 through. The broad handler below would turn it
+        # into a 500, so an unreachable node would read as a server fault. The sibling config
+        # route above carries the same pair; this one was missing both halves.
+        raise
     except Exception as e:
         logger.error(f"Error getting server resources from {node_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

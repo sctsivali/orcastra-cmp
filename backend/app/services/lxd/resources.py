@@ -18,10 +18,57 @@ from app.core.node_metadata import get_node_metadata_store
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_node_type
 from .utils import parse_vm_status, find_instance_in_projects
 from .gpu import GpuInventory, build_gpu_inventory
+from .hardware import build_hardware_profile
 from .node_resources import aggregate_microcloud_resources, build_node_resources
 from .exceptions import LXDOperationError
 
 logger = logging.getLogger(__name__)
+
+
+# Keys of the LXD environment block that may reach a client.
+#
+# important: allowlist, not denylist. The raw block also carries the cluster's certificate PEM,
+# its fingerprint, every listen address and the server PID, and NodeStatus.environment is typed
+# Dict[str, Any] so response_model filters nothing. It rides GET /nodes, which the Technologies
+# page reads and which has no role gate, so a Tenant's browser was receiving all of it.
+#
+# Nothing in the backend reads status.environment: every consumer works off host_info directly,
+# so narrowing this is contained to what goes on the wire. Same decision, and the same shape, as
+# routers/integrations.py:_public_location_data.
+PUBLIC_ENVIRONMENT_KEYS = frozenset(
+    {
+        "architectures",
+        "backup_metadata_version_range",
+        "driver",
+        "driver_version",
+        "firewall",
+        "instance_types",
+        "kernel",
+        "kernel_architecture",
+        "kernel_features",
+        "kernel_version",
+        "lxc_features",
+        "os_name",
+        "os_version",
+        "project",
+        "server",
+        "server_clustered",
+        "server_event_mode",
+        "server_lts",
+        "server_name",
+        "server_version",
+        "storage",
+        "storage_supported_drivers",
+        "storage_version",
+    }
+)
+
+
+def public_environment(environment: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The environment block minus anything a client has no business holding."""
+    if not environment:
+        return environment
+    return {key: value for key, value in environment.items() if key in PUBLIC_ENVIRONMENT_KEYS}
 
 
 class ResourceManager:
@@ -189,6 +236,10 @@ class ResourceManager:
                 "storage_total": sum(p.get("space_total", 0) for p in storage_pools),
                 "storage_available": storage_available,
                 "storage_pools": storage_pools,
+                # Detected hardware, identifier-stripped. resources_data is the raw
+                # /1.0/resources body read above and otherwise discarded; pylxd memoises
+                # client.resources, so this costs no extra round trip.
+                "hardware": build_hardware_profile(resources_data),
             }
             
         except Exception as e:
@@ -221,7 +272,7 @@ class ResourceManager:
             )
             status.api_version = host_info.get("api_version")
             status.auth = host_info.get("auth")
-            status.environment = host_info.get("environment")
+            status.environment = public_environment(host_info.get("environment"))
             
             # Parse tags from server config
             # Use direct API call to get fresh data (avoid pylxd caching)

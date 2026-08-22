@@ -244,8 +244,13 @@ class LXDService:
         return statuses
     
     def get_node_resources(self, node_name: str) -> Dict[str, Any]:
-        """Get available resources for a specific node."""
-        client = self.connection_manager.get_client(node_name)
+        """Get available resources for a specific node.
+
+        important: require_client, like every sibling here. Without it a breaker-tripped
+        cluster arrived as a None dereference and the route answered 500, sending an operator
+        to look for a backend fault when the node was simply not answering.
+        """
+        client = require_client(self.connection_manager.get_client(node_name), node_name)
         return self.resource_manager.get_node_resources(client, node_name)
 
     def get_node_resources_detail(self, node_name: str) -> NodeResources:

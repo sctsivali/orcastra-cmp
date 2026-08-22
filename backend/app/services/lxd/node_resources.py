@@ -13,6 +13,7 @@ import pylxd
 from app.models.schemas import NodeResources
 
 from .gpu import GpuInventory, build_gpu_inventory
+from .hardware import build_hardware_profile, merge_hardware_profiles
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
         storage_total=resources_data.get("storage_total", 0),
         storage_available=resources_data.get("storage_available", 0),
         storage_pools=resources_data.get("storage_pools", []),
+        hardware=resources_data.get("hardware"),
     )
 
 
@@ -125,6 +127,9 @@ def aggregate_microcloud_resources(
             total_memory = 0
             total_memory_used = 0
             cluster_gpu = GpuInventory.empty()
+            # One profile per member, folded after the loop. A cluster row must not present
+            # one member's motherboard as the cluster's.
+            member_hardware = []
             total_storage = 0
             total_storage_available = 0
             storage_pools_map = {}
@@ -172,6 +177,9 @@ def aggregate_microcloud_resources(
                         # against another member's cards.
                         member_gpu_inv = build_gpu_inventory(
                             member_resources, cluster_instances, member=member_name
+                        )
+                        member_hardware.append(
+                            build_hardware_profile(member_resources, member=member_name)
                         )
                         member_gpu_total = member_gpu_inv.gpu_total
                         member_gpu_used = member_gpu_inv.gpu_used
@@ -305,6 +313,7 @@ def aggregate_microcloud_resources(
                 storage_total=total_storage,
                 storage_available=total_storage_available,
                 storage_pools=storage_pools_list,
+                hardware=merge_hardware_profiles(member_hardware),
             )
             
             logger.info(

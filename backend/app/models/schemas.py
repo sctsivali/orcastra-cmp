@@ -3,7 +3,7 @@ Pydantic models for Orcastra Dashboard API.
 Defines request/response schemas for VMs and operations.
 """
 
-from pydantic import BaseModel, Field, computed_field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 from typing import Optional, Dict, Any, List, Literal
 from enum import Enum
 from datetime import datetime
@@ -326,7 +326,11 @@ class GPUNvidiaInfo(BaseModel):
     nvrm_version: Optional[str] = Field(None, description="NVRM driver version")
     brand: Optional[str] = Field(None, description="Brand name (ex;, 'GeForce', 'Quadro')")
     model: Optional[str] = Field(None, description="Model name")
-    uuid: Optional[str] = Field(None, description="GPU UUID")
+    # important: exclude=True, not deleted. A GPU UUID is a per-device serial and this model
+    # rides GET /nodes, which the ungated Technologies page reads, so it must not reach a
+    # Tenant's browser. gpu_model.py builds its card-match keys from the raw LXD dict rather
+    # than from this model, so dropping it from the response costs the matcher nothing.
+    uuid: Optional[str] = Field(None, description="GPU UUID; internal only, never serialized", exclude=True)
     architecture: Optional[str] = Field(None, description="Architecture generation")
     card_name: Optional[str] = Field(None, description="Card device name (ex;, 'nvidia0')")
     card_device: Optional[str] = Field(None, description="Card device number")
@@ -403,6 +407,167 @@ class GpuCardListResponse(BaseModel):
     total: int = Field(0, description="Total cards detected")
     compute_total: int = Field(0, description="Cards that count as compute capacity")
 
+# ========== Detected hardware (Technologies page) ==========
+# Every model below is an allowlist, and every one forbids extra keys. GET /1.0/resources
+# carries asset identifiers next to the facts worth showing: system UUID and serial, chassis and
+# motherboard serials, disk serial, WWN and device path, and a MAC address per NIC port. The
+# Technologies page has no role gate and is reachable by Tenant, so none of that may leave the
+# backend. extra="forbid" means a future LXD release that adds a new identifier cannot be
+# carried by accident: it has to be named here first.
+#
+# Built in exactly one place, services/lxd/hardware.py:build_hardware_profile.
+
+
+class FirmwareInfo(BaseModel):
+    """System firmware (BIOS or UEFI)."""
+    model_config = ConfigDict(extra="forbid")
+    vendor: Optional[str] = Field(None, description="Firmware vendor")
+    version: Optional[str] = Field(None, description="Firmware version")
+    date: Optional[str] = Field(None, description="Firmware release date, as the node reports it")
+
+
+class ChassisInfo(BaseModel):
+    """Enclosure description. The chassis serial is deliberately absent."""
+    model_config = ConfigDict(extra="forbid")
+    vendor: Optional[str] = Field(None, description="Chassis vendor")
+    type: Optional[str] = Field(None, description="Chassis type (ex; 'Rack Mount Chassis')")
+    version: Optional[str] = Field(None, description="Chassis version")
+
+
+class MotherboardInfo(BaseModel):
+    """Mainboard description. The board serial is deliberately absent."""
+    model_config = ConfigDict(extra="forbid")
+    vendor: Optional[str] = Field(None, description="Motherboard vendor")
+    product: Optional[str] = Field(None, description="Motherboard product name")
+    version: Optional[str] = Field(None, description="Motherboard version")
+
+
+class SystemInfo(BaseModel):
+    """The machine itself.
+
+    Absent entirely rather than blank in two cases: the node omits the section (nested
+    containers report no DMI), and a MicroCloud fold where members disagree. Neither may render
+    as a row of empty values on a page that shows detected facts only.
+
+    System UUID, serial and SKU have no field here and never reach the client.
+    """
+    model_config = ConfigDict(extra="forbid")
+    vendor: Optional[str] = Field(None, description="System vendor (ex; 'Dell Inc.')")
+    product: Optional[str] = Field(None, description="System product (ex; 'PowerEdge R650')")
+    family: Optional[str] = Field(None, description="Product family")
+    version: Optional[str] = Field(None, description="System version")
+    type: Optional[str] = Field(None, description="System type as the node reports it")
+    firmware: Optional[FirmwareInfo] = Field(None, description="Firmware detail")
+    chassis: Optional[ChassisInfo] = Field(None, description="Chassis detail")
+    motherboard: Optional[MotherboardInfo] = Field(None, description="Motherboard detail")
+
+
+class CPUSocketInfo(BaseModel):
+    """One populated socket. Cores and threads are counted, never inferred."""
+    model_config = ConfigDict(extra="forbid")
+    socket: Optional[int] = Field(None, description="Socket number; None on a cluster fold, where it means nothing")
+    name: Optional[str] = Field(None, description="CPU model name as the node reports it")
+    vendor: Optional[str] = Field(None, description="Normalized vendor, or the raw string when it matches nothing known")
+    cores: int = Field(0, description="Physical cores in this socket")
+    threads: int = Field(0, description="Hardware threads in this socket")
+    frequency: Optional[int] = Field(None, description="Base frequency in MHz")
+    frequency_turbo: Optional[int] = Field(None, description="Turbo frequency in MHz")
+    member: Optional[str] = Field(None, description="MicroCloud member this socket belongs to; None for a single host")
+
+
+class CPUTopology(BaseModel):
+    """Counted by walking sockets, cores and threads. cpu.total is not a core count."""
+    model_config = ConfigDict(extra="forbid")
+    architectures: List[str] = Field(default_factory=list, description="Distinct detected architectures; empty when none was reported, never defaulted")
+    total: int = Field(0, description="Logical CPUs the node reports")
+    cores: int = Field(0, description="Physical cores summed over every socket; 0 when no topology was reported")
+    threads: int = Field(0, description="Hardware threads summed over every core; 0 when no topology was reported")
+    numa_nodes: int = Field(0, description="Distinct NUMA nodes seen on CPU threads; 0 when unreported")
+    sockets: List[CPUSocketInfo] = Field(default_factory=list, description="Per-socket detail")
+
+
+class MemoryTopology(BaseModel):
+    """Memory totals, including hugepages."""
+    model_config = ConfigDict(extra="forbid")
+    total: int = Field(0, description="Total memory in bytes")
+    used: int = Field(0, description="Used memory in bytes")
+    free: int = Field(0, description="Total minus used, floored at zero")
+    hugepages_total: int = Field(0, description="Total hugepage bytes")
+    hugepages_used: int = Field(0, description="Used hugepage bytes")
+    hugepages_size: int = Field(0, description="Hugepage size in bytes")
+
+
+class NetworkPortInfo(BaseModel):
+    """One NIC port. The MAC address is dropped in the backend, not hidden in the UI."""
+    model_config = ConfigDict(extra="forbid")
+    id: Optional[str] = Field(None, description="Interface name (ex; 'eno1')")
+    port: Optional[int] = Field(None, description="Port number on the card")
+    protocol: Optional[str] = Field(None, description="Port protocol")
+    port_type: Optional[str] = Field(None, description="Port type (ex; 'twisted pair')")
+    transceiver_type: Optional[str] = Field(None, description="Transceiver type")
+    auto_negotiation: Optional[bool] = Field(None, description="Auto-negotiation enabled")
+    link_detected: Optional[bool] = Field(None, description="Carrier detected")
+    link_speed: Optional[int] = Field(None, description="Negotiated link speed in Mbit/s")
+    link_duplex: Optional[str] = Field(None, description="Link duplex")
+
+
+class NetworkCardInfo(BaseModel):
+    """One detected network card."""
+    model_config = ConfigDict(extra="forbid")
+    vendor: Optional[str] = Field(None, description="Card vendor")
+    vendor_id: Optional[str] = Field(None, description="PCI vendor ID")
+    product: Optional[str] = Field(None, description="Card product name")
+    product_id: Optional[str] = Field(None, description="PCI product ID")
+    driver: Optional[str] = Field(None, description="Kernel driver")
+    driver_version: Optional[str] = Field(None, description="Driver version")
+    firmware_version: Optional[str] = Field(None, description="Card firmware version")
+    pci_address: Optional[str] = Field(None, description="PCI address")
+    numa_node: Optional[int] = Field(None, description="NUMA node")
+    ports: List[NetworkPortInfo] = Field(default_factory=list, description="Ports on this card")
+    member: Optional[str] = Field(None, description="MicroCloud member this card belongs to; None for a single host")
+
+
+class StorageDeviceInfo(BaseModel):
+    """One physical disk. Serial, WWN and device path are dropped in the backend."""
+    model_config = ConfigDict(extra="forbid")
+    id: Optional[str] = Field(None, description="Kernel device name (ex; 'nvme0n1')")
+    device: Optional[str] = Field(None, description="Device major and minor")
+    model: Optional[str] = Field(None, description="Disk model")
+    type: Optional[str] = Field(None, description="Bus type (ex; 'nvme', 'sata')")
+    size: int = Field(0, description="Capacity in bytes")
+    numa_node: Optional[int] = Field(None, description="NUMA node")
+    removable: Optional[bool] = Field(None, description="Removable media")
+    read_only: Optional[bool] = Field(None, description="Read-only device")
+    firmware_version: Optional[str] = Field(None, description="Disk firmware version")
+    block_size: Optional[int] = Field(None, description="Logical block size in bytes")
+    rpm: Optional[int] = Field(None, description="Rotational speed; 0 means solid state. The node reports rpm, not a boolean")
+    partitions: int = Field(0, description="Number of partitions; the partition table itself is not emitted")
+    member: Optional[str] = Field(None, description="MicroCloud member this disk belongs to; None for a single host")
+
+
+class HardwareProfile(BaseModel):
+    """Detected hardware for one host, or for one whole MicroCloud cluster.
+
+    Nothing here is defaulted to a plausible value. A page that shows detected facts only must
+    show nothing rather than a guess, so an unreported architecture is an empty list and an
+    unreported system block is None.
+
+    GPU cards are deliberately not repeated here. NodeResources.gpu_cards already carries them
+    from the canonical inventory in services/lxd/gpu.py, and two sources for one fact is how the
+    GPU counts came to disagree in the first place.
+    """
+    model_config = ConfigDict(extra="forbid")
+    scope: str = Field("node", description="'node' for one host, 'cluster' when folded over MicroCloud members")
+    member_count: int = Field(1, description="Hosts this profile describes")
+    detected: bool = Field(False, description="False when the node returned nothing usable, so the UI shows nothing rather than zeros")
+    system: Optional[SystemInfo] = Field(None, description="Absent when the node omits the section, or when cluster members disagree")
+    cpu: CPUTopology = Field(default_factory=CPUTopology, description="CPU topology")
+    memory: MemoryTopology = Field(default_factory=MemoryTopology, description="Memory totals")
+    networks: List[NetworkCardInfo] = Field(default_factory=list, description="Detected network cards")
+    storage_devices: List[StorageDeviceInfo] = Field(default_factory=list, description="Detected physical disks")
+    storage_types: List[str] = Field(default_factory=list, description="Distinct disk classes; the same helper /regions uses")
+
+
 class NodeResources(BaseModel):
     """Node available resources information."""
     cpu_total: int = Field(0, description="Total CPU cores")
@@ -426,6 +591,7 @@ class NodeResources(BaseModel):
     storage_total: int = Field(0, description="Total storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
+    hardware: Optional[HardwareProfile] = Field(None, description="Detected hardware, identifier-stripped. None when the node did not answer, which must not look like an empty profile")
 
 
 class MemberResources(BaseModel):

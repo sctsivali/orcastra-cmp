@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 # backend must not keep serving a pre-change body for the rest of its TTL: gpu_total went from
 # "every DRM card" to "compute GPUs only", so an old body shows 2 where the new UI says 1.
 # Old keys are never read again and expire on their own.
-RESOURCE_SCHEMA_VERSION = "v2"
+# v3: NodeResources gained `hardware`. A v2 body deserializes with hardware=None, which
+# the UI cannot tell apart from a node that detected nothing.
+RESOURCE_SCHEMA_VERSION = "v3"
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
