@@ -130,12 +130,6 @@ export function GpuCardDetails({ card, dense = false }: GpuCardDetailsProps) {
               <p className="font-mono text-xs">{card.nvidia.nvrm_version}</p>
             </Field>
           )}
-          {card.nvidia.uuid && (
-            <div className="col-span-2 md:col-span-4">
-              <p className="text-muted-foreground text-xs">UUID</p>
-              <p className="font-mono text-xs break-all">{card.nvidia.uuid}</p>
-            </div>
-          )}
         </div>
       )}
 

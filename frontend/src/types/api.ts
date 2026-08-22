@@ -212,11 +212,13 @@ export interface GPUDRMInfo {
 
 // NVIDIA-specific GPU Information
 export interface GPUNvidiaInfo {
+  // note: `uuid` is deliberately absent. It is a per-device serial and the backend excludes it
+  // from the response, because NodeResources rides the ungated /nodes body that Technologies
+  // reads. It still exists server-side, where the card matcher uses it as a key.
   cuda_version?: string;
   nvrm_version?: string;
   brand?: string;
   model?: string;
-  uuid?: string;
   architecture?: string;
   card_name?: string;
   card_device?: string;
@@ -282,6 +284,131 @@ export interface GPUCardInfo {
 }
 
 // Node Resources
+// ==================== Detected Hardware ====================
+// Mirrors backend/app/models/schemas.py. Every field here survived an allowlist: asset
+// identifiers (system UUID and serial, chassis and motherboard serials, disk serial and WWN,
+// NIC MAC) are dropped in the backend and have no field on either side.
+
+export interface FirmwareInfo {
+  vendor?: string | null;
+  version?: string | null;
+  date?: string | null;
+}
+
+export interface ChassisInfo {
+  vendor?: string | null;
+  type?: string | null;
+  version?: string | null;
+}
+
+export interface MotherboardInfo {
+  vendor?: string | null;
+  product?: string | null;
+  version?: string | null;
+}
+
+export interface SystemInfo {
+  vendor?: string | null;
+  product?: string | null;
+  family?: string | null;
+  version?: string | null;
+  type?: string | null;
+  firmware?: FirmwareInfo | null;
+  chassis?: ChassisInfo | null;
+  motherboard?: MotherboardInfo | null;
+}
+
+export interface CPUSocketInfo {
+  socket?: number | null;
+  name?: string | null;
+  vendor?: string | null;
+  cores: number;
+  threads: number;
+  /** MHz. */
+  frequency?: number | null;
+  frequency_turbo?: number | null;
+  member?: string | null;
+}
+
+export interface CPUTopology {
+  /** Empty when the node reported none. Never defaulted to x86_64. */
+  architectures: string[];
+  /** Logical CPUs. NOT a core count. */
+  total: number;
+  /** 0 when the node sent no socket topology, which a Jetson does. */
+  cores: number;
+  threads: number;
+  numa_nodes: number;
+  sockets: CPUSocketInfo[];
+}
+
+export interface MemoryTopology {
+  total: number;
+  used: number;
+  free: number;
+  hugepages_total: number;
+  hugepages_used: number;
+  hugepages_size: number;
+}
+
+export interface NetworkPortInfo {
+  id?: string | null;
+  port?: number | null;
+  protocol?: string | null;
+  port_type?: string | null;
+  transceiver_type?: string | null;
+  auto_negotiation?: boolean | null;
+  link_detected?: boolean | null;
+  /** Mbit/s. */
+  link_speed?: number | null;
+  link_duplex?: string | null;
+}
+
+export interface NetworkCardInfo {
+  vendor?: string | null;
+  vendor_id?: string | null;
+  product?: string | null;
+  product_id?: string | null;
+  driver?: string | null;
+  driver_version?: string | null;
+  firmware_version?: string | null;
+  pci_address?: string | null;
+  numa_node?: number | null;
+  ports: NetworkPortInfo[];
+  member?: string | null;
+}
+
+export interface StorageDeviceInfo {
+  id?: string | null;
+  device?: string | null;
+  model?: string | null;
+  type?: string | null;
+  size: number;
+  numa_node?: number | null;
+  removable?: boolean | null;
+  read_only?: boolean | null;
+  firmware_version?: string | null;
+  block_size?: number | null;
+  /** 0 means solid state. The node reports rpm, not a boolean. */
+  rpm?: number | null;
+  partitions: number;
+  member?: string | null;
+}
+
+export interface HardwareProfile {
+  /** "cluster" when folded over MicroCloud members, so singular facts read differently. */
+  scope: string;
+  member_count: number;
+  /** False when the node returned nothing usable. Show nothing rather than zeros. */
+  detected: boolean;
+  system?: SystemInfo | null;
+  cpu: CPUTopology;
+  memory: MemoryTopology;
+  networks: NetworkCardInfo[];
+  storage_devices: StorageDeviceInfo[];
+  storage_types: string[];
+}
+
 export interface NodeResources {
   cpu_total: number;
   cpu_used: number;
@@ -311,6 +438,8 @@ export interface NodeResources {
     space_used: number;
     space_available: number;
   }>;
+  /** Detected hardware. Absent when the node did not answer, which is not the same as empty. */
+  hardware?: HardwareProfile | null;
 }
 
 // LXD Node Environment Information (from LXD API)
@@ -338,6 +467,17 @@ export interface NodeEnvironment {
   // Other
   firewall?: string;
   project?: string;
+  // note: these are all served and none was typed, so every read site cast. server_pid,
+  // addresses, certificate and certificate_fingerprint are deliberately absent: the backend
+  // allowlist drops them before the response leaves.
+  instance_types?: string[];
+  storage_supported_drivers?: Array<{ Name?: string; Version?: string; Remote?: boolean }>;
+  /** Values are the STRINGS "true" and "false". Boolean("false") is true, so compare. */
+  kernel_features?: Record<string, string>;
+  lxc_features?: Record<string, string>;
+  server_lts?: boolean;
+  server_event_mode?: string;
+  backup_metadata_version_range?: number[];
   [key: string]: unknown;
 }
 

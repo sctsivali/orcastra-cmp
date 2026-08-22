@@ -5,6 +5,10 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// note: the placeholder glyph, kept in step with components/ui/table-text.tsx. Importing
+// it from there would point lib/ at components/, which nothing else in lib/ does.
+const EMPTY_VALUE = "\u2014";
+
 export function formatBytes(bytes: number, decimals = 2): string {
   if (bytes === 0) return "0 Bytes";
 
@@ -15,6 +19,26 @@ export function formatBytes(bytes: number, decimals = 2): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
 
   return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+}
+
+/**
+ * CPU or link frequency, given in MHz.
+ *
+ * Lives here rather than in a component because formatBytes taught this codebase the lesson
+ * the expensive way: thirteen private copies exist and they disagree on whether 8 GiB reads
+ * as "8 GB" or "8.0 GB".
+ */
+export function formatFrequency(mhz: number | null | undefined): string {
+  if (mhz === null || mhz === undefined || mhz <= 0) return EMPTY_VALUE;
+  if (mhz < 1000) return `${Math.round(mhz)} MHz`;
+  return `${parseFloat((mhz / 1000).toFixed(2))} GHz`;
+}
+
+/** Link speed, given in Mbit/s. Same reasoning as formatFrequency. */
+export function formatLinkSpeed(mbit: number | null | undefined): string {
+  if (mbit === null || mbit === undefined || mbit <= 0) return EMPTY_VALUE;
+  if (mbit < 1000) return `${mbit} Mb/s`;
+  return `${parseFloat((mbit / 1000).toFixed(1))} Gb/s`;
 }
 
 export function formatDate(dateString: string | null | undefined): string {
