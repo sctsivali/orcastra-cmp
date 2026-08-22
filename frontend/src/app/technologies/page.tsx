@@ -2,16 +2,28 @@
 
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Cpu, HardDrive, Server, Database, Network, Package, Info, Sparkles } from "lucide-react";
+import { Cpu, HardDrive, Server, Database, Network, Package, Info, Sparkles, AlertTriangle } from "lucide-react";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { api } from "@/lib/api";
 import { formatHypervisorType } from "@/lib/utils";
 import type { NodeStatus, NodeEnvironment } from "@/types/api";
+
+function PageHeader() {
+  return (
+    <div>
+      <h1 className="text-4xl font-bold mb-2">Technologies</h1>
+      <p className="text-muted-foreground text-lg">
+        Explore the hardware and software powering the Orcastra platform
+      </p>
+    </div>
+  );
+}
 
 interface HardwareCategory {
   icon: React.ElementType;
@@ -139,7 +151,7 @@ function generateSoftwareStack(nodes: NodeStatus[]): SoftwareItem[] {
 }
 
 export default function TechnologiesPage() {
-  const { data: nodesResponse, isLoading } = useQuery<{ nodes: NodeStatus[]; all_connected: boolean }>({
+  const { data: nodesResponse, isLoading, isError, refetch } = useQuery<{ nodes: NodeStatus[]; all_connected: boolean }>({
     queryKey: ["nodes"],
     queryFn: () => api.nodes.status(),
   });
@@ -321,14 +333,38 @@ export default function TechnologiesPage() {
     );
   }
 
+  // important: a read that failed is not a fleet that is empty. `data` is undefined either
+  // way, so without this branch the page falls through to the no-node empty state and tells
+  // the operator their nodes are gone when the dashboard simply got no answer.
+  //
+  // note: only when there is nothing to show. A refetch can fail while the previous response
+  // is still held (refetchOnReconnect is on), and replacing readable data with an error is
+  // worse than showing it. Same rule as the sessions list.
+  if (isError && !nodesResponse) {
+    return (
+      <div className="container py-8 space-y-8">
+        <PageHeader />
+        <Card>
+          <CardContent className="pt-6">
+            <EmptyState
+              icon={AlertTriangle}
+              title="Could not load node data"
+              description="The dashboard did not get an answer for this page. This says nothing about whether your nodes are running."
+              action={
+                <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                  Retry
+                </Button>
+              }
+            />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="container py-8 space-y-8">
-      <div>
-        <h1 className="text-4xl font-bold mb-2">Technologies</h1>
-        <p className="text-muted-foreground text-lg">
-          Explore the hardware and software powering the Orcastra platform
-        </p>
-      </div>
+      <PageHeader />
 
       <Tabs defaultValue="hardware" className="w-full">
         <TabsList className="grid w-full max-w-md grid-cols-2 h-auto">
