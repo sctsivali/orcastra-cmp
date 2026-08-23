@@ -700,14 +700,12 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
     <Card className="hover:border-primary/50 transition-colors">
       <CardHeader className="pb-3 px-3 md:px-6">
         <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-2">
-          <div 
-            className="flex items-center gap-2 flex-1"
-          >
-            <FolderKanban className="h-4 w-4 text-muted-foreground" />
-            <CardTitle className="text-base">{project.name}</CardTitle>
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <FolderKanban className="h-4 w-4 text-muted-foreground shrink-0" />
+            <CardTitle className="text-base min-w-0 break-words">{project.name}</CardTitle>
           </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-xs">
+          <div className="flex items-center gap-2 shrink-0">
+            <Badge variant="outline" className="text-xs shrink-0">
               {project.host}
             </Badge>
             {/* Delete/Edit Button - Partner+ only */}
@@ -800,72 +798,56 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         </div>
         
         {/* Resource Usage */}
-        <div className="grid grid-cols-3 gap-2 pt-2">
-          {/* CPU */}
-          <div className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border">
-            <Cpu className="h-4 w-4 text-foreground/80 flex-shrink-0" />
-            <div className="flex flex-col min-w-0">
-              {limits.cpuLimit ? (
-                <>
-                  <span className="text-xs font-semibold text-foreground/80">
-                    {resourceUsage.cpuUsed} of {limits.cpuLimit}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">cores</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-xs font-semibold text-foreground/80">
-                    Unlimited
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">CPU</span>
-                </>
-              )}
+        {/* important: one chip per row, not a 3-up grid. Measured in the live app, a chip in the
+            grid was 99px wide at 1440 and 53px at 1024, leaving the text column 59px and 13px
+            against the 70px "Unlimited" needs. Numeric readouts like "19.9 of 66.0 GiB" did not
+            fit either. A quota an operator has to hover to read is not a readout, so the row is
+            the unit now: icon and value on the left, resource on the right, one line each. That
+            costs about one line of card height, not the two a stacked grid would. `truncate` and
+            `title` stay as a backstop for a very narrow card. */}
+        <div className="grid grid-cols-1 gap-2 pt-2">
+          {[
+            {
+              key: "cpu",
+              Icon: Cpu,
+              label: "CPU",
+              value: limits.cpuLimit
+                ? `${resourceUsage.cpuUsed} of ${limits.cpuLimit} cores`
+                : "Unlimited",
+            },
+            {
+              key: "ram",
+              Icon: MemoryStick,
+              label: "RAM",
+              value: limits.ramLimitBytes
+                ? `${(resourceUsage.ramUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of ${(limits.ramLimitBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`
+                : "Unlimited",
+            },
+            {
+              key: "storage",
+              Icon: HardDrive,
+              label: "Storage",
+              value: limits.storageLimitBytes
+                ? `${(resourceUsage.storageUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of ${(limits.storageLimitBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`
+                : "Unlimited",
+            },
+          ].map(({ key, Icon, label, value }) => (
+            <div
+              key={key}
+              className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border"
+            >
+              <Icon className="h-4 w-4 text-foreground/80 flex-shrink-0" />
+              <span
+                className="text-xs font-semibold text-foreground/80 truncate"
+                title={`${value} ${label}`}
+              >
+                {value}
+              </span>
+              <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
+                {label}
+              </span>
             </div>
-          </div>
-
-          {/* RAM */}
-          <div className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border">
-            <MemoryStick className="h-4 w-4 text-foreground/80 flex-shrink-0" />
-            <div className="flex flex-col min-w-0">
-              {limits.ramLimitBytes ? (
-                <>
-                  <span className="text-xs font-semibold text-foreground/80">
-                    {(resourceUsage.ramUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.ramLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">GiB</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-xs font-semibold text-foreground/80">
-                    Unlimited
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">RAM</span>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Storage */}
-          <div className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border">
-            <HardDrive className="h-4 w-4 text-foreground/80 flex-shrink-0" />
-            <div className="flex flex-col min-w-0">
-              {limits.storageLimitBytes ? (
-                <>
-                  <span className="text-xs font-semibold text-foreground/80">
-                    {(resourceUsage.storageUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of {(limits.storageLimitBytes / 1024 / 1024 / 1024).toFixed(1)}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">GiB</span>
-                </>
-              ) : (
-                <>
-                  <span className="text-xs font-semibold text-foreground/80">
-                    Unlimited
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">Storage</span>
-                </>
-              )}
-            </div>
-          </div>
+          ))}
         </div>
 
         <div className="space-y-2 pt-2 border-t">
