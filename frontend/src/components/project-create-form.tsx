@@ -250,14 +250,17 @@ export function ProjectCreateForm() {
   return (
     <div className="space-y-6 animate-fade-in">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => router.back()}>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => router.back()}
+          aria-label="Go back"
+        >
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">
-            Create New Project
-          </h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-3xl font-bold">Create New Project</h1>
+          <p className="text-muted-foreground mt-2">
             Create a new project to organize your instances
           </p>
         </div>

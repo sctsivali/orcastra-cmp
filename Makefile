@@ -261,6 +261,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-filter-url-roundtrip.mjs
 	@echo "$(COLOR_GREEN)Checking icon button names...$(COLOR_RESET)"
 	@node scripts/checks/check-icon-button-names.mjs
+	@echo "$(COLOR_GREEN)Checking stray JSX attributes...$(COLOR_RESET)"
+	@node scripts/checks/check-jsx-stray-attrs.mjs
 	@echo "$(COLOR_GREEN)Checking dialog affordances...$(COLOR_RESET)"
 	@node scripts/checks/check-dialog-affordances.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"

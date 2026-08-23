@@ -39,7 +39,13 @@ const src = join(root, 'frontend', 'src');
 // should change with state rather than sit still.
 //
 // Lower it when you fix one. It may fall and never rise.
-const BASELINE = 55;
+//
+// 55 -> 54: the back button on the Create Project form. The dashboard project kebab, which
+// the comment above already counted as cleared, was in fact invisible to this check the
+// whole time: its aria-label had landed below the opening tag as a text child, so the body
+// was not one self-closing element and isIconOnly() skipped it. Fixing that leak did not
+// move the number, it only made the button countable. See check-jsx-stray-attrs.mjs.
+const BASELINE = 54;
 
 // `vm-table.tsx` is deprecated and rendered by nothing, so its buttons cannot be announced
 // to anybody. Counting them would mean either a permanently failing check or a baseline

@@ -139,6 +139,12 @@ jobs:
       # the dashboard had 22 such buttons on one screen and the shared pagination 4 more.
       - name: Icon button names
         run: node scripts/checks/check-icon-button-names.mjs .
+      # An attribute that lands below its own opening `>` is a text child, and JSX renders it
+      # verbatim. Every project card on /inventory drew "aria-label=Project actions for <name>"
+      # across its title for three days, from the very commit meant to name that button. tsc,
+      # eslint and the icon-button guard all accept the shape.
+      - name: Stray JSX attributes
+        run: node scripts/checks/check-jsx-stray-attrs.mjs .
 
       # A Badge renders a div, so a dialog opened from one is mouse-only: no focus, no focus
       # ring, and Enter does nothing. And a DialogContent that bounds its own height must clip

@@ -932,16 +932,9 @@ export function InstanceCreateForm() {
           <ArrowLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            {form.type === "vm" ? (
-              <Monitor className="h-6 w-6" />
-            ) : (
-              <Container className="h-6 w-6" />
-            )}
-            Create New Instance
-          </h1>
-          <p className="text-muted-foreground">
-            Create a new container or virtual machine on your cluster.
+          <h1 className="text-3xl font-bold">Create New Instance</h1>
+          <p className="text-muted-foreground mt-2">
+            Create a new container or virtual machine on your cluster
           </p>
         </div>
       </div>
