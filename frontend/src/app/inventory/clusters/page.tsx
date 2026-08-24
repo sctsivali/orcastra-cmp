@@ -282,7 +282,7 @@ function ClustersContent() {
                             Copy
                           </Button>
                         </div>
-                        <pre className="bg-black text-green-400 p-3 rounded text-xs overflow-x-auto select-all cursor-text" onClick={(e) => {
+                        <pre className="bg-muted text-foreground font-mono p-3 rounded text-xs overflow-x-auto select-all cursor-text" onClick={(e) => {
                           const selection = window.getSelection();
                           const range = document.createRange();
                           range.selectNodeContents(e.currentTarget);
@@ -473,7 +473,7 @@ EOF`}
                         {cluster.zone || <TableEmptyValue label="No zone" />}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={statusMeta.badgeVariant}>
+                        <Badge variant={statusMeta.tone}>
                           <StatusIcon className="h-3 w-3 mr-1" />
                           {statusMeta.label}
                         </Badge>
@@ -493,7 +493,7 @@ EOF`}
                               size="sm"
                               onClick={() => handleRegenerateCert(cluster)}
                               title="Regenerate Certificate"
-                              className="text-amber-600 hover:text-amber-700"
+                              className="text-status-pending"
                             >
                               <KeyRound className="h-4 w-4" />
                             </Button>
@@ -503,7 +503,7 @@ EOF`}
                             size="sm"
                             onClick={() => setLocationModal({ open: true, cluster })}
                             title={cluster.location ? `Location: ${cluster.location.city}` : "Set Location"}
-                            className={cluster.location ? "text-emerald-600 hover:text-emerald-700" : "text-muted-foreground"}
+                            className={cluster.location ? "text-status-online" : "text-muted-foreground"}
                           >
                             <MapPin className="h-4 w-4" />
                           </Button>

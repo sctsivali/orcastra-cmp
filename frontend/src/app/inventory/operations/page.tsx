@@ -16,6 +16,7 @@ import {
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { OperationDetailDialog } from "./components/operation-detail-dialog";
+import { operationStatusTone } from "./components/operation-status";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -135,20 +136,6 @@ function OperationsContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
-
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case "success":
-      case "completed":
-        return "default";
-      case "running":
-        return "secondary";
-      case "pending":
-        return "outline";
-      default:
-        return "destructive";
-    }
-  };
 
   // Find the host for an operation (check metadata, node_name, or iterate nodes)
   const findOperationHost = (operation: any): string => {
@@ -320,7 +307,7 @@ function OperationsContent() {
                 }
               }}
               disabled={cancellingId !== null || killingId !== null}
-              className="bg-red-600 hover:bg-red-700"
+              className="bg-status-offline text-status-offline-foreground hover:bg-status-offline/90"
             >
               {(cancellingId === confirmDialog.operationId || killingId === confirmDialog.operationId) ? (
                 <>
@@ -396,8 +383,8 @@ function OperationsContent() {
                         <span className="text-sm">{operation.project || "default"}</span>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={getStatusColor(operation.status)}>
-                          {operation.status}
+                        <Badge variant={operationStatusTone(operation.status)}>
+                          {formatLabel(operation.status)}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -413,7 +400,7 @@ function OperationsContent() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 text-red-500 hover:text-red-600 hover:bg-red-100"
+                                className="h-8 w-8 text-status-offline"
                                 onClick={() => openCancelConfirm(operation)}
                                 disabled={cancellingId !== null || killingId !== null}
                               >
@@ -432,7 +419,7 @@ function OperationsContent() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 text-orange-500 hover:text-orange-600 hover:bg-orange-100"
+                                className="h-8 w-8 text-status-pending"
                                 onClick={() => openCancelConfirm(operation, true, instanceName || "N/A")}
                                 disabled={cancellingId !== null || killingId !== null}
                               >

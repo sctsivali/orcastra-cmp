@@ -58,11 +58,26 @@ const config: Config = {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
+        // DEFAULT keeps bg-status-online and text-status-online resolving exactly as before,
+        // so the existing dot and icon call sites are untouched. The foreground pair is what
+        // a solid status chip writes on top of the token.
         status: {
-          online: "hsl(var(--status-online))",
-          offline: "hsl(var(--status-offline))",
-          pending: "hsl(var(--status-pending))",
-          unknown: "hsl(var(--status-unknown))",
+          online: {
+            DEFAULT: "hsl(var(--status-online))",
+            foreground: "hsl(var(--status-online-foreground))",
+          },
+          offline: {
+            DEFAULT: "hsl(var(--status-offline))",
+            foreground: "hsl(var(--status-offline-foreground))",
+          },
+          pending: {
+            DEFAULT: "hsl(var(--status-pending))",
+            foreground: "hsl(var(--status-pending-foreground))",
+          },
+          unknown: {
+            DEFAULT: "hsl(var(--status-unknown))",
+            foreground: "hsl(var(--status-unknown-foreground))",
+          },
         },
       },
       borderRadius: {

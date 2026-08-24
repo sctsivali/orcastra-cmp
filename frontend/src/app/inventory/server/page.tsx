@@ -167,7 +167,7 @@ export default function ServerPage() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-sm">Public:</span>
-                    <Badge variant={server.public ? "default" : "outline"}>
+                    <Badge variant="outline">
                       {server.public ? "Yes" : "No"}
                     </Badge>
                   </div>

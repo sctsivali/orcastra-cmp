@@ -297,7 +297,7 @@ function ClusterMembersContent() {
                     </TableCell>
                     <TableCell>
                       <Badge 
-                        variant={member.status === "Online" ? "default" : "destructive"}
+                        variant={member.status === "Online" ? "positive" : "negative"}
                         className="gap-1"
                       >
                         {member.status === "Online" ? (

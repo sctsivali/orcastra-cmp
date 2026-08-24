@@ -151,6 +151,14 @@ jobs:
       # and scroll in DialogBody, or the title scrolls away with the body on a long record.
       - name: Dialog affordances
         run: node scripts/checks/check-dialog-affordances.mjs .
+      # A translucent tint behind saturated same-hue text is the app's most recognisable
+      # generated-UI signature. It was banned in prose and enforced by nothing, so it reached
+      # four of the nine Badge variants. It is also a WCAG failure: the amber one measures
+      # 2.73:1 on 12px semibold against a 4.5:1 floor. This also computes the ratio for every
+      # cva variant in both themes, which is what catches a "fix" that only darkens the text:
+      # doing that leaves warning at 4.30 and still failing.
+      - name: Semantic colour and contrast
+        run: node scripts/checks/check-semantic-colour.mjs .
 
   commit-format:
     name: Conventional commits

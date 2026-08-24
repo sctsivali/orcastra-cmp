@@ -27,6 +27,7 @@ import {
   type WarningKind,
   type WarningRecord,
 } from "./components/warning-detail-dialog";
+import { warningSeverityTone } from "./components/warning-severity";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import {
   Tabs,
@@ -259,22 +260,6 @@ function WarningsContent() {
     setDetailModalOpen(true);
   };
 
-  const getSeverityColor = (severity: string) => {
-    switch (severity.toLowerCase()) {
-      case "high":
-      case "critical":
-        return "destructive";
-      case "medium":
-      case "warning":
-        return "default";
-      case "low":
-      case "info":
-        return "secondary";
-      default:
-        return "outline";
-    }
-  };
-  
   const getSeverityIcon = (severity: string) => {
     switch (severity.toLowerCase()) {
       case "high":
@@ -329,32 +314,32 @@ function WarningsContent() {
             </div>
           </CardContent>
         </Card>
-        <Card className="border-red-500/50">
+        <Card className="border-status-offline/50">
           <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-red-600 dark:text-red-400">Critical</CardTitle>
+            <CardTitle className="text-xs md:text-sm font-medium text-status-offline">Critical</CardTitle>
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-red-600 dark:text-red-400">
+            <div className="text-xl md:text-2xl font-bold text-status-offline">
               {systemWarnings?.critical || 0}
             </div>
           </CardContent>
         </Card>
-        <Card className="border-amber-500/50">
+        <Card className="border-status-pending/50">
           <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-amber-600 dark:text-amber-400">Certificate Issues</CardTitle>
+            <CardTitle className="text-xs md:text-sm font-medium text-status-pending">Certificate Issues</CardTitle>
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-amber-600 dark:text-amber-400">
+            <div className="text-xl md:text-2xl font-bold text-status-pending">
               {certWarnings.length}
             </div>
           </CardContent>
         </Card>
-        <Card className="border-purple-500/50">
+        <Card className="border-status-offline/50">
           <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-            <CardTitle className="text-xs md:text-sm font-medium text-purple-600 dark:text-purple-400">Offline Nodes</CardTitle>
+            <CardTitle className="text-xs md:text-sm font-medium text-status-offline">Offline Nodes</CardTitle>
           </CardHeader>
           <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-            <div className="text-xl md:text-2xl font-bold text-purple-600 dark:text-purple-400">
+            <div className="text-xl md:text-2xl font-bold text-status-offline">
               {nodeWarnings.length}
             </div>
           </CardContent>
@@ -452,7 +437,7 @@ function WarningsContent() {
                       {warning.last_message}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={getSeverityColor(warning.severity)} className="flex items-center gap-1 w-fit">
+                      <Badge variant={warningSeverityTone(warning.severity)} className="flex items-center gap-1 w-fit">
                         {getSeverityIcon(warning.severity)}
                         {warning.severity}
                       </Badge>
@@ -535,13 +520,13 @@ function WarningsContent() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant={isExpired ? "destructive" : "secondary"}>
+                          <Badge variant={isExpired ? "negative" : "caution"}>
                             {statusLabel}
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <Badge 
-                            variant={warning.severity === "critical" ? "destructive" : "default"}
+                          <Badge
+                            variant={warningSeverityTone(warning.severity)}
                             className="flex items-center gap-1 w-fit"
                           >
                             {warning.severity === "critical" && <Flame className="h-3 w-3" />}
@@ -549,7 +534,7 @@ function WarningsContent() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          <span className={warning.days_until_expiry <= 3 ? "text-red-600 font-bold" : warning.days_until_expiry <= 7 ? "text-amber-600 font-medium" : ""}>
+                          <span className={warning.days_until_expiry <= 3 ? "text-status-offline font-bold" : warning.days_until_expiry <= 7 ? "text-status-pending font-medium" : ""}>
                             {warning.days_until_expiry <= 0 ? "Expired" : `${warning.days_until_expiry} days`}
                           </span>
                         </TableCell>
@@ -626,7 +611,7 @@ function WarningsContent() {
                           )}
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
-                          <Badge variant="destructive" className="flex items-center gap-1 w-fit">
+                          <Badge variant="negative" className="flex items-center gap-1 w-fit">
                             <Flame className="h-3 w-3" />
                             {warning.severity || "critical"}
                           </Badge>

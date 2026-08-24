@@ -42,6 +42,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { certificateStatusMeta } from "./components/certificate-status";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -65,38 +66,6 @@ import { formatDate, formatLabel } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { copyText } from "@/lib/clipboard";
-
-const statusConfig = {
-  [CertificateStatus.VALID]: {
-    label: "Valid",
-    variant: "default" as const,
-    icon: CheckCircle,
-    color: "text-green-500",
-    bgColor: "bg-green-500/10" },
-  [CertificateStatus.EXPIRING]: {
-    label: "Expiring Soon",
-    variant: "secondary" as const,
-    icon: Clock,
-    color: "text-amber-500",
-    bgColor: "bg-amber-500/10" },
-  [CertificateStatus.EXPIRED]: {
-    label: "Expired",
-    variant: "destructive" as const,
-    icon: XCircle,
-    color: "text-red-500",
-    bgColor: "bg-red-500/10" },
-  [CertificateStatus.UNKNOWN]: {
-    label: "Unknown",
-    variant: "outline" as const,
-    icon: AlertTriangle,
-    color: "text-gray-500",
-    bgColor: "bg-gray-500/10" },
-  [CertificateStatus.PENDING_RENEWAL]: {
-    label: "Pending Renewal",
-    variant: "secondary" as const,
-    icon: RefreshCw,
-    color: "text-blue-500",
-    bgColor: "bg-blue-500/10" } };
 
 function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return "N/A";
@@ -355,12 +324,12 @@ function CertificatesContent() {
           onClick={() => toggleStatus(CertificateStatus.VALID)}
           className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Card className={`border-green-500/50 h-full ${statusSelected.includes(CertificateStatus.VALID) ? "ring-2 ring-ring" : ""}`}>
+          <Card className={`border-status-online/50 h-full ${statusSelected.includes(CertificateStatus.VALID) ? "ring-2 ring-ring" : ""}`}>
             <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-              <CardTitle className="text-xs md:text-sm font-medium text-green-600">Valid</CardTitle>
+              <CardTitle className="text-xs md:text-sm font-medium text-status-online">Valid</CardTitle>
             </CardHeader>
             <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-              <div className="text-xl md:text-2xl font-bold text-green-600">
+              <div className="text-xl md:text-2xl font-bold text-status-online">
                 {certificates.filter((c) => c.status === CertificateStatus.VALID).length}
               </div>
             </CardContent>
@@ -372,12 +341,12 @@ function CertificatesContent() {
           onClick={() => toggleStatus(CertificateStatus.EXPIRING)}
           className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Card className={`border-amber-500/50 h-full ${statusSelected.includes(CertificateStatus.EXPIRING) ? "ring-2 ring-ring" : ""}`}>
+          <Card className={`border-status-pending/50 h-full ${statusSelected.includes(CertificateStatus.EXPIRING) ? "ring-2 ring-ring" : ""}`}>
             <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-              <CardTitle className="text-xs md:text-sm font-medium text-amber-600">Expiring Soon</CardTitle>
+              <CardTitle className="text-xs md:text-sm font-medium text-status-pending">Expiring Soon</CardTitle>
             </CardHeader>
             <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-              <div className="text-xl md:text-2xl font-bold text-amber-600">
+              <div className="text-xl md:text-2xl font-bold text-status-pending">
                 {data?.expiring_count || 0}
               </div>
             </CardContent>
@@ -389,12 +358,12 @@ function CertificatesContent() {
           onClick={() => toggleStatus(CertificateStatus.EXPIRED)}
           className="text-left rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Card className={`border-red-500/50 h-full ${statusSelected.includes(CertificateStatus.EXPIRED) ? "ring-2 ring-ring" : ""}`}>
+          <Card className={`border-status-offline/50 h-full ${statusSelected.includes(CertificateStatus.EXPIRED) ? "ring-2 ring-ring" : ""}`}>
             <CardHeader className="pb-2 p-3 md:p-6 md:pb-2">
-              <CardTitle className="text-xs md:text-sm font-medium text-red-600">Expired</CardTitle>
+              <CardTitle className="text-xs md:text-sm font-medium text-status-offline">Expired</CardTitle>
             </CardHeader>
             <CardContent className="p-3 pt-0 md:p-6 md:pt-0">
-              <div className="text-xl md:text-2xl font-bold text-red-600">
+              <div className="text-xl md:text-2xl font-bold text-status-offline">
                 {data?.expired_count || 0}
               </div>
             </CardContent>
@@ -444,7 +413,7 @@ function CertificatesContent() {
                   />
                 ) : (
                   visibleCerts.map((cert) => {
-                  const config = statusConfig[cert.status] || statusConfig[CertificateStatus.UNKNOWN];
+                  const config = certificateStatusMeta(cert.status);
                   const StatusIcon = config.icon;
 
                   return (
@@ -461,14 +430,14 @@ function CertificatesContent() {
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1">
-                          <Badge variant={config.variant} className="gap-1 w-fit">
+                          <Badge variant={config.tone} className="gap-1 w-fit">
                             <StatusIcon className="h-3 w-3" />
-                            <span className="hidden sm:inline">{config.label}</span>
+                            {config.label}
                           </Badge>
                           {cert.has_pending_renewal && (
-                            <Badge variant="outline" className="gap-1 text-blue-500 w-fit">
+                            <Badge variant="outline" className="gap-1 w-fit">
                               <RefreshCw className="h-3 w-3" />
-                              <span className="hidden sm:inline">Pending</span>
+                              Pending
                             </Badge>
                           )}
                         </div>
@@ -492,10 +461,10 @@ function CertificatesContent() {
                         <span
                           className={`text-xs md:text-sm font-medium whitespace-nowrap ${
                             (cert.days_until_expiry ?? 0) <= 0
-                              ? "text-red-500"
+                              ? "text-status-offline"
                               : (cert.days_until_expiry ?? 0) <= 14
-                              ? "text-amber-500"
-                              : "text-green-500"
+                              ? "text-status-pending"
+                              : "text-status-online"
                           }`}
                         >
                           {getDaysDisplay(cert.days_until_expiry)}
@@ -512,7 +481,7 @@ function CertificatesContent() {
                                   setRenewalModal({ open: true, certificate: cert });
                                   setShowManualTrust(true);
                                 }}
-                                className="text-blue-600 h-8 px-2 md:px-3"
+                                className="h-8 px-2 md:px-3"
                               >
                                 <CheckCircle className="h-4 w-4 md:mr-1" />
                                 <span className="hidden md:inline">Verify</span>
@@ -521,7 +490,7 @@ function CertificatesContent() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => handleCancelPending(cert.cluster_id)}
-                                className="text-red-600 h-8 px-2"
+                                className="text-status-offline h-8 px-2"
                               >
                                 <XCircle className="h-4 w-4" />
                               </Button>

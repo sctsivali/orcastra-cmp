@@ -47,6 +47,7 @@ export function ClusterDetailDialog({
   if (!cluster) return null;
 
   const location = cluster.location;
+  const statusMeta = clusterStatusMeta(cluster.status);
 
   return (
     <RecordDetailDialog
@@ -61,9 +62,7 @@ export function ClusterDetailDialog({
         </TableLink>
       }
       status={
-        <Badge variant={clusterStatusMeta(cluster.status).badgeVariant}>
-          {clusterStatusMeta(cluster.status).label}
-        </Badge>
+        <Badge variant={statusMeta.tone}>{statusMeta.label}</Badge>
       }
       // The reason a cluster is unreachable, which the table has never had room for.
       error={cluster.error_message || null}
