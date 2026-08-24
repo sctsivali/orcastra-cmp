@@ -264,6 +264,10 @@ class ResourceManager:
         
         try:
             host_info = client.host_info
+            # The host answered. Everything below can still fail, but from here on a failure
+            # means "answered and refused us", not "never answered", and that is the whole
+            # difference between Pending Trust and Offline.
+            status.reachable = True
             
             # Don't set connected=True yet, need to verify we can actually access resources
             # Connection successful but need to check if authenticated
@@ -370,6 +374,8 @@ class ResourceManager:
         except Exception as e:
             status.error = str(e)
             status.connected = False
+            # host_info itself raised, so the host never answered.
+            status.reachable = False
             logger.warning(f"Node {node_name} health check failed: {e}")
         
         return status

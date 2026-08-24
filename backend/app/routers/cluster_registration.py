@@ -19,14 +19,20 @@ from app.models.schemas import (
     ClusterListResponse,
     ClusterDeleteResponse,
     ClusterStatus,
+    derive_status,
     ClusterLocationUpdateRequest,
     ClusterLocationUpdateResponse,
 )
 from app.core.config import get_settings
 from app.core.vault_client import get_vault_client
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
+from app.services.lxd.exceptions import LXDAuthorizationError
 from app.core.dependencies import check_read_only_mode, require_partner, require_tenant, AuthenticatedUser
-from app.core.cache import NODES_STATUS_CACHE_KEY, REGIONS_OVERVIEW_CACHE_KEY
+from app.core.cache import (
+    NODES_AVAILABILITY_CACHE_KEY,
+    NODES_STATUS_CACHE_KEY,
+    REGIONS_OVERVIEW_CACHE_KEY,
+)
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
 from app.services.activity_logger import get_activity_logger
@@ -245,6 +251,8 @@ async def register_cluster(
             # Invalidate nodes status cache
             cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
             cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
+            # trailing * so every org-scope suffix goes with it
+            cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
             # Invalidate regions overview (all scopes) so the inventory/monitoring
             # overview reflects the new cluster without a manual refresh
             cache.delete_pattern("api_responses", "regions:*")
@@ -372,7 +380,10 @@ async def check_cluster_authentication(
         cluster_id = request.cluster_id
         
         # Verify connection
-        connected, message = cert_manager.verify_connection(cluster_id, use_breaker=False)
+        # use_breaker=False: this is an operator-initiated check, so it must probe for real
+        # rather than replay a 60-second-old failure.
+        auth_probe = cert_manager.probe_connection(cluster_id, use_breaker=False)
+        connected, message = auth_probe.trusted, auth_probe.message
         
         if connected:
             # Get server info
@@ -487,11 +498,16 @@ async def check_cluster_authentication(
                     message=f"Connected but failed to retrieve server info: {str(e)}"
                 )
         else:
+            # A cluster that never answered is offline, not a trust problem. Reporting
+            # NOT_AUTHORIZED here sent operators to rotate a certificate on a dead host.
+            unreachable_status, _reason_code, _detail = derive_status(
+                connected=False, reachable=auth_probe.reachable, error=message
+            )
             return ClusterAuthCheckResponse(
                 cluster_id=cluster_id,
-                connected=False,
+                connected=bool(auth_probe.reachable),
                 authenticated=False,
-                status=ClusterStatus.NOT_AUTHORIZED,
+                status=unreachable_status,
                 message=message
             )
             
@@ -537,11 +553,17 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
         existing_client = lxd_service.connection_manager.get_client(cluster_id)
         
         connected = False
+        # important: reachable is tracked separately from connected because they answer
+        # different questions. This used to be `ONLINE if connected else NOT_AUTHORIZED`,
+        # which reported every unreachable cluster as "Pending Trust" and left an operator
+        # chasing a certificate problem on a host that was simply powered off.
+        reachable = None
         error_msg = None
         
         if existing_client:
             # We have a valid connection
             connected = True
+            reachable = True
             logger.debug(f"Cluster {cluster_id} already connected in pool")
         else:
             # No valid connection, try to reconnect using Vault certs
@@ -558,17 +580,25 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
                     force=True,
                 )
                 connected = True
+                reachable = True
                 logger.info(f"Reconnected cluster {cluster_id} to connection pool from Vault certs")
+            except LXDAuthorizationError as auth_err:
+                # The host answered and refused the certificate. That IS Pending Trust.
+                reachable, error_msg = True, str(auth_err)
+                logger.debug(f"{cluster_id} answered but refused our certificate: {auth_err}")
             except Exception as reconnect_err:
                 logger.debug(f"Could not reconnect {cluster_id}: {reconnect_err}")
-                # Fall back to verify_connection for status check
-                connected, error_msg = cert_manager.verify_connection(cluster_id)
+                # Fall back to a probe, which reports reachability and trust separately
+                probe = cert_manager.probe_connection(cluster_id)
+                connected, reachable, error_msg = probe.trusted, probe.reachable, probe.message
         
         # Get cluster info (may already be cached from above)
         with ThreadPoolExecutor(max_workers=1) as executor:
             info = await loop.run_in_executor(executor, cert_manager.get_cluster_info, cluster_id)
         
-        current_status = ClusterStatus.ONLINE if connected else ClusterStatus.NOT_AUTHORIZED
+        current_status, _reason_code, derived_message = derive_status(
+            connected=connected, reachable=reachable, error=error_msg
+        )
         
         # Only show cluster type if connected/authenticated
         cluster_type = None
@@ -588,6 +618,7 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
             has_certificate=info["certificate"]["has_certificate"],
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
+            error_message=None if connected else (error_msg or derived_message or None),
             location=info["metadata"].get("location")
         )
         
@@ -731,9 +762,13 @@ async def get_cluster(
     try:
         info = cert_manager.get_cluster_info(cluster_id)
         
-        # Check current connection status
-        connected, error_msg = cert_manager.verify_connection(cluster_id)
-        current_status = ClusterStatus.ONLINE if connected else ClusterStatus.NOT_AUTHORIZED
+        # Check current connection status. The probe reports reachability and trust
+        # separately, so a powered-off cluster no longer reads as a certificate problem.
+        probe = cert_manager.probe_connection(cluster_id)
+        connected, error_msg = probe.trusted, probe.message
+        current_status, _reason_code, _message = derive_status(
+            connected=connected, reachable=probe.reachable, error=error_msg
+        )
         
         return ClusterInfo(
             cluster_id=cluster_id,
@@ -905,6 +940,7 @@ async def delete_cluster(
                 # Clear nodes status cache to ensure UI updates immediately
                 cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
                 cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
+                cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
                 cache.delete("api_responses", get_scope_cache_key("nodes:status"))
                 cache.delete("api_responses", "nodes:status:scope=all")
                 

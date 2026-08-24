@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
+import { clusterStatusMeta } from "@/lib/cluster-status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { TableLink } from "@/components/ui/table-link";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
@@ -59,7 +60,11 @@ export function ClusterDetailDialog({
           {cluster.endpoint}
         </TableLink>
       }
-      status={<Badge variant="outline">{cluster.status}</Badge>}
+      status={
+        <Badge variant={clusterStatusMeta(cluster.status).badgeVariant}>
+          {clusterStatusMeta(cluster.status).label}
+        </Badge>
+      }
       // The reason a cluster is unreachable, which the table has never had room for.
       error={cluster.error_message || null}
       footer={footer}

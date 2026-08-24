@@ -2,6 +2,8 @@ import { memo } from "react";
 import { Play, Server } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { clusterStatusMeta } from "@/lib/cluster-status";
+import { ClusterStatus } from "@/types/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -26,23 +28,16 @@ interface NodeCardProps {
 
 export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
   const gpu = summarizeGpus(node);
-  // Determine status badge color and text based on cluster_status
-  const getStatusBadge = () => {
-    if (node.is_online) {
-      return <Badge variant="default">Online</Badge>;
-    }
-    
-    switch (node.cluster_status) {
-      case "pending_trust":
-        return <Badge variant="secondary" className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Pending Trust</Badge>;
-      case "offline":
-        return <Badge variant="destructive">Offline</Badge>;
-      case "error":
-        return <Badge variant="destructive">Error</Badge>;
-      default:
-        return <Badge variant="secondary">Offline</Badge>;
-    }
-  };
+  // note: this endpoint still emits "pending_trust", which is not in the ClusterStatus enum.
+  // clusterStatusMeta accepts it as a documented alias, so this card reads the same vocabulary
+  // as the Clusters page without waiting on a backend change. The hand-written amber pill it
+  // replaces was the last place a status colour was written at a call site.
+  const statusMeta = clusterStatusMeta(
+    node.is_online ? ClusterStatus.ONLINE : node.cluster_status,
+  );
+  const getStatusBadge = () => (
+    <Badge variant={statusMeta.badgeVariant}>{statusMeta.label}</Badge>
+  );
 
   return (
     <Card className={cn(

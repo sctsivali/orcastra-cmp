@@ -71,6 +71,7 @@ class LXDService:
         # Org-scope guard: prevent reconnecting to clusters outside the user's org
         from app.core.org_scope import get_current_allowed_clusters
         from app.services.lxd import health
+        from app.services.lxd.exceptions import LXDAuthorizationError
         allowed = get_current_allowed_clusters()
         if allowed is not None and cluster_id not in allowed:
             return False
@@ -105,6 +106,15 @@ class LXDService:
             logger.info(f"Lazy-connected to cluster: {cluster_id}")
             health.clear(cluster_id)
             return True
+        except LXDAuthorizationError as e:
+            # important: the host ANSWERED and refused our certificate. Letting this fall into
+            # the broad handler below recorded it as a generic failure, so the breaker's kind
+            # reverted to "offline" one line after connect_with_vault_cert had correctly
+            # recorded "unauthorized". Five clusters on the dev fleet answered HTTP 200 and
+            # still read Offline on every surface because of these two lines.
+            logger.warning(f"Cluster {cluster_id} refused our certificate: {e}")
+            health.record_failure(cluster_id, str(e), kind=health.KIND_UNAUTHORIZED)
+            return False
         except Exception as e:
             # important: WARNING, not ERROR. See connection.py: an offline cluster is
             # expected operational noise, and the breaker below already records it.
@@ -155,30 +165,41 @@ class LXDService:
         """
         return self._check_single_node_status(node_name, get_settings())
 
+    def _read_endpoint(self, node_name: str, settings) -> str:
+        """The cluster's registered endpoint, which does not depend on whether it answers."""
+        try:
+            metadata = self.cert_manager.vault.vault_read(
+                f"{settings.vault_clusters_path}/{node_name}/metadata"
+            )
+            return metadata.get("endpoint", "unknown")
+        except Exception:
+            return "unknown"
+
     def _check_single_node_status(self, node_name: str, settings) -> NodeStatus:
         """Check status for a single node (internal helper)."""
         from app.services.lxd import health
 
+        # important: read the endpoint BEFORE the breaker check. It is registry metadata and has
+        # nothing to do with reachability, but returning it only on the healthy path meant every
+        # dead cluster reported endpoint="unknown", and a node picker printed the word "unknown"
+        # under its name. The breaker exists to skip an 8s connect, not a local Vault read.
+        endpoint = self._read_endpoint(node_name, settings)
+
         # Skip clusters the shared breaker marked as recently failed.
         if health.is_tripped(node_name):
             logger.debug(f"Skipping {node_name} - recently failed (cached)")
+            # The breaker remembers WHY it tripped, so a cluster that answered and refused our
+            # certificate keeps reading as untrusted instead of degrading to "offline" for the
+            # 60s the breaker holds.
             return NodeStatus(
                 name=node_name,
-                endpoint="unknown",
+                endpoint=endpoint,
                 connected=False,
+                reachable=health.get_kind(node_name) == health.KIND_UNAUTHORIZED,
                 error=health.get_reason(node_name) or "Node recently failed - retry later"
             )
 
         try:
-            # Get endpoint from Vault metadata
-            endpoint = "unknown"
-            try:
-                metadata = self.cert_manager.vault.vault_read(
-                    f"{settings.vault_clusters_path}/{node_name}/metadata"
-                )
-                endpoint = metadata.get("endpoint", "unknown")
-            except Exception:
-                pass
             
             # Use get_client_with_reconnect for automatic reconnection
             client = self.get_client_with_reconnect(node_name)
@@ -186,20 +207,33 @@ class LXDService:
                 status = self.resource_manager.check_node_status(client, node_name, endpoint)
                 return status
             else:
-                health.record_failure(node_name, "Client not connected")
+                # important: get_client has already recorded WHY it failed, and an untrusted
+                # certificate records KIND_UNAUTHORIZED. Overwriting that with a generic
+                # "Client not connected" downgrades a cluster that answered and refused us
+                # into one that looks powered off, and the breaker then serves that wrong
+                # answer to every reader for its whole TTL.
+                kind = health.get_kind(node_name)
+                if kind is None:
+                    health.record_failure(node_name, "Client not connected")
+                    kind = health.KIND_OFFLINE
                 return NodeStatus(
                     name=node_name,
                     endpoint=endpoint,
                     connected=False,
-                    error="Client not connected"
+                    reachable=kind == health.KIND_UNAUTHORIZED,
+                    error=health.get_reason(node_name) or "Client not connected"
                 )
         except Exception as e:
             logger.warning(f"Node {node_name} health check failed: {e}")
-            health.record_failure(node_name, str(e))
+            kind = health.get_kind(node_name)
+            if kind is None:
+                health.record_failure(node_name, str(e))
+                kind = health.KIND_OFFLINE
             return NodeStatus(
                 name=node_name,
-                endpoint="unknown",
+                endpoint=endpoint,
                 connected=False,
+                reachable=kind == health.KIND_UNAUTHORIZED,
                 error=str(e)
             )
     
@@ -234,14 +268,13 @@ class LXDService:
                     name=node_names[i],
                     endpoint="unknown",
                     connected=False,
+                    reachable=False,
                     error=str(status)
                 ))
             else:
                 result.append(status)
         
         return result
-        
-        return statuses
     
     def get_node_resources(self, node_name: str) -> Dict[str, Any]:
         """Get available resources for a specific node.

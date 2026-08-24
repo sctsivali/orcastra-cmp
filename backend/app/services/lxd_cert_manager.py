@@ -6,7 +6,7 @@ Handles certificate generation via Vault PKI and LXD trust registration.
 import logging
 import os
 import tempfile
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, NamedTuple, Optional, Tuple
 import requests
 from pylxd import Client
 
@@ -20,6 +20,19 @@ logger = logging.getLogger(__name__)
 class LXDCertManagerError(Exception):
     """Base exception for LXD certificate manager errors."""
     pass
+
+
+class ConnectionProbe(NamedTuple):
+    """What a single connectivity probe actually observed.
+
+    `reachable` and `trusted` are independent: a host can answer and still refuse us. Collapsing
+    them into one bool is what made a dead cluster and an untrusted one indistinguishable, so
+    verify_connection keeps returning a bool for its five existing callers while anything that
+    needs the distinction reads this instead. `reachable` is None only when the probe never ran.
+    """
+    reachable: Optional[bool]
+    trusted: bool
+    message: str
 
 
 def extract_cert_base64(pem_cert: str) -> str:
@@ -243,11 +256,18 @@ class LXDCertificateManager:
             raise LXDCertManagerError(f"Connection failed: {str(e)}")
     
     def verify_connection(self, cluster_id: str, use_breaker: bool = True) -> Tuple[bool, str]:
+        """Whether the certificate is trusted, and why not when it is not.
+
+        Thin wrapper over probe_connection, kept because five call sites want the bool.
         """
-        Verify connection to LXD cluster and authentication status.
+        probe = self.probe_connection(cluster_id, use_breaker=use_breaker)
+        return probe.trusted, probe.message
+
+    def probe_connection(self, cluster_id: str, use_breaker: bool = True) -> ConnectionProbe:
+        """
+        Probe an LXD cluster: did it answer, and does it trust our certificate.
         
-        To tests if the certificate is trusted by attempting to
-        access protected resources that require authentication.
+        Tests trust by attempting to access protected resources that require authentication.
         
         Uses temporary files that are immediately cleaned up after verification.
         Certificate data is fetched fresh from Vault each time.
@@ -256,9 +276,20 @@ class LXDCertificateManager:
         # within the TTL window so a dead cluster does not cost the full connect
         # timeout on every dashboard fan-out. User-initiated checks pass
         # use_breaker=False to force a fresh probe.
-        from app.services.lxd.health import is_tripped, record_failure, clear, get_reason
+        from app.services.lxd.health import (
+            KIND_UNAUTHORIZED,
+            clear,
+            get_kind,
+            get_reason,
+            is_tripped,
+            record_failure,
+        )
         if use_breaker and is_tripped(cluster_id):
-            return False, get_reason(cluster_id) or "Cluster recently unreachable - retry shortly"
+            return ConnectionProbe(
+                reachable=get_kind(cluster_id) == KIND_UNAUTHORIZED,
+                trusted=False,
+                message=get_reason(cluster_id) or "Cluster recently unreachable - retry shortly",
+            )
 
         cert_path = None
         key_path = None
@@ -316,7 +347,7 @@ class LXDCertificateManager:
                 # a cluster that is merely offline is what makes ERROR unreadable.
                 logger.warning(f"Connection failed for {cluster_id}: {last_error}")
                 record_failure(cluster_id, "Cannot connect to LXD endpoint. Check if server is running.")
-                return False, "Cannot connect to LXD endpoint. Check if server is running."
+                return ConnectionProbe(False, False, "Cannot connect to LXD endpoint. Check if server is running.")
             
             # Host is reachable (we got an HTTP response) - clear any breaker trip.
             clear(cluster_id)
@@ -325,18 +356,24 @@ class LXDCertificateManager:
             if response.status_code == 200:
                 # Successfully authenticated
                 logger.info(f"Certificate trusted and authenticated for {cluster_id}")
-                return True, "Certificate trusted and authenticated"
+                return ConnectionProbe(True, True, "Certificate trusted and authenticated")
             elif response.status_code == 403:
                 # Certificate not trusted
                 logger.warning(f"Certificate not trusted for {cluster_id}")
-                return False, "Certificate not trusted by hypervisor. Please add trust via CLI."
+                return ConnectionProbe(
+                    True, False, "Certificate not trusted by hypervisor. Please add trust via CLI."
+                )
             else:
                 logger.warning(f"Unexpected status {response.status_code} for {cluster_id}")
-                return False, f"Unexpected response: HTTP {response.status_code}"
+                return ConnectionProbe(True, False, f"Unexpected response: HTTP {response.status_code}")
             
         except requests.exceptions.SSLError as e:
             logger.error(f"SSL error for {cluster_id}: {e}")
-            return False, "Certificate error. Verify certificate is valid."
+            # note: reachable=True. A TLS failure means the socket was answered and the
+            # handshake was refused, which is a trust problem somebody has to fix, not a
+            # host that is down. requests.SSLError subclasses ConnectionError, so this
+            # branch must stay above the ConnectionError one below.
+            return ConnectionProbe(True, False, "Certificate error. Verify certificate is valid.")
         except requests.exceptions.ConnectionError as e:
             # important: WARNING. Refused or unresolvable is an offline cluster, and the
             # breaker below is what the product acts on. The SSL branch above stays at
@@ -344,14 +381,17 @@ class LXDCertificateManager:
             # has to fix, not one that clears itself when the host comes back.
             logger.warning(f"Connection error for {cluster_id}: {e}")
             record_failure(cluster_id, "Cannot connect to LXD endpoint. Check if server is running.")
-            return False, "Cannot connect to LXD endpoint. Check if server is running."
+            return ConnectionProbe(False, False, "Cannot connect to LXD endpoint. Check if server is running.")
         except requests.exceptions.Timeout as e:
             logger.warning(f"Timeout for {cluster_id}: {e}")
             record_failure(cluster_id, "Connection timeout. Check network connectivity.")
-            return False, "Connection timeout. Check network connectivity."
+            return ConnectionProbe(False, False, "Connection timeout. Check network connectivity.")
         except Exception as e:
+            # important: no raw exception text in the message. It reaches ClusterInfo.error_message
+            # on /clusters, which every role down to tenant can read, and a Vault failure here
+            # carries the Vault base URL and the KV path to the cluster's certificates.
             logger.error(f"Verification failed for {cluster_id}: {e}")
-            return False, f"Connection failed: {str(e)}"
+            return ConnectionProbe(None, False, "Could not verify the connection to this cluster.")
         finally:
             # Clean up verify-specific temp files (not the main connection files)
             try:

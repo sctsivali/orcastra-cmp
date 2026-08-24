@@ -22,14 +22,16 @@ import {
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
-import { useNodeNames, useCreateNetwork, useNetworks } from "@/hooks/use-lxd";
+import { useCreateNetwork, useNetworks } from "@/hooks/use-lxd";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { NetworkCreateRequest } from "@/types/api";
 import { Loader2 } from "lucide-react";
 
 type IpMode = "auto" | "none" | "custom";
 
-/** LXD wants a real CIDR — "not-an-ip", a bare address, or /33 must be rejected. */
+/** LXD wants a real CIDR: "not-an-ip", a bare address, or /33 must be rejected. */
 function isValidIpv4Cidr(value: string): boolean {
   const m = value.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
   if (!m) return false;
@@ -63,8 +65,8 @@ export function NetworkCreateForm() {
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
 
-  const { data: nodeNames, isLoading: loadingNodes } = useNodeNames();
-  const nodeOptions = (nodeNames || []).map((n) => ({ value: n, label: n }));
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
   const createNetwork = useCreateNetwork();
   const { isReadOnly } = useReadOnlyMode();
 
@@ -106,7 +108,7 @@ export function NetworkCreateForm() {
       : ipv4Custom.trim() === ""
         ? "Enter an IPv4 address in CIDR notation."
         : !isValidIpv4Cidr(ipv4Custom)
-          ? "Invalid IPv4 CIDR (e.g. 10.10.10.1/24)."
+          ? "Invalid IPv4 CIDR, for example 10.10.10.1/24."
           : "";
   const ipv6Error =
     ipv6Mode !== "custom"
@@ -114,7 +116,7 @@ export function NetworkCreateForm() {
       : ipv6Custom.trim() === ""
         ? "Enter an IPv6 address in CIDR notation."
         : !isValidIpv6Cidr(ipv6Custom)
-          ? "Invalid IPv6 CIDR (e.g. fd42:1:2:3::1/64)."
+          ? "Invalid IPv6 CIDR, for example fd42:1:2:3::1/64."
           : "";
   const uplinkError =
     type === "ovn" && !uplink ? "Select an uplink network for the OVN network." : "";
@@ -193,7 +195,7 @@ export function NetworkCreateForm() {
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
             placeholder={
-              which === "IPv4" ? "e.g. 10.10.10.1/24" : "e.g. fd42:1:2:3::1/64"
+              which === "IPv4" ? "10.10.10.1/24" : "fd42:1:2:3::1/64"
             }
             className="flex-1"
             aria-invalid={!!fieldError}
@@ -236,6 +238,15 @@ export function NetworkCreateForm() {
                 searchPlaceholder="Search nodes..."
                 emptyText="No nodes found."
                 disabled={loadingNodes}
+              />
+              <NodeStatusNotice
+                meta={node ? nodePicker.statusOf(node) : undefined}
+                reason={node ? nodePicker.availabilityOf(node)?.reason ?? undefined : undefined}
+                nodeLabel={node ? nodePicker.labelOf(node) : undefined}
+                unavailable={nodePicker.statusUnavailable}
+                noSelectableNodes={nodePicker.selectableCount === 0}
+                updatedAt={nodePicker.statusUpdatedAt}
+                onRecheck={nodePicker.refreshNow}
               />
             </div>
             <div className="grid gap-2">

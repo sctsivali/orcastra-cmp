@@ -10,6 +10,14 @@ from datetime import datetime
 import re
 from urllib.parse import urlparse
 
+# note: ClusterStatus lives in cluster_status.py beside derive_status, the one function
+# allowed to produce it. Re-exported here so existing imports from this module still work.
+from app.models.cluster_status import (  # noqa: F401
+    AvailabilityReason,
+    ClusterStatus,
+    derive_status,
+)
+
 
 class VMStatus(str, Enum):
     """Possible VM statuses."""
@@ -639,7 +647,22 @@ class NodeStatus(BaseModel):
     resources: Optional[NodeResources] = None
     tags: List[str] = Field(default_factory=list, description="Node tags for organization and filtering")
     display_name: Optional[str] = Field(None, description="Custom display name for the node")
-    
+    reachable: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether the host answered our probe. connected=False with reachable=True means it "
+            "answered and refused our certificate; reachable=False means it never answered."
+        ),
+    )
+
+    @computed_field
+    @property
+    def status(self) -> ClusterStatus:
+        """The single status vocabulary, so no client has to re-derive it from booleans."""
+        return derive_status(
+            connected=self.connected, reachable=self.reachable, auth=self.auth, error=self.error
+        )[0]
+
     @computed_field
     @property
     def cpu_cores(self) -> Optional[int]:
@@ -666,6 +689,48 @@ class NodesStatusResponse(BaseModel):
     """Response for node status check."""
     nodes: List[NodeStatus]
     all_connected: bool
+
+
+class ClusterAvailability(BaseModel):
+    """One row for a cluster picker: can an operator act on this cluster right now, and if not why.
+
+    Deliberately carries no resources, no GPU inventory and no environment. This is a dropdown's
+    payload; /nodes stays the endpoint for hardware detail.
+    """
+    name: str = Field(..., description="Cluster id. The exact value a create request sends as its node")
+    display_name: str = Field(..., description="Label to show; falls back to the id")
+    endpoint: str = Field(..., description="Hypervisor API endpoint")
+    status: ClusterStatus = Field(..., description="Current connection status")
+    reason_code: AvailabilityReason = Field(
+        AvailabilityReason.UNKNOWN,
+        description="Machine-readable reason. Clients key their copy off this, never off `reason`.",
+    )
+    reason: Optional[str] = Field(
+        None, max_length=200, description="One short sentence for the operator. Never a stack trace."
+    )
+    node_type: Optional[str] = Field(None, description="Hypervisor family, when known")
+    checked_at: datetime = Field(..., description="When this row was last established")
+
+    @computed_field
+    @property
+    def available(self) -> bool:
+        """The single boolean a picker keys its treatment on."""
+        return self.status == ClusterStatus.ONLINE
+
+
+class ClusterAvailabilityResponse(BaseModel):
+    """Availability of every cluster in the caller's org scope.
+
+    important: a cluster that did not answer is present with status=offline, never omitted. An
+    operator who cannot find a cluster in this list concludes it was deregistered.
+    """
+    clusters: List[ClusterAvailability]
+    online_count: int
+    total_count: int
+    source: Literal["nodes_cache", "availability_cache", "probe"] = Field(
+        ..., description="Which path produced this body. Diagnostic; clients ignore it."
+    )
+    generated_at: datetime
 
 
 class NodeUpdateRequest(BaseModel):
@@ -788,13 +853,6 @@ class ProjectUpdateResponse(BaseModel):
 
 # Cluster Registration Models for Vault Integration
 
-class ClusterStatus(str, Enum):
-    """Cluster connection status."""
-    PENDING = "pending"
-    NOT_AUTHORIZED = "not_authorized"
-    ONLINE = "online"
-    OFFLINE = "offline"
-    ERROR = "error"
 
 
 # ========== Geo Location Models ==========

@@ -18,6 +18,7 @@ import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
@@ -167,10 +168,19 @@ function ClusterMembersContent() {
             placeholder="Select a MicroCloud node"
             searchPlaceholder="Search clusters..."
             emptyText="No MicroCloud clusters available"
-            options={clusters.map((cluster: any) => ({
-              value: cluster.cluster_id,
-              label: cluster.display_name || cluster.cluster_id,
-              badge: formatHypervisorType(cluster.cluster_type) }))}
+            options={clusters.map((cluster: any) => {
+              const meta = clusterStatusMeta(cluster.status);
+              return {
+                value: cluster.cluster_id,
+                label: cluster.display_name || cluster.cluster_id,
+                badge: formatHypervisorType(cluster.cluster_type),
+                status: {
+                  label: meta.label,
+                  dotClassName: meta.dotClassName,
+                  tone: meta.tone,
+                },
+              };
+            })}
           />
         </div>
         <div>

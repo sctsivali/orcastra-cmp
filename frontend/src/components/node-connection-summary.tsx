@@ -8,6 +8,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { NodeStatus } from "@/types";
+import { clusterStatusMeta } from "@/lib/cluster-status";
+import { cn } from "@/lib/utils";
 
 interface NodeConnectionSummaryProps {
   nodes?: NodeStatus[];
@@ -44,7 +46,7 @@ export function NodeConnectionSummary({
             type="button"
             className="mt-1 inline-flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           >
-            Some nodes not connected
+            {`${nodes.filter((n) => n.connected).length} of ${nodes.length} connected`}
             <Info className="h-3 w-3" aria-hidden="true" />
           </button>
         </TooltipTrigger>
@@ -61,6 +63,16 @@ export function NodeConnectionSummary({
                     <p className="text-xs text-muted-foreground">Node ID: {node.name}</p>
                   )}
                   <p className="break-all font-mono text-xs text-muted-foreground">{node.endpoint}</p>
+                  <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "h-1.5 w-1.5 shrink-0 rounded-full",
+                        clusterStatusMeta(node).dotClassName
+                      )}
+                    />
+                    {clusterStatusMeta(node).label}
+                  </p>
                   <p className="text-xs text-destructive">{getDisconnectedReason(node)}</p>
                 </div>
               ))}

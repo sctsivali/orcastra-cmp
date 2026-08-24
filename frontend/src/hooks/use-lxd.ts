@@ -33,6 +33,7 @@ export const queryKeys = {
   imagesByHost: (host: string) => ["images", host] as const,
   nodes: ["nodes"] as const,
   nodeNames: ["nodeNames"] as const,
+  nodeAvailability: ["nodeAvailability"] as const,
   projects: (host: string) => ["projects", host] as const,
   allProjects: ["projects", "all"] as const,
   health: ["health"] as const,
@@ -273,10 +274,32 @@ export function useNodeNames() {
   return useQuery({
     queryKey: queryKeys.nodeNames,
     queryFn: () => nodeAPI.names(),
-    staleTime: Infinity, // node names rarely change, cache indefinitely
+    // note: this was staleTime: Infinity with refetchOnMount: false. Membership does change,
+    // and registering a cluster then opening a create form showed a stale list until a hard
+    // reload, because the register mutation invalidates queryKeys.nodes and not this key.
+    // Three minutes plus the invalidation below is the fix.
+    staleTime: 1000 * 60 * 3,
     gcTime: 1000 * 60 * 60 * 24, // keep in cache for 24 hours
-    refetchOnMount: false,
     refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Per-cluster reachability for node pickers.
+ *
+ * Separate query key from nodeNames on purpose: this polls on a minute, and sharing a key
+ * would drag the name list along with it. Cheap by construction on the backend, which rides
+ * the cached /nodes fan-out rather than generating its own.
+ */
+export function useNodeAvailability() {
+  return useRefreshableQuery({
+    queryKey: queryKeys.nodeAvailability,
+    queryFn: ({ fresh }) => nodeAPI.availability({ fresh }),
+    staleTime: 30000,
+    refetchInterval: 60000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: false,
+    retry: 1,
   });
 }
 
@@ -1371,6 +1394,10 @@ export function useRegisterCluster() {
       // Also invalidate for inactive queries
       queryClient.invalidateQueries({ queryKey: ["clusters"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.nodes });
+      // the picker's membership and status keys, which used to be left stale here: a newly
+      // registered cluster did not appear in any create form until a hard reload
+      queryClient.invalidateQueries({ queryKey: queryKeys.nodeNames });
+      queryClient.invalidateQueries({ queryKey: queryKeys.nodeAvailability });
       queryClient.invalidateQueries({ queryKey: queryKeys.vms });
       queryClient.invalidateQueries({ queryKey: queryKeys.allProjects });
       queryClient.invalidateQueries({ queryKey: ["instances"] });
@@ -1388,6 +1415,7 @@ export function useCheckClusterAuth() {
     onSuccess: async () => {
       // First pass: immediate refetch so clusters list updates
       await queryClient.refetchQueries({ queryKey: ["clusters"], type: 'active' });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.nodeAvailability });
       
       // Remove stale cached data for instances/VMs/projects
       // so the next fetch pulls fresh data including the new cluster
@@ -1425,6 +1453,8 @@ export function useDeleteCluster() {
       // Remove cached data and force fresh fetch
       await queryClient.invalidateQueries({ queryKey: ["clusters"], refetchType: 'all' });
       await queryClient.invalidateQueries({ queryKey: queryKeys.nodes, refetchType: 'all' });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.nodeNames, refetchType: 'all' });
+      await queryClient.invalidateQueries({ queryKey: queryKeys.nodeAvailability, refetchType: 'all' });
       await queryClient.invalidateQueries({ queryKey: ["certificates"], refetchType: 'all' });
     },
   });

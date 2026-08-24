@@ -1257,12 +1257,14 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
 
         # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
         # routers/instances.py list_instances, routers/vms.py list_vms,
-        # routers/regions.py get_regions_overview, routers/storage_pools.py resources-all.
+        # routers/regions.py get_regions_overview, routers/storage_pools.py resources-all,
+        # routers/nodes.py _availability_response.
         expected = {
             "instances:list": 30,
             "vms:list": 180,
             "regions:overview": 120,
             "storage_pool_resources:all": 60,
+            "nodes:availability": 45,
         }
         from app.core import cache as cache_module
 
@@ -1287,7 +1289,20 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
                 )
             else:
                 continue
-            ttl = next((kw.value.value for kw in call.keywords if kw.arg == "ttl"), None)
+            # As with the key above, a TTL may be a literal or a constant in app.core.cache.
+            # A shared constant is the stronger form: it makes the endpoint and the prewarm
+            # impossible to drift apart, where two matching literals only happen to agree.
+            ttl_node = next((kw.value for kw in call.keywords if kw.arg == "ttl"), None)
+            if isinstance(ttl_node, ast.Constant):
+                ttl = ttl_node.value
+            elif isinstance(ttl_node, ast.Name):
+                ttl = getattr(cache_module, ttl_node.id, None)
+                self.assertIsInstance(
+                    ttl, int,
+                    f"prewarm ttl {ttl_node.id} must be an int constant in app.core.cache",
+                )
+            else:
+                ttl = None
             seen[next((p for p in expected if key.startswith(p)), key)] = ttl
         self.assertEqual(seen, expected)
 

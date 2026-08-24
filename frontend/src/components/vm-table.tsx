@@ -100,7 +100,9 @@ function StatusIndicator({ status }: { status: VMStatus }) {
       <div
         className={cn(
           "h-2 w-2 rounded-full",
-          isRunning ? "bg-emerald-500" : "bg-zinc-400"
+          // note: instance power state, a different noun from cluster reachability, so it
+          // keeps its own labels. The shades come from the shared status tokens.
+          isRunning ? "bg-status-online" : "bg-status-unknown"
         )}
       />
       <Badge variant={getStatusBadgeVariant(status)}>{status}</Badge>

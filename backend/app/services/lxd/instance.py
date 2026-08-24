@@ -378,11 +378,16 @@ class InstanceManager:
                     logger.info(f"Reconnected to {node_name}")
                 except Exception as e:
                     logger.warning(f"Reconnect failed for {node_name}: {e}")
-                    health.record_failure(node_name, str(e))
+                    # Preserve a more specific diagnosis. connect_with_vault_cert records
+                    # KIND_UNAUTHORIZED for a host that answered and refused us, and a generic
+                    # overwrite here would make it read as powered off everywhere.
+                    if health.get_kind(node_name) is None:
+                        health.record_failure(node_name, str(e))
                     return [], False
             
             if client is None:
-                health.record_failure(node_name, "Client not connected")
+                if health.get_kind(node_name) is None:
+                    health.record_failure(node_name, "Client not connected")
                 return [], False
             
             # Get all projects on this node

@@ -23,7 +23,9 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCreateVM, useNodeNames, useImages } from "@/hooks/use-lxd";
+import { useCreateVM, useImages } from "@/hooks/use-lxd";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
 import { formatBytes, truncateFingerprint } from "@/lib/utils";
 import { ImageInfo, ImageListResponse } from "@/types";
@@ -139,7 +141,8 @@ export function VMCreateForm() {
   // the leaving transition raises the global progress bar.
   const router = useRouter();
   const { navigate } = useNavigationProgress();
-  const { data: nodeNames, isLoading: nodesLoading } = useNodeNames();
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: nodesLoading } = nodePicker;
   const createVM = useCreateVM();
   const [showCloudInit, setShowCloudInit] = React.useState(false);
 
@@ -301,9 +304,18 @@ export function VMCreateForm() {
                     placeholder="Select a host"
                     searchPlaceholder="Search hosts..."
                     emptyText="No hosts available"
-                    options={(nodeNames ?? []).map((name) => ({ value: name, label: name }))}
+                    options={nodeOptions}
                   />
                 )}
+                <NodeStatusNotice
+                  meta={selectedHost ? nodePicker.statusOf(selectedHost) : undefined}
+                  reason={selectedHost ? nodePicker.availabilityOf(selectedHost)?.reason ?? undefined : undefined}
+                  nodeLabel={selectedHost ? nodePicker.labelOf(selectedHost) : undefined}
+                  unavailable={nodePicker.statusUnavailable}
+                  noSelectableNodes={nodePicker.selectableCount === 0}
+                  updatedAt={nodePicker.statusUpdatedAt}
+                  onRecheck={nodePicker.refreshNow}
+                />
                 {errors.host && (
                   <p className="text-sm text-red-500">{errors.host.message}</p>
                 )}

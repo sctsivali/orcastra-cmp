@@ -20,9 +20,16 @@ logger = logging.getLogger(__name__)
 # Old keys are never read again and expire on their own.
 # v3: NodeResources gained `hardware`. A v2 body deserializes with hardware=None, which
 # the UI cannot tell apart from a node that detected nothing.
-RESOURCE_SCHEMA_VERSION = "v3"
+# v4: NodeStatus gained `reachable`. A v3 body deserializes with reachable=None, which the
+# status derivation cannot tell apart from a host that never answered, so every dead cluster
+# would read Offline even when it answered and refused our certificate.
+RESOURCE_SCHEMA_VERSION = "v4"
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
+# Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's
+# 30s cycle, the same way the monitoring dashboard's 35s cache is paired with it.
+NODES_AVAILABILITY_CACHE_KEY = f"nodes:availability:{RESOURCE_SCHEMA_VERSION}"
+NODES_AVAILABILITY_CACHE_TTL = 45
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
 MICROCLOUD_RESOURCES_CACHE_PREFIX = f"microcloud_resources:{RESOURCE_SCHEMA_VERSION}"
 

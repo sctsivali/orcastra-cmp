@@ -874,16 +874,16 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
           {instanceCount > 0 && (
             <div className="flex items-center gap-2 text-xs">
               <div className="flex items-center gap-1">
-                <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                <div className="h-2 w-2 rounded-full bg-status-online" />
                 <span className="text-muted-foreground">{stats.running} running</span>
               </div>
               <div className="flex items-center gap-1">
-                <div className="h-2 w-2 rounded-full bg-zinc-400" />
+                <div className="h-2 w-2 rounded-full bg-status-unknown" />
                 <span className="text-muted-foreground">{stats.stopped} stopped</span>
               </div>
               {stats.other > 0 && (
                 <div className="flex items-center gap-1">
-                  <div className="h-2 w-2 rounded-full bg-amber-500" />
+                  <div className="h-2 w-2 rounded-full bg-status-pending" />
                   <span className="text-muted-foreground">{stats.other} other</span>
                 </div>
               )}

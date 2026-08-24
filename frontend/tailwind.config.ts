@@ -58,6 +58,12 @@ const config: Config = {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
+        status: {
+          online: "hsl(var(--status-online))",
+          offline: "hsl(var(--status-offline))",
+          pending: "hsl(var(--status-pending))",
+          unknown: "hsl(var(--status-unknown))",
+        },
       },
       borderRadius: {
         lg: "var(--radius)",

@@ -15,6 +15,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { clusterStatusMeta } from "@/lib/cluster-status";
+import { ClusterStatus } from "@/types/api";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
@@ -127,7 +129,7 @@ function RuleEditor({
 }: {
   rule: Omit<PolicyRule, "id">;
   index: number;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string }>;
+  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
   onUpdate: (index: number, rule: Omit<PolicyRule, "id">) => void;
   onRemove: (index: number) => void;
 }) {
@@ -207,11 +209,23 @@ function RuleEditor({
                 searchPlaceholder="Search clusters..."
                 options={[
                   { value: "*", label: "* (All Clusters)" },
-                  ...clusters.map((c) => ({
-                    value: c.cluster_id,
-                    label: c.display_name,
-                    sublabel: c.endpoint,
-                  })),
+                  // note: a scope picker, not a target picker. An offline cluster is a
+                  // perfectly valid thing to write a rule about, so the status is marked but
+                  // never disabled and never warned about. Disabling here would block a rule
+                  // an operator is writing precisely because the cluster is down.
+                  ...clusters.map((c) => {
+                    const meta = clusterStatusMeta(c.status);
+                    return {
+                      value: c.cluster_id,
+                      label: c.display_name,
+                      sublabel: c.endpoint,
+                      status: {
+                        label: meta.label,
+                        dotClassName: meta.dotClassName,
+                        tone: meta.tone,
+                      },
+                    };
+                  }),
                 ]}
               />
             </div>
@@ -292,7 +306,7 @@ function InlinePolicyEditor({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   editPolicy?: AccessPolicy | null;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string }>;
+  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
   organizations: IntegrationOrganization[];
   orgIdFilter?: number;
   onSubmit: (data: PolicyCreateRequest | PolicyUpdateRequest, isEdit: boolean) => void;
@@ -547,6 +561,7 @@ export function TenantAccessDialog({
       cluster_id: c.cluster_id,
       display_name: c.display_name || c.cluster_id,
       endpoint: c.endpoint || "",
+      status: c.status,
     }));
   }, [clustersData]);
 
@@ -907,7 +922,7 @@ function AssignedPolicyCard({
 }: {
   assignment: PolicyAssignment;
   policy: AccessPolicy | null;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string }>;
+  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
   revokeId: number | null;
   onSetRevokeId: (id: number | null) => void;
   onRevoke: () => void;
@@ -1101,7 +1116,7 @@ function EffectivePermissionsSection({
     permissions: TenantPermission[];
     policy_name: string;
   }>;
-  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string }>;
+  clusters: Array<{ cluster_id: string; display_name: string; endpoint: string; status?: ClusterStatus }>;
 }) {
   const [expanded, setExpanded] = useState(false);
 

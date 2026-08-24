@@ -13,6 +13,7 @@ import {
   ImageListResponse,
   RemoteImageListResponse,
   NodesStatusResponse,
+  ClusterAvailabilityResponse,
   NodeResources,
   GpuCardListResponse,
   ProjectListResponse,
@@ -532,6 +533,12 @@ export const nodeAPI = {
 
   names: async (): Promise<string[]> => {
     return fetchAPI<string[]>("/nodes/names");
+  },
+
+  // important: fetchRead, not fetchHeavyRead. Six pickers poll this; putting it on the
+  // heavy-read budget alongside the node-status fan-out is the storm we are avoiding.
+  availability: async (opts: ReadOptions = {}): Promise<ClusterAvailabilityResponse> => {
+    return fetchRead<ClusterAvailabilityResponse>("/nodes/availability", opts);
   },
 
   resources: async (nodeName: string): Promise<NodeResources> => {

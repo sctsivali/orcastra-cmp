@@ -14,14 +14,36 @@ import {
   CommandList,
 } from "@/components/ui/command";
 
+// A structural slice, deliberately not the ClusterStatus enum: a components/ui primitive that
+// imports a domain type stops being reusable. ClusterStatusMeta from lib/cluster-status.ts is
+// assignable to this with no adapter, so there is still exactly one mapping in the codebase.
+export interface SearchableSelectStatus {
+  // Always rendered next to the dot. Colour is never the only carrier of the state.
+  label: string;
+  // Background utility from the --status-* tokens, ex; "bg-status-offline".
+  dotClassName: string;
+  // Ordering weight owned by the caller's vocabulary, not by this primitive.
+  tone: "positive" | "caution" | "neutral" | "negative";
+}
+
 export interface SearchableSelectOption {
   value: string;
   label: string;
   // secondary line under the label (ex; cluster endpoint), also matched while searching
   sublabel?: string;
   // trailing hint shown on the right (ex; hypervisor type), also matched while searching
+  //
+  // important: keep this a string. The cmdk match key below is a template literal, so a
+  // ReactNode here interpolates to "[object Object]": every option would match the query
+  // "object" and contribute nothing else to search. Anything richer belongs in `status`.
   badge?: string;
   disabled?: boolean;
+  // Reachability of the thing this option names.
+  status?: SearchableSelectStatus;
+  // Why it is in that state, ex; "connection refused". Rendered inline, never as a tooltip:
+  // command.tsx sets pointer-events-none on a disabled item, so a disabled row cannot be
+  // hovered and a tooltip on it is unreachable.
+  statusReason?: string;
 }
 
 interface SearchableSelectProps {
@@ -55,7 +77,17 @@ export function SearchableSelect({
 }: SearchableSelectProps) {
   const [open, setOpen] = React.useState(false);
   const selected = options.find((o) => o.value === value);
-  const showSearch = options.length > searchThreshold;
+
+  // important: freeze the rendered order while the popover is open. Status arrives on a poll,
+  // and re-sorting a live list moves a row out from under the cursor between the eye and the
+  // click. On a control that creates real infrastructure, that is a wrong cluster, not a
+  // cosmetic glitch.
+  const frozen = React.useRef(options);
+  if (!open) frozen.current = options;
+  const rendered = open ? frozen.current : options;
+
+  const showSearch = rendered.length > searchThreshold;
+  const anyStatus = rendered.some((o) => o.status);
   // A combobox must name the listbox it controls, otherwise a screen reader announces the
   // trigger with no relationship to the options. Radix renders the list in a portal, so the two
   // are not adjacent in the DOM and only an explicit id ties them together.
@@ -80,15 +112,36 @@ export function SearchableSelect({
             className
           )}
         >
-          <span
-            className={cn(
-              "line-clamp-1 text-left",
-              !selected && "text-muted-foreground"
+          <span className="flex min-w-0 items-center gap-2">
+            {selected?.status && (
+              <span
+                aria-hidden
+                className={cn(
+                  "h-1.5 w-1.5 shrink-0 rounded-full",
+                  selected.status.dotClassName
+                )}
+              />
             )}
-          >
-            {selected ? selected.label : placeholder}
+            <span
+              className={cn(
+                "line-clamp-1 text-left",
+                !selected && "text-muted-foreground"
+              )}
+            >
+              {selected ? selected.label : placeholder}
+            </span>
           </span>
-          <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+          <span className="flex shrink-0 items-center gap-2">
+            {/* The trigger has to carry the state too. Without it the whole signal vanishes
+                the moment the popover closes, which is exactly when the operator is about to
+                submit against the cluster they picked. */}
+            {selected?.status && (
+              <span className="text-xs text-muted-foreground">
+                {selected.status.label}
+              </span>
+            )}
+            <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+          </span>
         </button>
       </PopoverTrigger>
       {/* The id belongs on the panel. cmdk's List sets its own id after spreading the
@@ -106,16 +159,20 @@ export function SearchableSelect({
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>
             <CommandGroup>
-              {options.map((opt) => (
+              {rendered.map((opt) => (
                 <CommandItem
                   key={opt.value}
-                  // include value/sublabel/badge so search matches more than the visible label
-                  value={`${opt.value} ${opt.label} ${opt.sublabel ?? ""} ${opt.badge ?? ""}`}
+                  // include value/sublabel/badge/status so search matches more than the visible
+                  // label. The status label is in here on purpose: typing "offline" narrows the
+                  // list to the broken clusters, which is how an operator finds them rather
+                  // than only avoids them.
+                  value={`${opt.value} ${opt.label} ${opt.sublabel ?? ""} ${opt.badge ?? ""} ${opt.status?.label ?? ""}`}
                   disabled={opt.disabled}
                   onSelect={() => {
                     onValueChange(opt.value);
                     setOpen(false);
                   }}
+                  title={!opt.disabled && opt.statusReason ? opt.statusReason : undefined}
                 >
                   <Check
                     className={cn(
@@ -123,6 +180,18 @@ export function SearchableSelect({
                       value === opt.value ? "opacity-100" : "opacity-0"
                     )}
                   />
+                  {/* Reserved even when this row has no status, so labels keep one
+                      x-position and nothing shifts sideways when reachability lands
+                      after the names. */}
+                  {anyStatus && (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "mr-2 h-1.5 w-1.5 shrink-0 rounded-full",
+                        opt.status ? opt.status.dotClassName : "invisible"
+                      )}
+                    />
+                  )}
                   <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
                     <div className="min-w-0">
                       <p className="truncate">{opt.label}</p>
@@ -131,12 +200,21 @@ export function SearchableSelect({
                           {opt.sublabel}
                         </p>
                       )}
+                      {opt.disabled && opt.statusReason && (
+                        <p className="truncate text-xs text-muted-foreground">
+                          {opt.statusReason}
+                        </p>
+                      )}
                     </div>
-                    {opt.badge && (
-                      <span className="shrink-0 text-xs text-muted-foreground">
-                        {opt.badge}
-                      </span>
-                    )}
+                    <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                      {opt.badge && <span>{opt.badge}</span>}
+                      {opt.status && (
+                        <span>
+                          <span className="sr-only">Status: </span>
+                          {opt.status.label}
+                        </span>
+                      )}
+                    </span>
                   </div>
                 </CommandItem>
               ))}

@@ -8,6 +8,17 @@ class LXDConnectionError(Exception):
     pass
 
 
+class LXDAuthorizationError(LXDConnectionError):
+    """The host answered our probe and refused our certificate.
+
+    important: subclasses LXDConnectionError so every existing `except LXDConnectionError`
+    handler keeps working unchanged. It exists only so a caller can tell "answered and said
+    no" from "never answered" without matching on message text. That distinction is what
+    decides whether a cluster reads as Pending Trust or Offline.
+    """
+    pass
+
+
 class LXDOperationError(Exception):
     """Exception raised when an LXD operation fails."""
     pass

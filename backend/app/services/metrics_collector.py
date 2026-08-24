@@ -182,7 +182,11 @@ class MetricsCollector:
             # build theirs. Without get_scope_cache_key() they lacked the
             # ":scope=all" suffix, so nothing ever read them and every request
             # after a TTL expiry still paid the full cold cost.
-            from app.core.cache import REGIONS_OVERVIEW_CACHE_KEY
+            from app.core.cache import (
+                NODES_AVAILABILITY_CACHE_KEY,
+                NODES_AVAILABILITY_CACHE_TTL,
+                REGIONS_OVERVIEW_CACHE_KEY,
+            )
             from app.core.org_scope import get_scope_cache_key
             
             cache = get_cache_manager()
@@ -222,6 +226,18 @@ class MetricsCollector:
                 get_scope_cache_key("storage_pool_resources:all"),
                 self._fetch_storage_pool_resources,
                 ttl=60,
+            )
+
+            # Pre-warm cluster availability so a node picker never pays for a probe sweep.
+            # important: unlike the list fan-outs above, an all-offline result IS the answer
+            # here and must be cached. Those refuse an empty result because an empty list
+            # cannot be told apart from "nobody answered"; here "everything is offline" is
+            # precisely the fact the picker needs to show.
+            await self._prewarm_single_cache(
+                cache,
+                get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY),
+                self._fetch_availability,
+                ttl=NODES_AVAILABILITY_CACHE_TTL,
             )
             
         except Exception as e:
@@ -319,6 +335,16 @@ class MetricsCollector:
             logger.debug(f"Regions pre-warm fetch failed: {e}")
             return None
     
+    async def _fetch_availability(self):
+        """Fetch cluster availability for cache warming."""
+        try:
+            from app.routers.nodes import get_nodes_availability
+            result = await get_nodes_availability(lxd_service=self._lxd_service)
+            return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
+        except Exception as e:
+            logger.debug(f"Availability pre-warm fetch failed: {e}")
+            return None
+
     async def _fetch_storage_pool_resources(self):
         """Fetch storage pool resources for cache warming."""
         try:

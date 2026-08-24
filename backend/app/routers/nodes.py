@@ -6,16 +6,20 @@ Provides endpoints for monitoring node connectivity.
 from fastapi import APIRouter, Depends, HTTPException
 import logging
 import asyncio
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
-    NodeStatus,
+    ClusterAvailabilityResponse,
+    ClusterStatus,
     NodesStatusResponse,
     NodeResources,
     NodeUpdateRequest,
     NodeUpdateResponse,
     GpuCardListResponse,
 )
+from app.services.lxd import status as lxd_status
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -24,11 +28,13 @@ from app.services.lxd_service import (
 from app.core.single_flight import single_flight_on_fresh
 from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.vault_client import get_vault_client
 from app.core.cache import (
     get_cache_manager,
     MICROCLOUD_RESOURCES_CACHE_PREFIX,
+    NODES_AVAILABILITY_CACHE_KEY,
+    NODES_AVAILABILITY_CACHE_TTL,
     NODES_STATUS_CACHE_KEY,
 )
 
@@ -42,6 +48,15 @@ router = APIRouter(
 
 # Thread pool for parallel node status fetching
 _node_executor = ThreadPoolExecutor(max_workers=10)
+
+# Availability probes get their own pool so a slow reachability sweep cannot starve the
+# node-status fan-out, and vice versa.
+_availability_executor = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="nodes_availability"
+)
+# One connect budget (3s) plus one read budget (8s) plus margin. The probes run in parallel,
+# so this bounds the whole sweep, not one cluster.
+NODES_AVAILABILITY_PROBE_TIMEOUT = 20.0
 
 
 @router.get(
@@ -71,116 +86,12 @@ async def get_nodes_status(
     # Not in cache - fetch fresh data using ASYNC PARALLEL version
     statuses = await lxd_service.check_nodes_status_async()
     
-    # Also fetch clusters from Vault if enabled
-    settings = get_settings()
-    if settings.vault_enabled and settings.vault_token:
-        try:
-            from app.services.lxd_cert_manager import LXDCertificateManager
-            vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
-            cert_manager = LXDCertificateManager(
-                vault_client=vault_client,
-                clusters_path=settings.vault_clusters_path
-            )
-            
-            # Get all cluster IDs from Vault
-            cluster_ids = apply_cluster_filter(cert_manager.list_clusters())
-            
-            # Filter out clusters already in statuses
-            existing_names = {s.name for s in statuses}
-            new_cluster_ids = [cid for cid in cluster_ids if cid not in existing_names]
-            
-            if new_cluster_ids:
-                # Helper function to fetch cluster status
-                def fetch_cluster_status(cluster_id: str) -> NodeStatus:
-                    try:
-                        cluster_info = cert_manager.get_cluster_info(cluster_id)
-                        metadata = cluster_info.get("metadata", {})
-                        certificate_info = cluster_info.get("certificate", {})
-                        endpoint = metadata.get("endpoint", "")
-                        
-                        # Try to connect with certificate and get full node status
-                        node_status = None
-                        if certificate_info.get("has_certificate"):
-                            try:
-                                # Get certificate content from Vault
-                                cert_data = cert_manager.vault.vault_read(
-                                    f"{settings.vault_clusters_path}/{cluster_id}/certs"
-                                )
-                                
-                                cert_content = cert_data.get("client.crt", "")
-                                key_content = cert_data.get("client.key", "")
-                                
-                                if cert_content and key_content:
-                                    # Try to connect using Vault certificate
-                                    from app.services.lxd.connection import LXDConnectionManager
-                                    conn_manager = LXDConnectionManager()
-                                    client = conn_manager.connect_with_vault_cert(
-                                        cluster_id=cluster_id,
-                                        endpoint=endpoint,
-                                        cert_content=cert_content,
-                                        key_content=key_content
-                                    )
-                                    
-                                    # Get resources using the connected client
-                                    from app.services.lxd.resources import ResourceManager
-                                    resource_manager = ResourceManager()
-                                    node_status = resource_manager.check_node_status(
-                                        client=client,
-                                        node_name=cluster_id,
-                                        endpoint=endpoint
-                                    )
-                                    
-                                    # Override display name from metadata
-                                    node_status.display_name = metadata.get("display_name", cluster_id)
-                                
-                            except Exception as e:
-                                logger.warning(f"Failed to connect to {cluster_id} with certificate: {e}")
-                        
-                        # If connection failed or no certificate, create basic status
-                        if node_status is None:
-                            is_connected = False
-                            if not certificate_info.get("has_certificate"):
-                                try:
-                                    import requests
-                                    response = requests.get(
-                                        f"{endpoint}/1.0",
-                                        verify=False,
-                                        timeout=2
-                                    )
-                                    is_connected = response.ok
-                                except:
-                                    pass
-                            
-                            node_status = NodeStatus(
-                                name=cluster_id,
-                                display_name=metadata.get("display_name", cluster_id),
-                                endpoint=endpoint,
-                                connected=is_connected,
-                                node_type=None,
-                                tags=[],
-                                error=None if is_connected or certificate_info.get("has_certificate") else "Not reachable"
-                            )
-                        
-                        return node_status
-                    except Exception as e:
-                        logger.warning(f"Failed to get info for cluster {cluster_id}: {e}")
-                        return None
-                
-                # Fetch all cluster statuses in parallel
-                loop = asyncio.get_event_loop()
-                with ThreadPoolExecutor(max_workers=min(len(new_cluster_ids), 5)) as executor:
-                    results = await asyncio.gather(
-                        *[loop.run_in_executor(executor, fetch_cluster_status, cid) for cid in new_cluster_ids]
-                    )
-                
-                # Add valid results to statuses
-                for result in results:
-                    if result is not None:
-                        statuses.append(result)
-                    
-        except Exception as e:
-            logger.warning(f"Failed to fetch Vault clusters: {e}")
-    
+    # note: a second Vault sweep used to live here, adding any cluster the fan-out had not
+    # already returned. It was unreachable: check_nodes_status_async iterates the same
+    # apply_cluster_filter(cert_manager.list_clusters()) set, so the difference it computed
+    # was always empty and its failure logs never appeared once in seven days of production
+    # logs. Removed rather than left as dead weight on the hottest read in the app.
+
     response = NodesStatusResponse(
         nodes=statuses,
         all_connected=all(node.connected for node in statuses),
@@ -198,13 +109,113 @@ async def get_nodes_status(
     "/names",
     response_model=list[str],
     summary="Get node names",
-    description="Get list of configured LXD node names.",
+    description=(
+        "Get list of configured LXD node names. Carries no reachability: use "
+        "/nodes/availability when the caller has to know which clusters will answer."
+    ),
+    deprecated=True,
 )
 async def get_node_names(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get list of configured node names."""
     return lxd_service.get_node_names()
+
+
+# important: declared before any /{node_name}/... route. FastAPI matches in declaration order,
+# so moving this below /{node_name}/resources makes "availability" a node name and this
+# endpoint unreachable.
+@router.get(
+    "/availability",
+    response_model=ClusterAvailabilityResponse,
+    summary="Get cluster availability",
+    description=(
+        "Per-cluster reachability for node pickers. Cheap by construction: it rides the cached "
+        "/nodes fan-out when one is warm and falls back to a reachability-only probe, never to "
+        "the resource fan-out."
+    ),
+)
+@single_flight_on_fresh("nodes:availability")
+async def get_nodes_availability(
+    lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
+):
+    """Availability of every cluster in the caller's org scope.
+
+    important: never raises for a cluster that is down. "That cluster is offline" is this
+    endpoint's payload, not its failure, and a picker that 503s tells an operator nothing.
+    """
+    cache = get_cache_manager()
+    availability_key = get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY)
+
+    if not fresh:
+        cached = cache.get("api_responses", availability_key)
+        if cached is not None:
+            # note: overwrite `source`. The stored body records how it was first produced, so
+            # returning it verbatim reports "probe" on every cache hit and makes the field
+            # useless for the one question it exists to answer.
+            return ClusterAvailabilityResponse(**{**cached, "source": "availability_cache"})
+
+        # The node-status page and the metrics prewarm both fill this key. Riding it costs one
+        # Redis read and keeps six pickers from generating their own fan-out.
+        nodes_body = cache.get("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
+        if nodes_body is not None:
+            return _availability_response(
+                cache, availability_key, lxd_status.project_from_nodes_body(nodes_body), "nodes_cache"
+            )
+
+    cluster_ids = lxd_service.get_node_names()
+    try:
+        rows = await run_blocking(
+            lxd_status.probe_clusters,
+            cluster_ids,
+            cert_manager=lxd_service.cert_manager,
+            connection_manager=lxd_service.connection_manager,
+            settings=get_settings(),
+            # Only an operator-initiated recheck may re-probe past the breaker. An ordinary
+            # picker open must not walk a fleet of dead clusters paying connect timeouts.
+            force=fresh,
+            timeout=NODES_AVAILABILITY_PROBE_TIMEOUT,
+            label="nodes.availability",
+            executor=_availability_executor,
+            # important: without a cap, _acquire never raises and the BlockingPoolFull handler
+            # below is dead code. On a degraded fleet, non-fresh reads are not deduped, so
+            # queued sweeps would accumulate instead of shedding.
+            max_in_flight=4,
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        # Degrade to "we could not tell", never to "everything is offline". A picker that
+        # marks a healthy fleet dead because a probe was slow is worse than one with no marks.
+        logger.warning("Availability probe unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="Cluster reachability is temporarily unavailable"
+        )
+
+    return _availability_response(cache, availability_key, rows, "probe")
+
+
+def _availability_response(cache, cache_key: str, rows, source: str) -> ClusterAvailabilityResponse:
+    """Build the response and cache it.
+
+    note: an all-offline result IS the answer here and is cached like any other. That differs
+    from the list fan-outs elsewhere, which refuse to cache an empty result because an empty
+    list cannot be told apart from "nobody answered". Here the difference is the payload.
+    """
+    response = ClusterAvailabilityResponse(
+        clusters=rows,
+        online_count=sum(1 for row in rows if row.status == ClusterStatus.ONLINE),
+        total_count=len(rows),
+        source=source,
+        generated_at=datetime.now(timezone.utc),
+    )
+    if cache:
+        cache.set(
+            "api_responses",
+            cache_key,
+            response.model_dump(mode="json"),
+            ttl=NODES_AVAILABILITY_CACHE_TTL,
+        )
+    return response
 
 
 @router.get(
@@ -357,6 +368,8 @@ async def update_node(
             cache.delete("api_responses", "clusters:list:all:scope=all")
             cache.delete("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
             cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
+            # trailing * so every org-scope suffix goes with it
+            cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
             cache.invalidate_cluster_cache(node_name)
             logger.info(f"Invalidated caches after updating node {node_name}")
         
@@ -393,6 +406,7 @@ async def invalidate_node_cache(
         
         # Invalidate various cache keys for this node (pattern match for all scope variants)
         cache.delete_pattern("api_responses", f"{NODES_STATUS_CACHE_KEY}*")
+        cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
         cache.delete("lxd_resources", f"{MICROCLOUD_RESOURCES_CACHE_PREFIX}:{node_name}")
         cache.delete_pattern("api_responses", f"cluster_members:list:host={node_name}*")
         
@@ -428,6 +442,7 @@ async def invalidate_all_nodes_cache(
         
         # Clear all nodes status cache (all scope variants)
         cache.delete_pattern("api_responses", f"{NODES_STATUS_CACHE_KEY}*")
+        cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
         
         # Clear all LXD resources cache (pattern delete)
         cache.delete_pattern("lxd_resources", "*")

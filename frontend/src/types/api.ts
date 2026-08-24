@@ -495,6 +495,11 @@ export interface NodeStatus {
   resources: NodeResources | null;
   tags: string[];
   display_name?: string | null;
+  /** Whether the host answered our probe. connected=false with reachable=true means it
+   *  answered and refused our certificate; reachable=false means it never answered. */
+  reachable?: boolean | null;
+  /** Server-derived status, so no client re-derives it from booleans. */
+  status?: ClusterStatus;
 }
 
 // Nodes Status Response
@@ -946,6 +951,37 @@ export interface ClusterAuthCheckResponse {
 export interface ClusterListResponse {
   clusters: ClusterInfo[];
   total: number;
+}
+
+/** Machine-readable reason behind a status. Copy keys off this, never off `reason`. */
+export enum AvailabilityReason {
+  OK = "ok",
+  UNTRUSTED_CERTIFICATE = "untrusted_certificate",
+  UNREACHABLE = "unreachable",
+  NO_CERTIFICATE = "no_certificate",
+  UNKNOWN = "unknown",
+}
+
+/** One row for a cluster picker. Carries no hardware detail by design. */
+export interface ClusterAvailability {
+  /** Cluster id. The exact value a create request sends as its node. */
+  name: string;
+  display_name: string;
+  endpoint: string;
+  status: ClusterStatus;
+  reason_code: AvailabilityReason;
+  reason?: string | null;
+  node_type?: string | null;
+  checked_at: string;
+  available: boolean;
+}
+
+export interface ClusterAvailabilityResponse {
+  clusters: ClusterAvailability[];
+  online_count: number;
+  total_count: number;
+  source: "nodes_cache" | "availability_cache" | "probe";
+  generated_at: string;
 }
 
 export interface ClusterDeleteResponse {

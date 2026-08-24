@@ -16,7 +16,9 @@ import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
-import { useNodeNames, useStoragePools } from "@/hooks/use-lxd";
+import { useStoragePools } from "@/hooks/use-lxd";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { api } from "@/lib/api";
 import { formatBytes } from "@/lib/utils";
 import { Loader2, UploadCloud } from "lucide-react";
@@ -43,8 +45,8 @@ function suggestName(fileName: string): string {
 
 export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDialogProps) {
   const { toast } = useToast();
-  const { data: nodeNames, isLoading: loadingNodes } = useNodeNames();
-  const nodeOptions = (nodeNames || []).map((n) => ({ value: n, label: n }));
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
   const [node, setNode] = useState("");
   const [pool, setPool] = useState("");
@@ -197,6 +199,15 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
                 searchPlaceholder="Search nodes..."
                 emptyText="No nodes found."
                 disabled={loadingNodes || busy}
+              />
+              <NodeStatusNotice
+                meta={node ? nodePicker.statusOf(node) : undefined}
+                reason={node ? nodePicker.availabilityOf(node)?.reason ?? undefined : undefined}
+                nodeLabel={node ? nodePicker.labelOf(node) : undefined}
+                unavailable={nodePicker.statusUnavailable}
+                noSelectableNodes={nodePicker.selectableCount === 0}
+                updatedAt={nodePicker.statusUpdatedAt}
+                onRecheck={nodePicker.refreshNow}
               />
             </div>
             <div className="grid gap-2">

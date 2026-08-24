@@ -1,0 +1,180 @@
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+  HelpCircle,
+  ShieldAlert,
+  XCircle,
+  type LucideIcon,
+} from "lucide-react";
+
+import { ClusterStatus, type NodeStatus } from "@/types/api";
+
+/**
+ * One vocabulary for "can this cluster be used right now".
+ *
+ * Before this, five files answered the question independently and disagreed on all three
+ * axes. The shades drifted (emerald-500 in one file, green-500 in another, green-400 in a
+ * third; zinc-400 against gray-400), the wording drifted ("Connected" against "Online",
+ * "Some nodes not connected" against "Offline"), and the regions page shipped its dots with
+ * no dark: variants at all. documentation/ui/frontend-design-language.md names exactly this
+ * as the defect: semantic colour comes from a token, never from a raw palette step, and
+ * never from two steps of the same semantic in two places.
+ */
+
+export type ClusterStatusTone = "positive" | "caution" | "neutral" | "negative";
+
+export type ClusterStatusBadgeVariant = "success" | "warning" | "error" | "muted";
+
+export interface ClusterStatusMeta {
+  /** Normalised enum value. Never undefined: unknown input resolves to a real member. */
+  status: ClusterStatus;
+  /** Display label. Title case, hand-written, safe to render anywhere. */
+  label: string;
+  /** For a Status column or a detail dialog, where a chip is the established treatment. */
+  badgeVariant: ClusterStatusBadgeVariant;
+  icon: LucideIcon;
+  /** Background utility for a status dot, from the --status-* tokens. */
+  dotClassName: string;
+  /** Foreground utility for an inline icon. */
+  iconClassName: string;
+  /** Sort weight. Lower sorts first, so reachable clusters lead a picker. */
+  tone: ClusterStatusTone;
+  toneRank: number;
+  /** True only for ONLINE. Never derive this by comparing the label. */
+  reachable: boolean;
+  /** Announced text, so colour is never the only carrier. */
+  srLabel: string;
+}
+
+const TONE_RANK: Record<ClusterStatusTone, number> = {
+  positive: 0,
+  caution: 1,
+  neutral: 2,
+  negative: 3,
+};
+
+type Entry = Omit<ClusterStatusMeta, "srLabel" | "toneRank">;
+
+const ENTRIES: Record<ClusterStatus, Entry> = {
+  [ClusterStatus.ONLINE]: {
+    status: ClusterStatus.ONLINE,
+    label: "Online",
+    badgeVariant: "success",
+    icon: CheckCircle2,
+    dotClassName: "bg-status-online",
+    iconClassName: "text-status-online",
+    tone: "positive",
+    reachable: true,
+  },
+  [ClusterStatus.NOT_AUTHORIZED]: {
+    status: ClusterStatus.NOT_AUTHORIZED,
+    // note: not formatLabel("not_authorized"), which gives "Not Authorized" and reads as a
+    // permission denial. The cluster answered; the trust handshake is what is unfinished.
+    label: "Pending Trust",
+    badgeVariant: "warning",
+    icon: ShieldAlert,
+    dotClassName: "bg-status-pending",
+    iconClassName: "text-status-pending",
+    tone: "caution",
+    reachable: false,
+  },
+  [ClusterStatus.PENDING]: {
+    status: ClusterStatus.PENDING,
+    label: "Pending",
+    badgeVariant: "muted",
+    icon: Clock,
+    dotClassName: "bg-status-unknown",
+    iconClassName: "text-status-unknown",
+    tone: "neutral",
+    reachable: false,
+  },
+  [ClusterStatus.OFFLINE]: {
+    status: ClusterStatus.OFFLINE,
+    label: "Offline",
+    badgeVariant: "error",
+    // XCircle for offline, AlertTriangle for error: the existing clusters page already drew
+    // that line and it is worth keeping. A host that is down and a fault in us are different
+    // problems, and the icon is the only thing separating them once both go red.
+    icon: XCircle,
+    dotClassName: "bg-status-offline",
+    iconClassName: "text-status-offline",
+    tone: "negative",
+    reachable: false,
+  },
+  [ClusterStatus.ERROR]: {
+    status: ClusterStatus.ERROR,
+    label: "Error",
+    badgeVariant: "error",
+    icon: AlertTriangle,
+    dotClassName: "bg-status-offline",
+    iconClassName: "text-status-offline",
+    tone: "negative",
+    reachable: false,
+  },
+};
+
+const UNKNOWN: Entry = {
+  status: ClusterStatus.PENDING,
+  label: "Unknown",
+  badgeVariant: "muted",
+  icon: HelpCircle,
+  dotClassName: "bg-status-unknown",
+  iconClassName: "text-status-unknown",
+  tone: "neutral",
+  reachable: false,
+};
+
+// important: the monitoring endpoint emits "pending_trust", which is not in the enum, from
+// routers/monitoring.py. Accepting it here keeps monitoring/node-card.tsx correct without a
+// backend change. Drop this alias only once that endpoint speaks the enum.
+const ALIASES: Record<string, ClusterStatus> = {
+  pending_trust: ClusterStatus.NOT_AUTHORIZED,
+  not_trusted: ClusterStatus.NOT_AUTHORIZED,
+  connected: ClusterStatus.ONLINE,
+  disconnected: ClusterStatus.OFFLINE,
+};
+
+function isNodeStatus(value: unknown): value is NodeStatus {
+  return typeof value === "object" && value !== null && "connected" in value;
+}
+
+/**
+ * Resolve any shape the product carries into the one vocabulary.
+ *
+ * Accepts a NodeStatus as well as the enum because the dashboard cards and the connection
+ * summary hold booleans. The backend now sends a `status` field on NodeStatus, so this reads
+ * it directly rather than pattern-matching `node.error` for words like "trust", which would
+ * change what the UI decides the first time a backend message is reworded.
+ */
+export function clusterStatusMeta(
+  input: ClusterStatus | NodeStatus | string | null | undefined,
+): ClusterStatusMeta {
+  let key: string | undefined;
+
+  if (isNodeStatus(input)) {
+    key =
+      input.status ??
+      // Fallback for a body cached before the backend carried `status`. Structural, not
+      // textual: reachable=true with connected=false means the host answered and refused us.
+      (input.connected
+        ? ClusterStatus.ONLINE
+        : input.reachable === true
+          ? ClusterStatus.NOT_AUTHORIZED
+          : ClusterStatus.OFFLINE);
+  } else if (typeof input === "string") {
+    key = input;
+  }
+
+  const normalized = key ? (ALIASES[key] ?? key) : undefined;
+  const entry =
+    normalized && normalized in ENTRIES
+      ? ENTRIES[normalized as ClusterStatus]
+      : UNKNOWN;
+
+  return {
+    ...entry,
+    toneRank: TONE_RANK[entry.tone],
+    srLabel: `Status: ${entry.label}`,
+  };
+}

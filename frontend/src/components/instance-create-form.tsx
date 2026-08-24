@@ -64,7 +64,6 @@ import {
 } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import {
-  useNodeNames,
   useCreateInstance,
   useImagesByHost,
   useStoragePoolList,
@@ -75,6 +74,8 @@ import {
   useProfile,
   useNodeGpus,
 } from "@/hooks/use-lxd";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useToast } from "@/hooks/use-toast";
 import { addPendingCreate } from "@/lib/pending-creates";
 import { safeRandomUUID } from "@/lib/utils";
@@ -227,8 +228,8 @@ export function InstanceCreateForm() {
     form.type === "vm" ? "virtual-machine" : "container";
 
   // --- Data sources -----------------------------------------------------------
-  const { data: nodeNames, isLoading: loadingNodes } = useNodeNames();
-  const nodeOptions = (nodeNames || []).map((name) => ({ value: name, label: name }));
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
   const { data: projectsResp, isLoading: loadingProjects } = useProjects(
     form.selectedNode,
@@ -1069,6 +1070,15 @@ export function InstanceCreateForm() {
                     searchPlaceholder="Search nodes..."
                     emptyText="No nodes found."
                     disabled={loadingNodes}
+                  />
+                  <NodeStatusNotice
+                    meta={form.selectedNode ? nodePicker.statusOf(form.selectedNode) : undefined}
+                    reason={form.selectedNode ? nodePicker.availabilityOf(form.selectedNode)?.reason ?? undefined : undefined}
+                    nodeLabel={form.selectedNode ? nodePicker.labelOf(form.selectedNode) : undefined}
+                    unavailable={nodePicker.statusUnavailable}
+                    noSelectableNodes={nodePicker.selectableCount === 0}
+                    updatedAt={nodePicker.statusUpdatedAt}
+                    onRecheck={nodePicker.refreshNow}
                   />
                 </div>
                 <div className="grid gap-2">

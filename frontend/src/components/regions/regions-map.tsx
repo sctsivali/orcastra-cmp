@@ -45,12 +45,16 @@ function getRegionIcon(region: RegionSummary): L.DivIcon {
   const onlineCount = region.nodes.filter((n) => n.status === "online").length;
   const totalCount = region.nodes.length;
 
+  // note: the markers are injected as raw HTML into a Leaflet DivIcon, so they take a CSS
+  // value rather than a Tailwind class. Reading the same --status-* custom properties is what
+  // keeps the map on the product's status palette in both themes instead of three hex
+  // literals that drift the first time a token is retuned.
   if (onlineCount === totalCount) {
-    return createCustomIcon("#10b981"); // All online - green
+    return createCustomIcon("hsl(var(--status-online))");
   } else if (onlineCount > 0) {
-    return createCustomIcon("#f59e0b"); // Some online - amber
+    return createCustomIcon("hsl(var(--status-pending))");
   } else {
-    return createCustomIcon("#ef4444"); // All offline - red
+    return createCustomIcon("hsl(var(--status-offline))");
   }
 }
 

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
@@ -66,19 +67,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
 }
 
-// Get status color
-function getStatusColor(status: ClusterStatus): string {
-  switch (status) {
-    case "online":
-      return "bg-emerald-500";
-    case "offline":
-      return "bg-red-500";
-    case "not_authorized":
-      return "bg-amber-500";
-    default:
-      return "bg-gray-500";
-  }
-}
 
 // Hardware summary component
 function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHardwareInfo; compact?: boolean }) {
@@ -230,7 +218,7 @@ function RegionCard({
                       <Building2 className="h-3 w-3 text-muted-foreground" />
                       <span className="text-xs text-muted-foreground font-medium">
                         {region.facility_name}
-                        {region.facility_provider && ` — ${region.facility_provider}`}
+                        {region.facility_provider && `, ${region.facility_provider}`}
                       </span>
                     </div>
                   )}
@@ -285,7 +273,19 @@ function RegionCard({
                     className="flex items-center justify-between p-2 rounded-md bg-muted/50 text-sm"
                   >
                     <div className="flex items-center gap-2">
-                      <span className={cn("h-2 w-2 rounded-full", getStatusColor(node.status))} />
+                      <span
+                        aria-hidden
+                        className={cn(
+                          "h-2 w-2 rounded-full",
+                          clusterStatusMeta(node.status).dotClassName
+                        )}
+                      />
+                      {/* The dot used to be the only signal here, unlabelled and with no
+                          dark: variants, so in dark mode a grey cluster was invisible and no
+                          screen reader ever heard the state. */}
+                      <span className="sr-only">
+                        {clusterStatusMeta(node.status).srLabel}
+                      </span>
                       <span className="font-medium">{node.display_name}</span>
                       {node.node_type && (
                         <Badge variant="secondary" className="text-xs">

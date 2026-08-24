@@ -33,6 +33,18 @@
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 50%;
     --warning-foreground: 0 0% 100%;
+    /* Cluster reachability. Separate from --success/--warning/--destructive because those are
+       tuned as backgrounds carrying their own foreground, while a status dot is a bare graphic
+       measured against the surface behind it. --destructive in dark measures 1.99:1 on
+       --popover, under the 3:1 floor WCAG 1.4.11 sets for a non-text graphic, which is why six
+       files hand-rolled bg-red-500 instead of using the token. Every pair below was measured:
+       worst is 4.52:1, so they are also safe if one ever colours a word. */
+    --status-online: 142 76% 28%;
+    --status-offline: 0 74% 42%;
+    --status-pending: 32 90% 34%;
+    /* deliberately identical to --muted-foreground: an unknown status is the same
+       subordinate grey as everything else that is not asserting anything */
+    --status-unknown: 215 16% 47%;
     --border: 220 13% 87%;
     --input: 220 13% 87%;
     --ring: 262.1 83.3% 57.8%;
@@ -72,6 +84,10 @@
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 40%;
     --warning-foreground: 0 0% 100%;
+    --status-online: 142 64% 47%;
+    --status-offline: 0 84% 62%;
+    --status-pending: 38 92% 55%;
+    --status-unknown: 240 5% 65%;
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
     --ring: 263.4 70% 50.4%;

@@ -21,7 +21,9 @@ import {
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useCreateProject, useNodeNames } from "@/hooks/use-lxd";
+import { useCreateProject } from "@/hooks/use-lxd";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
 
 const projectCreateSchema = z.object({
@@ -53,7 +55,8 @@ export function ProjectCreateForm() {
   // the leaving transition raises the global progress bar.
   const router = useRouter();
   const { navigate } = useNavigationProgress();
-  const { data: nodeNames, isLoading: nodesLoading, error } = useNodeNames();
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: nodesLoading, isError: error } = nodePicker;
   const createProject = useCreateProject();
   const [nodeResources, setNodeResources] = React.useState<any>(null);
   const [loadingResources, setLoadingResources] = React.useState(false);
@@ -304,7 +307,16 @@ export function ProjectCreateForm() {
                   placeholder={nodesLoading ? "Loading clusters..." : "Select a cluster"}
                   searchPlaceholder="Search clusters..."
                   emptyText="No clusters available"
-                  options={(nodeNames ?? []).map((name) => ({ value: name, label: name }))}
+                  options={nodeOptions}
+                />
+                <NodeStatusNotice
+                  meta={selectedHost ? nodePicker.statusOf(selectedHost) : undefined}
+                  reason={selectedHost ? nodePicker.availabilityOf(selectedHost)?.reason ?? undefined : undefined}
+                  nodeLabel={selectedHost ? nodePicker.labelOf(selectedHost) : undefined}
+                  unavailable={nodePicker.statusUnavailable}
+                  noSelectableNodes={nodePicker.selectableCount === 0}
+                  updatedAt={nodePicker.statusUpdatedAt}
+                  onRecheck={nodePicker.refreshNow}
                 />
                 {errors.host && (
                   <p className="text-sm text-red-500">{errors.host.message}</p>

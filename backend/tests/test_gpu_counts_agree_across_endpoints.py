@@ -99,6 +99,7 @@ def test_the_versioned_cache_keys_move_together() -> None:
     assert cache_module.RESOURCE_SCHEMA_VERSION
     for key in (
         cache_module.NODES_STATUS_CACHE_KEY,
+        cache_module.NODES_AVAILABILITY_CACHE_KEY,
         cache_module.REGIONS_OVERVIEW_CACHE_KEY,
         cache_module.MEMBER_RESOURCES_CACHE_PREFIX,
         cache_module.MICROCLOUD_RESOURCES_CACHE_PREFIX,

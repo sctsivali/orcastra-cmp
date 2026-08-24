@@ -60,33 +60,8 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { Role } from "@/types/rbac";
 import { copyText } from "@/lib/clipboard";
+import { clusterStatusMeta } from "@/lib/cluster-status";
 
-const statusConfig = {
-  [ClusterStatus.ONLINE]: {
-    label: "Online",
-    variant: "default" as const,
-    icon: CheckCircle,
-    color: "text-green-500" },
-  [ClusterStatus.NOT_AUTHORIZED]: {
-    label: "Pending Trust",
-    variant: "secondary" as const,
-    icon: Clock,
-    color: "text-amber-500" },
-  [ClusterStatus.OFFLINE]: {
-    label: "Offline",
-    variant: "destructive" as const,
-    icon: XCircle,
-    color: "text-red-500" },
-  [ClusterStatus.ERROR]: {
-    label: "Error",
-    variant: "destructive" as const,
-    icon: AlertTriangle,
-    color: "text-red-500" },
-  [ClusterStatus.PENDING]: {
-    label: "Pending",
-    variant: "secondary" as const,
-    icon: Clock,
-    color: "text-gray-500" } };
 
 const CLUSTERS = defineTable<any>()({
   searchPlaceholder: "Search clusters",
@@ -466,7 +441,8 @@ EOF`}
                   />
                 ) : (
                   visibleClusters.map((cluster: any) => {
-                  const StatusIcon = statusConfig[cluster.status as ClusterStatus]?.icon || AlertTriangle;
+                  const statusMeta = clusterStatusMeta(cluster.status);
+                  const StatusIcon = statusMeta.icon;
                   return (
                     <TableRow key={cluster.cluster_id}>
                       <TableCell className="font-medium">
@@ -497,9 +473,9 @@ EOF`}
                         {cluster.zone || <TableEmptyValue label="No zone" />}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={statusConfig[cluster.status as ClusterStatus]?.variant || "secondary"}>
+                        <Badge variant={statusMeta.badgeVariant}>
                           <StatusIcon className="h-3 w-3 mr-1" />
-                          {statusConfig[cluster.status as ClusterStatus]?.label || "Unknown"}
+                          {statusMeta.label}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">

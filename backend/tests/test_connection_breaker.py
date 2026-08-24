@@ -141,3 +141,110 @@ def test_the_breaker_expires_so_a_cluster_is_reprobed(manager) -> None:
 
     manager._auto_reconnect = lambda cid: "client"  # type: ignore[assignment]
     assert manager.get_client(CLUSTER) == "client"
+
+
+def test_the_breaker_remembers_whether_the_host_answered(manager) -> None:
+    """A tripped cluster still has to be classifiable.
+
+    Without the kind, every cluster the breaker holds degrades to "offline" for 60 seconds,
+    including one that answered and refused our certificate. That is a different problem with
+    a different fix, and telling an operator to check the power on a host that is up and
+    talking is the failure this records.
+    """
+    health.record_failure(CLUSTER, "certificate not trusted", kind=health.KIND_UNAUTHORIZED)
+    assert health.get_kind(CLUSTER) == health.KIND_UNAUTHORIZED
+    assert health.get_reason(CLUSTER) == "certificate not trusted"
+
+
+def test_the_default_kind_is_offline(manager) -> None:
+    """`kind` is keyword-only with a default so the existing call sites needed no edit, and
+    "we could not reach it" is the right thing to assume when a caller does not say."""
+    health.record_failure(CLUSTER, "connection refused")
+    assert health.get_kind(CLUSTER) == health.KIND_OFFLINE
+
+
+def test_clearing_drops_the_kind_with_the_entry(manager) -> None:
+    health.record_failure(CLUSTER, "certificate not trusted", kind=health.KIND_UNAUTHORIZED)
+    health.clear(CLUSTER)
+    assert health.get_kind(CLUSTER) is None
+    assert health.get_reason(CLUSTER) is None
+
+
+def test_a_generic_failure_never_downgrades_an_authorization_one() -> None:
+    """The bug this pins was found on the live fleet, not in review.
+
+    Five clusters answered `GET /1.0` with HTTP 200 and still read "Offline" on every surface.
+    connect_with_vault_cert correctly recorded KIND_UNAUTHORIZED, and then ensure_connection's
+    broad `except Exception` recorded the same cluster again with the default kind one line
+    later. The breaker served that generic answer to every reader for the rest of its TTL, so
+    an operator was sent to check the power on a host that was up and talking.
+    """
+    from app.services.lxd.exceptions import LXDAuthorizationError
+    from app.services.lxd.lxd_service import LXDService
+
+    cluster = "blitz001"
+    health.clear(cluster)
+
+    class _Certs:
+        def get_cluster_info(self, cid, **kw):
+            return {"metadata": {"endpoint": "https://10.1.1.49:9443"}}
+
+        def get_cluster_certificate(self, cid):
+            return {"client.crt": "crt", "client.key": "key"}
+
+    class _Conn:
+        def get_client(self, cid, *a, **kw):
+            return None
+
+        def connect_with_vault_cert(self, cluster_id, **kw):
+            # what the real one does: record the specific kind, then re-raise
+            health.record_failure(
+                cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
+            )
+            raise LXDAuthorizationError(f"Certificate not trusted by {cluster_id}")
+
+    svc = LXDService.__new__(LXDService)
+    svc.connection_manager = _Conn()
+    svc.cert_manager = _Certs()
+
+    assert svc.ensure_connection(cluster) is False
+    assert health.get_kind(cluster) == health.KIND_UNAUTHORIZED, (
+        "a host that answered and refused us must not be recorded as unreachable"
+    )
+    health.clear(cluster)
+
+
+def test_a_tripped_cluster_still_reports_its_endpoint() -> None:
+    """The endpoint is registry metadata, not an observation about reachability.
+
+    It used to be read only after the breaker check, so every cluster the breaker held reported
+    endpoint="unknown". The node picker then printed the word "unknown" under the cluster's
+    name, which reads as a fact about the cluster rather than a gap in what we know. The
+    breaker exists to skip an 8s connect, not a local Vault read.
+    """
+    from app.services.lxd.lxd_service import LXDService
+
+    cluster = "blitzkrieg"
+    endpoint = "https://142.132.147.94:8443"
+
+    class _Vault:
+        def vault_read(self, path):
+            return {"endpoint": endpoint}
+
+    class _Certs:
+        def __init__(self):
+            self.vault = _Vault()
+
+    class _Settings:
+        vault_clusters_path = "secret/data/clusters"
+
+    svc = LXDService.__new__(LXDService)
+    svc.cert_manager = _Certs()
+
+    health.record_failure(cluster, "connection refused")
+    try:
+        status = svc._check_single_node_status(cluster, _Settings())
+        assert status.endpoint == endpoint, status.endpoint
+        assert status.connected is False
+    finally:
+        health.clear(cluster)

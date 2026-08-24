@@ -17,7 +17,7 @@ from urllib3.util.retry import Retry
 
 from app.core.config import get_settings
 from . import health
-from .exceptions import LXDConnectionError
+from .exceptions import LXDAuthorizationError, LXDConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -319,7 +319,9 @@ class LXDConnectionManager:
                 auth_status = data.get("metadata", {}).get("auth", "")
                 if auth_status != "trusted":
                     self._cleanup_temp_cert_files(cluster_id)
-                    raise LXDConnectionError(f"Certificate not trusted by {cluster_id} (auth={auth_status})")
+                    raise LXDAuthorizationError(
+                        f"Certificate not trusted by {cluster_id} (auth={auth_status})"
+                    )
             
             # Configure session with larger connection pool for parallel operations
             self._configure_client_session(client)
@@ -346,11 +348,16 @@ class LXDConnectionManager:
 
             return client
                     
-        except LXDConnectionError:
+        except LXDAuthorizationError:
+            # Narrow on purpose. A plain LXDConnectionError escaping this block is a transport
+            # failure, and recording it as "unauthorized" would make an offline cluster read as
+            # Pending Trust on every surface for the whole breaker TTL.
             # Raised above for an untrusted certificate, which is a real reachability failure:
             # the peer answered and refused us, and it will keep refusing until someone rotates
             # the cert. Recording it is what stops every later request paying the handshake.
-            health.record_failure(cluster_id, "certificate not trusted")
+            health.record_failure(
+                cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
+            )
             raise
         except Exception as e:
             self._cleanup_temp_cert_files(cluster_id)
@@ -489,7 +496,9 @@ class LXDConnectionManager:
                 if data.get("metadata", {}).get("auth") != "trusted":
                     logger.warning(f"Reconnect failed: cert not trusted by {cluster_id}")
                     self._cleanup_temp_cert_files(cluster_id)
-                    health.record_failure(cluster_id, "certificate not trusted")
+                    health.record_failure(
+                        cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
+                    )
                     return None
             
             self._clients[cluster_id] = client

@@ -34,7 +34,14 @@ import { cn } from "@/lib/utils";
 import { useTerminalStore, TerminalInstance } from "@/lib/terminal-store";
 import { Badge } from "@/components/ui/badge";
 
-// Status indicator for tray items
+// Status indicator for tray items.
+//
+// note: deliberately NOT on the shared --status-* tokens, unlike every other status dot in
+// the product. This tray renders on fixed dark chrome (bg-[#1f2335]) that does not follow the
+// theme, and those tokens do. Measured, the light-theme --status-online lands at 3.30:1 on
+// that chrome against 7.51:1 for the dark value, so a blind swap would trade a legible dot in
+// one theme for a barely-legible one in the other. The right fix is theme-independent chrome,
+// which is a larger change than this one.
 function TrayStatusDot({ status }: { status: TerminalInstance["status"] }) {
   switch (status) {
     case "connecting":
