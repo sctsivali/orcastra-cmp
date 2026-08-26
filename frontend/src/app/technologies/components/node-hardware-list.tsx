@@ -27,7 +27,7 @@ export function NodeHardwareList({ nodes }: { nodes: NodeStatus[] }) {
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="text-xl font-semibold">Hardware by node</h2>
+        <h2 className="text-xl font-semibold">Hardware by Node</h2>
         {/* --foreground on the page background, same reason as the aggregate section. */}
         <p className="text-sm text-foreground">
           {reportingCount === 0

@@ -189,7 +189,7 @@ export function HardwareAggregate({ categories }: { categories: HardwareCategory
   return (
     <section className="space-y-3">
       <div>
-        <h2 className="text-xl font-semibold">Fleet totals</h2>
+        <h2 className="text-xl font-semibold">Fleet Totals</h2>
         {/* note: --foreground, not --muted-foreground. On --background the muted token measures
             4.27:1 where AA wants 4.5:1, which is why the page subtitle is a declared exception
             in the contrast sweep. One exception is enough. */}
