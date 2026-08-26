@@ -554,8 +554,11 @@ class LXDCertificateManager:
             endpoint = metadata["endpoint"]
             
             # Create temp files for current certificate
-            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', prefix=f'lxd_add_trust_{cluster_id}_')
-            key_fd, key_path = tempfile.mkstemp(suffix='.key', prefix=f'lxd_add_trust_{cluster_id}_')
+            # dir= is load-bearing: see cert_files.staging_dir. Without it tempfile falls
+            # through to /var/tmp when /tmp is full and the private key lands on disk.
+            staging = cert_files.staging_dir()
+            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', dir=staging, prefix=f'lxd_add_trust_{cluster_id}_')
+            key_fd, key_path = tempfile.mkstemp(suffix='.key', dir=staging, prefix=f'lxd_add_trust_{cluster_id}_')
             
             os.write(cert_fd, current_cert["client.crt"].encode('utf-8'))
             os.close(cert_fd)
@@ -695,8 +698,10 @@ class LXDCertificateManager:
         
         try:
             # Create temp files
-            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', prefix='lxd_verify_')
-            key_fd, key_path = tempfile.mkstemp(suffix='.key', prefix='lxd_verify_')
+            # dir= is load-bearing: see cert_files.staging_dir.
+            staging = cert_files.staging_dir()
+            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', dir=staging, prefix='lxd_verify_')
+            key_fd, key_path = tempfile.mkstemp(suffix='.key', dir=staging, prefix='lxd_verify_')
             
             os.write(cert_fd, cert_pem.encode('utf-8'))
             os.close(cert_fd)

@@ -27,8 +27,6 @@ import threading
 import time
 from typing import Any, Dict, Tuple
 
-from app.services.lxd_ssl import describe_disk_usage
-
 from .exceptions import LXDLocalStorageError
 
 logger = logging.getLogger(__name__)
@@ -214,6 +212,37 @@ def describe_usage() -> Dict[str, Any]:
         "percent_used": round(used_ratio * 100, 1),
         "degraded": used_ratio >= DEGRADED_AT,
     }
+
+
+def describe_disk_usage(path: str) -> str:
+    """One-line human summary of free space, shared with the WebSocket path in lxd_ssl.
+
+    Lives here rather than there because this module owns where certificate material goes, and
+    two wordings for one exhaustion is how a runbook rots.
+    """
+    try:
+        usage = shutil.disk_usage(path)
+        free_mib = usage.free / 1024 / 1024
+        total_mib = usage.total / 1024 / 1024
+        return f"{path} has {free_mib:.1f} MiB free of {total_mib:.1f} MiB."
+    except OSError:
+        return f"Unable to read disk usage for {path}."
+
+
+def staging_dir() -> str:
+    """Pinned directory for short-lived certificate scratch files, created if absent.
+
+    important: callers must pass this as ``dir=`` to tempfile. Left to its own devices tempfile
+    resolves through gettempdir(), which searches for a WRITABLE directory and silently falls
+    through to /var/tmp once /tmp is full. That would relocate TLS private keys onto the
+    container's disk layer at the moment the tmpfs filled, with nothing visible to say so.
+    """
+    base = cert_base()
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+    except OSError as exc:
+        raise _storage_error(exc) from exc
+    return base
 
 
 def _storage_error(exc: OSError) -> LXDLocalStorageError:

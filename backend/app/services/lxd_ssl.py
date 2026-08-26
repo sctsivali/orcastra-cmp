@@ -5,10 +5,11 @@ SSL helpers for LXD WebSocket connections.
 import errno
 import logging
 import os
-import shutil
 import ssl
 import tempfile
 from typing import Mapping
+
+from app.services.lxd.cert_files import describe_disk_usage, staging_dir
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,9 @@ def _load_cert_chain_from_tempfiles(
     key_pem: str,
 ) -> None:
     try:
-        with tempfile.TemporaryDirectory(prefix="orcastra-lxd-ssl-") as cert_dir:
+        # dir= is load-bearing: without it tempfile resolves through gettempdir(), which falls
+        # through to /var/tmp when /tmp is full and would put the private key on disk.
+        with tempfile.TemporaryDirectory(prefix="orcastra-lxd-ssl-", dir=staging_dir()) as cert_dir:
             cert_path = os.path.join(cert_dir, "client.crt")
             key_path = os.path.join(cert_dir, "client.key")
 
@@ -96,24 +99,8 @@ def _write_secure_file(path: str, content: str) -> None:
 
 
 def _build_temp_storage_error(exc: OSError) -> RuntimeError:
-    temp_dir = tempfile.gettempdir()
-    usage = describe_disk_usage(temp_dir)
+    usage = describe_disk_usage(staging_dir())
     return RuntimeError(
         "Backend temporary storage is full while preparing LXD TLS credentials. "
         f"{usage} Increase BACKEND_TMPFS_SIZE or clear stale files in the backend container."
     )
-
-
-def describe_disk_usage(path: str) -> str:
-    """One-line human summary of free space, shared with app.services.lxd.cert_files.
-
-    Public because both the WebSocket path here and the REST cert materialization there report
-    the same exhaustion to operators, and two wordings for one condition is how a runbook rots.
-    """
-    try:
-        usage = shutil.disk_usage(path)
-        free_mib = usage.free / 1024 / 1024
-        total_mib = usage.total / 1024 / 1024
-        return f"{path} has {free_mib:.1f} MiB free of {total_mib:.1f} MiB."
-    except OSError:
-        return f"Unable to read disk usage for {path}."
