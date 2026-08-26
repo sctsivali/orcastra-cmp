@@ -283,7 +283,7 @@ function volumeSubject(volume: StorageVolumeInfo): UsedBySubject {
     facts: [
       { label: "Pool", value: volume.pool },
       { label: "Type", value: formatLabel(volume.type) },
-      { label: "Content type", value: volume.content_type },
+      { label: "Content Type", value: volume.content_type },
       { label: "Node", value: volume.node },
     ],
     panels: Object.keys(config).length

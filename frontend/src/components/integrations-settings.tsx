@@ -320,7 +320,7 @@ function APIKeySecretDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button onClick={onClose}>I have Saved the Credentials</Button>
+          <Button onClick={onClose}>I have saved the credentials</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -538,7 +538,7 @@ export function IntegrationsSettings() {
             <div className="text-center space-y-4">
               <Key className="h-12 w-12 mx-auto text-muted-foreground" />
               <div>
-                <h3 className="text-lg font-medium">No API Keys</h3>
+                <h3 className="text-lg font-medium">No API keys</h3>
                 <p className="text-muted-foreground">
                   Create an API key to allow external applications to connect.
                 </p>

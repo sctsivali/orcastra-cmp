@@ -265,6 +265,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-jsx-stray-attrs.mjs
 	@echo "$(COLOR_GREEN)Checking truncation reveal...$(COLOR_RESET)"
 	@node scripts/checks/check-truncation-reveal.mjs
+	@echo "$(COLOR_GREEN)Checking heading case...$(COLOR_RESET)"
+	@node scripts/checks/check-heading-case.mjs
 	@echo "$(COLOR_GREEN)Checking dialog affordances...$(COLOR_RESET)"
 	@node scripts/checks/check-dialog-affordances.mjs
 	@echo "$(COLOR_GREEN)Checking semantic colour...$(COLOR_RESET)"

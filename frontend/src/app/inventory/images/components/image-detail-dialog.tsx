@@ -68,7 +68,7 @@ export function ImageDetailDialog({
           <DetailGrid cols={3}>
             <DetailField label="Uploaded" value={formatDateTime(image.upload_date)} />
             <DetailField label="Created" value={formatDateTime(image.created_at)} />
-            <DetailField label="Last used" value={formatDateTime(image.last_used_at)} />
+            <DetailField label="Last Used" value={formatDateTime(image.last_used_at)} />
             <DetailField label="Expires" value={formatDateTime(image.expires_at)} />
           </DetailGrid>
         </DetailSection>

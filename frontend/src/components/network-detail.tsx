@@ -158,7 +158,7 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
-                <AlertDialogTitle>Delete network &quot;{network.name}&quot;?</AlertDialogTitle>
+                <AlertDialogTitle>Delete Network &quot;{network.name}&quot;?</AlertDialogTitle>
                 <AlertDialogDescription>
                   This permanently deletes the network on {host}. Networks that are
                   still in use by instances or profiles cannot be deleted.

@@ -13,7 +13,7 @@ export function InstanceDevicesTab({ instance }: { instance: VMInfo }) {
   return (
     <div className="space-y-6">
       <DetailSection
-        title="Set on this instance"
+        title="Set on This Instance"
         description="Devices configured on the instance itself, which is where a root disk size chosen at create time lives."
       >
         <DevicesPanel devices={instance.devices ?? undefined} />

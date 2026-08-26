@@ -77,7 +77,7 @@ export function CpuSocketList({ sockets }: { sockets: CPUSocketInfo[] }) {
           <DetailGrid cols={4}>
             <DetailField label="Cores" value={socket.cores || undefined} />
             <DetailField label="Threads" value={socket.threads || undefined} />
-            <DetailField label="Base clock" value={formatFrequency(socket.frequency)} />
+            <DetailField label="Base Clock" value={formatFrequency(socket.frequency)} />
             <DetailField label="Turbo" value={formatFrequency(socket.frequency_turbo)} />
           </DetailGrid>
         </DeviceRow>
@@ -128,12 +128,12 @@ export function StorageDeviceList({ devices }: { devices: StorageDeviceInfo[] })
             />
             <DetailField label="Firmware" value={disk.firmware_version || undefined} mono />
             <DetailField
-              label="Block size"
+              label="Block Size"
               value={disk.block_size ? `${disk.block_size} B` : undefined}
             />
             <DetailField label="Partitions" value={disk.partitions || undefined} />
             <DetailField
-              label="NUMA node"
+              label="NUMA Node"
               value={disk.numa_node === null || disk.numa_node === undefined ? undefined : disk.numa_node}
             />
           </DetailGrid>
@@ -166,11 +166,11 @@ export function NetworkCardList({ cards }: { cards: NetworkCardInfo[] }) {
           }
         >
           <DetailGrid cols={4}>
-            <DetailField label="Driver version" value={card.driver_version || undefined} mono />
+            <DetailField label="Driver Version" value={card.driver_version || undefined} mono />
             <DetailField label="Firmware" value={card.firmware_version || undefined} mono />
-            <DetailField label="PCI address" value={card.pci_address || undefined} mono />
+            <DetailField label="PCI Address" value={card.pci_address || undefined} mono />
             <DetailField
-              label="NUMA node"
+              label="NUMA Node"
               value={card.numa_node === null || card.numa_node === undefined ? undefined : card.numa_node}
             />
           </DetailGrid>

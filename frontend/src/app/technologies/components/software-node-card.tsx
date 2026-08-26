@@ -55,12 +55,12 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
         <DetailSection title="Platform">
           <DetailGrid cols={3}>
             <DetailField label="Hypervisor" value={node.server_version || undefined} mono />
-            <DetailField label="API version" value={node.api_version || undefined} mono />
+            <DetailField label="API Version" value={node.api_version || undefined} mono />
             <DetailField label="Project" value={env?.project || undefined} />
-            <DetailField label="Server name" value={env?.server_name || undefined} />
-            <DetailField label="Event mode" value={env?.server_event_mode || undefined} />
+            <DetailField label="Server Name" value={env?.server_name || undefined} />
+            <DetailField label="Event Mode" value={env?.server_event_mode || undefined} />
             <DetailField
-              label="Instance types"
+              label="Instance Types"
               value={
                 Array.isArray(env?.instance_types) && env.instance_types.length > 0
                   ? env.instance_types.join(", ")
@@ -70,7 +70,7 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
           </DetailGrid>
         </DetailSection>
 
-        <DetailSection title="Operating system">
+        <DetailSection title="Operating System">
           <DetailGrid cols={3}>
             <DetailField
               label="Distribution"
@@ -81,7 +81,7 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
             <DetailField label="Kernel" value={env?.kernel_version || undefined} mono />
             <DetailField label="Architecture" value={env?.kernel_architecture || undefined} mono />
             <DetailField
-              label="Supported architectures"
+              label="Supported Architectures"
               value={
                 Array.isArray(env?.architectures) && env.architectures.length > 0
                   ? env.architectures.join(", ")
@@ -95,7 +95,7 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
 
         {runtimes.length > 0 ? (
           <DetailSection
-            title="Instance runtimes"
+            title="Instance Runtimes"
             description="Each runtime with the version this node reports for it."
           >
             <DetailGrid cols={3}>
@@ -111,7 +111,7 @@ export function SoftwareNodeCard({ node }: { node: NodeStatus }) {
           </DetailSection>
         ) : null}
 
-        <DetailSection title="Storage and networking">
+        <DetailSection title="Storage and Networking">
           <DetailGrid cols={3}>
             {storage.map((backend) => (
               <DetailField

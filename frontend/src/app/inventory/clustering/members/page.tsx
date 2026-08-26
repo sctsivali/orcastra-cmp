@@ -224,7 +224,7 @@ function ClusterMembersContent() {
         </CardHeader>
         <CardContent>
           {/* important: an unreachable cluster answers 503, which leaves membersData
-              undefined and is_clustered false. Rendering that as "Not a Clustered Node"
+              undefined and is_clustered false. Rendering that as "Not a clustered node"
               told the operator their cluster is not a cluster, presenting an outage as a
               configuration fact. Reachability is checked before clustering. */}
           {error ? (
@@ -236,13 +236,13 @@ function ClusterMembersContent() {
           ) : !isClustered ? (
             <EmptyState
               icon={Server}
-              title="Not a Clustered Node"
+              title="Not a clustered node"
               description="This node is not part of a hypervisor cluster"
             />
           ) : members.length === 0 ? (
             <EmptyState
               icon={Server}
-              title="No Members Found"
+              title="No members found"
               description="Could not retrieve cluster member information"
             />
           ) : (

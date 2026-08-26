@@ -118,7 +118,7 @@ function NodeHardwareDetail({
     <>
       {system ? (
         <DetailSection
-          title="System and firmware"
+          title="System and Firmware"
           description={
             cluster ? "Reported identically by every member of this cluster." : undefined
           }
@@ -128,16 +128,16 @@ function NodeHardwareDetail({
             <DetailField label="Product" value={system.product || undefined} />
             <DetailField label="Family" value={system.family || undefined} />
             <DetailField label="Type" value={system.type || undefined} />
-            <DetailField label="Firmware vendor" value={system.firmware?.vendor || undefined} />
-            <DetailField label="Firmware version" value={system.firmware?.version || undefined} mono />
-            <DetailField label="Firmware date" value={system.firmware?.date || undefined} />
+            <DetailField label="Firmware Vendor" value={system.firmware?.vendor || undefined} />
+            <DetailField label="Firmware Version" value={system.firmware?.version || undefined} mono />
+            <DetailField label="Firmware Date" value={system.firmware?.date || undefined} />
             <DetailField label="Chassis" value={system.chassis?.type || undefined} />
             <DetailField label="Motherboard" value={system.motherboard?.product || undefined} />
           </DetailGrid>
         </DetailSection>
       ) : null}
 
-      <DetailSection title="CPU topology">
+      <DetailSection title="CPU Topology">
         <DetailGrid cols={4}>
           {/* Architectures is a list because a cluster can genuinely run two, and because an
               unreported architecture must read as nothing rather than as x86_64. */}
@@ -147,15 +147,15 @@ function NodeHardwareDetail({
             mono
           />
           <DetailField label="Logical CPUs" value={cpu.total || undefined} />
-          <DetailField label="Physical cores" value={cpu.cores || undefined} />
+          <DetailField label="Physical Cores" value={cpu.cores || undefined} />
           <DetailField label="Threads" value={cpu.threads || undefined} />
-          <DetailField label="NUMA nodes" value={cpu.numa_nodes || undefined} />
+          <DetailField label="NUMA Nodes" value={cpu.numa_nodes || undefined} />
           <DetailField label="Sockets" value={cpu.sockets.length || undefined} />
         </DetailGrid>
         <CpuSocketList sockets={cpu.sockets} />
       </DetailSection>
 
-      <DetailSection title="Memory on this node">
+      <DetailSection title="Memory on This Node">
         <DetailGrid cols={4}>
           <DetailField label="Total" value={memory.total ? formatBytes(memory.total) : undefined} />
           <DetailField label="Used" value={memory.used ? formatBytes(memory.used) : undefined} />
@@ -169,7 +169,7 @@ function NodeHardwareDetail({
 
       {hardware.storage_devices.length > 0 ? (
         <DetailSection
-          title="Storage devices"
+          title="Storage Devices"
           description={
             hardware.storage_types.length > 0 ? hardware.storage_types.join(", ") : undefined
           }
@@ -179,13 +179,13 @@ function NodeHardwareDetail({
       ) : null}
 
       {hardware.networks.length > 0 ? (
-        <DetailSection title="Network interfaces">
+        <DetailSection title="Network Interfaces">
           <NetworkCardList cards={hardware.networks} />
         </DetailSection>
       ) : null}
 
       {node.resources ? (
-        <DetailSection title="Graphics and compute cards">
+        <DetailSection title="Graphics and Compute Cards">
           {/* The canonical GPU surface, fed from the same node.resources the counts come from.
               A second GPU renderer is how the counts came to disagree in the first place. */}
           <GpuPanel src={node.resources} dense />

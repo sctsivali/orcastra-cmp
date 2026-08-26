@@ -288,8 +288,8 @@ function aclSubject(acl: NetworkACLInfo): UsedBySubject {
     usedBy: acl.used_by ?? [],
     facts: [
       { label: "Node", value: acl.node },
-      { label: "Ingress rules", value: ingress.length },
-      { label: "Egress rules", value: egress.length },
+      { label: "Ingress Rules", value: ingress.length },
+      { label: "Egress Rules", value: egress.length },
     ],
     panels: [
       { id: "rules", label: "Rules", kind: "aclRules", ingress, egress },

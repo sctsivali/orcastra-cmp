@@ -232,7 +232,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4" />
-            Rebuild instance
+            Rebuild Instance
           </DialogTitle>
           <DialogDescription>
             Reinstalls <span className="font-medium text-foreground">{instance.name}</span>&apos;s

@@ -57,7 +57,7 @@ export function GpuPanel({ src, dense = false, className }: GpuPanelProps) {
 
       {cards.length > 0 && (
         <div className="space-y-3 border-t pt-4">
-          <p className="text-sm font-semibold">Cards on this node ({summary.cardsTotal})</p>
+          <h3 className="text-sm font-semibold">Cards on This Node ({summary.cardsTotal})</h3>
           {cards.map((card) => (
             <GpuCardDetails key={card.id ?? card.index} card={card} dense={dense} />
           ))}

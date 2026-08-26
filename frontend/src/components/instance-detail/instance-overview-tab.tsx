@@ -23,7 +23,7 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
           <DetailField label="Status" value={<Badge variant="outline">{instance.status}</Badge>} />
           <DetailField label="Project" value={instance.project || "default"} />
           <DetailField label="Node" value={instance.host} />
-          <DetailField label="Cluster member" value={instance.location} />
+          <DetailField label="Cluster Member" value={instance.location} />
           <DetailField label="Description" value={instance.description} span="full" />
         </DetailGrid>
       </DetailSection>
@@ -31,12 +31,12 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
       <DetailSection title="Lifecycle">
         <DetailGrid cols={3}>
           <DetailField label="Created" value={formatDateTime(instance.created_at)} />
-          <DetailField label="Last used" value={formatDateTime(instance.last_used_at)} />
+          <DetailField label="Last Used" value={formatDateTime(instance.last_used_at)} />
           {/* important: the whole fingerprint. This rendered 12 of its 64 characters with no
               ellipsis at all, so nothing told the operator the value had been cut, and the title
               named the action rather than the value. */}
           <DetailField
-            label="Base image"
+            label="Base Image"
             mono
             value={
               baseImage ? (
@@ -94,9 +94,9 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
           description="Reported by the cluster for this instance, not by the metrics poll."
         >
           <DetailGrid cols={3}>
-            <DetailField label="CPU usage" value={instance.resources.cpu_usage} />
-            <DetailField label="Memory usage" value={instance.resources.memory_usage} />
-            <DetailField label="Memory limit" value={instance.resources.memory_limit} />
+            <DetailField label="CPU Usage" value={instance.resources.cpu_usage} />
+            <DetailField label="Memory Usage" value={instance.resources.memory_usage} />
+            <DetailField label="Memory Limit" value={instance.resources.memory_limit} />
           </DetailGrid>
         </DetailSection>
       ) : null}

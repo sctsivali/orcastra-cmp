@@ -49,21 +49,21 @@ export function WarningDetailDialog({
         size="lg"
       >
         <div className="space-y-4">
-          <DetailSection title="What happened">
+          <DetailSection title="What Happened">
             <DetailGrid>
               <DetailField label="Message" value={record.last_message} span="full" />
             </DetailGrid>
           </DetailSection>
-          <DetailSection title="Where and when">
+          <DetailSection title="Where and When">
             <DetailGrid cols={3}>
               {/* note: location and source_node are different things, per the type comment. */}
               <DetailField label="Location" value={record.location} />
-              <DetailField label="Source node" value={record.source_node} />
+              <DetailField label="Source Node" value={record.source_node} />
               <DetailField label="Project" value={record.project} />
               <DetailField label="Status" value={record.status} />
               <DetailField label="Seen" value={record.count?.toLocaleString?.() ?? record.count} />
-              <DetailField label="First seen" value={formatDateTime(record.first_seen_at)} />
-              <DetailField label="Last seen" value={formatDateTime(record.last_seen_at)} />
+              <DetailField label="First Seen" value={formatDateTime(record.first_seen_at)} />
+              <DetailField label="Last Seen" value={formatDateTime(record.last_seen_at)} />
             </DetailGrid>
           </DetailSection>
         </div>
@@ -92,9 +92,9 @@ export function WarningDetailDialog({
       >
         <DetailGrid cols={2}>
           <DetailField label="Severity" value={record.severity} />
-          <DetailField label="Warning type" value={formatLabel(record.warning_type ?? "")} />
+          <DetailField label="Warning Type" value={formatLabel(record.warning_type ?? "")} />
           <DetailField
-            label="Days until expiry"
+            label="Days Until Expiry"
             value={record.days_until_expiry <= 0 ? "Expired" : `${record.days_until_expiry} days`}
           />
           <DetailField label="Expires at" value={formatDateTime(record.expires_at)} />

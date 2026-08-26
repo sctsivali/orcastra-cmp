@@ -64,11 +64,11 @@ const KINDS: Record<string, KindDescriptor> = {
         : `/inventory/networks`,
   },
   "network-acls": { label: "Network ACL", icon: Shield, href: searchOn("/inventory/network-acls") },
-  "storage-pools": { label: "Storage pool", icon: Database, href: searchOn("/inventory/storage-pools") },
+  "storage-pools": { label: "Storage Pool", icon: Database, href: searchOn("/inventory/storage-pools") },
   images: { label: "Image", icon: ImageIcon, href: searchOn("/inventory/images") },
   custom: { label: "Volume", icon: HardDrive, href: searchOn("/inventory/storage-volumes") },
-  block: { label: "Block volume", icon: HardDrive, href: searchOn("/inventory/storage-volumes") },
-  iso: { label: "ISO image", icon: Disc, href: searchOn("/inventory/iso-images") },
+  block: { label: "Block Volume", icon: HardDrive, href: searchOn("/inventory/storage-volumes") },
+  iso: { label: "ISO Image", icon: Disc, href: searchOn("/inventory/iso-images") },
   // An instance-backed volume IS an instance's own disk, so the useful destination is the
   // instance, not the volume list.
   container: { label: "Instance", icon: Box, href: instanceHref },

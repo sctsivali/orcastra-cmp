@@ -743,7 +743,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
               <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
               <AlertDialogContent onClick={(e) => e.stopPropagation()}>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Delete project '{project.name}'?</AlertDialogTitle>
+                  <AlertDialogTitle>Delete Project &quot;{project.name}&quot;?</AlertDialogTitle>
                   <AlertDialogDescription>
                     This will permanently delete the project from {project.host}. 
                     {instanceCount > 0 && (

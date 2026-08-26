@@ -46,7 +46,7 @@ export function OperationDetailDialog({
       size="lg"
     >
       <div className="space-y-4">
-        <DetailSection title="Where and when">
+        <DetailSection title="Where and When">
           <DetailGrid cols={3}>
             <DetailField label="Node" value={operation.node_name} />
             <DetailField label="Project" value={operation.project || "default"} />
@@ -67,7 +67,7 @@ export function OperationDetailDialog({
             />
             <DetailField label="Created" value={formatDateTime(operation.created_at)} />
             <DetailField label="Updated" value={formatDateTime(operation.updated_at)} />
-            <DetailField label="Status code" value={operation.status_code} />
+            <DetailField label="Status Code" value={operation.status_code} />
             <DetailField label="Cancellable" value={operation.may_cancel ? "Yes" : "No"} />
           </DetailGrid>
         </DetailSection>

@@ -99,7 +99,7 @@ export function SessionDetailDialog({
               <DetailField label="User" value={record.user_email} />
               <DetailField label="Role" value={record.user_role ? formatLabel(record.user_role) : undefined} />
               <DetailField
-                label="Break-glass"
+                label="Break-Glass"
                 value={record.is_break_glass ? <Badge variant="destructive">Yes</Badge> : "No"}
               />
             </DetailGrid>

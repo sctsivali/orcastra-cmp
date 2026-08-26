@@ -59,7 +59,7 @@ export function BreakGlassPanel() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <ShieldAlert className="h-5 w-5 text-amber-500" />
-          Break-glass grants
+          Break-Glass Grants
         </CardTitle>
         <CardDescription>
           {isAdmin

@@ -379,7 +379,7 @@ export function OrgPersonalizationSettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <AlertCircle className="h-5 w-5 text-muted-foreground" />
-            No Organization
+            No organization
           </CardTitle>
           <CardDescription>
             You are not a member of any organization. Create or join one first to

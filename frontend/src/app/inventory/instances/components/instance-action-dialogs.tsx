@@ -60,7 +60,7 @@ export function InstanceActionDialogs({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Delete instance &quot;{deleteDisplay?.name}&quot;?
+              Delete Instance &quot;{deleteDisplay?.name}&quot;?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This permanently deletes the instance and its data from{" "}
@@ -105,7 +105,7 @@ export function InstanceActionDialogs({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirmAction.action === "stop" ? "Stop" : "Restart"} “{confirmAction.name}”?
+              {confirmAction.action === "stop" ? "Stop" : "Restart"} &quot;{confirmAction.name}&quot;?
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmAction.action === "stop"

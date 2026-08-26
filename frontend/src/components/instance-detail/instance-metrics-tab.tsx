@@ -58,7 +58,7 @@ export function InstanceMetricsTab({
           <DetailField label="Processes" value={metrics.processes} />
           <DetailField label="Uptime" value={formatUptime(metrics.uptime_seconds)} />
           <DetailField label="PID" value={metrics.pid} />
-          <DetailField label="Base image" value={metrics.base_image} mono span="full" />
+          <DetailField label="Base Image" value={metrics.base_image} mono span="full" />
         </DetailGrid>
       </DetailSection>
 

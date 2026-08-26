@@ -31,7 +31,7 @@ type Phase = "idle" | "uploading" | "importing" | "done" | "error";
 type ImageType = "container" | "virtual-machine";
 
 const TYPE_OPTIONS = [
-  { value: "virtual-machine", label: "Virtual machine" },
+  { value: "virtual-machine", label: "Virtual Machine" },
   { value: "container", label: "Container" },
 ];
 
@@ -182,7 +182,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Upload image</DialogTitle>
+          <DialogTitle>Upload Image</DialogTitle>
           <DialogDescription>
             Upload a custom LXD image (a unified image tarball) into the cluster&apos;s
             image store under a private alias. It can then be used to create

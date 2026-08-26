@@ -404,7 +404,7 @@ EOF`}
           {clusters.length === 0 ? (
             <div className="text-center py-12">
               <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No Clusters Registered</h3>
+              <h3 className="text-lg font-semibold mb-2">No clusters registered</h3>
               <p className="text-muted-foreground mb-4">
                 Get started by registering your first hypervisor cluster
               </p>

@@ -273,7 +273,7 @@ function isoSubject(volume: StorageVolumeInfo): UsedBySubject {
     facts: [
       { label: "Pool", value: volume.pool },
       { label: "Node", value: volume.node },
-      { label: "Content type", value: volume.content_type },
+      { label: "Content Type", value: volume.content_type },
     ],
     panels: Object.keys(config).length
       ? [{ id: "config", label: "Configuration", kind: "config", entries: config }]

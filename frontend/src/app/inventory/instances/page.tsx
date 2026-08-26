@@ -428,7 +428,7 @@ function InstancesContent() {
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <TableHead>Root disk</TableHead>
+                <TableHead>Root Disk</TableHead>
                 <TableHead>Tags</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>

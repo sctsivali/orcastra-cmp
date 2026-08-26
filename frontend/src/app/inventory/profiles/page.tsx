@@ -285,7 +285,7 @@ function profileSubject(profile: ProfileInfo): UsedBySubject {
     facts: [
       { label: "Node", value: profile.node },
       { label: "Devices", value: Object.keys(devices).length },
-      { label: "Config keys", value: Object.keys(config).length },
+      { label: "Config Keys", value: Object.keys(config).length },
     ],
     panels: [
       { id: "devices", label: "Devices", kind: "devices", devices },

@@ -333,7 +333,7 @@ export function MemberResourceModal({
         ) : (
           <div className="text-center py-12">
             <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No Resource Data</h3>
+            <h3 className="text-lg font-semibold mb-2">No resource data</h3>
             <p className="text-muted-foreground">
               Unable to fetch resource information for this member
             </p>

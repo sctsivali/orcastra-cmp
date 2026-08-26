@@ -80,7 +80,7 @@ export function ClusterDetailDialog({
                       shared placeholder says so rather than rendering an empty field. */}
                   <DetailField label="Merchant ID" value={cluster.merchant_id} mono copyable />
                   <DetailField label="Registered" value={formatDateTime(cluster.created_at)} />
-                  <DetailField label="Last checked" value={formatDateTime(cluster.last_checked)} />
+                  <DetailField label="Last Checked" value={formatDateTime(cluster.last_checked)} />
                 </DetailGrid>
               </DetailSection>
               {Object.keys(cluster.labels ?? {}).length > 0 && (
@@ -131,10 +131,10 @@ export function ClusterDetailDialog({
               description="Expiry and renewal live on the certificates page; this is what the registration knows."
             >
               <DetailGrid cols={2}>
-                <DetailField label="Certificate present" value={cluster.has_certificate ? "Yes" : "No"} />
-                <DetailField label="Common name" value={cluster.certificate_common_name} mono />
+                <DetailField label="Certificate Present" value={cluster.has_certificate ? "Yes" : "No"} />
+                <DetailField label="Common Name" value={cluster.certificate_common_name} mono />
                 <DetailField
-                  label="Certificates page"
+                  label="Certificates Page"
                   span="full"
                   value={
                     <TableLink

@@ -1734,7 +1734,7 @@ export function InstanceCreateForm() {
         {/* GPU passthrough */}
         <Card>
             <CardHeader>
-              <CardTitle>GPU passthrough</CardTitle>
+              <CardTitle>GPU Passthrough</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-3">
@@ -1866,7 +1866,7 @@ export function InstanceCreateForm() {
               <CardContent className="space-y-8">
                 {/* Security policies */}
                 <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Security policies</h3>
+                  <h3 className="text-sm font-semibold">Security Policies</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {advBool("Protect deletion", "secProtectDelete")}
                     {form.type === "container" && (
@@ -1950,7 +1950,7 @@ export function InstanceCreateForm() {
 
                 {/* Cloud init */}
                 <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Cloud init</h3>
+                  <h3 className="text-sm font-semibold">Cloud-Init</h3>
                   <p className="text-xs text-muted-foreground">
                     Override the instance&apos;s cloud-init config (requires a
                     cloud-init-enabled image).
@@ -2013,7 +2013,7 @@ export function InstanceCreateForm() {
       <Dialog open={imageDialogOpen} onOpenChange={setImageDialogOpen}>
         <DialogContent className="sm:max-w-[75rem] max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle>Select base image</DialogTitle>
+            <DialogTitle>Select Base Image</DialogTitle>
             <DialogDescription>
               Local images, plus the Custom (images.lxd.canonical.com) and Ubuntu
               catalogs. Remote images are pulled on creation.

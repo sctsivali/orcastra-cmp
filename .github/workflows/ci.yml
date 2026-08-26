@@ -157,6 +157,18 @@ jobs:
       - name: Truncation reveal
         run: node scripts/checks/check-truncation-reveal.mjs .
 
+      # /technologies rendered "Fleet totals" above a card titled "CPU Resources" whose rows
+      # read "Total Cores" and "Memory per Node", then "Hardware by node" above rows reading
+      # "CPU topology", "Base clock" and "Physical cores". "Logical CPUs" sat one line above
+      # "Physical cores" in the same grid. Across the app 71 strings broke the contract in one
+      # direction or the other, and clustering/members/page.tsx shipped "No Members Found" and
+      # "No members found" six lines apart.
+      #
+      # Checked both ways: titles must be Title Case, and empty or error states must be
+      # sentences whatever element renders them.
+      - name: Heading case
+        run: node scripts/checks/check-heading-case.mjs .
+
       # A Badge renders a div, so a dialog opened from one is mouse-only: no focus, no focus
       # ring, and Enter does nothing. And a DialogContent that bounds its own height must clip
       # and scroll in DialogBody, or the title scrolls away with the body on a long record.

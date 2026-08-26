@@ -69,7 +69,7 @@ export function BreakGlassModal() {
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldAlert className="h-5 w-5 text-amber-500" />
-            Break-glass access required
+            Break-Glass Access Required
           </DialogTitle>
           <DialogDescription>
             {prompt?.instanceName} is on a cluster you do not own

@@ -168,7 +168,7 @@ export default function SessionsPage() {
             </TabsTrigger>
             <TabsTrigger value="break-glass" className="gap-1.5">
               <ShieldAlert className="h-3.5 w-3.5" />
-              Break-glass
+              Break-Glass
             </TabsTrigger>
           </TabsList>
 
