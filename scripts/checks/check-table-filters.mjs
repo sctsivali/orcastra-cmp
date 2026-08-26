@@ -20,6 +20,9 @@ const src = join(root, 'frontend', 'src');
 
 const RESERVED = ['q', 'sort', 'dir', 'show', 'tab'];
 
+/** Paths are relative to `frontend/src`, so the primitives live under this prefix, not `ui/`. */
+const UI_DIR = 'components/ui/';
+
 // Node and project are the dimensions the product is organised around, so a column that IS one
 // must say so. Every rule keys off the declared role, but the guard has to notice the spelling
 // to know when a role is missing.
@@ -41,6 +44,13 @@ const MAX_RESTING_FACETS = 2;
 // Terminal find-bars, create-form pickers, the tag popover. Not table toolbars.
 // Ratchet: may fall, never rise.
 const HANDROLLED_SEARCH_BASELINE = 5;
+
+// important: every rule below keys off `defineTable`, so a table that renders TableBody
+// directly is not exempt from the contract, it is invisible to the check. Six files are in
+// that state today, one of which (components/vm-table.tsx) is dead code. Counting them keeps
+// the headline number from reading as "every table in the app".
+// Ratchet: may fall, never rise.
+const UNMANAGED_TABLE_BASELINE = 6;
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -96,6 +106,7 @@ function readTables(code) {
         label,
         hasFacet: /\bfacet:/.test(body),
         hasFilter: /\bfilter:/.test(body),
+        usesFromSort: /\bfilter:\s*fromSort\s*\(/.test(body),
         hasSearch: /\bsearch:/.test(body),
         hasSort: /\bsort:/.test(body),
         primary: /primary:\s*true/.test(body),
@@ -111,6 +122,8 @@ function readTables(code) {
 const offenders = [];
 let handrolled = 0;
 const handrolledFiles = [];
+let unmanaged = 0;
+const unmanagedFiles = [];
 let tableCount = 0;
 let columnCount = 0;
 let filterableCount = 0;
@@ -140,6 +153,16 @@ for (const file of walk(src)) {
     }
   }
 
+  // A table the contract never reached. `components/ui/` holds the primitives it is built from,
+  // and a wrapper primitive that renders TableBody itself is not an unmanaged table.
+  // note: the prefix is `components/ui/`, not `ui/`. relPosix is relative to `frontend/src`, so
+  // every path here starts at `app/` or `components/`. The first version of this guard tested
+  // `ui/` and was inert, passing only because no primitive rendered a TableBody at the time.
+  if (!relPosix.startsWith(UI_DIR) && /<TableBody\b/.test(code) && !/defineTable</.test(code)) {
+    unmanaged += 1;
+    unmanagedFiles.push(rel);
+  }
+
   const roleExempt = ROLE_EXEMPT.has(relPosix);
 
   for (const columns of readTables(code)) {
@@ -154,6 +177,22 @@ for (const file of walk(src)) {
 
       if (RESERVED.includes(column.field)) {
         offenders.push(`${rel}: column "${column.field}" collides with a reserved query key`);
+      }
+
+      // Rule 0: `fromSort()` derives the filter FROM the sort accessor, so a column using it
+      // must declare one. table-filter.ts:398 throws when it does not, at module scope, which
+      // means the whole importing module dies rather than one cell. A shared component took
+      // six inventory pages to "Failed to load page" this way: zero rows, zero requests.
+      //
+      // important: a hard ban, never a ratchet. The runtime treats it as unconditionally
+      // fatal, so there is no legitimate existing case to grandfather. tsc cannot see it
+      // either, because both properties are individually well-typed and only their
+      // combination is invalid, which is exactly the class this file exists to catch.
+      if (column.usesFromSort && !column.hasSort) {
+        offenders.push(
+          `${rel}: column "${column.field}" uses fromSort() but declares no sort accessor. ` +
+            'This throws at module scope and takes every page importing it down.',
+        );
       }
 
       // Rule 1: a rendered column is filterable, searchable, or carries a written waiver.
@@ -208,6 +247,14 @@ if (handrolled > HANDROLLED_SEARCH_BASELINE) {
   for (const f of handrolledFiles) offenders.push(`  ${f}`);
 }
 
+if (unmanaged > UNMANAGED_TABLE_BASELINE) {
+  offenders.push(
+    `tables rendered without defineTable: ${unmanaged} (baseline ${UNMANAGED_TABLE_BASELINE}, may fall and never rise). ` +
+      'A table outside the contract is not checked by any rule in this file.',
+  );
+  for (const f of unmanagedFiles) offenders.push(`  ${f}`);
+}
+
 // A scan over nothing passes for the wrong reason.
 if (tableCount < 20) {
   offenders.push(`only ${tableCount} tables found, expected the scan to reach more`);
@@ -223,3 +270,7 @@ if (offenders.length) {
 
 console.log(`table filters: ${tableCount} tables, ${columnCount} columns, ${filterableCount} filterable`);
 console.log(`hand-rolled search inputs outside the table surface: ${handrolled} (baseline ${HANDROLLED_SEARCH_BASELINE})`);
+console.log(
+  `tables rendered without defineTable and therefore unchecked: ${unmanaged} (baseline ${UNMANAGED_TABLE_BASELINE})`,
+);
+for (const f of unmanagedFiles) console.log(`  ${f}`);
