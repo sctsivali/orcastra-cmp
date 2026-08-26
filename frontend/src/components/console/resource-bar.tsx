@@ -36,6 +36,7 @@ import { cn } from "@/lib/utils";
 import { InstanceMetrics } from "@/types";
 import { useSession } from "next-auth/react";
 import { useInstanceMetrics } from "@/hooks";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 // ============ Types ============
 
@@ -421,11 +422,7 @@ export function ConsoleResourceBar({
                 mono
               />
               <InfoRow label="Protocol" value={displayProtocol} />
-              <InfoRow
-                label="Session"
-                value={sessionId ? `${sessionId.slice(0, 12)}...` : "-"}
-                mono
-              />
+              <InfoRow label="Session" value={sessionId ?? "-"} mono />
               <div className="border-t border-[#292e42] my-1.5 pt-1.5">
                 <InfoRow
                   label="Download"
@@ -563,15 +560,12 @@ function InfoRow({
   return (
     <div className="flex justify-between items-center">
       <span className="text-gray-500">{label}</span>
-      <span
-        className={cn(
-          "text-gray-300 truncate max-w-[200px]",
-          mono && "font-mono",
-          valueClass
-        )}
-        title={value}
-      >
-        {value}
+      {/* important: this used to be title={value} on the element rendering {value}, so the
+          reveal repeated whatever it was given. Its Session caller passed a 12 character slice,
+          which made the tooltip echo the cut string rather than reveal the rest. The panel is
+          pinned over a live console and cannot grow, so the reveal is an overlay. */}
+      <span className={cn("max-w-[200px] text-gray-300", valueClass)}>
+        <OverflowText value={value} label={label.toLowerCase()} mode="overlay" tone="chrome" mono={mono} />
       </span>
     </div>
   );

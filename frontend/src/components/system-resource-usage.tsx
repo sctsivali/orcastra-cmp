@@ -39,6 +39,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { cn } from "@/lib/utils";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 // Helper function to format bytes
 function formatBytes(bytes: number, decimals: number = 2): string {
@@ -254,8 +255,8 @@ function DiskSection({ disks }: { disks: DiskInfo[] }) {
                 <Badge variant="outline" className="font-mono text-xs">
                   {disk.fstype}
                 </Badge>
-                <span className="text-sm font-medium truncate max-w-[200px]" title={disk.mountpoint}>
-                  {disk.mountpoint}
+                <span className="max-w-[200px] text-sm font-medium">
+                  <OverflowText value={disk.mountpoint} label="disk mountpoint" mono />
                 </span>
               </div>
               <span className="text-sm font-medium">{disk.percent.toFixed(1)}%</span>

@@ -10,6 +10,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { OverflowText } from "@/components/ui/overflow-text";
+import { TableEmptyValue } from "@/components/ui/table-text";
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "active") return <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15">active</Badge>;
@@ -89,9 +91,15 @@ export function BreakGlassPanel() {
               {grants.map((g) => (
                 <TableRow key={g.id}>
                   <TableCell className="font-medium">{g.cluster_id}</TableCell>
-                  <TableCell>{g.target_org_slug || "-"}</TableCell>
+                  <TableCell>{g.target_org_slug || <TableEmptyValue label="No target organization" />}</TableCell>
                   <TableCell className="text-muted-foreground">{g.admin_email}</TableCell>
-                  <TableCell className="max-w-xs truncate" title={g.reason}>{g.reason}</TableCell>
+                  <TableCell className="max-w-xs">
+                    <OverflowText
+                      value={g.reason}
+                      label={`reason for the grant on ${g.cluster_id}`}
+                      lines={2}
+                    />
+                  </TableCell>
                   <TableCell><StatusBadge status={g.status} /></TableCell>
                   <TableCell className="text-muted-foreground">{new Date(g.expires_at).toLocaleString()}</TableCell>
                   {isAdmin ? (

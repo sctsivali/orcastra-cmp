@@ -134,7 +134,7 @@ function TrayItem({
         <span className="text-xs font-medium text-gray-200 truncate max-w-[120px]">
           {terminal.instanceName}
         </span>
-        <span className="text-[10px] text-gray-500 truncate max-w-[120px]">
+        <span className="max-w-[120px] truncate text-xs text-gray-500">
           {terminal.host}
         </span>
       </div>
@@ -149,6 +149,7 @@ function TrayItem({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-green-400 hover:bg-green-400/10 touch-manipulation"
+                  aria-label={`Restore terminal ${terminal.instanceName} on ${terminal.host}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     onRestore();
@@ -166,6 +167,7 @@ function TrayItem({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 min-h-[32px] min-w-[32px] text-gray-400 hover:text-red-400 hover:bg-red-400/10 touch-manipulation"
+                  aria-label={`Close terminal ${terminal.instanceName} on ${terminal.host}`}
                   onClick={(e) => {
                     e.stopPropagation();
                     onClose();

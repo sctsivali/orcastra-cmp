@@ -236,26 +236,35 @@ export function OverflowText({
   );
 
   if (mode === "overlay") {
+    // Nothing is clipped, so there is nothing behind this and it must not pretend otherwise.
+    // A Popover whose trigger never renders is also a Radix root with no anchor.
+    if (!showToggle) {
+      return (
+        <span className={rootClass} data-slot="overflow-text">
+          <span ref={spanRef} className={valueClass}>
+            {renderValue(false)}
+          </span>
+        </span>
+      );
+    }
     return (
       <Popover>
         <span className={rootClass} data-slot="overflow-text">
           <span ref={spanRef} className={valueClass}>
             {renderValue(false)}
           </span>
-          {showToggle ? (
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className={buttonClass}
-                data-reveal-trigger=""
-                aria-label={`Show full ${label}`}
-              >
-                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
-              </Button>
-            </PopoverTrigger>
-          ) : null}
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className={buttonClass}
+              data-reveal-trigger=""
+              aria-label={`Show full ${label}`}
+            >
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+            </Button>
+          </PopoverTrigger>
         </span>
         <PopoverContent align="start" className="w-72">
           <div className="flex items-start gap-2">

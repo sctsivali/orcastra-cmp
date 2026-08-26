@@ -70,6 +70,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { OverflowCell } from "@/components/ui/overflow-cell";
 
 interface VMTableProps {
   vms: VMInfo[];
@@ -548,27 +549,14 @@ export function VMTable({ vms, isLoading }: VMTableProps) {
                         <StatusIndicator status={vm.status} />
                       </TableCell>
                       <TableCell>
-                        <div className="flex flex-col gap-0.5">
-                          {vm.ip_addresses.length > 0 ? (
-                            vm.ip_addresses.slice(0, 2).map((ip, idx) => (
-                              <code
-                                key={idx}
-                                className="text-xs font-mono bg-muted px-1.5 py-0.5 rounded w-fit"
-                              >
-                                {ip}
-                              </code>
-                            ))
-                          ) : (
-                            <span className="text-xs text-muted-foreground">
-                              No IP assigned
-                            </span>
-                          )}
-                          {vm.ip_addresses.length > 2 && (
-                            <span className="text-xs text-muted-foreground">
-                              +{vm.ip_addresses.length - 2} more
-                            </span>
-                          )}
-                        </div>
+                        <OverflowCell
+                          items={vm.ip_addresses}
+                          preview={2}
+                          noun="IP addresses"
+                          ownerLabel={vm.name}
+                          emptyLabel="No IP assigned"
+                          itemLabel="IP address"
+                        />
                       </TableCell>
                       <TableCell>
                         {vm.host}

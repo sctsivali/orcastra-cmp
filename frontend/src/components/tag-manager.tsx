@@ -200,8 +200,11 @@ export function TagManager({
     return null;
   }
 
-  const visibleTags = tags.slice(0, maxVisible);
-  const hiddenCount = tags.length - maxVisible;
+  // important: a read-only operator gets the whole list inline. The "+N more" control that
+  // reveals the rest is a DialogTrigger for the tag editor, and that editor is gated behind
+  // !readonly, so slicing here removed tags 4..N from the page with nothing left to reach them.
+  const visibleTags = readonly ? tags : tags.slice(0, maxVisible);
+  const hiddenCount = tags.length - visibleTags.length;
   const hasMoreTags = hiddenCount > 0;
 
   // Dialog content
@@ -395,7 +398,7 @@ export function TagManager({
                   size="sm"
                   className="h-5 px-1 text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:bg-transparent"
                 >
-                  +{hiddenCount} more tag{hiddenCount !== 1 ? "s" : ""}...
+                  +{hiddenCount} more tag{hiddenCount !== 1 ? "s" : ""}
                 </Button>
               </DialogTrigger>
             </>

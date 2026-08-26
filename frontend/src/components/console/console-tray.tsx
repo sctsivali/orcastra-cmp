@@ -86,6 +86,7 @@ export function ConsoleTray({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 min-h-[32px] min-w-[32px] hover:bg-primary/20 touch-manipulation"
+                  aria-label={`Restore the console for ${console.instanceName}`}
                   onClick={() => onRestore(console.id)}
                 >
                   <Maximize2 className="h-4 w-4" />
@@ -101,6 +102,7 @@ export function ConsoleTray({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 min-h-[32px] min-w-[32px] hover:bg-destructive/20 touch-manipulation"
+                  aria-label={`Close the console for ${console.instanceName}`}
                   onClick={() => onClose(console.id)}
                 >
                   <X className="h-4 w-4" />

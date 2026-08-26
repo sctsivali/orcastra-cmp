@@ -2706,7 +2706,6 @@ export default function MonitoringContent() {
                 .sort((a, b) => storagePoolsSortDesc 
                   ? (b.usage_percent || 0) - (a.usage_percent || 0)
                   : (a.usage_percent || 0) - (b.usage_percent || 0))
-                .slice(0, 10)
                 .map((pool) => (
                 <div key={`${pool.node}-${pool.name}`} className="space-y-1.5">
                   <div className="flex items-center justify-between text-sm">
