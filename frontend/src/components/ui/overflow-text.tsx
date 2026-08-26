@@ -193,9 +193,14 @@ export function OverflowText({
       ? "text-gray-400 hover:bg-white/10 hover:text-gray-100 focus-visible:bg-white/10"
       : "text-muted-foreground hover:text-foreground focus-visible:bg-accent";
 
-  // -my-1 keeps the 24px target WCAG 2.5.8 asks for without growing the 20px line box a table
-  // row is built on, so a column of these does not cost rows per screen.
-  const buttonClass = cn("h-6 w-6 shrink-0 -my-1", buttonTone);
+  // 24px is the target size WCAG 2.5.8 asks for, and -my-1 keeps it from growing the 20px line
+  // box a table row is built on, so a column of these costs no rows per screen.
+  //
+  // note: only where something is actually clipped. lines="none" is the detail-surface preset,
+  // which is not a table row and has room, and pulling four pixels off the top and bottom there
+  // tightened the gap between a dialog's header and its first section. A negative margin applied
+  // where it is not earning anything is just a layout bug waiting to be seen.
+  const buttonClass = cn("h-6 w-6 shrink-0", lines !== "none" && "-my-1", buttonTone);
 
   const valueClass = cn(
     "min-w-0",

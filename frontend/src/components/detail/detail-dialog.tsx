@@ -104,7 +104,11 @@ export function RecordDetailDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={cn(SIZES[size], "max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden")}>
-        <DialogHeader className="pr-8">
+        {/* note: pb-4 because DialogContent sets no gap at all, so the header sat flush against
+            whatever followed it while the body's own sections are spaced 16px apart. It was
+            invisible for as long as every record dialog carried a subtitle line to fill the
+            space, and it showed the moment one stopped. Measured: 0px against a 16px rhythm. */}
+        <DialogHeader className="pr-8 pb-4">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle className="min-w-0">{title}</DialogTitle>
             {status}
