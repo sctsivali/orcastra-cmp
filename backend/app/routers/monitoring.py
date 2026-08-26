@@ -419,12 +419,24 @@ async def _get_running_instance_metrics(
     return instance_metrics, current_time
 
 
-# Cache for dashboard response - keyed by org-scope suffix
-# This ensures partner users never get admin-cached data
-_dashboard_cache: Dict[str, Dict[str, Any]] = {}
-_dashboard_cache_times: Dict[str, float] = {}
-_dashboard_cache_ttl: float = 35.0  # Cache dashboard for 35 seconds (background collector runs every 30s)
-_dashboard_cache_lock = asyncio.Lock()  # Prevent thundering herd on concurrent requests
+# Cache key for the dashboard response, scoped so partner users never read admin-cached data.
+#
+# important: this lives in Redis, not in module state. It used to be a pair of plain dicts, so
+# with WEB_CONCURRENCY=4 there were four independent 35s snapshots and the background collector
+# only ever warmed the worker it happened to run in. An operator refreshing the page hopped
+# workers and watched the numbers jump backwards. Worse, each worker saw a request only about
+# every 40s under a 10s client poll, past its own 35s TTL, so the cache missed nearly every time
+# and each miss paid a full node fan-out.
+#
+# note: Redis here runs allkeys-lru at 256mb, so an entry can be evicted before its TTL under
+# memory pressure. That is survivable precisely because these keys are few (one per scope) and
+# hot; do not split this into one key per cluster.
+MONITORING_DASHBOARD_CACHE_KEY = "monitoring:dashboard"
+_DASHBOARD_CACHE_TTL = 35  # background collector runs every 30s
+
+# note: no herd lock here any more. single_flight("monitoring:dashboard") serialises arrivals
+# per scope key, including ordinary cache misses, which is what the local lock was approximating
+# with a pre-advanced timestamp that pinned a stale body for 35s whenever a rebuild raised.
 
 
 @router.get(
@@ -444,28 +456,17 @@ async def get_monitoring_dashboard(
     Uses background collector caching (35s TTL) - cache is pre-warmed on startup.
     Set fresh=true to bypass cache.
     """
-    global _dashboard_cache, _dashboard_cache_times
-    
-    # Build a scope key so each org gets its own cached snapshot
+    # Build a scope key so each org gets its own cached snapshot.
+    # note: scope_key keeps the "dashboard" base because _monitoring_history_key maps off it.
     scope_key = get_scope_cache_key("dashboard")
-    
-    # Check cache outside lock first (fast path)
-    current_time = time.time()
-    cached_time = _dashboard_cache_times.get(scope_key, 0)
-    if not fresh and scope_key in _dashboard_cache and (current_time - cached_time) < _dashboard_cache_ttl:
+    cache = get_cache_manager()
+    dashboard_key = get_scope_cache_key(MONITORING_DASHBOARD_CACHE_KEY)
+
+    cached_response = None if fresh else cache.get("api_responses", dashboard_key)
+    if cached_response is not None:
         logger.debug("Returning cached dashboard response (background collector)")
-        return _dashboard_cache[scope_key]
-    
-    # Acquire lock to prevent thundering herd - only one request fetches fresh data
-    async with _dashboard_cache_lock:
-        # Double-check cache inside lock (another request may have populated it)
-        current_time = time.time()
-        cached_time = _dashboard_cache_times.get(scope_key, 0)
-        if not fresh and scope_key in _dashboard_cache and (current_time - cached_time) < _dashboard_cache_ttl:
-            return _dashboard_cache[scope_key]
-        # Pre-set timestamp to prevent other requests from also starting computation
-        _dashboard_cache_times[scope_key] = current_time
-    
+        return MonitoringDashboardResponse(**cached_response)
+
     try:
         start_time = time.time()
         
@@ -815,8 +816,7 @@ async def get_monitoring_dashboard(
         if current_time - last_store_time >= _history_min_interval:
             try:
                 _last_history_store_times[history_key] = current_time
-                
-                cache = get_cache_manager()
+
                 history = cache.get("monitoring_history", history_key) or []
                 new_point = _build_history_point(
                     nodes_metrics,
@@ -848,20 +848,21 @@ async def get_monitoring_dashboard(
         # the previous entry in place means they keep seeing stale-but-true numbers
         # and the next request retries.
         if connected_nodes:
-            _dashboard_cache[scope_key] = response.model_dump()
-            _dashboard_cache_times[scope_key] = time.time()
+            cache.set(
+                "api_responses", dashboard_key, response.model_dump(), ttl=_DASHBOARD_CACHE_TTL
+            )
         else:
-            _dashboard_cache_times.pop(scope_key, None)
             logger.warning("Not caching monitoring dashboard: no cluster answered")
-        
+
         return response
-        
+
+    # note: nothing to unwind on the error paths any more. The old code had to pop a
+    # pre-advanced timestamp so the next request would retry; a failed rebuild now simply
+    # writes nothing and the next arrival takes the ordinary miss path.
     except LXDConnectionError as e:
-        _dashboard_cache_times.pop(scope_key, None)  # Allow retry on next request
         logger.warning(f"LXD connection error in monitoring: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        _dashboard_cache_times.pop(scope_key, None)  # Allow retry on next request
         logger.error(f"Error getting monitoring dashboard: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
