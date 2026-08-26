@@ -12,6 +12,14 @@ export interface SearchInputProps {
   placeholder: string;
   /** Falls back to the placeholder. Use for a fuller sentence than the visible hint. */
   label?: string;
+  /**
+   * Names the clear button. Set it wherever more than one of these renders on a screen.
+   *
+   * important: the default is a fixed string, so N searches on one page give a screen reader N
+   * buttons that announce identically. check-icon-button-names.mjs counts buttons with no name,
+   * not buttons whose name is ambiguous, so nothing catches that for you.
+   */
+  clearLabel?: string;
   disabled?: boolean;
   className?: string;
 }
@@ -31,6 +39,7 @@ export function SearchInput({
   onChange,
   placeholder,
   label,
+  clearLabel = "Clear search",
   disabled = false,
   className,
 }: SearchInputProps) {
@@ -50,12 +59,16 @@ export function SearchInput({
         aria-label={label ?? placeholder}
         placeholder={placeholder}
         onChange={(event) => onChange(event.target.value)}
-        className="pl-9 pr-9"
+        // important: Chrome paints its own clear button for type="search", so without this reset
+        // every one of these renders TWO crosses side by side, the native one and the real
+        // button below. Scoped here rather than in globals.css because this component is the
+        // only place the app uses type="search".
+        className="pl-9 pr-9 [&::-webkit-search-cancel-button]:appearance-none"
       />
       {value && (
         <button
           type="button"
-          aria-label="Clear search"
+          aria-label={clearLabel}
           onClick={() => {
             onChange("");
             // Returning focus keeps a keyboard user in the field they were typing in.

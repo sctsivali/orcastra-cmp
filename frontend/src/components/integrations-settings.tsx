@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { IntegrationClusterAccessList } from "@/components/integration-cluster-access-list";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -54,8 +55,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
-import { formatClusterPermissionLabel, getClusterAccessDisplay } from "@/lib/integration-display";
+import { getClusterAccessDisplay, summarizeClusterAccessLevel } from "@/lib/integration-display";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ClusterAccessSelector } from "@/components/cluster-access-selector";
 import type {
@@ -552,38 +552,50 @@ export function IntegrationsSettings() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {apiKeys.map((apiKey) => {
             if (!apiKey || typeof apiKey.id !== 'string') return null;
             const clusterAccess = getClusterAccessDisplay(apiKey.cluster_permissions, clusters);
             const clusterCount = clusterAccess.length;
             
-            const allPerms = Array.isArray(apiKey.cluster_permissions)
-              ? apiKey.cluster_permissions.flatMap(cp => cp.permissions || [])
-              : [];
-            const permLevel = formatClusterPermissionLabel(allPerms);
+            const permLevel = summarizeClusterAccessLevel(clusterAccess);
 
             const expiryLabel = apiKey.expires_at
               ? new Date(apiKey.expires_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
               : "Never";
             
             return (
-              <Card key={apiKey.id} className={cn(apiKey.is_revoked && "opacity-60")}>
+              <Card key={apiKey.id}>
                 <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-1">
+                  {/* important: min-w-0 on the text block and shrink-0 on the badge. The key id
+                      is a 34 character unbreakable token, so without these the description set
+                      the card's width and pushed the status badge 127px outside its own card at
+                      the two-column breakpoint. The id itself reveals rather than clipping
+                      silently, because it is the one string that identifies the credential. */}
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0 space-y-1">
                       <CardTitle className="text-lg">
                         {String(apiKey.name || 'N/A')}
                       </CardTitle>
                       <CardDescription className="flex items-center gap-2">
-                        <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">
-                          {String(apiKey.id)}
+                        <span className="min-w-0 font-mono text-xs bg-muted px-2 py-0.5 rounded">
+                          {/* note: auto, not always. The "always" preset is for a value whose
+                              answer is known, ex; a 64 character fingerprint that never fits.
+                              A key id is 34 characters and fits or does not depending on the
+                              card width, so measuring is the honest answer and a chevron on a
+                              value that is fully visible is noise. */}
+                          <OverflowText value={String(apiKey.id)} label="API key id" />
                         </span>
                         <span>•</span>
-                        <span>{String(apiKey.app_name || '')}</span>
+                        <span className="min-w-0">
+                          <OverflowText
+                            value={String(apiKey.app_name || '')}
+                            label={`application for ${String(apiKey.name || 'N/A')}`}
+                          />
+                        </span>
                       </CardDescription>
                     </div>
-                    <div>
+                    <div className="shrink-0">
                       {apiKey.is_revoked ? (
                         <Badge variant="destructive">Revoked</Badge>
                       ) : apiKey.is_active ? (
@@ -595,7 +607,7 @@ export function IntegrationsSettings() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="grid grid-cols-3 gap-4 text-sm">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
                     <div className="flex items-center gap-2">
                       <Server className="h-4 w-4 text-muted-foreground" />
                       <span className="text-muted-foreground">Clusters:</span>
@@ -607,12 +619,15 @@ export function IntegrationsSettings() {
                       <span className="font-medium">{permLevel}</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <CalendarClock className="h-4 w-4 text-muted-foreground" />
+                      <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="text-muted-foreground">Expires:</span>
-                      <span className="font-medium">{expiryLabel}</span>
+                      <span className="font-medium whitespace-nowrap">{expiryLabel}</span>
                     </div>
                   </div>
-                  <IntegrationClusterAccessList clusters={clusterAccess} />
+                  <IntegrationClusterAccessList
+                    clusters={clusterAccess}
+                    keyName={String(apiKey.name || "N/A")}
+                  />
                   
                   <div className="flex items-center justify-end gap-2 border-t pt-3">
                     {!apiKey.is_revoked && (

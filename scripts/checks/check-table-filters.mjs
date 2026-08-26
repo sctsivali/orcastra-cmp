@@ -42,8 +42,13 @@ const ROLE_EXEMPT = new Map([
 const MAX_RESTING_FACETS = 2;
 
 // Terminal find-bars, create-form pickers, the tag popover. Not table toolbars.
+// Was 5 until the API key cluster picker (components/cluster-access-selector.tsx) adopted
+// SearchInput, which it should have used from the start: it is the write-side twin of the
+// cluster-access panel and had hand-rolled the same control one file away.
+// The four left are cluster-location-dialog, console/iso-manager-panel, groups/edit-group-dialog
+// and tag-manager.
 // Ratchet: may fall, never rise.
-const HANDROLLED_SEARCH_BASELINE = 5;
+const HANDROLLED_SEARCH_BASELINE = 4;
 
 // important: every rule below keys off `defineTable`, so a table that renders TableBody
 // directly is not exempt from the contract, it is invisible to the check. Six files are in

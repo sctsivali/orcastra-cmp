@@ -1,11 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Search, X } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SearchInput } from "@/components/ui/search-input";
 import { cn, formatHypervisorType } from "@/lib/utils";
 import type { AvailableCluster } from "@/types";
 
@@ -51,27 +50,12 @@ export function ClusterAccessSelector({
     <div className="space-y-2">
       <Label>Cluster Access</Label>
       {showSearch && (
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            type="text"
-            aria-label="Search clusters"
-            placeholder="Search by name, endpoint, or type..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="h-9 pl-9 pr-9"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              aria-label="Clear search"
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
+        <SearchInput
+          value={search}
+          onChange={setSearch}
+          placeholder="Search by name, endpoint, or type"
+          label="Search clusters"
+        />
       )}
       <div className="h-48 overflow-y-auto rounded-md border p-3">
         {safeClusterList.length === 0 ? (
