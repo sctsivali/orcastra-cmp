@@ -26,6 +26,7 @@ from app.models.schemas import (
 from app.core.config import get_settings
 from app.core.vault_client import get_vault_client
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
+from app.services.lxd.exceptions import LXDLocalStorageError
 from app.services.lxd.exceptions import LXDAuthorizationError
 from app.core.dependencies import check_read_only_mode, require_partner, require_tenant, AuthenticatedUser
 from app.core.cache import (
@@ -511,6 +512,13 @@ async def check_cluster_authentication(
                 message=message
             )
             
+    except LXDLocalStorageError:
+        # important: above LXDCertManagerError and the generic handler. probe_connection
+        # raises this when the backend's own disk could not hold the TLS material, so there
+        # is no honest cluster status to return: derive_status would default it to OFFLINE,
+        # which is how a full tmpfs came to label healthy hypervisors down. Re-raised so the
+        # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
+        raise
     except LXDCertManagerError as e:
         logger.error(f"Authentication check failed: {e}")
         raise HTTPException(
@@ -622,6 +630,13 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
             location=info["metadata"].get("location")
         )
         
+    except LXDLocalStorageError:
+        # important: above LXDCertManagerError and the generic handler. probe_connection
+        # raises this when the backend's own disk could not hold the TLS material, so there
+        # is no honest cluster status to return: derive_status would default it to OFFLINE,
+        # which is how a full tmpfs came to label healthy hypervisors down. Re-raised so the
+        # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
+        raise
     except Exception as e:
         logger.warning(f"Failed to get info for cluster {cluster_id}: {e}")
         return ClusterInfo(
@@ -785,6 +800,13 @@ async def get_cluster(
             location=info["metadata"].get("location")
         )
         
+    except LXDLocalStorageError:
+        # important: above LXDCertManagerError and the generic handler. probe_connection
+        # raises this when the backend's own disk could not hold the TLS material, so there
+        # is no honest cluster status to return: derive_status would default it to OFFLINE,
+        # which is how a full tmpfs came to label healthy hypervisors down. Re-raised so the
+        # app-level handler answers 503 BACKEND_TEMP_STORAGE_FULL and names the real fault.
+        raise
     except LXDCertManagerError as e:
         logger.error(f"Failed to get cluster {cluster_id}: {e}")
         raise HTTPException(

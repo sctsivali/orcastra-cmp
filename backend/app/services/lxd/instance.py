@@ -12,7 +12,13 @@ from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from app.models.schemas import VMInfo
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
-from .exceptions import LXDConnectionError, LXDOperationError, LXDGracefulTimeoutError, LXDSnapshotExistsError
+from .exceptions import (
+    LXDConnectionError,
+    LXDLocalStorageError,
+    LXDOperationError,
+    LXDGracefulTimeoutError,
+    LXDSnapshotExistsError,
+)
 from .utils import (
     parse_vm_status,
     extract_ip_addresses,
@@ -376,6 +382,10 @@ class InstanceManager:
                         verify=False
                     )
                     logger.info(f"Reconnected to {node_name}")
+                except LXDLocalStorageError:
+                    # See lxd_service.ensure_connection: the backend's own storage failed, so
+                    # recording it here would mark a healthy node offline for the breaker TTL.
+                    raise
                 except Exception as e:
                     logger.warning(f"Reconnect failed for {node_name}: {e}")
                     # Preserve a more specific diagnosis. connect_with_vault_cert records

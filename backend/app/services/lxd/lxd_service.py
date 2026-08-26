@@ -23,7 +23,7 @@ from .resources import ResourceManager
 from .instance import InstanceManager
 from .projects import ProjectManager
 from .images import ImageManager
-from .exceptions import LXDConnectionError
+from .exceptions import LXDConnectionError, LXDLocalStorageError
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import VaultClient
 from app.core.config import get_settings
@@ -115,6 +115,13 @@ class LXDService:
             logger.warning(f"Cluster {cluster_id} refused our certificate: {e}")
             health.record_failure(cluster_id, str(e), kind=health.KIND_UNAUTHORIZED)
             return False
+        except LXDLocalStorageError:
+            # important: narrow, and above the broad handler for the same reason the
+            # LXDAuthorizationError branch is. The backend's own disk failed, so the peer was
+            # never contacted and there is nothing true to record about it. Letting this reach
+            # record_failure below marked every cluster offline at once while the hypervisors
+            # were healthy, and the breaker then suppressed the retries that would have shown it.
+            raise
         except Exception as e:
             # important: WARNING, not ERROR. See connection.py: an offline cluster is
             # expected operational noise, and the breaker below already records it.
@@ -223,6 +230,10 @@ class LXDService:
                     reachable=kind == health.KIND_UNAUTHORIZED,
                     error=health.get_reason(node_name) or "Client not connected"
                 )
+        except LXDLocalStorageError:
+            # See ensure_connection above. The node is not the thing that failed, so it must not
+            # be the thing recorded, and a NodeStatus claiming "not connected" would be a guess.
+            raise
         except Exception as e:
             logger.warning(f"Node {node_name} health check failed: {e}")
             kind = health.get_kind(node_name)

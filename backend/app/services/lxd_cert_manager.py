@@ -11,8 +11,9 @@ import requests
 from pylxd import Client
 
 from app.core.vault_client import VaultClient, VaultClientError
-from app.services.lxd import health
+from app.services.lxd import cert_files, health
 from app.services.lxd.connection import DEFAULT_LXD_TIMEOUT
+from app.services.lxd.exceptions import LXDLocalStorageError
 
 logger = logging.getLogger(__name__)
 
@@ -219,17 +220,13 @@ class LXDCertificateManager:
             
             # Fallback: Create standalone client (for one-off operations)
             # Note: This path doesn't benefit from connection pooling
-            # WARNING: Don't delete temp files in finally block - pylxd needs them
-            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', prefix=f'lxd_cm_{cluster_id}_')
-            key_fd, key_path = tempfile.mkstemp(suffix='.key', prefix=f'lxd_cm_{cluster_id}_')
-            
-            os.write(cert_fd, cert_content.encode('utf-8'))
-            os.close(cert_fd)
-            os.chmod(cert_path, 0o600)
-            
-            os.write(key_fd, key_content.encode('utf-8'))
-            os.close(key_fd)
-            os.chmod(key_path, 0o600)
+            # important: these files must outlive this function - pylxd opens them again on every
+            # later request, so a finally block that deleted them would break the client it just
+            # returned. That constraint is why this used to mkstemp a fresh randomly named pair
+            # per call and never clean up, which is an unbounded leak into a 256 MiB tmpfs. The
+            # materializer keeps the files alive exactly as long as pylxd needs while bounding
+            # them at one pair per cluster, because the path is derived from the cluster id.
+            cert_path, key_path = cert_files.materialize(cluster_id, cert_content, key_content)
             
             # important: without an explicit timeout pylxd stores _timeout=None, so its own
             # constructor probe and every later client.api call on this standalone client
@@ -241,14 +238,16 @@ class LXDCertificateManager:
                 verify=False,
                 timeout=DEFAULT_LXD_TIMEOUT
             )
-            
-            # Store temp file paths on client for later cleanup if needed
-            client._temp_cert_path = cert_path
-            client._temp_key_path = key_path
-            
+
             logger.info(f"Created standalone connection to {cluster_id}")
             return client
-                        
+
+        except LXDLocalStorageError:
+            # important: above the generic handler on purpose. Rewritten as "Connection failed"
+            # this reached the operator as a cluster problem, which is how a full backend /tmp
+            # came to be read as "Not Authenticated Yet" against a healthy hypervisor.
+            logger.error(f"Cannot prepare TLS credentials for {cluster_id}: backend storage")
+            raise
         except Exception as e:
             # important: WARNING, not ERROR. See connection.py: an offline cluster is
             # expected, and the caller still gets the exception to act on.
@@ -260,7 +259,13 @@ class LXDCertificateManager:
 
         Thin wrapper over probe_connection, kept because five call sites want the bool.
         """
-        probe = self.probe_connection(cluster_id, use_breaker=use_breaker)
+        # note: the storage fault is absorbed here on purpose. probe_connection raises it so a
+        # single-cluster endpoint can answer 503, but this wrapper is called inside per-cluster
+        # loops that build warning lists, and letting it escape would drop the whole list.
+        try:
+            probe = self.probe_connection(cluster_id, use_breaker=use_breaker)
+        except LXDLocalStorageError:
+            return False, "Could not verify the connection to this cluster."
         return probe.trusted, probe.message
 
     def probe_connection(self, cluster_id: str, use_breaker: bool = True) -> ConnectionProbe:
@@ -291,9 +296,6 @@ class LXDCertificateManager:
                 message=get_reason(cluster_id) or "Cluster recently unreachable - retry shortly",
             )
 
-        cert_path = None
-        key_path = None
-        
         try:
             # Get cluster metadata and certificate fresh from Vault
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
@@ -301,18 +303,15 @@ class LXDCertificateManager:
             
             endpoint = metadata["endpoint"]
             
-            # Create secure temp files
-            cert_fd, cert_path = tempfile.mkstemp(suffix='.crt', prefix=f'lxd_verify_{cluster_id}_')
-            key_fd, key_path = tempfile.mkstemp(suffix='.key', prefix=f'lxd_verify_{cluster_id}_')
-            
-            # Write certificates with proper permissions
-            os.write(cert_fd, cert_data["client.crt"].encode('utf-8'))
-            os.close(cert_fd)
-            os.chmod(cert_path, 0o600)
-            
-            os.write(key_fd, cert_data["client.key"].encode('utf-8'))
-            os.close(key_fd)
-            os.chmod(key_path, 0o600)
+            # important: the shared materializer, not a per-probe mkstemp. Two reasons. It is
+            # the same bounded pair the connection manager uses, so probing a cluster no longer
+            # writes a file per call. And it raises LXDLocalStorageError on a full disk, which is
+            # what lets the handler below tell "the backend could not write" apart from "the
+            # cluster did not answer". A raw OSError here fell into the generic branch and the
+            # caller derived OFFLINE from it, so a healthy hypervisor read as down.
+            cert_path, key_path = cert_files.materialize(
+                cluster_id, cert_data["client.crt"], cert_data["client.key"]
+            )
             
             # Test authenticated endpoint that requires trust
             # `/1.0/instances` requires authentication, `/1.0` doesn't always
@@ -386,21 +385,20 @@ class LXDCertificateManager:
             logger.warning(f"Timeout for {cluster_id}: {e}")
             record_failure(cluster_id, "Connection timeout. Check network connectivity.")
             return ConnectionProbe(False, False, "Connection timeout. Check network connectivity.")
+        except LXDLocalStorageError:
+            # important: raised, not folded into a probe result. Every ConnectionProbe this
+            # function can return is a claim about the cluster, and there is no true claim to
+            # make: the peer was never contacted. Returning reachable=None sent derive_status
+            # down its "default to OFFLINE" path, which is how a full backend tmpfs came to
+            # label healthy hypervisors down. The breaker is deliberately left untouched.
+            logger.error(f"Cannot prepare TLS credentials for {cluster_id}: backend storage")
+            raise
         except Exception as e:
             # important: no raw exception text in the message. It reaches ClusterInfo.error_message
             # on /clusters, which every role down to tenant can read, and a Vault failure here
             # carries the Vault base URL and the KV path to the cluster's certificates.
             logger.error(f"Verification failed for {cluster_id}: {e}")
             return ConnectionProbe(None, False, "Could not verify the connection to this cluster.")
-        finally:
-            # Clean up verify-specific temp files (not the main connection files)
-            try:
-                if cert_path and os.path.exists(cert_path):
-                    os.unlink(cert_path)
-                if key_path and os.path.exists(key_path):
-                    os.unlink(key_path)
-            except Exception:
-                pass
     
     def remove_trust_password(self, cluster_id: str) -> bool:
         """

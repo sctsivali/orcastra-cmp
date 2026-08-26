@@ -47,7 +47,11 @@ from app.routers import (
 from app.routers.terminal import router as terminal_router
 from app.routers.system import router as system_router
 from app.routers.cluster_registration import router as cluster_registration_router
-from app.services.lxd_service import get_lxd_service, LXDConnectionError
+from app.services.lxd_service import (
+    get_lxd_service,
+    LXDConnectionError,
+    LXDLocalStorageError,
+)
 
 # Configure structured JSON logging
 settings_for_logging = get_settings()
@@ -516,8 +520,30 @@ Ensure your client certificates are properly configured.
     # Health check endpoint
     @app.get("/health", tags=["Health"])
     async def health_check():
-        """Health check endpoint."""
-        return {"status": "healthy", "service": "orcastra-dashboard-api"}
+        """Health check endpoint.
+
+        important: always answers 200, including when temp storage is degraded. The container
+        healthcheck in docker-compose keys on this status code, so reporting unhealthy here would
+        restart the backend in a loop. The restart would even appear to work, because it clears
+        the tmpfs, which is precisely how this class of fault stays invisible. Reporting the
+        number instead is what lets monitoring see it coming.
+        """
+        from app.services.lxd import cert_files
+
+        temp_storage = cert_files.describe_usage()
+        if temp_storage.get("degraded"):
+            logger.warning(
+                "Backend temp storage at %s%% of %s MiB (%s). LXD TLS credential writes fail "
+                "when this reaches 100%%, and a failed write is not a cluster outage.",
+                temp_storage.get("percent_used"),
+                temp_storage.get("total_mib"),
+                temp_storage.get("path"),
+            )
+        return {
+            "status": "healthy",
+            "service": "orcastra-dashboard-api",
+            "temp_storage": temp_storage,
+        }
     
     # Root endpoint
     @app.get("/", tags=["Root"])
@@ -535,6 +561,27 @@ Ensure your client certificates are properly configured.
         return response
     
     # Global exception handler
+    @app.exception_handler(LXDLocalStorageError)
+    async def lxd_local_storage_error_handler(
+        request: Request,
+        exc: LXDLocalStorageError
+    ):
+        """Handle a backend-side failure to write LXD TLS material.
+
+        Separate from the connection handler below on purpose. This is the backend's own disk,
+        not the cluster's reachability, and conflating the two told operators every hypervisor
+        was offline while they were all healthy.
+        """
+        logger.error(f"LXD local storage error: {exc}")
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": "Backend Storage Unavailable",
+                "detail": str(exc),
+                "code": "BACKEND_TEMP_STORAGE_FULL",
+            },
+        )
+
     @app.exception_handler(LXDConnectionError)
     async def lxd_connection_error_handler(
         request: Request, 

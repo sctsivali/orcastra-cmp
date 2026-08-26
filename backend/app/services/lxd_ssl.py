@@ -97,14 +97,19 @@ def _write_secure_file(path: str, content: str) -> None:
 
 def _build_temp_storage_error(exc: OSError) -> RuntimeError:
     temp_dir = tempfile.gettempdir()
-    usage = _describe_disk_usage(temp_dir)
+    usage = describe_disk_usage(temp_dir)
     return RuntimeError(
         "Backend temporary storage is full while preparing LXD TLS credentials. "
         f"{usage} Increase BACKEND_TMPFS_SIZE or clear stale files in the backend container."
     )
 
 
-def _describe_disk_usage(path: str) -> str:
+def describe_disk_usage(path: str) -> str:
+    """One-line human summary of free space, shared with app.services.lxd.cert_files.
+
+    Public because both the WebSocket path here and the REST cert materialization there report
+    the same exhaustion to operators, and two wordings for one condition is how a runbook rots.
+    """
     try:
         usage = shutil.disk_usage(path)
         free_mib = usage.free / 1024 / 1024

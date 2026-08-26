@@ -19,6 +19,19 @@ class LXDAuthorizationError(LXDConnectionError):
     pass
 
 
+class LXDLocalStorageError(Exception):
+    """The backend could not write the TLS material a client needs, on its own disk.
+
+    important: deliberately NOT a subclass of LXDConnectionError. Roughly sixty handlers catch
+    that type and read it as a verdict about the cluster, and connect_with_vault_cert records it
+    against the circuit breaker as KIND_OFFLINE. A full /tmp is neither: the peer was never
+    contacted. Reported as a connection error it read as "every cluster is offline" while the
+    hypervisors were healthy, and the breaker then suppressed the retries that would have shown
+    otherwise. Keeping it off that hierarchy is what forces callers to say something true.
+    """
+    pass
+
+
 class LXDOperationError(Exception):
     """Exception raised when an LXD operation fails."""
     pass
