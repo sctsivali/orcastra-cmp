@@ -17,7 +17,7 @@ from app.core.dependencies import require_tenant, require_admin, AuthenticatedUs
 
 router = APIRouter(
     prefix="/system",
-    tags=["system"],
+    tags=["System"],
     dependencies=[Depends(require_tenant())],
 )
 
