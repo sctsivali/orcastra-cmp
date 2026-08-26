@@ -97,5 +97,42 @@ class RealGrantsStillWork(unittest.TestCase):
         self.assertEqual(caught.exception.status_code, 403)
 
 
+class TheBoundaryRefusesTheMistake(unittest.TestCase):
+    """The runtime 403 handles stored data; this catches the mistake where it is made.
+
+    Deliberately scoped to the request model. Keys already in Vault are read back without passing
+    through ClusterPermission, so tightening it cannot revoke access from a running integration.
+    That was the condition for adding it at all.
+    """
+
+    def _model(self):
+        from app.routers.integrations import ClusterPermission
+        return ClusterPermission
+
+    def test_an_empty_grant_is_rejected(self):
+        with self.assertRaises(Exception) as caught:
+            self._model()(cluster_id=CLUSTER, permissions=[])
+        self.assertIn("at least one", str(caught.exception))
+
+    def test_an_unknown_level_is_rejected_and_named(self):
+        with self.assertRaises(Exception) as caught:
+            self._model()(cluster_id=CLUSTER, permissions=["read", "superuser"])
+        message = str(caught.exception)
+        self.assertIn("superuser", message)
+        self.assertNotIn("read,", message.split("unknown permission")[-1].split(".")[0])
+
+    def test_the_real_levels_are_accepted(self):
+        for grant in (["read"], ["write"], ["admin"], ["read", "write", "admin"]):
+            with self.subTest(grant=grant):
+                self.assertEqual(self._model()(cluster_id=CLUSTER, permissions=grant).permissions, grant)
+
+    def test_omitting_the_field_still_defaults_to_read(self):
+        self.assertEqual(self._model()(cluster_id=CLUSTER).permissions, ["read"])
+
+    def test_a_stored_grant_with_an_unknown_name_still_authorises(self):
+        """Proof the tightening is boundary-only: the runtime path never sees the validator."""
+        assert_cluster_permission(_key(["read", "legacy-name"]), CLUSTER, "read")
+
+
 if __name__ == "__main__":
     unittest.main()

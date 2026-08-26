@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
@@ -35,7 +35,7 @@ from app.services.lxd.proxy import (
     raw_request,
     socket_timeout_for,
 )
-from app.core.api_key_permissions import assert_cluster_permission
+from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
@@ -80,12 +80,40 @@ class ClusterPermission(BaseModel):
     cluster_name: Optional[str] = Field(None, description="Cluster name for display")
     permissions: List[str] = Field(
         default=["read"],
-        description="Permission levels: read, write, admin"
+        description="Permission levels: read, write, admin. At least one is required.",
     )
     projects: List[str] = Field(
         default=["default"],
         description="Allowed projects within the cluster"
     )
+
+    @field_validator("permissions")
+    @classmethod
+    def _reject_a_grant_that_grants_nothing(cls, value: List[str]) -> List[str]:
+        """Refuse an empty or unrecognised grant at the boundary.
+
+        important: this rejects new mistakes, it does not re-validate what Vault already holds.
+        Stored keys are read back without passing through this model, so an existing grant with
+        an unfamiliar name keeps working and nobody loses access to a running integration.
+
+        An empty list was accepted before and reached a ``max()`` over nothing, which surfaced as
+        HTTP 500. The runtime now answers 403 for it either way (app/core/api_key_permissions.py);
+        this is the second half, so the mistake is caught where it is made rather than on first
+        use. An unrecognised name is worth refusing for a different reason: at runtime it scores
+        as "read" rather than as nothing, so a typo silently becomes a read grant.
+        """
+        if not value:
+            raise ValueError(
+                "permissions must name at least one of read, write, admin. "
+                "An empty list grants nothing, which is never a useful key."
+            )
+        unknown = sorted({name for name in value if name not in PERMISSION_LEVELS})
+        if unknown:
+            raise ValueError(
+                f"unknown permission level(s): {', '.join(unknown)}. "
+                f"Valid levels are {', '.join(PERMISSION_LEVELS)}."
+            )
+        return value
 
 
 class ExternalUserMapping(BaseModel):
