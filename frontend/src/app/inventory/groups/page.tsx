@@ -59,6 +59,7 @@ import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 // filter-coverage: no project dimension here, and not for lack of a mechanism. A group's
 // permissions[].url values do carry ?project= when LXD scopes them, and projectsFromUsedBy
@@ -283,8 +284,16 @@ function GroupsContent() {
                   paginatedGroups.map((group: any) => (
                   <TableRow key={`${group.node}-${group.name}`}>
                     <TableCell className="font-medium">{group.name}</TableCell>
-                    <TableCell className="max-w-xs truncate">
-                      {group.description || <span className="text-muted-foreground italic">No description</span>}
+                    <TableCell className="max-w-xs">
+                      {group.description ? (
+                        <OverflowText
+                          value={group.description}
+                          label={`description for group ${group.name}`}
+                          lines={2}
+                        />
+                      ) : (
+                        <TableEmptyValue label="No description" />
+                      )}
                     </TableCell>
                     <TableCell>
                       {group.node || <TableEmptyValue label="No node" />}

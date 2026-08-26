@@ -145,6 +145,17 @@ jobs:
       # eslint and the icon-button guard all accept the shape.
       - name: Stray JSX attributes
         run: node scripts/checks/check-jsx-stray-attrs.mjs .
+      # truncateFingerprint cut every 64 character image fingerprint to 12 and appended "...",
+      # and one of its four call sites fed the result into an accessible NAME, so the aliases
+      # cell announced "Show all 3 aliases on 1a4eed830630...". Seventeen more sites hand-rolled
+      # the same slice-plus-dots, six cut an id and appended nothing at all, and 74 elements
+      # clipped in CSS with no title, no aria-label and no reveal control above them.
+      #
+      # Ordered after the stray-attribute check on purpose: two of its rules read aria-label and
+      # title out of opening tags, and an attribute that has fallen into child position would
+      # make them credit an element with a name it does not carry.
+      - name: Truncation reveal
+        run: node scripts/checks/check-truncation-reveal.mjs .
 
       # A Badge renders a div, so a dialog opened from one is mouse-only: no focus, no focus
       # ring, and Enter does nothing. And a DialogContent that bounds its own height must clip

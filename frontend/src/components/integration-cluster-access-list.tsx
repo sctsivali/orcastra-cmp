@@ -26,7 +26,9 @@ export function IntegrationClusterAccessList({ clusters }: IntegrationClusterAcc
             className="flex flex-col gap-2 rounded-md bg-background/70 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
           >
             <div className="min-w-0">
-              <p className="truncate text-sm font-medium">{cluster.name}</p>
+              <p className="text-sm font-medium">
+                <OverflowText value={cluster.name} label="cluster name" />
+              </p>
               <p className="text-xs text-muted-foreground">
                 <OverflowText
                   value={`${cluster.typeLabel}${cluster.name !== cluster.id ? ` - ${cluster.id}` : ""}`}
