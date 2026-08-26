@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -103,9 +104,14 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
         const images = Array.isArray(imagesData) 
           ? imagesData.flatMap((host: any) => host?.images || [])
           : (imagesData as any)?.images || [];
-        return images.map((img: any) => ({ 
-          name: img.properties?.description || img.fingerprint?.substring(0, 12) || 'N/A', 
-          path: `/1.0/images/${img.fingerprint}` 
+        return images.map((img: any) => ({
+          name:
+            img.description ||
+            img.properties?.description ||
+            img.aliases?.find(Boolean) ||
+            img.fingerprint ||
+            EMPTY_VALUE,
+          path: `/1.0/images/${img.fingerprint}`
         }));
       case "profile":
         return ((profilesData as any)?.profiles || []).map((p: any) => ({ 
@@ -473,7 +479,7 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
                               />
                               <Label 
                                 htmlFor={`resource-${resource.name}`}
-                                className="text-xs cursor-pointer font-medium flex-1 truncate"
+                                className="text-xs cursor-pointer font-medium flex-1 break-words"
                               >
                                 {resource.name}
                               </Label>

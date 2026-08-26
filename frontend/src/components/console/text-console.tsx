@@ -191,7 +191,7 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
         switch (msg.type) {
           case "session":
             setConsoleSessionId(consoleId, msg.session_id);
-            xtermRef.current?.writeln(`\x1b[1;32m✓ Session established: ${msg.session_id.slice(0, 8)}...\x1b[0m`);
+            xtermRef.current?.writeln(`\x1b[1;32m✓ Session established: ${msg.session_id}\x1b[0m`);
             break;
 
           case "ready":

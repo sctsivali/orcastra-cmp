@@ -123,8 +123,8 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
       server: "",
       type: img.type,
       label:
-        (img.aliases?.[0] || img.description || img.fingerprint.slice(0, 12)) +
-        (img.size ? ` — ${formatBytes(img.size)}` : "") +
+        (img.aliases?.find(Boolean) || img.description || img.fingerprint) +
+        (img.size ? ` · ${formatBytes(img.size)}` : "") +
         " · Local",
     }));
     const remote = ((remoteResp?.images ?? []) as RemoteImageInfo[]).map((img) => ({

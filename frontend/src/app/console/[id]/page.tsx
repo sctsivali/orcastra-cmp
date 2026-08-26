@@ -486,7 +486,7 @@ function ConsoleContent() {
         switch (msg.type) {
           case "session":
             setSessionId(msg.session_id);
-            xtermRef.current?.writeln(`\x1b[1;32m✓ Session: ${msg.session_id.slice(0, 8)}...\x1b[0m`);
+            xtermRef.current?.writeln(`\x1b[1;32m✓ Session: ${msg.session_id}\x1b[0m`);
             break;
           case "ready":
             setTextStatus("connected");
@@ -1811,7 +1811,7 @@ function ConsoleContent() {
                 className="flex items-center justify-between p-2 bg-gray-800/50 rounded text-sm"
               >
                 <div className="flex-1 min-w-0">
-                  <div className="text-gray-200 truncate">{session.operation_id.slice(0, 12)}...</div>
+                  <div className="break-all text-gray-200">{session.operation_id}</div>
                   <div className="text-gray-500 text-xs">{session.description}</div>
                 </div>
                 <div className="text-gray-400 text-xs ml-2">

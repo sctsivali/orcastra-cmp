@@ -723,14 +723,9 @@ function HistoryRow({ log, onSelect }: { log: AuditLogEntry; onSelect: (r: Sessi
         )}
       </TableCell>
       <TableCell>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="text-sm text-muted-foreground">
-              {formatDateTime(log.created_at)}
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>Session ID: {log.session_id.slice(0, 12)}...</TooltipContent>
-        </Tooltip>
+        <span className="text-sm text-muted-foreground">
+          {formatDateTime(log.created_at)}
+        </span>
       </TableCell>
     </TableRow>
   );

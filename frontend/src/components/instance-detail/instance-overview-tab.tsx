@@ -32,15 +32,20 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
         <DetailGrid cols={3}>
           <DetailField label="Created" value={formatDateTime(instance.created_at)} />
           <DetailField label="Last used" value={formatDateTime(instance.last_used_at)} />
+          {/* important: the whole fingerprint. This rendered 12 of its 64 characters with no
+              ellipsis at all, so nothing told the operator the value had been cut, and the title
+              named the action rather than the value. */}
           <DetailField
             label="Base image"
+            mono
             value={
               baseImage ? (
                 <TableLink
+                  wrap
                   href={`/inventory/images?q=${encodeURIComponent(baseImage)}`}
-                  title={`Open this image in Images`}
+                  title="Open this image in Images"
                 >
-                  {baseImage.slice(0, 12)}
+                  {baseImage}
                 </TableLink>
               ) : undefined
             }

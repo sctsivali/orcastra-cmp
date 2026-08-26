@@ -405,9 +405,9 @@ export function ConsoleWindow({
                 const timeStr = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}:${d.getSeconds().toString().padStart(2, '0')}`;
                 return (
                 <div key={session.operation_id} className="mt-2 p-2 bg-muted rounded text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono text-xs">{session.operation_id.substring(0, 12)}...</span>
-                    <span className="text-muted-foreground text-xs">
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="min-w-0 break-all font-mono text-xs">{session.operation_id}</span>
+                    <span className="shrink-0 text-muted-foreground text-xs">
                       {timeStr}
                     </span>
                   </div>

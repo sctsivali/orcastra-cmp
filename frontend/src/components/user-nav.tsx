@@ -103,7 +103,7 @@ export function UserNav() {
               </Avatar>
               <div className="flex flex-col">
                 <p className="text-sm font-medium leading-none">{user.name}</p>
-                <p className="text-xs text-muted-foreground truncate max-w-[180px]">
+                <p className="break-all text-xs text-muted-foreground">
                   {user.email}
                 </p>
               </div>
@@ -113,7 +113,7 @@ export function UserNav() {
             {user.groups && user.groups.length > 0 && (
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <Shield className="h-3 w-3" />
-                <span className="truncate">{user.groups.join(", ")}</span>
+                <span className="break-words">{user.groups.join(", ")}</span>
               </div>
             )}
           </div>

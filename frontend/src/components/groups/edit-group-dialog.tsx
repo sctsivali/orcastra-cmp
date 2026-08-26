@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -225,9 +226,14 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         const images = Array.isArray(imagesData) 
           ? imagesData.flatMap((host: any) => host?.images || [])
           : (imagesData as any)?.images || [];
-        return images.map((img: any) => ({ 
-          name: img.properties?.description || img.fingerprint?.substring(0, 12) || 'N/A', 
-          path: `/1.0/images/${img.fingerprint}` 
+        return images.map((img: any) => ({
+          name:
+            img.description ||
+            img.properties?.description ||
+            img.aliases?.find(Boolean) ||
+            img.fingerprint ||
+            EMPTY_VALUE,
+          path: `/1.0/images/${img.fingerprint}`
         }));
       case "profile":
         return ((profilesData as any)?.profiles || []).map((p: any) => ({ 
@@ -809,7 +815,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                                   />
                                   <Label 
                                     htmlFor={`edit-resource-${resource.path}`}
-                                    className="text-xs cursor-pointer font-medium flex-1 truncate"
+                                    className="text-xs cursor-pointer font-medium flex-1 break-words"
                                   >
                                     {resource.name}
                                     {resource.project && resource.project !== 'default' && (
@@ -1209,10 +1215,11 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
             </DialogTitle>
             <DialogDescription className="space-y-2">
               <span>Are you sure you want to remove this identity from the group?</span>
-              <span className="block font-mono font-medium text-xs bg-muted px-2 py-1.5 rounded overflow-hidden text-ellipsis whitespace-nowrap max-w-full" title={identityToRemove?.id}>
-                {identityToRemove?.id && identityToRemove.id.length > 40 
-                  ? `${identityToRemove.id.substring(0, 18)}...${identityToRemove.id.substring(identityToRemove.id.length - 18)}`
-                  : identityToRemove?.id}
+              {/* important: printed whole, and not behind a reveal. This is the identity the
+                  operator is about to remove, and asking them to click something to see what they
+                  are confirming is how the wrong one gets removed. */}
+              <span className="block max-w-full break-all rounded bg-muted px-2 py-1.5 font-mono text-xs font-medium">
+                {identityToRemove?.id}
               </span>
               <span className="text-destructive font-medium">This action cannot be undone.</span>
             </DialogDescription>

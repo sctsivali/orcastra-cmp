@@ -481,7 +481,7 @@ export function InstanceCreateForm() {
 
   const localRows: ImageRow[] = localImages.map((img) => {
     const name =
-      img.aliases?.[0] || img.description || img.fingerprint.slice(0, 12);
+      img.aliases?.find(Boolean) || img.description || img.fingerprint;
     return {
       key: `local:${img.fingerprint}`,
       distribution: name,
@@ -489,12 +489,12 @@ export function InstanceCreateForm() {
       variant: "",
       architecture: normalizeArch(img.architecture || ""),
       type: img.type,
-      alias: img.aliases?.[0] || img.fingerprint.slice(0, 12),
+      alias: img.aliases?.find(Boolean) || img.fingerprint,
       source: "Local",
       server: "",
       value: img.fingerprint,
       cached: true,
-      label: name + (img.size ? ` — ${formatBytes(img.size)}` : ""),
+      label: name + (img.size ? ` · ${formatBytes(img.size)}` : ""),
     };
   });
   const remoteRows: ImageRow[] = remoteImages.map((img) => ({

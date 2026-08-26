@@ -15,6 +15,7 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { OperationDetailDialog } from "./components/operation-detail-dialog";
 import { operationStatusTone } from "./components/operation-status";
 import {
@@ -190,7 +191,7 @@ function OperationsContent() {
       
       toast({
         title: "Operation cancelled",
-        description: `Operation ${operationId.substring(0, 8)}... has been cancelled` });
+        description: `Operation ${operationId} has been cancelled` });
       
       // Refresh operations list
       refetch();
@@ -244,7 +245,7 @@ function OperationsContent() {
       open: true,
       operationId: operation.id,
       host,
-      description: operation.description || `Operation ${operation.id.substring(0, 8)}...`,
+      description: operation.description || `Operation ${operation.id}`,
       isKillSession,
       instanceName });
   };
@@ -360,13 +361,23 @@ function OperationsContent() {
                     
                     return (
                     <TableRow key={operation.id}>
-                      <TableCell className="font-mono">
-                        <TableLink
-                          onClick={() => setDetailOperation({ operation, instanceName })}
-                          aria-label={`Show details for operation ${operation.id}`}
+                      <TableCell className="max-w-[18rem] font-mono">
+                        <OverflowText
+                          value={operation.id}
+                          label={`id for the ${operation.description || "operation"}`}
+                          reveal="always"
+                          mono
                         >
-                          {`${operation.id.substring(0, 8)}...`}
-                        </TableLink>
+                          {(expanded) => (
+                            <TableLink
+                              wrap={expanded}
+                              onClick={() => setDetailOperation({ operation, instanceName })}
+                              aria-label={`Show details for operation ${operation.id}`}
+                            >
+                              {operation.id}
+                            </TableLink>
+                          )}
+                        </OverflowText>
                       </TableCell>
                       <TableCell>
                         {instanceName ? (

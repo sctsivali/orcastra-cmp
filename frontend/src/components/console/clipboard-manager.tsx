@@ -36,7 +36,6 @@ interface ClipboardEntry {
   id: string;
   text: string;
   createdAt: number;
-  label?: string;
 }
 
 interface ClipboardManagerProps {
@@ -94,7 +93,6 @@ export function ClipboardManager({ onInsert, onClose, className }: ClipboardMana
       id: `clip_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       text: newText.trim(),
       createdAt: Date.now(),
-      label: newText.trim().substring(0, 30) + (newText.length > 30 ? '...' : ''),
     };
 
     const newEntries = [entry, ...entries].slice(0, MAX_HISTORY);

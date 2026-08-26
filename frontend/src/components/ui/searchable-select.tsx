@@ -172,7 +172,6 @@ export function SearchableSelect({
                     onValueChange(opt.value);
                     setOpen(false);
                   }}
-                  title={!opt.disabled && opt.statusReason ? opt.statusReason : undefined}
                 >
                   <Check
                     className={cn(
@@ -196,12 +195,12 @@ export function SearchableSelect({
                     <div className="min-w-0">
                       <p className="truncate">{opt.label}</p>
                       {opt.sublabel && (
-                        <p className="truncate font-mono text-xs text-muted-foreground">
+                        <p className="break-all font-mono text-xs text-muted-foreground">
                           {opt.sublabel}
                         </p>
                       )}
                       {opt.disabled && opt.statusReason && (
-                        <p className="truncate text-xs text-muted-foreground">
+                        <p className="break-words text-xs text-muted-foreground">
                           {opt.statusReason}
                         </p>
                       )}
