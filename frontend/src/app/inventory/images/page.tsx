@@ -14,7 +14,8 @@ import {
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { OverflowCell } from "@/components/ui/overflow-cell";
-import { formatInstanceType, formatLabel, truncateFingerprint } from "@/lib/utils";
+import { formatInstanceType, formatLabel } from "@/lib/utils";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { UploadCloud, Image as ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useImages, useInstances } from "@/hooks/use-lxd";
@@ -38,6 +39,13 @@ import { Role } from "@/types/rbac";
 // on the backend model, so the Flags facet could only ever offer "Public" and searchExtra
 // pushed a permanent undefined. The backend now sends cached and auto_update; description has
 // always been sent under its own name.
+// What to call a row when a control has to name it. An alias is what an operator typed, the
+// description is what the registry wrote, and the fingerprint is the last resort rather than the
+// first. Never a slice of it: a name ending in three dots names nothing.
+function imageLabel(image: { aliases?: string[]; description?: string; fingerprint: string }): string {
+  return image.aliases?.find(Boolean) || image.description || image.fingerprint;
+}
+
 const IMAGES = defineTable<ImageInfo>()({
   searchPlaceholder: "Search images",
   defaultSort: { field: "fingerprint", direction: "asc" },
@@ -245,20 +253,34 @@ function ImagesContent() {
               ) : (
                 paginatedImages.map((image: any, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
-                    <TableCell className="font-mono">
-                      <TableLink
-                        onClick={() => setDetailImage(image)}
-                        aria-label={`Show details for image ${image.fingerprint}`}
+                    {/* important: the row names itself by whatever a human or a registry wrote,
+                        and only falls back to the fingerprint when an image carries neither. It
+                        used to name itself with a 12 character slice of the fingerprint, so the
+                        aliases control announced "Show all 3 aliases on 1a4eed830630...". */}
+                    <TableCell className="max-w-[18rem] font-mono">
+                      <OverflowText
+                        value={image.fingerprint}
+                        label={`fingerprint for ${imageLabel(image)}`}
+                        reveal="always"
+                        mono
                       >
-                        {truncateFingerprint(image.fingerprint)}
-                      </TableLink>
+                        {(expanded) => (
+                          <TableLink
+                            wrap={expanded}
+                            onClick={() => setDetailImage(image)}
+                            aria-label={`Show details for image ${image.fingerprint}`}
+                          >
+                            {image.fingerprint}
+                          </TableLink>
+                        )}
+                      </OverflowText>
                     </TableCell>
                     <TableCell>
                       <OverflowCell
                         items={image.aliases?.filter(Boolean)}
                         preview={1}
                         noun="aliases"
-                        ownerLabel={truncateFingerprint(image.fingerprint)}
+                        ownerLabel={imageLabel(image)}
                         emptyLabel="No alias"
                         itemLabel="alias"
                       />

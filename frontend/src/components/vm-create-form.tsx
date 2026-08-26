@@ -27,7 +27,7 @@ import { useCreateVM, useImages } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
-import { formatBytes, truncateFingerprint } from "@/lib/utils";
+import { formatBytes} from "@/lib/utils";
 import { ImageInfo, ImageListResponse } from "@/types";
 
 const vmCreateSchema = z.object({
@@ -97,12 +97,12 @@ function ImageSelector({
     return <Skeleton className="h-10 w-full" />;
   }
 
-  const getImageLabel = (image: ImageInfo) => {
-    if (image.aliases.length > 0) {
-      return image.aliases[0];
-    }
-    return truncateFingerprint(image.fingerprint);
-  };
+  // note: a Select trigger clamps its label to one line by contract, so reopening the list is
+  // the reveal. That only works if the list itself shows the whole value, which is why the row
+  // below wraps rather than clipping and why this no longer cuts the fingerprint to 12
+  // characters: an operator was picking the image for a new instance from a prefix.
+  const getImageLabel = (image: ImageInfo) =>
+    image.aliases.find(Boolean) || image.description || image.fingerprint;
 
   return (
     <Select value={value} onValueChange={onChange}>
@@ -122,8 +122,8 @@ function ImageSelector({
               key={image.fingerprint}
               value={image.aliases[0] || image.fingerprint}
             >
-              <div className="flex items-center gap-2">
-                <span>{getImageLabel(image)}</span>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="min-w-0 break-all">{getImageLabel(image)}</span>
                 <Badge variant="outline" className="text-xs font-mono">
                   {formatBytes(image.size)}
                 </Badge>

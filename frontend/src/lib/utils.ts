@@ -76,11 +76,6 @@ export function formatDateTime(dateString: string | null | undefined): string {
   }
 }
 
-export function truncateFingerprint(fingerprint: string, length = 12): string {
-  if (fingerprint.length <= length) return fingerprint;
-  return fingerprint.substring(0, length) + "...";
-}
-
 // Generate a UUID that also works in non-secure contexts. `crypto.randomUUID`
 // only exists over HTTPS or on localhost, so on a plain-HTTP LAN deployment
 // (e.g. http://10.0.1.5) it is undefined and calling it throws

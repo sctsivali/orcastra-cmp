@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { TableLink } from "@/components/ui/table-link";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
-import { formatBytes, formatDateTime, formatInstanceType, truncateFingerprint } from "@/lib/utils";
+import { formatBytes, formatDateTime, formatInstanceType } from "@/lib/utils";
 import type { ImageInfo, VMInfo } from "@/types/api";
 
 // The images table had zero row interaction: no drill-down, no copy, no way to read a
@@ -34,14 +34,20 @@ export function ImageDetailDialog({
 }) {
   if (!image) return null;
 
+  // important: the description first. This used to title itself with a 12 character slice of the
+  // fingerprint whenever an image had no alias, so the dialog opened to show what the table had
+  // cut and announced itself with the same cut value. The whole fingerprint is one line below,
+  // in full, with a copy button, because RecordDetailDialog requires recordId for exactly this.
+  // The aliases have their own section, so they are not repeated in a subtitle.
+  const title = image.description || image.aliases?.find(Boolean) || image.fingerprint;
+
   return (
     <RecordDetailDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={image.aliases?.find(Boolean) ?? truncateFingerprint(image.fingerprint)}
+      title={title}
       recordId={image.fingerprint}
       recordIdLabel="Fingerprint"
-      subtitle={image.description || undefined}
       status={image.public ? <Badge variant="outline">Public</Badge> : undefined}
       size="lg"
     >
