@@ -114,7 +114,12 @@ const BADGE_BASELINE = 17;
 // surfaces rather than in table cells: the on-screen keyboard's legends are laid out to a
 // fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping those
 // needs a layout pass on those pages, which is its own change. May fall, never rise.
-const ARBITRARY_BASELINE = 75;
+// Lowered 75 -> 68. Seven text-[10px] cleared as a side effect of the value-reveal pass: the
+// tenant policy description and its Badge, the terminal tray host line, and four more that moved
+// onto the scale when their surrounding markup was rewritten. The rest still live on chart and
+// console surfaces laid out to fixed gutters, which need a layout pass rather than a find and
+// replace. May fall, never rise.
+const ARBITRARY_BASELINE = 68;
 let badgesInBodies = 0;
 for (const file of walk(ROOT)) {
   const src = readFileSync(file, "utf8");

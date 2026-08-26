@@ -45,7 +45,11 @@ const src = join(root, 'frontend', 'src');
 // whole time: its aria-label had landed below the opening tag as a text child, so the body
 // was not one self-closing element and isIconOnly() skipped it. Fixing that leak did not
 // move the number, it only made the button countable. See check-jsx-stray-attrs.mjs.
-const BASELINE = 54;
+// Lowered 54 -> 50 when both trays gained names. The four were the restore and close buttons on
+// the terminal and console trays, which is the shape this check exists for: their Tooltip supplied
+// a description and never a name, so a screen reader announced "button" four times while the only
+// thing identifying which session they acted on was a clipped label beside them.
+const BASELINE = 50;
 
 // `vm-table.tsx` is deprecated and rendered by nothing, so its buttons cannot be announced
 // to anybody. Counting them would mean either a permanently failing check or a baseline
