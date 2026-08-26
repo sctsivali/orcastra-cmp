@@ -455,9 +455,9 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         import asyncio
         import inspect
 
-        from app.core.single_flight import single_flight_on_fresh
+        from app.core.single_flight import single_flight
 
-        @single_flight_on_fresh("probe")
+        @single_flight("probe")
         async def handler(host: str = "nuc2", fresh: bool = False) -> str:
             return f"{host}:{fresh}"
 
@@ -475,7 +475,7 @@ class SingleFlightDecoratorTests(unittest.TestCase):
 
         from app.core import single_flight
 
-        @single_flight.single_flight_on_fresh("probe")
+        @single_flight.single_flight("probe")
         async def handler(fresh: bool = False) -> str:
             return "ok"
 
@@ -504,7 +504,7 @@ class SingleFlightDecoratorTests(unittest.TestCase):
 
         seen = []
 
-        @single_flight.single_flight_on_fresh("probe_fail")
+        @single_flight.single_flight("probe_fail")
         async def handler(host: str = "nuc2", fresh: bool = False) -> str:
             seen.append(fresh)
             await asyncio.sleep(0.02)
@@ -539,7 +539,7 @@ class SingleFlightDecoratorTests(unittest.TestCase):
 
         seen = []
 
-        @single_flight.single_flight_on_fresh("probe_chain")
+        @single_flight.single_flight("probe_chain")
         async def handler(fresh: bool = False) -> str:
             seen.append(fresh)
             await asyncio.sleep(0.02)
@@ -583,7 +583,7 @@ class SingleFlightDecoratorTests(unittest.TestCase):
                 continue
             checked += 1
             decorated = any(
-                getattr(getattr(d, "func", d), "id", None) == "single_flight_on_fresh"
+                getattr(getattr(d, "func", d), "id", None) == "single_flight"
                 for d in fn.decorator_list
             )
             if not decorated:
@@ -604,7 +604,7 @@ class SingleFlightDecoratorTests(unittest.TestCase):
         for path in sorted(ROUTERS.glob("*.py")):
             lines = path.read_text().split("\n")
             for i, line in enumerate(lines):
-                if not line.startswith("@single_flight_on_fresh"):
+                if not line.startswith("@single_flight"):
                     continue
                 after = next((l for l in lines[i + 1:] if l.strip()), "")
                 if not after.startswith(("async def", "def")):

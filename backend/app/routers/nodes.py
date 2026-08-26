@@ -25,17 +25,19 @@ from app.services.lxd_service import (
     get_lxd_service,
     LXDOperationError,
 )
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.vault_client import get_vault_client
 from app.core.cache import (
     get_cache_manager,
+    MEMBER_RESOURCES_CACHE_PREFIX,
     MICROCLOUD_RESOURCES_CACHE_PREFIX,
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_AVAILABILITY_CACHE_TTL,
     NODES_STATUS_CACHE_KEY,
+    REGIONS_OVERVIEW_CACHE_KEY,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,7 +70,7 @@ NODES_AVAILABILITY_PROBE_TIMEOUT = 20.0
         200: {"description": "Node status retrieved successfully"},
     }
 )
-@single_flight_on_fresh("nodes:status")
+@single_flight("nodes:status")
 async def get_nodes_status(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -76,6 +78,8 @@ async def get_nodes_status(
     """Get status of all LXD nodes including Vault-registered clusters."""
     
     # Try to get from cache first (180 second cache)
+    # note: this TTL is the client's poll interval too. Keep the two in step, and keep the
+    # comments honest: they read 120 for a while after the value moved to 180.
     cache = get_cache_manager()
     cache_key = get_scope_cache_key(NODES_STATUS_CACHE_KEY)
     cached_response = None if fresh else cache.get("api_responses", cache_key)
@@ -97,9 +101,9 @@ async def get_nodes_status(
         all_connected=all(node.connected for node in statuses),
     )
     
-    # Cache the response for 120 seconds (enterprise TTL)
+    # Cache the response for 180 seconds (enterprise TTL)
     cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-    logger.debug("Cached nodes status for 120 seconds")
+    logger.debug("Cached nodes status for 180 seconds")
     
     return response
 
@@ -135,7 +139,7 @@ async def get_node_names(
         "the resource fan-out."
     ),
 )
-@single_flight_on_fresh("nodes:availability")
+@single_flight("nodes:availability")
 async def get_nodes_availability(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -179,8 +183,9 @@ async def get_nodes_availability(
             label="nodes.availability",
             executor=_availability_executor,
             # important: without a cap, _acquire never raises and the BlockingPoolFull handler
-            # below is dead code. On a degraded fleet, non-fresh reads are not deduped, so
-            # queued sweeps would accumulate instead of shedding.
+            # below is dead code. single_flight now collapses same-scope arrivals, but this
+            # bounds what it cannot: sweeps for *different* scopes queueing up on a degraded
+            # fleet, where each one pays a connect timeout per dead cluster.
             max_in_flight=4,
         )
     except (BlockingTimeout, BlockingPoolFull) as exc:
@@ -370,6 +375,8 @@ async def update_node(
             cache.delete("api_responses", f"{NODES_STATUS_CACHE_KEY}:scope=all")
             # trailing * so every org-scope suffix goes with it
             cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
+            # the regions map renders the display name too, and nothing else clears it
+            cache.delete_pattern("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}*")
             cache.invalidate_cluster_cache(node_name)
             logger.info(f"Invalidated caches after updating node {node_name}")
         
@@ -409,6 +416,12 @@ async def invalidate_node_cache(
         cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
         cache.delete("lxd_resources", f"{MICROCLOUD_RESOURCES_CACHE_PREFIX}:{node_name}")
         cache.delete_pattern("api_responses", f"cluster_members:list:host={node_name}*")
+        # important: these two were missing, so "invalidate this node" left the regions map and
+        # the per-member resource panels on the old body for a further 120s and 60s. Both carry
+        # the same node's hardware, so an operator who invalidated to force a refresh still read
+        # stale numbers on two surfaces and had no way to tell which one to trust.
+        cache.delete_pattern("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}*")
+        cache.delete_pattern("lxd_resources", f"{MEMBER_RESOURCES_CACHE_PREFIX}:{node_name}:*")
         
         logger.info(f"Invalidated all cache entries for node: {node_name}")
         
@@ -443,8 +456,9 @@ async def invalidate_all_nodes_cache(
         # Clear all nodes status cache (all scope variants)
         cache.delete_pattern("api_responses", f"{NODES_STATUS_CACHE_KEY}*")
         cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
-        
-        # Clear all LXD resources cache (pattern delete)
+        cache.delete_pattern("api_responses", f"{REGIONS_OVERVIEW_CACHE_KEY}*")
+
+        # Clear all LXD resources cache (pattern delete: microcloud and member resources)
         cache.delete_pattern("lxd_resources", "*")
         
         # Clear all cluster members cache

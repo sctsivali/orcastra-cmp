@@ -19,7 +19,7 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
@@ -124,7 +124,7 @@ def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter
     summary="List all storage volumes",
     description="Get a list of all storage volumes from LXD nodes.",
 )
-@single_flight_on_fresh("storage_volumes:list")
+@single_flight("storage_volumes:list")
 async def list_storage_volumes(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     pool: Optional[str] = Query(None, description="Filter by storage pool"),

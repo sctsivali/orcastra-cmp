@@ -25,7 +25,7 @@ from app.services.lxd_service import (
     LXDGracefulTimeoutError,
     get_lxd_service,
 )
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, verify_tenant_permission
 from app.core.config import get_settings
@@ -78,7 +78,7 @@ def _validate_image_server(image_server: Optional[str]) -> None:
     summary="List all instances",
     description="Get a list of all instances (containers and VMs) across all connected LXD nodes.",
 )
-@single_flight_on_fresh("instances:list")
+@single_flight("instances:list")
 async def list_instances(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     status: Optional[VMStatus] = Query(None, description="Filter by instance status"),

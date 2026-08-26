@@ -23,7 +23,7 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
@@ -228,7 +228,7 @@ def _filter_images_for_tenant(
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
-@single_flight_on_fresh("images:list")
+@single_flight("images:list")
 async def list_all_images(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,

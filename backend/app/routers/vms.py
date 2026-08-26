@@ -25,7 +25,7 @@ from app.services.lxd_service import (
     LXDGracefulTimeoutError,
     get_lxd_service,
 )
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import (
     org_scope_dependency,
@@ -60,7 +60,7 @@ router = APIRouter(
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
-@single_flight_on_fresh("vms:list")
+@single_flight("vms:list")
 async def list_vms(
     host: Optional[str] = Query(
         None, 

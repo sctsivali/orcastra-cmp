@@ -14,7 +14,7 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active, tenant_acl_can_view_lxd_used_by
@@ -117,7 +117,7 @@ def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> List[Stora
     summary="List all storage pools",
     description="Get a list of all storage pools from LXD nodes.",
 )
-@single_flight_on_fresh("storage_pools:list")
+@single_flight("storage_pools:list")
 async def list_storage_pools(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -195,7 +195,7 @@ async def list_storage_pools(
     summary="Get all storage pool resources",
     description="Get resources (space, inodes) for all storage pools across all nodes.",
 )
-@single_flight_on_fresh("storage_pool_resources")
+@single_flight("storage_pool_resources")
 async def get_all_storage_pool_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -503,7 +503,7 @@ async def delete_storage_pool(
     summary="Get all storage pool resources",
     description="Get resource usage information for all storage pools across all nodes.",
 )
-@single_flight_on_fresh("storage_pool_resources:all_v2")
+@single_flight("storage_pool_resources:all_v2")
 async def get_all_storage_pool_resources_legacy_path(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,

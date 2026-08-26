@@ -17,7 +17,7 @@ from app.services.lxd_service import (
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
@@ -102,7 +102,7 @@ def _fetch_profiles_for_node(lxd_service: LXDService, node_name: str) -> List[Pr
     summary="List all profiles",
     description="Get a list of all profiles from LXD nodes.",
 )
-@single_flight_on_fresh("profiles:list")
+@single_flight("profiles:list")
 async def list_profiles(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
     lxd_service: LXDService = Depends(get_lxd_service),

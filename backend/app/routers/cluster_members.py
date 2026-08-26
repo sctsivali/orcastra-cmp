@@ -14,7 +14,7 @@ from app.services.lxd_service import (
 )
 from pydantic import BaseModel, Field
 from pylxd.exceptions import LXDAPIException
-from app.core.single_flight import single_flight_on_fresh
+from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager, MEMBER_RESOURCES_CACHE_PREFIX
 from app.core.config import get_settings
 from app.models.schemas import (
@@ -270,7 +270,7 @@ Additional endpoint for cluster members resources
     summary="Get member resources",
     description="Get resource information (CPU, RAM, GPU, storage) for a specific cluster member.",
 )
-@single_flight_on_fresh("member_resources")
+@single_flight("member_resources")
 async def get_member_resources(
     member_name: str,
     node: str = Query(..., description="Node name to query"),
