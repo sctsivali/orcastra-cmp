@@ -31,6 +31,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+
+from app.core.api_key_permissions import assert_cluster_permission
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,13 +95,8 @@ def _staging_path(session_id: str) -> str:
 
 
 def _assert_cluster_permission(api_key: Dict[str, Any], cluster_id: str, required: str) -> None:
-    perms = {p["cluster_id"]: p for p in api_key.get("cluster_permissions", [])}
-    if cluster_id not in perms:
-        raise HTTPException(status_code=403, detail=f"No permission for cluster {cluster_id}")
-    hierarchy = {"read": 0, "write": 1, "admin": 2}
-    allowed = perms[cluster_id].get("permissions", ["read"])
-    if max(hierarchy.get(p, 0) for p in allowed) < hierarchy.get(required, 0):
-        raise HTTPException(status_code=403, detail=f"Operation requires {required} permission")
+    """Thin alias so the call sites below read unchanged. The check itself is shared."""
+    assert_cluster_permission(api_key, cluster_id, required)
 
 
 async def _get_session(db: AsyncSession, session_id: str) -> IsoUploadSession:

@@ -35,6 +35,7 @@ from app.services.lxd.proxy import (
     raw_request,
     socket_timeout_for,
 )
+from app.core.api_key_permissions import assert_cluster_permission
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
@@ -2065,19 +2066,9 @@ async def raw_proxy(
         elif method == "DELETE":
             required_permission = "admin"
         
-        allowed_permissions = perm.get("permissions", ["read"])
-        permission_hierarchy = {"read": 0, "write": 1, "admin": 2}
-        
-        max_permission = max(
-            permission_hierarchy.get(p, 0) for p in allowed_permissions
-        )
-        required_level = permission_hierarchy.get(required_permission, 0)
-        
-        if max_permission < required_level:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Operation requires {required_permission} permission"
-            )
+        # note: shared with the image and ISO upload routers. An empty grant raised ValueError
+        # here and surfaced as a 500; it is a 403 now. See app/core/api_key_permissions.py.
+        assert_cluster_permission(api_key, request.cluster_id, required_permission)
         
         # important: the breaker check sits AFTER the permission checks on purpose, so
         # response timing cannot be used to probe which clusters exist without permission.
