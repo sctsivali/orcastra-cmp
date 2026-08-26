@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { formatLabel } from "@/lib/utils";
 import {
@@ -198,13 +199,14 @@ function IdentitiesContent() {
                 <TableBody>
                   {paginatedIdentities.map((identity: any, index: number) => (
                     <TableRow key={identity.node + "-" + identity.id + "-" + index}>
-                      <TableCell className="font-mono max-w-[200px] truncate" title={identity.id}>
-                        {identity.id.length > 30 
-                          ? identity.id.substring(0, 15) + "..." + identity.id.substring(identity.id.length - 10)
-                          : identity.id}
+                      {/* important: this page has no detail dialog, so the cell is the only place
+                          the id exists. It used to elide the middle and hang the whole value on a
+                          title, which is a mouse-only reveal. */}
+                      <TableCell className="max-w-[16rem] font-mono">
+                        <OverflowText value={identity.id} label="identity id" reveal="always" mono />
                       </TableCell>
                       <TableCell className="font-medium">
-                        {identity.name || <span className="text-muted-foreground italic">N/A</span>}
+                        {identity.name || <TableEmptyValue label="No name" />}
                       </TableCell>
                       <TableCell>
                         {formatLabel(identity.type)}

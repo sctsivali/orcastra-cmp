@@ -288,7 +288,7 @@ export function BootPriorityPanel({
                     ) : (
                       <Box className="h-4 w-4 text-green-500 shrink-0" />
                     )}
-                    <span className="font-medium truncate">{entry.instanceName}</span>
+                    <span className="min-w-0 break-words font-medium">{entry.instanceName}</span>
                     <Badge
                       variant={entry.status === 'Running' ? 'default' : 'secondary'}
                       className="shrink-0"

@@ -1,4 +1,5 @@
 import type { ClusterAccessDisplay } from "@/lib/integration-display";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 interface IntegrationClusterAccessListProps {
   clusters: ClusterAccessDisplay[];
@@ -26,8 +27,11 @@ export function IntegrationClusterAccessList({ clusters }: IntegrationClusterAcc
           >
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{cluster.name}</p>
-              <p className="truncate text-xs text-muted-foreground">
-                {cluster.typeLabel}{cluster.name !== cluster.id ? ` - ${cluster.id}` : ""}
+              <p className="text-xs text-muted-foreground">
+                <OverflowText
+                  value={`${cluster.typeLabel}${cluster.name !== cluster.id ? ` - ${cluster.id}` : ""}`}
+                  label={`id for ${cluster.name}`}
+                />
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground sm:justify-end">

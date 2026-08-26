@@ -468,9 +468,9 @@ export function UserGroupsSettings() {
                             const o = org as { name: string; slug?: string };
                             return (
                               <span className="flex min-w-0 flex-col">
-                                <span className="truncate font-medium">{o.name}</span>
+                                <span className="break-words font-medium">{o.name}</span>
                                 {o.slug ? (
-                                  <span className="truncate font-mono text-xs text-muted-foreground">{o.slug}</span>
+                                  <span className="break-all font-mono text-xs text-muted-foreground">{o.slug}</span>
                                 ) : null}
                               </span>
                             );

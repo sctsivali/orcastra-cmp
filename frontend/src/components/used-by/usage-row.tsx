@@ -7,6 +7,7 @@ import { TableSubText } from "@/components/ui/table-text";
 import { CopyableText } from "@/components/detail/copyable-text";
 import { referenceKind } from "@/lib/used-by-kinds";
 import type { LxdReference } from "@/lib/used-by";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 interface UsageRowProps {
   reference: LxdReference;
@@ -37,7 +38,7 @@ export function UsageRow({ reference, node, onCopied }: UsageRowProps) {
               {name}
             </TableLink>
           ) : (
-            <span className="min-w-0 truncate">{name}</span>
+            <OverflowText value={name} label={`${kind.label} name`} />
           )}
         </span>
       </TableCell>

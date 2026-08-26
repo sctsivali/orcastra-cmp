@@ -29,6 +29,7 @@ import {
 } from "./components/warning-detail-dialog";
 import { warningSeverityTone } from "./components/warning-severity";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { OverflowText } from "@/components/ui/overflow-text";
 import {
   Tabs,
   TabsContent,
@@ -433,8 +434,12 @@ function WarningsContent() {
                         {formatLabel(warning.type)}
                       </TableLink>
                     </TableCell>
-                    <TableCell className="max-w-md truncate">
-                      {warning.last_message}
+                    <TableCell className="max-w-md">
+                      <OverflowText
+                        value={warning.last_message}
+                        label={`message for the ${formatLabel(warning.type)} warning`}
+                        lines={2}
+                      />
                     </TableCell>
                     <TableCell>
                       <Badge variant={warningSeverityTone(warning.severity)} className="flex items-center gap-1 w-fit">
@@ -616,17 +621,15 @@ function WarningsContent() {
                             {warning.severity || "critical"}
                           </Badge>
                         </TableCell>
+                        {/* important: this was a tooltip on a bare span, so it opened for a mouse
+                            and for nothing else, and cursor-help advertised an affordance no
+                            keyboard or touch user could reach. */}
                         <TableCell className="max-w-xs">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <span className="cursor-help line-clamp-2">{warning.message || "Connection failed"}</span>
-                              </TooltipTrigger>
-                              <TooltipContent side="top" className="max-w-sm">
-                                <p>{warning.message || "Connection failed"}</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
+                          <OverflowText
+                            value={warning.message || "Connection failed"}
+                            label={`connection message for ${warning.display_name || warning.cluster_id}`}
+                            lines={2}
+                          />
                         </TableCell>
                                               </TableRow>
                     ))}

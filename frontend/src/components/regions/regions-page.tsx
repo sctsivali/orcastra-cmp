@@ -142,10 +142,7 @@ function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHard
                 <p>{hardware.gpu_vendors.join(", ")}</p>
               )}
               {hardware.gpu_models.length > 0 && (
-                <p className="truncate" title={hardware.gpu_models.join(", ")}>
-                  {hardware.gpu_models.slice(0, 2).join(", ")}
-                  {hardware.gpu_models.length > 2 && ` +${hardware.gpu_models.length - 2} more`}
-                </p>
+                <p className="break-words">{hardware.gpu_models.join(", ")}</p>
               )}
               {extraCards > 0 && <p className="text-xs">{cardsTotal} cards detected</p>}
             </>

@@ -45,6 +45,7 @@ import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useConsoleStore, AttachedISO } from "@/lib/console-store";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 interface ISOInfo {
   name: string;
@@ -346,7 +347,9 @@ export function ISOManagerPanel({
           <div className="flex items-center gap-3 p-3 rounded-lg border bg-card">
             <Disc className="h-8 w-8 text-blue-500 shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="font-medium truncate">{attachedISO.source}</p>
+              <p className="font-medium">
+                <OverflowText value={attachedISO.source} label="source path for the attached ISO" mono />
+              </p>
               <div className="flex items-center gap-2 mt-1">
                 <Badge variant="secondary">Device: {attachedISO.deviceName}</Badge>
               </div>
@@ -437,7 +440,7 @@ export function ISOManagerPanel({
                 >
                   <HardDrive className="h-5 w-5 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate text-sm">{iso.name}</p>
+                    <p className="break-all text-sm font-medium">{iso.name}</p>
                     <div className="flex items-center gap-2 mt-1">
                       <Badge variant="outline" className="text-xs">
                         {iso.pool}

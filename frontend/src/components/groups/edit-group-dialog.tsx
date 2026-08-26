@@ -57,6 +57,7 @@ import {
 import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
 import { cn } from "@/lib/utils";
 import { getResourceBasePath, getValidEntitlements, getEntitlementLabel } from "@/lib/lxd-entitlements";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 interface EditGroupDialogProps {
   open: boolean;
@@ -931,14 +932,14 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                       >
                         <div className="flex flex-col flex-1 min-w-0">
                           {identityName && (
-                            <span className="text-sm font-medium truncate">
-                              {identityName}
-                            </span>
+                            <OverflowText
+                              value={identityName}
+                              label={`name for identity ${identityId}`}
+                              className="text-sm font-medium"
+                            />
                           )}
-                          <span className="font-mono text-xs text-muted-foreground truncate" title={identityId}>
-                            {identityId.length > 40 
-                              ? `${identityId.substring(0, 18)}...${identityId.substring(identityId.length - 10)}`
-                              : identityId}
+                          <span className="text-xs text-muted-foreground">
+                            <OverflowText value={identityId} label="identity id" reveal="always" mono />
                           </span>
                         </div>
                         <Button
@@ -981,14 +982,14 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                       >
                         <div className="flex flex-col flex-1 min-w-0">
                           {identityName && (
-                            <span className="text-sm font-medium truncate">
-                              {identityName}
-                            </span>
+                            <OverflowText
+                              value={identityName}
+                              label={`name for identity ${identityId}`}
+                              className="text-sm font-medium"
+                            />
                           )}
-                          <span className="font-mono text-xs text-muted-foreground truncate" title={identityId}>
-                            {identityId.length > 40 
-                              ? `${identityId.substring(0, 18)}...${identityId.substring(identityId.length - 10)}`
-                              : identityId}
+                          <span className="text-xs text-muted-foreground">
+                            <OverflowText value={identityId} label="identity id" reveal="always" mono />
                           </span>
                         </div>
                         <Button
@@ -1129,11 +1130,11 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                                         newIdentity.identity_id === identity.id ? "opacity-100" : "opacity-0"
                                       )}
                                     />
-                                    <div className="flex-1 overflow-hidden">
-                                      <div className="font-medium text-sm truncate">
-                                        {identity.name || "N/A"}
+                                    <div className="min-w-0 flex-1">
+                                      <div className="break-words text-sm font-medium">
+                                        {identity.name || EMPTY_VALUE}
                                       </div>
-                                      <div className="font-mono text-xs text-muted-foreground truncate">
+                                      <div className="break-all font-mono text-xs text-muted-foreground">
                                         {identity.id}
                                       </div>
                                       {identity.groups.length > 0 && (

@@ -32,6 +32,7 @@ import {
 import { Plus, X, Loader2, Info } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { getResourceBasePath, getValidEntitlements, getEntitlementLabel } from "@/lib/lxd-entitlements";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { 
   useCreateGroup, 
   useProjects, 
@@ -368,9 +369,15 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
                     <Badge variant="outline" className="text-xs">
                       {permission.entity_type}
                     </Badge>
-                    <code className="flex-1 text-xs truncate px-2">
-                      {permission.url}
-                    </code>
+                    {/* important: the URL is the identity of the permission being granted, and
+                        it was clipped inside the flow that grants it. */}
+                    <span className="min-w-0 flex-1 px-2 text-xs">
+                      <OverflowText
+                        value={permission.url}
+                        label={`target for the ${permission.entity_type} permission`}
+                        mono
+                      />
+                    </span>
                     <Badge variant="secondary" className="text-xs">
                       {permission.entitlement.replace('can_', '')}
                     </Badge>

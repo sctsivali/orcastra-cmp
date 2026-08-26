@@ -63,6 +63,7 @@ import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
@@ -778,9 +779,15 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       </CardHeader>
       <CardContent className="space-y-2">
         {project.description && (
-          <p className="text-xs text-muted-foreground line-clamp-2">
-            {project.description}
-          </p>
+          // note: the card itself is clickable, so the reveal has to stop its click from also
+          // opening the project. Same guard the tags row below already uses.
+          <div className="text-xs text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+            <OverflowText
+              value={project.description}
+              label={`description for project ${project.name}`}
+              lines={2}
+            />
+          </div>
         )}
 
         {/* Tags */}

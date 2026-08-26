@@ -11,6 +11,7 @@ import { cn, formatBytes } from "@/lib/utils";
 import type { GPUCardInfo } from "@/types/api";
 
 import { GpuClassBadge } from "./gpu-class-badge";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -56,7 +57,9 @@ export function GpuCardDetails({ card, dense = false }: GpuCardDetailsProps) {
               <Badge variant="secondary">Available</Badge>
             )}
           </div>
-          <p className="text-sm text-muted-foreground truncate">{gpuCardQualifier(card)}</p>
+          <p className="text-sm text-muted-foreground">
+            <OverflowText value={gpuCardQualifier(card)} label={`details for ${gpuCardLabel(card)}`} />
+          </p>
           {card.used_by && (
             <p className="text-xs text-muted-foreground mt-1">Attached to {card.used_by}</p>
           )}

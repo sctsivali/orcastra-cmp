@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { DeviceIcon } from "@/components/detail/device-icon";
 import { formatLabel } from "@/lib/utils";
 import { Boxes } from "lucide-react";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 export function DevicesPanel({ devices }: { devices?: Record<string, Record<string, string>> }) {
   const entries = React.useMemo(
@@ -27,7 +28,9 @@ export function DevicesPanel({ devices }: { devices?: Record<string, Record<stri
               <span className="inline-flex min-w-0 items-center gap-3">
                 <DeviceIcon type={type} />
                 <span className="min-w-0">
-                  <span className="block truncate font-semibold">{name}</span>
+                  <span className="block font-semibold">
+                    <OverflowText value={name} label="device name" />
+                  </span>
                   <span className="block text-xs text-muted-foreground">Device</span>
                 </span>
               </span>

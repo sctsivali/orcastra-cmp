@@ -35,6 +35,7 @@ import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { cn } from "@/lib/utils";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TagManager } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
@@ -167,8 +168,12 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
                   {node.name}
                 </p>
               )}
-              <p className="text-xs text-muted-foreground font-mono truncate">
-                {node.endpoint}
+              <p className="text-xs text-muted-foreground">
+                <OverflowText
+                  value={node.endpoint}
+                  label={`endpoint for ${node.display_name || node.name}`}
+                  mono
+                />
               </p>
             </div>
           </div>

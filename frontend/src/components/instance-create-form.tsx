@@ -1776,7 +1776,7 @@ export function InstanceCreateForm() {
                         className="w-40"
                       />
                       {gpu.label && (
-                        <span className="text-sm truncate">{gpu.label}</span>
+                        <span className="break-words text-sm">{gpu.label}</span>
                       )}
                       {gpu.gpuClass === "display" && (
                         <Badge variant="warning">Display only</Badge>

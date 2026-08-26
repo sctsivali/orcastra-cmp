@@ -25,7 +25,8 @@ import {
   TableHead,
   TableHeader,
   TableRow } from "@/components/ui/table";
-import { TableEmptyRow } from "@/components/ui/table-text";
+import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
+import { OverflowText } from "@/components/ui/overflow-text";
 import {
   Dialog,
   DialogContent,
@@ -418,13 +419,18 @@ function CertificatesContent() {
 
                   return (
                     <TableRow key={cert.cluster_id}>
-                      <TableCell>
+                      <TableCell className="max-w-[16rem]">
                         <div>
-                          <div className="font-medium truncate max-w-[150px]">{cert.cluster_id}</div>
+                          <div className="font-medium">
+                            <OverflowText value={cert.cluster_id} label="cluster id" />
+                          </div>
                           {(cert.endpoint || cert.common_name) && (
-                            <div className="text-xs text-muted-foreground truncate max-w-[150px]">
-                              {cert.endpoint || cert.common_name}
-                            </div>
+                            <TableSubText wrap>
+                              <OverflowText
+                                value={cert.endpoint || cert.common_name || ""}
+                                label={`endpoint for cluster ${cert.cluster_id}`}
+                              />
+                            </TableSubText>
                           )}
                         </div>
                       </TableCell>

@@ -14,6 +14,7 @@ import {
   type UsedBySubject,
 } from "@/components/used-by";
 import { TableLink } from "@/components/ui/table-link";
+import { OverflowText } from "@/components/ui/overflow-text";
 import {
   Table,
   TableBody,
@@ -186,8 +187,16 @@ function ProfilesContent() {
                 paginatedProfiles.map((profile: any) => (
                   <TableRow key={`${profile.node}-${profile.name}`}>
                     <TableCell className="font-medium">{profile.name}</TableCell>
-                    <TableCell className="max-w-xs truncate">
-                      {profile.description || <TableEmptyValue label="No description" />}
+                    <TableCell className="max-w-xs">
+                      {profile.description ? (
+                        <OverflowText
+                          value={profile.description}
+                          label={`description for ${profile.name}`}
+                          lines={2}
+                        />
+                      ) : (
+                        <TableEmptyValue label="No description" />
+                      )}
                     </TableCell>
                     {nodes.length > 0 && (
                       <TableCell>

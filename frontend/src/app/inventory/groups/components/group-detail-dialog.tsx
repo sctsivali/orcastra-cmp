@@ -25,6 +25,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { parseLxdReference } from "@/lib/used-by";
 import { referenceKind } from "@/lib/used-by-kinds";
 import { formatLabel } from "@/lib/utils";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 export type GroupDetailTab = "overview" | "members" | "permissions";
 
@@ -104,9 +105,13 @@ function PermissionsPanelContent({ group }: { group: any }) {
                           {name}
                         </TableLink>
                       ) : (
-                        <span className="truncate">{name}</span>
+                        <OverflowText value={name} label={`${kind.label} name`} />
                       )}
-                      <TableSubText>{permission.url}</TableSubText>
+                      {/* important: the URL is what the permission actually grants against, so a
+                          reader who cannot see all of it cannot audit the grant. */}
+                      <TableSubText wrap>
+                        <OverflowText value={permission.url} label={`permission target for ${name}`} mono />
+                      </TableSubText>
                     </TableCell>
                     <TableCell>{formatLabel(permission.entitlement ?? "")}</TableCell>
                   </TableRow>

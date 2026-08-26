@@ -34,6 +34,7 @@ import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { OverflowText } from "@/components/ui/overflow-text";
 import type {
   AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
   PolicyAssignment, AssignmentCreateRequest, TenantPermission,
@@ -821,7 +822,7 @@ export function TenantAccessDialog({
                           >
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2">
-                                <span className="text-sm font-medium truncate">{policy.name}</span>
+                                <OverflowText value={policy.name} label={`policy name ${policy.id}`} className="text-sm font-medium" />
                                 {policy.is_default && (
                                   <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-600 border-blue-500/20">
                                     Default
@@ -832,8 +833,12 @@ export function TenantAccessDialog({
                                 </Badge>
                               </div>
                               {policy.description && (
-                                <p className="text-[10px] text-muted-foreground mt-0.5 truncate max-w-[400px]">
-                                  {policy.description}
+                                <p className="mt-0.5 max-w-[400px] text-xs text-muted-foreground">
+                                  <OverflowText
+                                    value={policy.description}
+                                    label={`description for policy ${policy.name}`}
+                                    lines={2}
+                                  />
                                 </p>
                               )}
                             </div>
@@ -959,6 +964,11 @@ function AssignedPolicyCard({
         <button
           type="button"
           onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          // note: the clipped policy name below is still the whole string in the DOM, so this
+          // control already announces it in full. The label states the action as well, because
+          // "policy-name, button" does not say what the button does.
+          aria-label={`${expanded ? "Hide" : "Show"} the rules in policy ${assignment.policy_name}`}
           className="flex items-center gap-2 text-sm font-medium hover:text-primary flex-1 min-w-0 text-left"
         >
           {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}

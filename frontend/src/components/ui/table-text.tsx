@@ -23,13 +23,23 @@ export function TableEmptyValue({ label = "No value" }: { label?: string }) {
 // The only sanctioned second text size in a table: a subordinate qualifier rendered under
 // the identifier value (a cluster id under a display name, host/project under an instance
 // name). Never use it as a standalone cell value.
+//
+// note: `wrap` is for the one case where the qualifier is a long opaque value with nowhere else
+// to appear, ex; a cluster endpoint on a page that has no detail dialog. The clip is otherwise
+// correct and stays the default, but a caller that owns a reveal must be able to turn it off, or
+// the reveal expands a box whose contents are still clipped one element further in.
 export function TableSubText({
   className,
+  wrap,
   ...props
-}: React.HTMLAttributes<HTMLSpanElement>) {
+}: React.HTMLAttributes<HTMLSpanElement> & { wrap?: boolean }) {
   return (
     <span
-      className={cn("block truncate text-xs text-muted-foreground", className)}
+      className={cn(
+        "block text-xs text-muted-foreground",
+        wrap ? "whitespace-normal break-words" : "truncate",
+        className,
+      )}
       {...props}
     />
   );

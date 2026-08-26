@@ -20,6 +20,7 @@ import {
 } from "@/lib/gpu";
 import { cn, formatBytes } from "@/lib/utils";
 import type { GPUCardInfo } from "@/types/api";
+import { OverflowText } from "@/components/ui/overflow-text";
 
 interface GpuPickerDialogProps {
   open: boolean;
@@ -135,8 +136,11 @@ export function GpuPickerDialog({
                         <span className="text-xs text-muted-foreground">Available</span>
                       )}
                     </div>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {gpuCardQualifier(card)}
+                    <p className="text-xs text-muted-foreground">
+                      <OverflowText
+                        value={gpuCardQualifier(card)}
+                        label={`details for ${gpuCardLabel(card)}`}
+                      />
                     </p>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                       <span className="font-mono">{identifier.display}</span>

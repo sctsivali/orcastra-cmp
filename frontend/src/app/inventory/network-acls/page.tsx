@@ -23,6 +23,7 @@ import {
   TableRow } from "@/components/ui/table";
 import { ShieldCheck } from "lucide-react";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { TableLink } from "@/components/ui/table-link";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
@@ -185,8 +186,16 @@ function NetworkACLsContent() {
                 paginatedACLs.map((acl: any, idx: number) => (
                   <TableRow key={`${acl.node}-${acl.name}-${idx}`}>
                     <TableCell className="font-medium">{acl.name}</TableCell>
-                    <TableCell className="max-w-md truncate">
-                      {acl.description || <span className="text-muted-foreground">No description</span>}
+                    <TableCell className="max-w-md">
+                      {acl.description ? (
+                        <OverflowText
+                          value={acl.description}
+                          label={`description for ${acl.name}`}
+                          lines={2}
+                        />
+                      ) : (
+                        <TableEmptyValue label="No description" />
+                      )}
                     </TableCell>
                     {nodes.length > 0 && (
                       <TableCell>
