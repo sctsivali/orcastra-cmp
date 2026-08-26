@@ -20,6 +20,7 @@ from app.models.schemas import (
     ClusterStatus,
 )
 
+from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
 
 logger = logging.getLogger(__name__)
@@ -235,7 +236,11 @@ async def get_regions_overview(
                             if client:
                                 status = ClusterStatus.ONLINE
                                 try:
-                                    resources = client.resources
+                                    # important: a live read, not pylxd's client.resources.
+                                    # That property memoises the body for the life of the
+                                    # pooled client, so this map showed each worker's
+                                    # connect-time snapshot rather than the fleet now.
+                                    resources = read_resources(client, cluster_id).body
                                     cpu_info = resources.get("cpu", {})
                                     cpu_total = cpu_info.get("total", 0)
                                     cpu_sockets = len(cpu_info.get("sockets", []))

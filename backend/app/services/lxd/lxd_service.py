@@ -19,6 +19,7 @@ from .availability import require_client
 from .connection import LXDConnectionManager
 from .gpu import GpuInventory, build_gpu_inventory
 from .node_resources import build_node_resources
+from .freshness import read_resources
 from .resources import ResourceManager
 from .instance import InstanceManager
 from .projects import ProjectManager
@@ -305,10 +306,13 @@ class LXDService:
         default. The endpoint reported zero GPUs on hardware that has one.
         """
         client = require_client(self.connection_manager.get_client(node_name), node_name)
-        data = self.resource_manager.get_node_resources(client, node_name)
+        # important: one live read for both consumers. Reading twice doubles the round trips
+        # and lets the memory figure and the GPU inventory disagree about the same host.
+        live = read_resources(client, node_name)
+        data = self.resource_manager.get_node_resources(client, node_name, resources=live)
         gpu = GpuInventory.empty()
         try:
-            gpu = build_gpu_inventory(client.resources, client.instances.all())
+            gpu = build_gpu_inventory(live.body, client.instances.all())
         except Exception as e:
             logger.debug(f"Could not read GPU inventory for {node_name}: {e}")
         return build_node_resources(data, gpu)

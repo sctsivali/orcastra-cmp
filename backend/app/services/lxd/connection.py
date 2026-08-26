@@ -169,6 +169,15 @@ class LXDConnectionManager:
                 data = response.json()
                 auth_status = data.get("metadata", {}).get("auth", "")
                 if auth_status == "trusted":
+                    # important: pylxd captures host_info once in __init__ and only rewrites it
+                    # inside authenticate(), and this pool never expires a client, so every
+                    # reader of client.host_info saw the server version, auth and environment
+                    # from whenever this worker first connected. We have just paid for a live
+                    # /1.0 read and were discarding the body after one field; keeping it costs
+                    # nothing and is exactly what pylxd does after authenticating.
+                    metadata = data.get("metadata")
+                    if metadata:
+                        client.host_info = metadata
                     return True
                 else:
                     logger.warning(f"Connection to {node_name} not trusted (auth={auth_status})")

@@ -379,8 +379,20 @@ async def update_project(
             (request.max_storage is not None and request.max_storage != "0")
         )
         if has_real_limits:
-            available = lxd_service.get_node_resources(host)
-            
+            # important: the quota precheck must not be able to fail the update. Reading node
+            # resources is a live call to the cluster now that it no longer rides pylxd's
+            # connect-time memo, so a transient read failure used to surface here as a 400
+            # telling the operator their limits were invalid. The create path already degrades
+            # this way; matching it keeps one behaviour rather than two.
+            try:
+                available = lxd_service.get_node_resources(host)
+            except LXDOperationError:
+                logger.warning(
+                    f"Could not validate resources for {host}, proceeding with the update anyway"
+                )
+                available = None
+
+        if has_real_limits and available is not None:
             # Add back current project's limits to available pool
             current_cpu = int(project["config"].get("limits.cpu", 0)) if project["config"].get("limits.cpu") else 0
             current_ram_str = project["config"].get("limits.memory")

@@ -22,6 +22,7 @@ from .gpu import GpuInventory, build_gpu_inventory
 from .hardware import build_hardware_profile
 from .node_resources import aggregate_microcloud_resources, build_node_resources
 from .exceptions import LXDOperationError
+from .freshness import LiveRead, read_resources
 
 logger = logging.getLogger(__name__)
 
@@ -153,16 +154,29 @@ class ResourceManager:
         the support ticket it was meant to prevent.
         """
         try:
-            return build_gpu_inventory(client.resources, client.instances.all())
+            return build_gpu_inventory(
+                read_resources(client, node_name).body, client.instances.all()
+            )
         except Exception as e:
             logger.warning(f"Error listing GPUs for {node_name}: {e}")
             raise LXDOperationError(f"Failed to list GPUs: {str(e)}")
 
-    def get_node_resources(self, client: pylxd.Client, node_name: str) -> Dict[str, Any]:
-        """Get available (unused) resources for a specific node."""
+    def get_node_resources(
+        self,
+        client: pylxd.Client,
+        node_name: str,
+        resources: Optional[LiveRead] = None,
+    ) -> Dict[str, Any]:
+        """Get available (unused) resources for a specific node.
+
+        Pass `resources` when the caller has already read the body this request. That is what
+        keeps a node-status check at one round trip instead of three: CPU/memory, the hardware
+        profile and the GPU inventory all want the same body.
+        """
         try:
             # get system resources
-            resources_data = client.resources
+            live = resources or read_resources(client, node_name)
+            resources_data = live.body
             
             # extract CPU info
             cpu_info = resources_data.get("cpu", {})
@@ -244,8 +258,10 @@ class ResourceManager:
                 "storage_available": storage_available,
                 "storage_pools": storage_pools,
                 # Detected hardware, identifier-stripped. resources_data is the raw
-                # /1.0/resources body read above and otherwise discarded; pylxd memoises
-                # client.resources, so this costs no extra round trip.
+                # /1.0/resources body read above and otherwise discarded, so this costs no
+                # extra round trip and, more importantly, is the same sample the CPU and
+                # memory figures above came from. Two samples for one fact is how the GPU
+                # counts came to disagree across endpoints.
                 "hardware": build_hardware_profile(resources_data),
             }
             
@@ -334,12 +350,16 @@ class ResourceManager:
             
             # Get node resources
             try:
-                resources_data = self.get_node_resources(client, node_name)
-                
+                # important: one live read, threaded into both consumers below. Reading twice
+                # would double the fan-out cost per cluster and let the memory figure and the
+                # GPU inventory come from two different samples of the same host.
+                live = read_resources(client, node_name)
+                resources_data = self.get_node_resources(client, node_name, resources=live)
+
                 # GPU capacity, usage and card detail, all from the canonical inventory.
                 gpu_inv = GpuInventory.empty()
                 try:
-                    gpu_inv = build_gpu_inventory(client.resources, client.instances.all())
+                    gpu_inv = build_gpu_inventory(live.body, client.instances.all())
                 except Exception as gpu_err:
                     # A GPU read failure must not zero the node's CPU and memory.
                     logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")
