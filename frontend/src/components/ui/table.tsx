@@ -86,6 +86,13 @@ const TableRow = React.forwardRef<
 ));
 TableRow.displayName = "TableRow";
 
+// note: exported so SortableTableHead can put the head's own height and padding on the BUTTON
+// it renders, rather than on the th around it. A th is not focusable, so the click target has to
+// be a real control, and it has to fill the cell or the hover band shrinks to the text.
+export function useTableDensity(): TableDensity {
+  return React.useContext(TableDensityContext);
+}
+
 const TableHead = React.forwardRef<
   HTMLTableCellElement,
   React.ThHTMLAttributes<HTMLTableCellElement>

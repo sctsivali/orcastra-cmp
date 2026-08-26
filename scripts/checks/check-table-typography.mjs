@@ -133,14 +133,24 @@ for (const file of walk(ROOT)) {
 // whole-row click is mouse-only too, and it is worse in one respect: the row usually carries
 // cursor-pointer, so it advertises an affordance that keyboard users cannot reach. The
 // warnings page shipped exactly that, and its card even told every reader to click a row.
+//
+// <TableHead onClick> is the third. It hid for longer and cost more: SortableTableHead put the
+// handler on the th, so column sorting was mouse-only in all 26 tables at once, and this rule
+// could not see it because it listed the two element names where the defect had been found
+// rather than every element that can carry it. The header now renders a real button inside the
+// th, with aria-sort on the th where the ARIA spec puts it.
 const clickableCells = [];
 for (const file of walk(ROOT)) {
   const src = readFileSync(file, "utf8");
-  for (const m of src.matchAll(/<Table(?:Cell|Row)\b[^>]*?onClick=/gs)) {
+  for (const m of src.matchAll(/<Table(?:Cell|Row|Head)\b[^>]*?onClick=/gs)) {
     clickableCells.push({
       file: relative(ROOT, file),
       line: src.slice(0, m.index).split("\n").length,
-      tag: m[0].startsWith("<TableRow") ? "TableRow" : "TableCell",
+      tag: m[0].startsWith("<TableRow")
+        ? "TableRow"
+        : m[0].startsWith("<TableHead")
+          ? "TableHead"
+          : "TableCell",
     });
   }
 }
@@ -181,8 +191,9 @@ if (badgesInBodies > BADGE_BASELINE) {
 
 if (clickableCells.length) {
   console.log(
-    `\n${clickableCells.length} table row(s) or cell(s) carry an onClick. Neither a tr nor ` +
-      `a td is focusable, so the control is mouse-only. Use TableLink:`
+    `\n${clickableCells.length} table element(s) carry an onClick. None of tr, td or th is ` +
+      `focusable, so the control is mouse-only. Use TableLink in a body cell, and a real button ` +
+      `inside the th for a header:`
   );
   for (const c of clickableCells) console.log(`  ${c.file}:${c.line}  <${c.tag} onClick>`);
 }
