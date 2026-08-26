@@ -4,6 +4,7 @@ Handles resource usage tracking, node resources, and instance metrics.
 """
 
 import logging
+from collections import OrderedDict
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 import time
@@ -76,9 +77,15 @@ class ResourceManager:
     Manages resource tracking and metrics for LXD instances and nodes.
     """
     
+    # important: bounded. One ResourceManager lives for the whole process and this used to be
+    # a plain dict with one entry per host:instance ever sampled, never pruned when an
+    # instance was deleted, so it grew with lifetime instance churn rather than fleet size.
+    _CPU_HISTORY_MAX = 5000
+
     def __init__(self):
         # CPU usage tracking: {"host:instance": {"usage_ns": int, "timestamp": float}}
-        self._cpu_history: Dict[str, Dict[str, any]] = {}
+        # LRU by insertion order: every sample re-inserts, so the coldest key falls out first.
+        self._cpu_history: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
     
     def get_resource_usage(self, instance) -> Optional[ResourceUsage]:
         """Get resource usage for a running instance."""
@@ -437,10 +444,13 @@ class ResourceManager:
                         metrics.cpu_usage_percent = round(min(cpu_percent, 800.0), 2)
                 
                 # Store current values for next calculation
+                self._cpu_history.pop(cache_key, None)
                 self._cpu_history[cache_key] = {
                     "usage_ns": current_usage_ns,
                     "timestamp": current_time
                 }
+                while len(self._cpu_history) > self._CPU_HISTORY_MAX:
+                    self._cpu_history.popitem(last=False)
             
             # Memory usage
             if state.memory:

@@ -10,6 +10,7 @@ import logging
 import time
 import asyncio
 from datetime import datetime, timezone
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
@@ -54,7 +55,12 @@ ws_router = APIRouter(
 _executor = ThreadPoolExecutor(max_workers=10)
 
 # In-memory storage for previous CPU samples (for delta calculation)
-_previous_cpu_samples: Dict[str, Dict[str, Any]] = {}
+#
+# important: bounded. CPU percent is a rate, so it needs the previous sample, but the entry for
+# a deleted instance was never removed and this grew with lifetime instance churn rather than
+# fleet size. Insertion-ordered, re-inserted on every sample, so the coldest key falls out.
+_CPU_SAMPLES_MAX = 5000
+_previous_cpu_samples: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _previous_sample_time: float = 0
 _last_history_store_times: Dict[str, float] = {}  # Track history writes per scope
 _history_min_interval: float = 4.0  # Minimum seconds between history stores
@@ -214,6 +220,8 @@ def _calculate_cpu_percentage(
                 'cpu_ns': current_cpu_ns,
                 'time': current_time
             }
+            while len(_previous_cpu_samples) > _CPU_SAMPLES_MAX:
+                _previous_cpu_samples.popitem(last=False)
             return 0.0
         
         prev = _previous_cpu_samples[instance_key]
@@ -225,10 +233,13 @@ def _calculate_cpu_percentage(
         delta_time_s = current_time - prev_time
         
         # Update stored sample
+        _previous_cpu_samples.pop(instance_key, None)
         _previous_cpu_samples[instance_key] = {
             'cpu_ns': current_cpu_ns,
             'time': current_time
         }
+        while len(_previous_cpu_samples) > _CPU_SAMPLES_MAX:
+            _previous_cpu_samples.popitem(last=False)
     
     # Calculate outside lock for better concurrency
     if delta_time_s <= 0 or delta_cpu_ns < 0:
@@ -972,10 +983,23 @@ async def _persist_snapshot(point: Dict[str, Any]) -> None:
 
 
 # Cache for history endpoint responses to avoid repeated Pydantic model creation
-# Key: (scope_key, points) -> Value: (history_len, list of MetricsHistoryPoint)
+# Key: (scope_key, points) -> Value: (version token, list of MetricsHistoryPoint)
 # Bounded to 50 entries to prevent unbounded memory growth
-_history_response_cache: Dict[str, Tuple[int, List[MetricsHistoryPoint]]] = {}
+#
+# important: the token must identify the newest point, not count the points. This used to be
+# len(history), which stops changing the moment the ring buffer saturates at 8640 (see the cap
+# in _store_history_point below). From that moment every request matched the cached entry and
+# the chart froze permanently, with no TTL able to release it - only a restart. At the 4s
+# minimum store interval that is roughly 9.6 hours of uptime before the graph dies.
+_history_response_cache: Dict[str, Tuple[str, List[MetricsHistoryPoint]]] = {}
 _HISTORY_CACHE_MAX_SIZE = 50
+
+
+def _history_version(history: List[Dict[str, Any]]) -> str:
+    """Identify a history buffer by its newest point, so a saturated ring still versions."""
+    if not history:
+        return "0:"
+    return f"{len(history)}:{history[-1].get('timestamp', '')}"
 
 
 @router.get(
@@ -1031,18 +1055,18 @@ async def get_metrics_history(
     try:
         # Check response cache: avoid re-creating Pydantic models if history hasn't changed
         cache_key = f"{history_key}:{points}"
-        current_len = len(history)
+        version = _history_version(history)
         cached_entry = _history_response_cache.get(cache_key)
-        if cached_entry and cached_entry[0] == current_len:
+        if cached_entry and cached_entry[0] == version:
             return cached_entry[1]
-        
+
         # Create Pydantic models and cache the result
         result = [MetricsHistoryPoint(**p) for p in history[-points:]]
         # Evict oldest entries if cache exceeds max size
         if len(_history_response_cache) >= _HISTORY_CACHE_MAX_SIZE:
             oldest_key = next(iter(_history_response_cache))
             del _history_response_cache[oldest_key]
-        _history_response_cache[cache_key] = (current_len, result)
+        _history_response_cache[cache_key] = (version, result)
         return result
     except Exception as e:
         logger.error(f"Error parsing metrics history: {e}")
