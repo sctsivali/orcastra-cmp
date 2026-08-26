@@ -40,6 +40,18 @@ class MetricsCollector:
     
     # Cache TTL for API responses (180s = 3 minutes)
     CACHE_TTL = 180
+
+    # important: the collector is started from the FastAPI lifespan, which runs once per worker.
+    # With WEB_CONCURRENCY=4 that is four collectors, each calling the dashboard with fresh=True
+    # every cycle, so the configured interval bought a quarter of the fan-out it promised: four
+    # full sweeps of every cluster per cycle instead of one. Measured on this fleet by the
+    # startup line appearing four times.
+    #
+    # One short Redis lease per cycle elects a single collector. The others still read the
+    # dashboard from the shared cache so their own WebSocket subscribers keep receiving pushes;
+    # only the expensive sweep is elected. The lease expires with the cycle, so a worker that
+    # dies mid-collection is simply replaced next time round rather than needing a release.
+    COLLECTION_LEASE_KEY = "orcastra:metrics_collector:cycle_lease"
     
     def __init__(self, collection_interval: int = 60):
         """
@@ -117,6 +129,27 @@ class MetricsCollector:
             
         logger.info("Background metrics collection loop ended")
         
+    def _claim_collection_lease(self) -> bool:
+        """True when this worker should run the expensive sweep this cycle.
+
+        Falls back to True when Redis is unavailable, so a single-worker or Redis-down
+        deployment keeps collecting exactly as it did before rather than going silent.
+        """
+        try:
+            from app.core.cache import get_cache_manager
+
+            client = getattr(get_cache_manager(), "redis_client", None)
+            if client is None:
+                return True
+            # nx: exactly one worker wins. ex: the lease dies with the cycle, so the next one
+            # re-elects and a leader that crashed mid-sweep costs one cycle, not the loop.
+            return bool(
+                client.set(self.COLLECTION_LEASE_KEY, os.getpid(), nx=True, ex=self.collection_interval)
+            )
+        except Exception as exc:
+            logger.debug(f"Collection lease unavailable, collecting locally: {exc}")
+            return True
+
     async def _collect_metrics(self):
         """
         Collect metrics by calling the dashboard endpoint logic.
@@ -146,11 +179,16 @@ class MetricsCollector:
             from app.routers.monitoring import get_monitoring_dashboard
             
             # Call the dashboard endpoint - it handles all metrics collection and history storage
-            # This ensures a single code path for metrics collection, avoiding race conditions
-            # fresh=True bypasses the 35s dashboard cache so the collector always
-            # performs a full collection and stores a history point every cycle
-            result = await get_monitoring_dashboard(lxd_service=self._lxd_service, fresh=True)
-            logger.debug("Background collector triggered dashboard metrics collection")
+            # This ensures a single code path for metrics collection, avoiding race conditions.
+            # fresh=True bypasses the 35s dashboard cache so the elected collector always
+            # performs a full collection and stores a history point every cycle. Every other
+            # worker reads the shared cache instead, which is enough to keep its own WebSocket
+            # subscribers fed without repeating the sweep.
+            leading = self._claim_collection_lease()
+            result = await get_monitoring_dashboard(lxd_service=self._lxd_service, fresh=leading)
+            logger.debug(
+                "Background collector cycle complete (collected=%s)", leading
+            )
             
             # Push to WebSocket subscribers (if any connected)
             try:
