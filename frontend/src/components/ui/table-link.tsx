@@ -36,6 +36,16 @@ type CommonProps = {
   className?: string;
   title?: string;
   "aria-label"?: string;
+  /**
+   * Stop clipping the text and let it wrap instead.
+   *
+   * important: the clip below is not decoration, it is what stops a 64 character fingerprint
+   * from setting the width of a whole column, so it stays the default. But it also means the
+   * link is a second, invisible clip inside anything that reveals a long value, and a reveal
+   * whose own content is still truncated is the defect this codebase has shipped more than once.
+   * A caller that owns a reveal control passes the revealed state straight through here.
+   */
+  wrap?: boolean;
 };
 
 type ActionProps = CommonProps & {
@@ -57,9 +67,10 @@ type NavProps = CommonProps & {
 export type TableLinkProps = ActionProps | NavProps;
 
 export function TableLink(props: TableLinkProps) {
-  const { children, className, title } = props;
+  const { children, className, title, wrap } = props;
   const ariaLabel = props["aria-label"];
   const classes = cn(tableLinkClass, className);
+  const textClass = cn("min-w-0", wrap ? "whitespace-normal break-all text-left" : "truncate");
 
   if ("href" in props && props.href !== undefined) {
     if (props.external) {
@@ -72,7 +83,7 @@ export function TableLink(props: TableLinkProps) {
           aria-label={ariaLabel}
           className={classes}
         >
-          <span className="min-w-0 truncate">{children}</span>
+          <span className={textClass}>{children}</span>
           <ExternalLink className="h-3 w-3 shrink-0" aria-hidden="true" />
         </a>
       );
@@ -83,7 +94,7 @@ export function TableLink(props: TableLinkProps) {
     // operator is actually reading.
     return (
       <IntentLink href={props.href} title={title} aria-label={ariaLabel} className={classes}>
-        <span className="min-w-0 truncate">{children}</span>
+        <span className={textClass}>{children}</span>
       </IntentLink>
     );
   }
@@ -97,7 +108,7 @@ export function TableLink(props: TableLinkProps) {
       aria-label={ariaLabel}
       className={classes}
     >
-      <span className="min-w-0 truncate">{children}</span>
+      <span className={textClass}>{children}</span>
     </button>
   );
 }
