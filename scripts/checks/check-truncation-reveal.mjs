@@ -279,6 +279,14 @@ const RULE3 = /title=\{([A-Za-z_$][\w$.?]*)\}[^<>]*>\s*\{\1\}/g;
 
 const RULE5 = /^export\s+(?:async\s+)?(?:function|const)\s+((?:truncate|shorten|ellipsi|elide|abbrev|clip)[A-Za-z0-9_]*)/gm;
 
+// A reveal wrapped around a child that clips internally measures the child's clientWidth, not its
+// content, so it concludes the value fits and hides its own control, and expanding it would open
+// a box whose contents are still cut one element further in. TableLink and TableSubText both clip
+// by default, so a caller must either skip the measurement with reveal="always" or turn the inner
+// clip off with wrap.
+const RULE6 = /<OverflowText\b([\s\S]{0,900}?)<\/OverflowText>/g;
+const SELF_CLIPPING = /<(?:TableLink|TableSubText|CopyableText)\b/;
+
 const TRUNCATING = /(?:^|[\s"`{('])(?:(?:sm|md|lg|xl|2xl|dark|group-hover|hover|focus):)?(truncate|text-ellipsis|line-clamp-\d+)(?=[\s"`)}',]|$)/;
 
 const jsTruncation = [];
@@ -286,6 +294,7 @@ const silentCuts = [];
 const namedByCut = [];
 const echoes = [];
 const helpers = [];
+const nestedClips = [];
 const bare = [];
 let files = 0;
 let tsxFiles = 0;
@@ -375,6 +384,19 @@ for (const file of walk(src)) {
     }
   }
 
+  // --- rule 6 -------------------------------------------------------------------------
+  if (isTsx) {
+    RULE6.lastIndex = 0;
+    let m;
+    while ((m = RULE6.exec(code)) !== null) {
+      const block = m[1];
+      if (!SELF_CLIPPING.test(block)) continue;
+      if (/reveal=\{?"always"/.test(block) || /\bwrap\b/.test(block)) continue;
+      if (waived(code, m.index)) continue;
+      nestedClips.push({ file: rel, line: lineOf(code, m.index) });
+    }
+  }
+
   // --- rule 5 -------------------------------------------------------------------------
   if (rel.startsWith('lib/')) {
     RULE5.lastIndex = 0;
@@ -432,7 +454,10 @@ console.log(
 );
 console.log(
   `  shared truncation helper exported from lib/: ${helpers.length} (hard ban)` +
-    `   CSS truncation with no reveal: ${bare.length} (baseline ${CSS_TRUNCATION_BASELINE})`
+    `   a reveal around a child that clips itself: ${nestedClips.length} (hard ban)`
+);
+console.log(
+  `  CSS truncation with no reveal: ${bare.length} (baseline ${CSS_TRUNCATION_BASELINE})`
 );
 console.log(
   `  accounted for: ${ownedTags} inside a primitive, ${namedTags} already named, ` +
@@ -483,6 +508,14 @@ if (helpers.length) {
   console.log('rather than deprecated, because a helper that still exists is one somebody calls:');
   show(helpers, (r) => `${r.file}:${r.line}  ${r.name}`);
   offenders.push('a truncation helper exported from lib/');
+}
+
+if (nestedClips.length) {
+  console.log('\nA reveal wrapped around TableLink, TableSubText or CopyableText measures the');
+  console.log("child's clipped width, not its content, so it hides its own control and would");
+  console.log('expand into a box that is still cut. Pass reveal="always" or the child\'s wrap:');
+  show(nestedClips, (r) => `${r.file}:${r.line}`);
+  offenders.push('a reveal around a child that clips itself');
 }
 
 if (bare.length > CSS_TRUNCATION_BASELINE) {
