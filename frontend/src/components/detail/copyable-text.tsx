@@ -1,17 +1,24 @@
 "use client";
 
 import * as React from "react";
-import { Check, Copy } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { copyText } from "@/lib/clipboard";
+import { OverflowText } from "@/components/ui/overflow-text";
 import { cn } from "@/lib/utils";
 
 // A value the operator needs to take somewhere else: a full resource id, an LXD reference, an
-// IP address. Shown in full rather than truncated, with the copy affordance beside it.
+// IP address. Shown in full, with the copy affordance beside it.
 //
-// important: the copy button is icon-only, so `label` is required and becomes its accessible
-// name. check-icon-button-names.mjs enforces that, and an unnamed button in a list of twenty
-// identical rows is unusable by anything but a mouse.
+// It is a preset of components/ui/overflow-text.tsx rather than its own implementation, and the
+// direction of that composition is the point. This component used to render its value in a
+// `truncate` span with the whole string on a `title` attribute, which meant that on a narrow
+// viewport the reveal at the centre of every detail dialog was itself clipped, and reachable
+// only by hovering a mouse over it. RecordDetailDialog renders its required `recordId` through
+// here, DetailField renders `copyable` through here, and DetailListDialog renders every row
+// through here, so that one clip was the last line of defence failing on every surface at once:
+// the dialog opened to show what a table had hidden was hiding it again.
+//
+// note: `lines="none"` is what fixes it. A detail surface has the room, so the value wraps and
+// is readable with no interaction at all, rather than asking for a second click to see
+// something that would have fitted.
 //
 // note: it reports the result through `onCopied` instead of announcing it itself. A list can
 // render fifty of these, and fifty live regions is fifty announcements competing to be read.
@@ -27,39 +34,17 @@ interface CopyableTextProps {
 }
 
 export function CopyableText({ value, label, onCopied, className, children }: CopyableTextProps) {
-  const [copied, setCopied] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!copied) return;
-    const timer = window.setTimeout(() => setCopied(false), 1500);
-    return () => window.clearTimeout(timer);
-  }, [copied]);
-
-  const handleCopy = async () => {
-    const ok = await copyText(value);
-    setCopied(ok);
-    onCopied?.(ok);
-  };
-
   return (
-    <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
-      <span className="min-w-0 truncate font-mono text-sm" title={value}>
-        {children ?? value}
-      </span>
-      <Button
-        type="button"
-        variant="ghost"
-        size="icon"
-        className="h-6 w-6 shrink-0"
-        onClick={handleCopy}
-        aria-label={`Copy ${label}`}
-      >
-        {copied ? (
-          <Check className="h-3.5 w-3.5 text-success" aria-hidden="true" />
-        ) : (
-          <Copy className="h-3.5 w-3.5" aria-hidden="true" />
-        )}
-      </Button>
-    </span>
+    <OverflowText
+      value={value}
+      label={label}
+      lines="none"
+      mono
+      copy="always"
+      onCopied={onCopied}
+      className={cn("text-sm", className)}
+    >
+      {children}
+    </OverflowText>
   );
 }
