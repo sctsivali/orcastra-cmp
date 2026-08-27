@@ -99,9 +99,12 @@ function ClusterMembersContent() {
   const isClustered = membersData?.is_clustered || false;
   const nodeName = membersData?.node || "";
   
+  // note: gated on the modal. Without it this kept polling a live per-member read in the
+  // background for a panel nobody had open.
   const { data: memberResources, isLoading: isLoadingResources } = useMemberResources(
     node,
-    selectedMember || ""
+    selectedMember || "",
+    { enabled: isModalOpen },
   );
   
   const handleMemberClick = (memberName: string) => {

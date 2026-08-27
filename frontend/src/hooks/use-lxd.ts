@@ -4,7 +4,7 @@
 
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { 
   vmAPI, 
@@ -17,10 +17,14 @@ import {
 } from "@/lib/api";
 import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse } from "@/types";
 import {
+  ATTENDED_DATA_CONFIG,
   DYNAMIC_DATA_CONFIG,
   ON_DEMAND_CONFIG,
+  POLL_MS,
   SEMI_STATIC_DATA_CONFIG,
   STATIC_DATA_CONFIG,
+  backingOffInterval,
+  jitter,
 } from "@/lib/query-config";
 
 // Query Keys
@@ -106,6 +110,10 @@ export function useVMs(host?: string, status?: string) {
   return useQuery({
     queryKey: [...queryKeys.vms, { host, status }],
     queryFn: () => vmAPI.list(host, status),
+    // Matched to the 180s backend response cache: capacity and state move without
+    // anyone acting in this console, so a manual button alone was not enough.
+    refetchInterval: jitter(POLL_MS.fleet),
+    refetchIntervalInBackground: false,
     ...STATIC_DATA_CONFIG, // Cache for 3min; manual refresh via button
   });
 }
@@ -233,6 +241,10 @@ export function useImages(host?: string) {
       return imageAPI.listAll({ fresh });
     },
     // Always enabled - fetches all images when host is undefined, or filtered when host is provided
+    // Matched to the 180s backend response cache: capacity and state move without
+    // anyone acting in this console, so a manual button alone was not enough.
+    refetchInterval: jitter(POLL_MS.fleet),
+    refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -259,14 +271,25 @@ export function useRemoteImages() {
 
 // Nodes Hooks
 export function useNodesStatus() {
+  // note: lazy initialiser, so the cadence is fixed per hook instance rather than wandering
+  // on every render. Jitter keeps a page of cards from missing an expired TTL in one burst.
+  const [fleetInterval] = useState(() => jitter(POLL_MS.fleet));
   return useRefreshableQuery({
     queryKey: queryKeys.nodes,
     queryFn: ({ fresh }) => nodeAPI.status({ fresh }),
-    refetchInterval: 3600000, // Check node status every 1 hour (3600 seconds)
-    staleTime: 60000, // Consider data stale after 1 minute
+    // important: this was 3600000. One hour, against a backend that caches the same body for
+    // 180s, so every number sourced from /nodes was up to an hour old and the cluster cards
+    // simply did not move. Matched to the server TTL: polling faster cannot produce a newer
+    // number, it returns the identical cached body.
+    refetchInterval: fleetInterval,
+    refetchIntervalInBackground: false,
+    staleTime: POLL_MS.fleet / 2,
     retry: 3,
     refetchOnWindowFocus: false,
-    refetchOnMount: 'always', // Always refetch on mount to ensure fresh data after registration
+    // note: was 'always', which fired a full fan-out on every mount even seconds after the
+    // last one. The sidebar prefetches this key on hover, so sweeping the nav produced a
+    // request per hover. Registration freshness comes from the invalidations, not from here.
+    refetchOnMount: true,
   });
 }
 
@@ -295,11 +318,10 @@ export function useNodeAvailability() {
   return useRefreshableQuery({
     queryKey: queryKeys.nodeAvailability,
     queryFn: ({ fresh }) => nodeAPI.availability({ fresh }),
-    staleTime: 30000,
-    refetchInterval: 60000,
-    refetchIntervalInBackground: false,
-    refetchOnWindowFocus: false,
-    retry: 1,
+    // note: this hand-rolled set was character for character the attended tier. Using the
+    // preset keeps the one place a 60s cadence is defined from drifting away from the
+    // 45s backend TTL it is matched to.
+    ...ATTENDED_DATA_CONFIG,
   });
 }
 
@@ -340,12 +362,23 @@ export function useInvalidateAllNodesCache() {
   });
 }
 
-export function useNodeResources(nodeName: string) {
+/**
+ * Live resources for one cluster, for a surface someone is looking at right now.
+ *
+ * important: GET /nodes/{node}/resources is uncached on the backend, so every poll is a real
+ * call into that one cluster. Gate it on the panel being open, and back off geometrically once
+ * it starts failing rather than holding a dead host on a connect timeout forever. The query key
+ * is per node, which is the only place a per-cluster back-off is even expressible: /nodes is
+ * one fan-out and cannot back off for a single member of it.
+ */
+export function useNodeResources(nodeName: string, opts?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ["nodeResources", nodeName],
     queryFn: () => nodeAPI.resources(nodeName),
-    enabled: !!nodeName,
-    ...STATIC_DATA_CONFIG,
+    ...DYNAMIC_DATA_CONFIG,
+    enabled: (opts?.enabled ?? true) && !!nodeName,
+    refetchInterval: backingOffInterval(POLL_MS.active),
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -874,6 +907,10 @@ export function useStoragePools(host?: string) {
       };
     },
     // Always enabled - fetches all pools when host is undefined
+    // Matched to the 180s backend response cache: capacity and state move without
+    // anyone acting in this console, so a manual button alone was not enough.
+    refetchInterval: jitter(POLL_MS.fleet),
+    refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
@@ -924,6 +961,10 @@ export function useStorageVolumes(pool?: string, host?: string) {
   return useRefreshableQuery({
     queryKey: ["storageVolumes", pool, host],
     queryFn: ({ fresh }) => api.storageVolumes.list(host, pool, { fresh }),
+    // Matched to the 180s backend response cache: capacity and state move without
+    // anyone acting in this console, so a manual button alone was not enough.
+    refetchInterval: jitter(POLL_MS.fleet),
+    refetchIntervalInBackground: false,
     // Always enabled - fetches all volumes when pool/host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -966,6 +1007,10 @@ export function useNetworks(host?: string) {
   return useRefreshableQuery({
     queryKey: ["networks", host],
     queryFn: ({ fresh }) => api.networks.list(host, { fresh }),
+    // Matched to the 180s backend response cache: capacity and state move without
+    // anyone acting in this console, so a manual button alone was not enough.
+    refetchInterval: jitter(POLL_MS.fleet),
+    refetchIntervalInBackground: false,
     // Always enabled - fetches all networks when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1107,7 +1152,9 @@ export function useInstances(host?: string, opts?: { realtime?: boolean }) {
     // without a manual refresh. When `realtime` is set (instances page), polling
     // is disabled and the list is kept current via the LXD events stream
     // (see useInstanceStream) — the query just provides the initial snapshot.
-    refetchInterval: opts?.realtime ? false : 10000,
+    // note: was 10000 against a 30s backend TTL, so two of every three polls returned the
+    // identical cached body. false when the events WebSocket is driving this key instead.
+    refetchInterval: opts?.realtime ? false : POLL_MS.active,
     refetchIntervalInBackground: false,
   });
 }
@@ -1333,6 +1380,10 @@ export function useClusterMembers(node: string) {
   return useRefreshableQuery({
     queryKey: ["clusterMembers", node],
     queryFn: ({ fresh }) => api.clusterMembers.list(node, { fresh }),
+    // Matched to the 180s backend response cache: capacity and state move without
+    // anyone acting in this console, so a manual button alone was not enough.
+    refetchInterval: jitter(POLL_MS.fleet),
+    refetchIntervalInBackground: false,
     enabled: !!node,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1347,15 +1398,23 @@ export function useClusterMember(node: string, memberName: string) {
   });
 }
 
-export function useMemberResources(node: string, memberName: string) {
+export function useMemberResources(
+  node: string,
+  memberName: string,
+  opts?: { enabled?: boolean },
+) {
   return useRefreshableQuery({
     queryKey: ["memberResources", node, memberName],
     // note: getResources routes through the extended fan-out budget, which was unreachable
     // from the UI while this hook never passed a fresh flag.
     queryFn: ({ fresh }) => api.clusterMembers.getResources(node, memberName, { fresh }),
-    enabled: !!node && !!memberName,
+    // note: gated so a closed modal stops polling. The backend caches this for 60s, so the
+    // interval matches: anything faster returns the same body.
+    enabled: (opts?.enabled ?? true) && !!node && !!memberName,
     staleTime: 30 * 1000, // 30 seconds
     gcTime: 5 * 60 * 1000, // 5 minutes
+    refetchInterval: backingOffInterval(POLL_MS.attended),
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -1364,6 +1423,10 @@ export function useClusters(fresh: boolean = false) {
   return useRefreshableQuery({
     queryKey: ["clusters", { fresh }],
     queryFn: ({ fresh: manual }) => api.clusters.list(fresh || manual),
+    // Matched to the 180s backend response cache: capacity and state move without
+    // anyone acting in this console, so a manual button alone was not enough.
+    refetchInterval: jitter(POLL_MS.fleet),
+    refetchIntervalInBackground: false,
     ...SEMI_STATIC_DATA_CONFIG,
     staleTime: 0, // Always consider stale to ensure fresh data after deletion
     refetchOnMount: 'always', // Always refetch on mount to ensure fresh data after registration/deletion

@@ -440,6 +440,9 @@ export interface NodeResources {
   }>;
   /** Detected hardware. Absent when the node did not answer, which is not the same as empty. */
   hardware?: HardwareProfile | null;
+  /** When this sample was read off the cluster. Absent means unknown, which must never
+   * be rendered as "now": a body cached before this field existed carries no stamp. */
+  collected_at?: string | null;
 }
 
 // LXD Node Environment Information (from LXD API)
@@ -506,6 +509,9 @@ export interface NodeStatus {
 export interface NodesStatusResponse {
   nodes: NodeStatus[];
   all_connected: boolean;
+  /** When this fan-out was built. Covers nodes that never answered and so carry no
+   * resources of their own. */
+  collected_at?: string | null;
 }
 
 // Project Information
@@ -904,6 +910,8 @@ export interface MemberResources {
   }>;
   instances_count: number;
   instances_running: number;
+  /** When this sample was read off the cluster. Absent means unknown, never "now". */
+  collected_at?: string | null;
 }
 
 export interface ClusterInfo {

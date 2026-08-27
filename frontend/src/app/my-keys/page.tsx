@@ -53,6 +53,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAllProjects, useNodesStatus } from "@/hooks/use-lxd";
 import { api } from "@/lib/api";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { KeyInfo, KeyCreateRequest } from "@/types/api";
@@ -152,20 +153,17 @@ function MyKeysContent() {
     [filters.filteredRows, sortItems],
   );
 
-  // Fetch nodes for dropdown
-  const { data: nodesData } = useQuery({
-    queryKey: ["nodes"],
-    queryFn: () => api.nodes.status() });
+  // Fetch nodes for dropdown.
+  // note: through the owning hooks. These were bare useQuery calls on ["nodes"] and
+  // ["projects"] with no options, so their freshness depended on another component being
+  // mounted, and ["projects"] was a fourth alias for queryKeys.allProjects besides.
+  const { data: nodesData } = useNodesStatus();
 
-  const nodes = (nodesData as any)?.nodes || [];
-  const nodeNames = nodes
-    .filter((n: any) => n.connected)
-    .map((n: any) => n.name);
+  const nodes = nodesData?.nodes ?? [];
+  const nodeNames = nodes.filter((n) => n.connected).map((n) => n.name);
 
   // Fetch projects for dropdown
-  const { data: projectsData, isLoading: projectsLoading } = useQuery({
-    queryKey: ["projects"],
-    queryFn: () => api.projects.listAll() });
+  const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
 
   // Flatten projects from all hosts
   const projects = projectsData 

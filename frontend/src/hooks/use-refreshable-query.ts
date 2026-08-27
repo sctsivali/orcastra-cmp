@@ -45,7 +45,17 @@ export function useRefreshableQuery<TData, TError = Error>(
 
   const query = useQuery({
     ...rest,
-    queryFn: () => queryFn({ fresh: freshRef.current }),
+    // important: consumed, not merely read. The flag used to stay raised for the whole
+    // duration of a manual run, which was harmless while almost nothing here had a
+    // refetchInterval. Now that these queries poll, a tick landing inside that window would
+    // also send fresh=true: a second fan-out, and a second unit of the operator's 12-per-minute
+    // forced-refresh budget, neither of which anyone asked for. Only the fetch the click
+    // actually started carries the bypass.
+    queryFn: () => {
+      const fresh = freshRef.current;
+      freshRef.current = false;
+      return queryFn({ fresh });
+    },
   } as UseQueryOptions<TData, TError, TData>) as UseQueryResult<TData, TError>;
 
   const { refetch } = query;
@@ -57,6 +67,8 @@ export function useRefreshableQuery<TData, TError = Error>(
       // into query.error, where every current call site ignores it
       await refetch({ throwOnError: true });
     } finally {
+      // note: still reset here for the case where no fetch started at all (deduped by an
+      // in-flight request), which would otherwise leave the flag raised for the next tick.
       freshRef.current = false;
     }
   }, [refetch]);

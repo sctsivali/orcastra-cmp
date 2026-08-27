@@ -4,7 +4,7 @@ export * from "./vm-table";
 export * from "./vm-create-form";
 export * from "./project-create-form";
 export * from "./node-status";
-export * from "./node-detail-modal";
+export * from "./node-detail/node-detail-modal";
 export * from "./stats-overview";
 export * from "./instance-detail/instance-detail-dialog";
 export * from "./sidebar/sidebar";

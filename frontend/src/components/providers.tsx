@@ -10,6 +10,7 @@ import { AuthProvider } from "./auth-provider";
 import { NavigationProgressProvider } from "./navigation/navigation-progress";
 import { RouteIntentProvider } from "./navigation/route-intent";
 import { APIError } from "@/types";
+import { POLL_MS } from "@/lib/query-config";
 import { onTokenRefreshed } from "@/lib/api";
 
 /**
@@ -38,7 +39,7 @@ function QueryInvalidationBridge() {
 }
 
 function makeQueryClient() {
-  return new QueryClient({
+  const client = new QueryClient({
     defaultOptions: {
       queries: {
         // Increase staleTime to reduce refetching
@@ -62,6 +63,22 @@ function makeQueryClient() {
       },
     },
   });
+
+  // important: liveness belongs to the key, not to whichever component happens to be mounted.
+  // Three pages subscribed to ["nodes"] with no options at all, so whether their numbers moved
+  // depended on the dashboard being open in the same tab session. Those call sites now go
+  // through the owning hooks; this is the net underneath, so a future one that forgets still
+  // polls. Observer options always win over these, so it cannot fight an explicit hook.
+  client.setQueryDefaults(["nodes"], {
+    refetchInterval: POLL_MS.fleet,
+    refetchIntervalInBackground: false,
+  });
+  client.setQueryDefaults(["instances"], {
+    refetchInterval: POLL_MS.active,
+    refetchIntervalInBackground: false,
+  });
+
+  return client;
 }
 
 let browserQueryClient: QueryClient | undefined = undefined;

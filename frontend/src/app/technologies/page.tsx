@@ -1,15 +1,13 @@
 "use client";
 
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
+import { useNodesStatus } from "@/hooks/use-lxd";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { api } from "@/lib/api";
-import type { NodeStatus } from "@/types/api";
 import { HardwareAggregate, buildHardwareCategories } from "./components/hardware-aggregate";
 import { NodeHardwareList } from "./components/node-hardware-list";
 import { SoftwareInventory } from "./components/software-inventory";
@@ -26,10 +24,11 @@ function PageHeader() {
 }
 
 export default function TechnologiesPage() {
-  const { data: nodesResponse, isLoading, isError, refetch } = useQuery<{ nodes: NodeStatus[]; all_connected: boolean }>({
-    queryKey: ["nodes"],
-    queryFn: () => api.nodes.status(),
-  });
+  // important: through the owning hook, not a bare useQuery on the same key. This page
+  // subscribed to ["nodes"] with no options at all, so whether its hardware totals ever
+  // refreshed depended on whether some other component happened to be mounted in the same
+  // tab session to carry the interval.
+  const { data: nodesResponse, isLoading, isError, refetch } = useNodesStatus();
 
   const nodes = nodesResponse?.nodes || [];
   const hardwareInfo = React.useMemo(() => buildHardwareCategories(nodes), [nodes]);

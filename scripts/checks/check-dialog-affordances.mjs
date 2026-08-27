@@ -40,7 +40,8 @@ const BADGE_ONCLICK_BASELINE = 6;
 // instance-monitoring-modal was replaced, then 6 when the warnings page's inline dialog
 // moved into a shared component, then 5 when the two groups modals merged into one. That is
 // what a falling ratchet is supposed to look like.
-// node-detail-modal is the next one scheduled.
+// node-detail-modal was converted with the live-stats work: it now uses DialogBody so the
+// cluster name and its data-age line stay pinned while a long storage list scrolls.
 // Lower it when you convert one to DialogBody.
 const DIALOG_SCROLL_BASELINE = 5;
 

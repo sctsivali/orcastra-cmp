@@ -39,10 +39,13 @@ import { useNodesStatus, useUpdateNodeTags, useUpdateNodeDisplayName } from "@/h
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { cn } from "@/lib/utils";
 import { clusterStatusMeta } from "@/lib/cluster-status";
-import { NodeDetailModal } from "./node-detail-modal";
+import { NodeDetailModal } from "./node-detail/node-detail-modal";
+import { useLiveRecord } from "@/hooks/use-live-record";
 import { NodeStatusCard } from "./node-status/node-status-card";
 import { TagManager, TagFilter } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
+
+const nodeId = (node: NodeStatus) => node.name;
 
 function LoadingSkeleton() {
   return (
@@ -77,9 +80,21 @@ interface NodeStatusCardsProps {
 
 export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsProps) {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNodesStatus();
-  const [selectedNode, setSelectedNode] = useState<NodeStatus | null>(null);
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // important: the id, not the row. Storing the clicked NodeStatus object here meant the open
+  // dialog rendered a photograph taken at click time: the list kept polling underneath and the
+  // numbers behind the dialog moved while the ones inside it did not.
+  const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+
+  // note: data.nodes, not filteredNodes. The grid filters to connected && server_version, so a
+  // cluster dropping offline would vanish from the filtered list and blank the open dialog.
+  // Selecting from the raw list keeps it alive and lets it report that the cluster went
+  // offline, which is the thing an operator opened it to find out.
+  const { record: selectedNode, isOrphaned } = useLiveRecord(
+    data?.nodes,
+    selectedNodeName,
+    nodeId,
+  );
 
   // Collect all unique tags from nodes
   const allTags = useMemo(() => {
@@ -106,15 +121,9 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
     });
   }, [data?.nodes, selectedTags]);
 
-  const handleViewDetails = (node: NodeStatus) => {
-    setSelectedNode(node);
-    setIsModalOpen(true);
-  };
+  const handleViewDetails = (node: NodeStatus) => setSelectedNodeName(node.name);
 
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setSelectedNode(null);
-  };
+  const handleCloseModal = () => setSelectedNodeName(null);
 
   if (isLoading) {
     return <LoadingSkeleton />;
@@ -163,8 +172,10 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
       </div>
 
       <NodeDetailModal
+        isOpen={selectedNodeName !== null}
+        isOrphaned={isOrphaned}
+        listCollectedAt={data?.collected_at}
         node={selectedNode}
-        isOpen={isModalOpen}
         onClose={handleCloseModal}
       />
     </>

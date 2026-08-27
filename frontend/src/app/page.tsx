@@ -1,41 +1,26 @@
 "use client";
 
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
 import { Server, Database, Cloud, Zap, Shield, TrendingUp, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api } from "@/lib/api";
 import { useCounterAnimation } from "@/hooks/use-counter-animation";
-import { STATIC_DATA_CONFIG, DYNAMIC_DATA_CONFIG } from "@/lib/query-config";
 import { usePersonalization } from "@/components/personalization-provider";
 import { usePermissions } from "@/hooks/use-permissions";
-import { queryKeys } from "@/hooks/use-lxd";
+import { useAllProjects, useInstances, useNodesStatus } from "@/hooks/use-lxd";
 
 export default function HomePage() {
   const { settings } = usePersonalization();
   const { isPartner } = usePermissions();
   
-  // use canonical query keys so cache is shared with dashboard/inventory pages
-  const { data: nodesData, isLoading: isLoadingNodes } = useQuery({
-    queryKey: queryKeys.nodes,
-    queryFn: () => api.nodes.status(),
-    ...STATIC_DATA_CONFIG, // Nodes status rarely changes, use static config
-  });
-
-  const { data: vmsData, isLoading: isLoadingVMs } = useQuery({
-    queryKey: ["instances", undefined],
-    queryFn: () => api.instances.list(),
-    ...DYNAMIC_DATA_CONFIG, // Instances change frequently
-  });
-
-  const { data: projectsData, isLoading: isLoadingProjects } = useQuery({
-    queryKey: queryKeys.allProjects,
-    queryFn: () => api.projects.listAll(),
-    ...STATIC_DATA_CONFIG, // Projects rarely change
-  });
+  // important: through the owning hooks. These were three bare useQuery calls on the same keys
+  // with different options, so whether the counters on this page moved depended on which other
+  // component happened to be mounted in the same tab session to carry the interval.
+  const { data: nodesData, isLoading: isLoadingNodes } = useNodesStatus();
+  const { data: vmsData, isLoading: isLoadingVMs } = useInstances();
+  const { data: projectsData, isLoading: isLoadingProjects } = useAllProjects();
 
   const totalNodes = nodesData?.nodes?.length || 0;
   // Only count nodes as connected if they are authenticated (has server_version)
