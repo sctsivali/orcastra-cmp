@@ -195,6 +195,14 @@ async def get_regions_overview(
 
                 tenant_acl = get_tenant_acl()
 
+                # important: a cluster that answered but whose resource read failed is reported
+                # ONLINE with an all-zero hardware profile, and its zeros are then summed into
+                # the fleet totals. Caching that pins a silently shrunken fleet for the full
+                # 120s. Recording the failure here lets the write below decline, the same way
+                # the monitoring dashboard declines to cache a no-cluster-answered body.
+                # note: set.add from the thread pool is safe under the GIL.
+                degraded_clusters: Set[str] = set()
+
                 # process single cluster (runs in thread pool for parallelism)
                 def _process_cluster(cluster_id: str) -> Optional[Tuple[str, Dict, RegionNodeInfo, int, int]]:
                     """Fetch metadata + resources for one cluster. Returns (region_id, region_data, node_info, inst_count, inst_running) or None."""
@@ -322,6 +330,7 @@ async def get_regions_overview(
                                     )
                                 except Exception as e:
                                     logger.warning(f"Could not get resources for {cluster_id}: {e}")
+                                    degraded_clusters.add(cluster_id)
                             else:
                                 status = ClusterStatus.OFFLINE
                         except Exception as e:
@@ -407,7 +416,13 @@ async def get_regions_overview(
                     collected_at=datetime.now(timezone.utc),
                 )
         
-                cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
+                if degraded_clusters:
+                    logger.warning(
+                        "Not caching regions overview: %s answered but did not report resources",
+                        ", ".join(sorted(degraded_clusters)),
+                    )
+                else:
+                    cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
                 # important: mark only a rebuild that finished. In the finally below this
                 # also ran when the build raised, so the next waiter believed a rebuild had
                 # completed and served the cache it had asked to bypass.
