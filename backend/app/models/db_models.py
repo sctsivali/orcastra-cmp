@@ -614,10 +614,13 @@ class SessionAuditLog(Base):
         Integer, ForeignKey("break_glass_grants.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
-    # Session metrics (populated on disconnect events)
-    duration_seconds = Column(Integer, nullable=True, comment="Total session duration in seconds")
-    download_bytes = Column(Integer, nullable=True, comment="Total bytes downloaded by user")
-    upload_bytes = Column(Integer, nullable=True, comment="Total bytes uploaded by user")
+    # Session metrics (populated on disconnect events).
+    # important: 64-bit. A console session past 2 GiB overflowed a 32-bit column, and
+    # because the disconnect row is written fire-and-forget the failure was silent -
+    # the session lost its duration and totals entirely. See migration 015.
+    duration_seconds = Column(BigInteger, nullable=True, comment="Total session duration in seconds")
+    download_bytes = Column(BigInteger, nullable=True, comment="Total bytes downloaded by user")
+    upload_bytes = Column(BigInteger, nullable=True, comment="Total bytes uploaded by user")
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
