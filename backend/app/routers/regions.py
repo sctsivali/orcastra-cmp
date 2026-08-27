@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Optional, Set, Tuple
 import logging
 import asyncio
+from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd_service import LXDService, get_lxd_service
@@ -186,6 +187,7 @@ async def get_regions_overview(
                     response = RegionsOverviewResponse(
                         regions=[], total_nodes=0, total_instances=0,
                         total_cpu=0, total_memory=0, total_storage=0, total_gpu=0,
+                        collected_at=datetime.now(timezone.utc),
                     )
                     cache.set("api_responses", cache_key, response.model_dump(), ttl=120)
                     mark_rebuilt(_lock_key)
@@ -399,6 +401,10 @@ async def get_regions_overview(
                     total_cpu=total_cpu, total_memory=total_memory,
                     total_storage=total_storage, total_gpu=total_gpu,
                     total_gpu_cards=total_gpu_cards, total_gpu_integrated=total_gpu_integrated,
+                    # important: when the fan-out finished, carried through the 120s
+                    # cache. Restamping on the cached read would make this map claim to
+                    # be current every time anyone looked at it.
+                    collected_at=datetime.now(timezone.utc),
                 )
         
                 cache.set("api_responses", cache_key, response.model_dump(), ttl=120)

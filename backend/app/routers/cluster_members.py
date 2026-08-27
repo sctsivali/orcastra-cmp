@@ -6,6 +6,7 @@ Provides endpoints for listing cluster members in a MicroCloud setup.
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Optional
 import logging
+from datetime import datetime, timezone
 
 from app.services.lxd_service import (
     LXDService,
@@ -297,6 +298,8 @@ async def get_member_resources(
         
         # Get resources for this specific member by targeting it
         member_resources_response = client.api.resources.get(params={"target": member_name})
+        # important: stamped at the read, then carried through the 60s cache untouched.
+        collected_at = datetime.now(timezone.utc)
         member_resources = member_resources_response.json().get("metadata", {})
         
         # Extract CPU resources
@@ -444,6 +447,7 @@ async def get_member_resources(
             storage_pools=storage_pools,
             instances_count=instances_count,
             instances_running=instances_running,
+            collected_at=collected_at,
         )
         
         # Cache the result

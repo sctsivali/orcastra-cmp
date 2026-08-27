@@ -600,6 +600,7 @@ class NodeResources(BaseModel):
     storage_available: int = Field(0, description="Available storage in bytes")
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
     hardware: Optional[HardwareProfile] = Field(None, description="Detected hardware, identifier-stripped. None when the node did not answer, which must not look like an empty profile")
+    collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
 
 
 class MemberResources(BaseModel):
@@ -631,6 +632,7 @@ class MemberResources(BaseModel):
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
     instances_count: int = Field(0, description="Number of instances on this member")
     instances_running: int = Field(0, description="Number of running instances")
+    collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
 
 
 class NodeStatus(BaseModel):
@@ -689,6 +691,7 @@ class NodesStatusResponse(BaseModel):
     """Response for node status check."""
     nodes: List[NodeStatus]
     all_connected: bool
+    collected_at: Optional[datetime] = Field(None, description="When this fan-out was built. Per-node sample times live on NodeResources.collected_at; this one also covers nodes that never answered and so carry no resources at all")
 
 
 class ClusterAvailability(BaseModel):
@@ -1535,6 +1538,7 @@ class RegionsOverviewResponse(BaseModel):
     total_gpu: int = Field(0)
     total_gpu_cards: int = Field(0)
     total_gpu_integrated: int = Field(0)
+    collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
 
 
 class UserTagVisibilitySettings(BaseModel):

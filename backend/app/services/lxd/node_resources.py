@@ -6,6 +6,7 @@ built here so a new field can never be added to one path and forgotten on anothe
 """
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import pylxd
@@ -50,6 +51,9 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
         storage_available=resources_data.get("storage_available", 0),
         storage_pools=resources_data.get("storage_pools", []),
         hardware=resources_data.get("hardware"),
+        # note: carried, never minted here. This function runs on the cached path too, and a
+        # datetime.now() at this line would stamp a 60s-old body as current.
+        collected_at=resources_data.get("collected_at"),
     )
 
 
@@ -130,6 +134,11 @@ def aggregate_microcloud_resources(
             # One profile per member, folded after the loop. A cluster row must not present
             # one member's motherboard as the cluster's.
             member_hardware = []
+            # important: an aggregate is only as fresh as its stalest input, so this
+            # collects every member's read time and folds with min() below. Stamping
+            # now() here would report a cluster as current on the strength of whichever
+            # member happened to answer last.
+            member_read_times = []
             total_storage = 0
             total_storage_available = 0
             storage_pools_map = {}
@@ -161,6 +170,7 @@ def aggregate_microcloud_resources(
                         # Get resources for this specific member by targeting it
                         # The LXD API allows targeting specific cluster members
                         member_resources_response = client.api.resources.get(params={"target": member_name})
+                        member_read_times.append(datetime.now(timezone.utc))
                         member_resources = member_resources_response.json().get("metadata", {})
                         
                         # Extract CPU resources
@@ -314,6 +324,7 @@ def aggregate_microcloud_resources(
                 storage_available=total_storage_available,
                 storage_pools=storage_pools_list,
                 hardware=merge_hardware_profiles(member_hardware),
+                collected_at=min(member_read_times) if member_read_times else None,
             )
             
             logger.info(

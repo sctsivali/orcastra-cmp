@@ -38,6 +38,18 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_timestamp(value: Any) -> Optional[datetime]:
+    """Accept the datetime or the ISO string a cached body round-trips to."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _short(message: Optional[str]) -> Optional[str]:
     if not message:
         return None
@@ -71,6 +83,7 @@ def _availability(
     auth: Optional[str] = None,
     error: Optional[str] = None,
     node_type: Optional[str] = None,
+    collected_at: Optional[datetime] = None,
 ) -> ClusterAvailability:
     # important: `error` is deliberately NOT forwarded to derive_status here. Raw exception
     # text from this layer carries the Vault base URL, the KV path to a cluster's certs and the
@@ -88,7 +101,11 @@ def _availability(
         reason_code=reason_code,
         reason=None if status == ClusterStatus.ONLINE else _short(message),
         node_type=node_type,
-        checked_at=_now(),
+        # important: _now() only when the caller genuinely just checked. The projection
+        # path below replays an already-cached /nodes body, and stamping it now reported
+        # "checked just now" for data up to three minutes old, on the one field that
+        # exists to say otherwise.
+        checked_at=collected_at or _now(),
     )
 
 
@@ -99,6 +116,9 @@ def project_from_nodes_body(body: Dict[str, Any]) -> List[ClusterAvailability]:
     for the fan-out, the picker rides it for the cost of one Redis read.
     """
     rows: List[ClusterAvailability] = []
+    # The batch stamp covers offline nodes too, which carry no resources and so have no
+    # sample time of their own. Absent on a pre-v5 body, which correctly falls back to now.
+    body_collected_at = _parse_timestamp(body.get("collected_at"))
     for node in body.get("nodes", []) or []:
         name = node.get("name")
         if not name:
@@ -113,6 +133,7 @@ def project_from_nodes_body(body: Dict[str, Any]) -> List[ClusterAvailability]:
                 auth=node.get("auth"),
                 error=node.get("error"),
                 node_type=node.get("node_type"),
+                collected_at=body_collected_at,
             )
         )
     return rows

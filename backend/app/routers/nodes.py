@@ -96,9 +96,13 @@ async def get_nodes_status(
     # was always empty and its failure logs never appeared once in seven days of production
     # logs. Removed rather than left as dead weight on the hottest read in the app.
 
+    # important: stamped here, where the fan-out finished, and then carried through the cache
+    # verbatim. Restamping on the cached read at the top of this function would report a
+    # three-minute-old body as current, which is the whole failure this field exists to expose.
     response = NodesStatusResponse(
         nodes=statuses,
         all_connected=all(node.connected for node in statuses),
+        collected_at=datetime.now(timezone.utc),
     )
     
     # Cache the response for 180 seconds (enterprise TTL)

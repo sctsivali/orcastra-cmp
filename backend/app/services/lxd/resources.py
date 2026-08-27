@@ -263,6 +263,10 @@ class ResourceManager:
                 # memory figures above came from. Two samples for one fact is how the GPU
                 # counts came to disagree across endpoints.
                 "hardware": build_hardware_profile(resources_data),
+                # important: the moment the body came off the cluster, not the moment a client
+                # read it back. Everything downstream must carry this through rather than
+                # restamp, or a body served from a 180s cache claims to be current.
+                "collected_at": live.collected_at,
             }
             
         except Exception as e:
