@@ -34,9 +34,11 @@ import {
   TooltipTrigger } from "@/components/ui/tooltip";
 import { Loader2, XCircle, Unplug } from "lucide-react";
 import { useOperations } from "@/hooks/use-lxd";
+import { useLiveRecord } from "@/hooks/use-live-record";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { toast } from "@/hooks/use-toast";
 import { API_URL, getAccessToken } from "@/lib/api";
+import type { OperationInfo } from "@/types/api";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { formatDateTime, formatLabel} from "@/lib/utils";
@@ -110,10 +112,23 @@ function OperationsContent() {
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
-  const operations = useMemo(() => (data as any)?.operations || [], [data]);
+  const operations: OperationRow[] = useMemo(
+    () => ((data as any)?.operations as OperationRow[]) || [],
+    [data],
+  );
   const nodes = (data as any)?.nodes || [];
   
-  const [detailOperation, setDetailOperation] = useState<{ operation: any; instanceName?: string } | null>(null);
+  // note: the id, not the row. Operations are the clearest case for re-deriving: the list
+  // polls every 15s and an operation's status changes underneath an open dialog, then the
+  // operation completes and leaves the list entirely.
+  const [detailOperation, setDetailOperation] = useState<{ id: string; instanceName?: string } | null>(null);
+  // important: keeps the last known row when the operation finishes and leaves the list.
+  // Snapping the dialog shut mid-read is a worse failure than the freeze it replaces.
+  const { record: liveOperation } = useLiveRecord(
+    operations,
+    detailOperation?.id ?? null,
+    operationId,
+  );
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [killingId, setKillingId] = useState<string | null>(null);
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -371,7 +386,7 @@ function OperationsContent() {
                           {(expanded) => (
                             <TableLink
                               wrap={expanded}
-                              onClick={() => setDetailOperation({ operation, instanceName })}
+                              onClick={() => setDetailOperation({ id: operation.id, instanceName })}
                               aria-label={`Show details for operation ${operation.id}`}
                             >
                               {operation.id}
@@ -464,7 +479,7 @@ function OperationsContent() {
       </Card>
 
       <OperationDetailDialog
-        operation={detailOperation?.operation ?? null}
+        operation={liveOperation}
         instanceName={detailOperation?.instanceName}
         open={!!detailOperation}
         onOpenChange={(next) => {
@@ -477,6 +492,11 @@ function OperationsContent() {
 
 // The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
 // imports. Suspense is required because useTableFilters reads useSearchParams.
+/** Row shape the operations table and its detail dialog share. */
+type OperationRow = OperationInfo & { node_name?: string; project?: string };
+
+const operationId = (operation: OperationRow) => operation.id;
+
 export default function OperationsPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 
