@@ -20,7 +20,7 @@ Endpoints:
 import asyncio
 import logging
 from typing import Optional, List
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends, Response
 from pydantic import BaseModel, Field
 import websockets
 from websockets import State as WebSocketState
@@ -31,6 +31,8 @@ from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws, verif
 from app.services.console_service import get_console_service
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
+from app.services.session_models import new_session_id
+from app.services.session_registry import SESSION_REGISTRY_DEGRADED_HEADER
 from app.core.database import async_session_maker
 from app.models.db_models import SessionAuditLog
 
@@ -185,6 +187,8 @@ class ConsoleSessionStats(BaseModel):
     user: SessionUser = Field(default_factory=SessionUser, description="User info")
     bandwidth: SessionBandwidth = Field(default_factory=SessionBandwidth, description="Bandwidth stats")
     connection_status: str = Field("connected", description="Connection status")
+    target_org_slug: Optional[str] = Field(None, description="Organization owning the target cluster")
+    is_break_glass: bool = Field(False, description="Session opened under a break-glass grant")
 
 
 # ============ Endpoints ============
@@ -198,19 +202,29 @@ class ConsoleSessionStats(BaseModel):
 )
 async def get_session_stats(
     session_id: str,
+    response: Response,
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get real-time session stats - scoped to the authenticated user's own session."""
+    # important: a caller we cannot identify cannot be scoped, so refuse rather than
+    # guess. The email claim is not required by validate_jwt, so this is reachable.
+    if not _rbac.email:
+        raise HTTPException(status_code=403, detail="Token carries no email claim")
+
     tracker = get_session_tracker()
-    session = tracker.get(session_id)
-    
+    # across all workers, not just whichever one answered this request: the socket is
+    # pinned to one process and this poll is not, which is why it used to 404 at random.
+    session, degraded = await tracker.resolve(session_id)
+    if degraded:
+        response.headers[SESSION_REGISTRY_DEGRADED_HEADER] = "1"
+
     if not session:
         raise HTTPException(status_code=404, detail="Session not found or expired")
-    
+
     # enforce user-scoped access (users can only view their own sessions)
-    if session.user_email and _rbac.email and session.user_email != _rbac.email:
+    if session.user_email and session.user_email != _rbac.email:
         raise HTTPException(status_code=404, detail="Session not found or expired")
-    
+
     data = session.to_dict()
     return ConsoleSessionStats(
         session_id=data["session_id"],
@@ -220,6 +234,8 @@ async def get_session_stats(
         protocol=data["protocol"],
         started_at=data["started_at"],
         duration_seconds=data["duration_seconds"],
+        target_org_slug=data["target_org_slug"],
+        is_break_glass=data["is_break_glass"],
         user=SessionUser(**data["user"]),
         bandwidth=SessionBandwidth(**data["bandwidth"]),
         connection_status=data["connection_status"],
@@ -233,19 +249,58 @@ async def get_session_stats(
     dependencies=[Depends(org_scope_dependency)],
 )
 async def list_active_tracked_sessions(
+    response: Response,
     instance_name: Optional[str] = Query(None, description="Filter by instance name"),
     host: Optional[str] = Query(None, description="Filter by host node"),
+    scope: str = Query("self", description="self = your own sessions (default); org = every session on your organization's clusters"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
-    """List active sessions scoped to the authenticated user (data minimization / GDPR)."""
+    """
+    List active console/terminal sessions.
+
+    scope=self (default): the caller's own sessions only (data minimization).
+    scope=org: every live session on clusters in the caller's scope, including a
+    platform admin's break-glass access. Isolation is the caller's own
+    get_user_allowed_clusters set, mirroring /sessions/audit exactly so there is one
+    authorization model here rather than two that can drift apart.
+    """
+    # important: a caller with no email cannot be scoped to "their own" sessions. This
+    # used to pass None straight into a filter that read None as "no filter" and handed
+    # back every session on the worker, across tenants. Refuse instead.
+    if not _rbac.email:
+        raise HTTPException(status_code=403, detail="Token carries no email claim")
+
     if host:
         verify_cluster_access(host)
+
+    allowed_clusters = None
+    user_email = _rbac.email
+    if scope == "org":
+        # important: the REQUEST-scoped set, not a fresh get_user_allowed_clusters(). That
+        # function returns only the org-derived clusters; org_scope_dependency then narrows
+        # it by the tenant ACL and stores the result in the context var, which is the set
+        # verify_cluster_access actually enforces. Calling the function directly skips the
+        # ACL layer, and a live QA run caught exactly that: qa-tenant is a member of the org
+        # owning nuc2 but is narrowed off it by ACL, and saw an admin's break-glass session
+        # on a cluster it cannot reach. Read the enforced set, never recompute a second one.
+        from app.core.org_scope import get_current_allowed_clusters
+        allowed = get_current_allowed_clusters()
+        # admin -> None -> unrestricted. An empty set means the caller owns nothing, which
+        # must match nothing rather than falling open to everything.
+        allowed_clusters = None if allowed is None else (allowed or {"__none__"})
+        user_email = None
+
     tracker = get_session_tracker()
-    sessions = tracker.get_active_sessions(
+    sessions, degraded = await tracker.list_active(
         instance_name=instance_name,
         host=host,
-        user_email=_rbac.email,
+        user_email=user_email,
+        allowed_clusters=allowed_clusters,
     )
+    if degraded:
+        # the shared view is unavailable, so this is one worker's slice of the truth.
+        # Say so rather than let the UI present a short list as the whole picture.
+        response.headers[SESSION_REGISTRY_DEGRADED_HEADER] = "1"
     return [s.to_dict() for s in sessions]
 
 
@@ -272,13 +327,19 @@ async def query_session_audit_logs(
     so no other organization's sessions leak.
     """
     from sqlalchemy import select, desc
-    from app.core.org_scope import get_user_allowed_clusters
+    from app.core.org_scope import get_current_allowed_clusters
 
     async with async_session_maker() as db:
         query = select(SessionAuditLog).order_by(desc(SessionAuditLog.created_at))
 
         if scope == "org":
-            allowed = await get_user_allowed_clusters(_rbac, db)
+            # important: the request-scoped set, which org_scope_dependency has already
+            # narrowed by the tenant ACL. This previously called get_user_allowed_clusters
+            # directly, which returns the org-derived clusters WITHOUT that narrowing, so a
+            # tenant scoped off a cluster by ACL could still read its audit trail. Nothing
+            # in the UI sent scope=org before, so it was unreachable; the Sessions page now
+            # does. Same set verify_cluster_access enforces, computed once.
+            allowed = get_current_allowed_clusters()
             if allowed is not None:
                 # restrict to the caller's own clusters (host == cluster_id); empty -> nothing
                 query = query.where(SessionAuditLog.host.in_(allowed or {"__none__"}))
@@ -900,8 +961,14 @@ class ConsoleProxy:
                 await self._send_error(error)
                 return
             
-            # Register session for tracking
-            session_id = session_info.get("operation_id", f"console-{self.instance_name}-{id(self)}")
+            # Register session for tracking. See new_session_id for why the empty case
+            # matters now that the id is a key shared across workers.
+            session_id = new_session_id(session_info.get("operation_id"), "console")
+            if session_id != session_info.get("operation_id"):
+                logger.warning(
+                    f"LXD returned no operation id for {self.instance_name}@{self.host}; "
+                    f"tracking under {session_id}"
+                )
             self._session = tracker.register(
                 session_id=session_id,
                 instance_name=self.instance_name,
@@ -951,9 +1018,13 @@ class ConsoleProxy:
                 )
                 logger.info(f"Connected to LXD data socket: {self.instance_name}")
                 
-                # Mark session as connected after both sockets are ready
+                # Mark session as connected after both sockets are ready.
+                # via the tracker, not the SessionInfo: a console registers as
+                # CONNECTING and only lands here after two LXD connects with 10s and
+                # 15s timeouts, so this edge has to reach the other workers now rather
+                # than at the next heartbeat.
                 if self._session:
-                    self._session.mark_connected()
+                    get_session_tracker().mark_connected(self._session.session_id)
                 
                 # Note: SPICE doesn't send initial data - it waits for client handshake
                 # We immediately start the proxy to avoid any timeout issues

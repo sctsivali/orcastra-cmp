@@ -244,9 +244,17 @@ async def lifespan(app: FastAPI):
     # Start session tracker cleanup loop
     try:
         from app.services.session_tracker import get_session_tracker
+        from app.services.session_registry import get_session_registry
         session_tracker = get_session_tracker()
         await session_tracker.start_cleanup_loop()
-        logger.info("Session tracker cleanup loop started")
+
+        # important: the Redis client is built HERE and nowhere else. redis.asyncio
+        # binds its pool to the running loop lazily, so one created at import time
+        # attaches to the wrong loop and fails intermittently under load.
+        if settings.redis_enabled:
+            await get_session_registry().connect(settings.redis_url)
+        await session_tracker.start_publisher()
+        logger.info("Session tracker cleanup loop and publisher started")
     except Exception as tracker_err:
         logger.warning(f"Could not start session tracker: {tracker_err}")
     
@@ -300,8 +308,12 @@ async def lifespan(app: FastAPI):
     # Stop session tracker cleanup
     try:
         from app.services.session_tracker import get_session_tracker
-        get_session_tracker().stop_cleanup()
-        logger.info("Session tracker cleanup stopped")
+        from app.services.session_registry import get_session_registry
+        tracker = get_session_tracker()
+        tracker.stop_cleanup()
+        tracker.stop_publisher()
+        await get_session_registry().aclose()
+        logger.info("Session tracker cleanup and publisher stopped")
     except Exception:
         pass
 

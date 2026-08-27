@@ -114,19 +114,31 @@ async def log_session_disconnect(
     )
 
 
-def fire_and_forget_connect(**kwargs) -> None:
-    """Schedule connect audit log as a background task (non-blocking)."""
+# important: asyncio holds only a WEAK reference to a running task. A bare
+# create_task() whose result nobody keeps can be garbage collected before it runs,
+# so a disconnect row - the one carrying duration and byte totals - could simply
+# never be written, silently and unreproducibly. Hold a strong reference until the
+# write finishes.
+_pending: set = set()
+
+
+def _schedule(coro, event: str) -> None:
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(log_session_connect(**kwargs))
     except RuntimeError:
-        logger.debug("No event loop for audit log — skipping connect event")
+        logger.debug("No event loop for audit log — skipping %s event", event)
+        coro.close()
+        return
+    task = loop.create_task(coro)
+    _pending.add(task)
+    task.add_done_callback(_pending.discard)
+
+
+def fire_and_forget_connect(**kwargs) -> None:
+    """Schedule connect audit log as a background task (non-blocking)."""
+    _schedule(log_session_connect(**kwargs), "connect")
 
 
 def fire_and_forget_disconnect(**kwargs) -> None:
     """Schedule disconnect audit log as a background task (non-blocking)."""
-    try:
-        loop = asyncio.get_running_loop()
-        loop.create_task(log_session_disconnect(**kwargs))
-    except RuntimeError:
-        logger.debug("No event loop for audit log — skipping disconnect event")
+    _schedule(log_session_disconnect(**kwargs), "disconnect")

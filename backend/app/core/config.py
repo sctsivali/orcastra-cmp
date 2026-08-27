@@ -265,6 +265,24 @@ class Settings(BaseSettings):
         alias="REDIS_ENCRYPTION_KEY",
         description="Base64-encoded Fernet encryption key for Redis cache. Generate with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
     )
+
+    # Live console/terminal sessions are shared across uvicorn workers through Redis,
+    # because a WebSocket pins to one worker while the REST poll that lists sessions
+    # does not. These two tune that share.
+    # important: keep STALE > 3 x HEARTBEAT. The stale window is what decides a session
+    # is gone, so setting it near the heartbeat makes a worker that is merely busy look
+    # dead and the list will flicker; setting it very high leaves a killed worker's
+    # sessions listed as connected for that long. Raise BOTH or neither.
+    session_registry_heartbeat_seconds: int = Field(
+        default=2,
+        alias="SESSION_REGISTRY_HEARTBEAT_SECONDS",
+        description="How often each worker republishes its live sessions, in seconds"
+    )
+    session_registry_stale_seconds: int = Field(
+        default=10,
+        alias="SESSION_REGISTRY_STALE_SECONDS",
+        description="Age at which a published session is treated as gone (must exceed 3x the heartbeat)"
+    )
     secret_key: str = Field(
         default="",
         alias="SECRET_KEY",

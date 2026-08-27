@@ -15,6 +15,7 @@ from websockets.protocol import State as WebSocketState
 from app.services.terminal_service import get_terminal_service
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
+from app.services.session_models import new_session_id
 from app.core.dependencies import require_tenant, AuthenticatedUser, get_ws_user
 from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
 
@@ -167,8 +168,14 @@ class TerminalProxy:
                 await self._send_error(error)
                 return
             
-            # Register session for tracking
-            session_id = session_info["operation_id"]
+            # Register session for tracking. See new_session_id for why the empty case
+            # matters now that the id is a key shared across workers.
+            session_id = new_session_id(session_info.get("operation_id"), "terminal")
+            if session_id != session_info.get("operation_id"):
+                logger.warning(
+                    f"LXD returned no operation id for {self.instance_name}@{self.host}; "
+                    f"tracking under {session_id}"
+                )
             self._session = tracker.register(
                 session_id=session_id,
                 instance_name=self.instance_name,
@@ -182,7 +189,9 @@ class TerminalProxy:
                 target_org_slug=self.target_org_slug,
                 break_glass_grant_id=self.break_glass_grant_id,
             )
-            self._session.mark_connected()
+            # via the tracker, not the SessionInfo: this is the edge that has to reach
+            # the other workers immediately rather than at the next heartbeat.
+            tracker.mark_connected(session_id)
             
             # Send session info (include session_id for frontend tracking)
             await self.browser_ws.send_json({
