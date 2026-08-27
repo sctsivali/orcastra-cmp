@@ -5,7 +5,9 @@
  * - Active: live sessions (auto-refresh 5s)
  * - History: past sessions from audit log (with pagination)
  *
- * All data is user-scoped (backend filters by authenticated user's email).
+ * Both tabs default to the signed-in user's own sessions and can be switched to an
+ * organisation scope, which shows every session on the caller's clusters. Isolation is
+ * enforced server-side by the caller's allowed-cluster set, not here.
  */
 
 "use client";
@@ -25,12 +27,16 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { EmptyState } from "@/components/ui/empty-state";
-import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import {
   SessionDetailDialog,
   type SessionRecord,
 } from "./components/session-detail-dialog";
+import {
+  SessionScopeToggle,
+  type SessionScope,
+} from "./components/session-scope-toggle";
 import {
   Tooltip,
   TooltipContent,
@@ -48,7 +54,8 @@ import {
   ArrowUpFromLine,
   Loader2,
   History,
-  ShieldAlert } from "lucide-react";
+  ShieldAlert,
+  AlertTriangle } from "lucide-react";
 import { cn, formatLabel } from "@/lib/utils";
 import { getAccessToken } from "@/lib/api";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
@@ -70,6 +77,8 @@ interface SessionData {
   started_at: number;
   duration_seconds: number;
   connection_status: string;
+  target_org_slug: string | null;
+  is_break_glass: boolean;
   user: { id: string; email: string; role: string };
   bandwidth: {
     download_bytes: number;
@@ -93,6 +102,7 @@ interface AuditLogEntry {
   duration_seconds: number | null;
   download_bytes: number | null;
   upload_bytes: number | null;
+  is_break_glass: boolean;
   created_at: string;
 }
 
@@ -225,6 +235,8 @@ const ACTIVE_SESSIONS = defineTable<SessionData>()({
 function ActiveSessionsTab() {
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [sessions, setSessions] = useState<SessionData[]>([]);
+  const [scope, setScope] = useState<SessionScope>("self");
+  const [degraded, setDegraded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -243,9 +255,14 @@ function ActiveSessionsTab() {
     setError(null);
     try {
       const token = getAccessToken();
-      const res = await fetch(`${API_URL}/api/v1/console/sessions/active`, {
+      const params = new URLSearchParams({ scope });
+      const res = await fetch(`${API_URL}/api/v1/console/sessions/active?${params}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {} });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
+      // The backend sets this when the cross-worker view is unavailable, so the list is
+      // one worker's slice rather than the whole picture. Same origin, so the header is
+      // readable without any CORS work.
+      setDegraded(res.headers.get("X-Session-Registry-Degraded") === "1");
       setSessions(await res.json());
       setLastRefresh(new Date());
       setError(null);
@@ -255,7 +272,7 @@ function ActiveSessionsTab() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => { void fetchSessions(true).catch(() => {}); }, [fetchSessions]);
 
@@ -317,6 +334,7 @@ function ActiveSessionsTab() {
           <div className="flex items-center justify-between">
             <CardTitle className="text-lg">Active Sessions</CardTitle>
             <div className="flex items-center gap-2">
+              <SessionScopeToggle scope={scope} onChange={setScope} />
               <Button
                 variant={autoRefresh ? "default" : "outline"}
                 size="sm"
@@ -342,6 +360,17 @@ function ActiveSessionsTab() {
           <TableToolbar filters={filters} noun="sessions" />
         </CardHeader>
         <CardContent>
+          {/* A short list and a correct list look identical, which is how the
+              per-worker bug went unnoticed for so long. Say when it is partial. */}
+          {degraded && (
+            <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-warning" />
+              <span className="text-foreground">
+                Showing sessions from one server only. The shared session view is
+                unavailable, so this list may be incomplete. Your connections are unaffected.
+              </span>
+            </div>
+          )}
           {/* important: only replace the table when there is nothing to show. A
               5s poll that blips would otherwise wipe rows we still hold. */}
           {error && sessions.length > 0 && (
@@ -379,7 +408,7 @@ function ActiveSessionsTab() {
                 </TableHeader>
                 <TableBody>
                   {sorted.map((s) => (
-                    <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} />
+                    <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} scope={scope} />
                   ))}
                 </TableBody>
               </Table>
@@ -436,6 +465,7 @@ function SessionHistoryTab() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+  const [scope, setScope] = useState<SessionScope>("self");
 
   const resetPage = () => setCurrentPage(1);
   const filters = useTableFilters(SESSION_HISTORY, logs, { onFilterChange: resetPage });
@@ -451,7 +481,9 @@ function SessionHistoryTab() {
     setError(null);
     try {
       const token = getAccessToken();
-      const params = new URLSearchParams({ limit: "500" });
+      // scope has always been supported here and the page never sent it, so the
+      // organisation trail the backend maintains was unreachable from the UI.
+      const params = new URLSearchParams({ limit: "500", scope });
       const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {} });
       if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
@@ -464,7 +496,7 @@ function SessionHistoryTab() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => { void fetchLogs(true).catch(() => {}); }, [fetchLogs]);
 
@@ -532,10 +564,13 @@ function SessionHistoryTab() {
             <div>
               <CardTitle className="text-lg">Session History</CardTitle>
               <CardDescription>
-                Connection history
+                {scope === "org"
+                  ? "Every connection to your organization's clusters"
+                  : "Your connection history"}
               </CardDescription>
             </div>
             <div className="flex items-center gap-2">
+              <SessionScopeToggle scope={scope} onChange={setScope} />
               <RefreshButton
                 iconClassName="h-3.5 w-3.5"
                 label="Refresh session history"
@@ -583,7 +618,7 @@ function SessionHistoryTab() {
                   </TableHeader>
                   <TableBody>
                     {paginated.map((log) => (
-                      <HistoryRow key={`${log.id}-${log.event_type}`} log={log} onSelect={setSelectedSession} />
+                      <HistoryRow key={`${log.id}-${log.event_type}`} log={log} onSelect={setSelectedSession} scope={scope} />
                     ))}
                   </TableBody>
                 </Table>
@@ -615,7 +650,11 @@ function SessionHistoryTab() {
 
 // ============ Row Components ============
 
-function ActiveRow({ session, onSelect }: { session: SessionData; onSelect: (r: SessionRecord) => void }) {
+function ActiveRow({ session, onSelect, scope }: {
+  session: SessionData;
+  onSelect: (r: SessionRecord) => void;
+  scope: SessionScope;
+}) {
   const isGraphics = session.protocol === "spice-graphics";
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
@@ -632,10 +671,33 @@ function ActiveRow({ session, onSelect }: { session: SessionData; onSelect: (r: 
             </TableLink>
           </span>
           <TableSubText>{session.host} / {session.project}</TableSubText>
+          {/* under an organisation scope every row is somebody else's, so the row is
+              meaningless without saying whose. Kept out of the personal view, where it
+              would just repeat the signed-in user on every line. */}
+          {scope === "org" && (
+            <TableSubText>{session.user.email || EMPTY_VALUE}</TableSubText>
+          )}
         </div>
       </TableCell>
       <TableCell>
-        {protocolLabel}
+        <div className="flex items-center gap-1.5 whitespace-nowrap">
+          {protocolLabel}
+          {session.is_break_glass && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* shrink-0 + nowrap: the label broke across two lines in a narrow
+                    Protocol column and crowded the protocol name beside it */}
+                <Badge variant="destructive" className="gap-1 shrink-0 whitespace-nowrap">
+                  <ShieldAlert className="h-3 w-3 shrink-0" />
+                  Break-glass
+                </Badge>
+              </TooltipTrigger>
+              <TooltipContent>
+                Opened under a time-boxed grant against a cluster the operator does not own
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </div>
       </TableCell>
       <TableCell>
         <Tooltip>
@@ -686,7 +748,11 @@ function ActiveRow({ session, onSelect }: { session: SessionData; onSelect: (r: 
   );
 }
 
-function HistoryRow({ log, onSelect }: { log: AuditLogEntry; onSelect: (r: SessionRecord) => void }) {
+function HistoryRow({ log, onSelect, scope }: {
+  log: AuditLogEntry;
+  onSelect: (r: SessionRecord) => void;
+  scope: SessionScope;
+}) {
   const isGraphics = log.protocol === "spice-graphics";
   const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
 
@@ -704,6 +770,14 @@ function HistoryRow({ log, onSelect }: { log: AuditLogEntry; onSelect: (r: Sessi
             </TableLink>
           </span>
           <TableSubText>{log.host} / {log.project}</TableSubText>
+          {/* same reasoning as the active table: an organisation view of other people's
+              sessions has to say whose, and a break-glass entry has to be legible as one. */}
+          {scope === "org" && (
+            <TableSubText>
+              {log.user_email || EMPTY_VALUE}
+              {log.is_break_glass ? " · break-glass" : ""}
+            </TableSubText>
+          )}
         </div>
       </TableCell>
       <TableCell>
