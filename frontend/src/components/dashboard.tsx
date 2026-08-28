@@ -1213,7 +1213,13 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
         />
       )}
       
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      {/* important: two-up starts at lg and three-up at xl, not md and lg. Measured live, the
+          old thresholds gave a 224px card at both 768 and 1024, which leaves the header's title
+          column about 52px once the host badge and the kebab have taken their fixed width, so a
+          name as short as "Ryo-Labs" broke mid-word. The card needs roughly 340px to hold its own
+          header. At 1280 a three-up card is 309px, which clears it, so the widest band is
+          unchanged. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
         {projectsLoading ? (
           <div className="col-span-full flex justify-center py-8">
             <LoadingLottieMediumEnhanced showProgress={false} />

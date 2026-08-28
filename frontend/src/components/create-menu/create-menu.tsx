@@ -12,12 +12,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { IntentLink } from "@/components/navigation/route-intent";
-import { cn } from "@/lib/utils";
 import type { CreateAction } from "./create-menu-config";
 
 interface CreateMenuProps {
-  /** "bar" is the desktop header button, "fab" the mobile floating action button. */
-  variant: "bar" | "fab";
   /** Already filtered by role and by the current route. Empty means render nothing. */
   actions: CreateAction[];
   isReadOnly: boolean;
@@ -26,8 +23,16 @@ interface CreateMenuProps {
 const READ_ONLY_REASON = "Disabled in read-only mode";
 
 /**
- * The console's only global create affordance, rendered from one action list so the desktop
- * menu and the mobile button cannot offer different things.
+ * The console's only global create affordance. One trigger at every width, in the sticky header.
+ *
+ * important: this used to render a floating action button below `sm`, fixed to the bottom right
+ * corner. Measured at 390px across 24 scroll positions, that button sat on top of "Refresh
+ * overview" at one of them, so a tap meant for refresh opened the create menu instead, and it
+ * grazed two more controls. A fixed overlay can also hide the control a keyboard user has just
+ * focused, which WCAG 2.2 SC 2.4.11 is about. The header is sticky at every width and carries
+ * only a menu button and the avatar on a phone, so the control lives there instead: always
+ * reachable, never on top of anything. It also used to vanish while the sidebar drawer was open,
+ * which the header button does not.
  *
  * important: a read-only item is marked with aria-disabled, never with Radix's `disabled` prop.
  * @radix-ui/react-menu passes `focusable: !disabled` to the roving-focus item and filters
@@ -36,38 +41,25 @@ const READ_ONLY_REASON = "Disabled in read-only mode";
  * unreachable by keyboard and emits no hover, so the reason it is unavailable could never be
  * surfaced to anyone. Here the item stays focusable and explains itself instead.
  */
-export function CreateMenu({ variant, actions, isReadOnly }: CreateMenuProps) {
+export function CreateMenu({ actions, isReadOnly }: CreateMenuProps) {
   const reasonId = React.useId();
 
   if (actions.length === 0) return null;
 
-  const trigger =
-    variant === "bar" ? (
-      <Button className="gap-2 shadow-lg">
-        <Plus className="h-4 w-4" aria-hidden="true" />
-        <span>New</span>
-        <ChevronDown className="h-4 w-4" aria-hidden="true" />
-      </Button>
-    ) : (
-      <Button
-        size="lg"
-        className="h-14 w-14 rounded-full shadow-lg flex items-center justify-center"
-      >
-        <Plus className="h-6 w-6 shrink-0" aria-hidden="true" />
-        <span className="sr-only">New</span>
-      </Button>
-    );
+  const trigger = (
+    <Button className="gap-1.5 px-3 shadow-lg sm:gap-2 sm:px-4">
+      <Plus className="h-4 w-4" aria-hidden="true" />
+      <span>New</span>
+      <ChevronDown className="h-4 w-4" aria-hidden="true" />
+    </Button>
+  );
 
   const menu = (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       {/* note: the shared DropdownMenuContent animates in and out with no reduced-motion guard.
           Fixing the primitive would touch every menu in the app, so the override is scoped here. */}
-      <DropdownMenuContent
-        align="end"
-        side={variant === "fab" ? "top" : "bottom"}
-        className={cn("w-56 motion-reduce:animate-none", variant === "fab" && "mb-2")}
-      >
+      <DropdownMenuContent align="end" side="bottom" className="w-56 motion-reduce:animate-none">
         {isReadOnly && (
           <>
             <DropdownMenuLabel
@@ -116,8 +108,5 @@ export function CreateMenu({ variant, actions, isReadOnly }: CreateMenuProps) {
     </DropdownMenu>
   );
 
-  if (variant === "fab") {
-    return <div className="sm:hidden fixed bottom-6 right-6 z-50">{menu}</div>;
-  }
   return menu;
 }
