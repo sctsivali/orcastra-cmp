@@ -208,6 +208,32 @@ if [ -z "$(env_get AUTHENTIK_CLIENT_ID)" ]; then
 fi
 
 # -----------------------------------------------------------------------------
+section "Settings carried over from an older template"
+
+# note: these are not wrong so much as stale. Templates published before 1.0.0-RC4 shipped
+# values that never matched the code defaults, and a deployment built from one is quietly
+# running tighter limits than anything was tested against.
+check_default() {
+    _name="$1"; _default="$2"; _why="$3"
+    _val="$(env_get "$_name")"
+    [ -n "$_val" ] || return 0
+    [ "$_val" = "$_default" ] && return 0
+    warn "$_name is $_val, the code default is $_default"
+    warn "  $_why"
+}
+
+check_default RATE_LIMIT_REQUESTS 500 \
+    "older templates shipped 100, which throttles five times harder than the tested default"
+check_default RATE_LIMIT_SUBNET_REQUESTS 1500 \
+    "older templates shipped 300, and this is a per-subnet ceiling shared by every operator behind one NAT"
+check_default RATE_LIMIT_WINDOW_SECONDS 60 "the limits above are counted over this window"
+
+for dead in JSON_LOGS LOG_LEVEL; do
+    [ -n "$(env_get "$dead")" ] && warn "$dead is set but nothing reads it; the backend derives both from DEBUG"
+done
+true
+
+# -----------------------------------------------------------------------------
 section "Environment coverage for the new compose file"
 
 if [ -z "$NEW_COMPOSE" ] || [ ! -f "$NEW_COMPOSE" ]; then
