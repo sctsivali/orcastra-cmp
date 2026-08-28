@@ -93,6 +93,18 @@ const nextConfig = {
           }
         ],
       },
+      {
+        // The basemap filename carries its own version, so a change ships as a new path and
+        // the old one can be cached hard. Without this Next serves public/ with max-age=0
+        // and every navigation revalidates a file that never changes.
+        source: '/geo/:path*',
+        headers: [
+          {
+            key: 'Cache-Control',
+            value: 'public, max-age=31536000, immutable'
+          }
+        ],
+      },
     ];
   },
   async rewrites() {

@@ -349,9 +349,40 @@ TRUSTED_CLIENT_IP_HEADERS=cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-f
 ALLOW_PRIVATE_FORWARDED_IPS=false
 SECRET_KEY=your-secret-key                 # openssl rand -hex 32
 READ_ONLY_MODE=false
+
+# regions map basemap (all optional, see "Map basemap" below)
+MAP_TILE_URL=                              # unset uses the bundled offline basemap
+MAP_TILE_URL_DARK=
+MAP_TILE_ATTRIBUTION=
+MAP_TILE_ATTRIBUTION_URL=
+MAP_TILE_SUBDOMAINS=
+MAP_TILE_MAX_ZOOM=18
 ```
 
 </details>
+
+### Map basemap
+
+The Regions page draws its map from a landmass file shipped inside the image
+(`frontend/public/geo/`, derived from public-domain Natural Earth data). Out of the box it
+makes no outbound request, needs no API key, and works in air-gapped installs. Nothing about
+where your clusters are leaves the browser.
+
+To use a tile provider instead, point `MAP_TILE_URL` at an XYZ template:
+
+```bash
+MAP_TILE_URL=https://tiles.example.com/{z}/{x}/{y}.png
+MAP_TILE_ATTRIBUTION=Your Provider
+MAP_TILE_ATTRIBUTION_URL=https://example.com/
+MAP_TILE_MAX_ZOOM=18
+```
+
+Optionally set `MAP_TILE_URL_DARK` for a second endpoint used in dark mode, and
+`MAP_TILE_SUBDOMAINS` when the template contains `{s}`. These are read at runtime, so
+changing one needs a container restart but no rebuild. A value that is not a usable template
+is rejected at startup with a logged reason and the bundled basemap is used instead; a
+provider that stops answering falls back to it too, and the map says so rather than showing
+broken tiles.
 
 ## Versioning
 

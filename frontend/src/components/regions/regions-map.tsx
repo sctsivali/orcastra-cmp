@@ -7,207 +7,72 @@ import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster";
 import "leaflet.markercluster/dist/MarkerCluster.css";
 import "leaflet.markercluster/dist/MarkerCluster.Default.css";
+// important: after Leaflet's own stylesheets, so these overrides win on document order.
+import "./map-theme.css";
 import { RegionSummary } from "@/types/api";
 import { INDONESIA_BOUNDS } from "@/lib/regions-data";
+import { useTheme } from "@/components/theme-provider";
+import { BasemapConfig, OFFLINE_BASEMAP, OFFLINE_MAX_ZOOM } from "@/lib/map-basemap";
+import { OfflineBasemap } from "./offline-basemap";
+import { createClusterIcon, createPopupContent, getRegionIcon } from "./map-icons";
 
-// Custom marker icons based on status
-const createCustomIcon = (color: string): L.DivIcon => {
-  return L.divIcon({
-    className: "custom-marker",
-    html: `
-      <div style="
-        background-color: ${color};
-        width: 24px;
-        height: 24px;
-        border-radius: 50%;
-        border: 3px solid white;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      ">
-        <div style="
-          width: 8px;
-          height: 8px;
-          background-color: white;
-          border-radius: 50%;
-        "></div>
-      </div>
-    `,
-    iconSize: [24, 24],
-    iconAnchor: [12, 12],
-    popupAnchor: [0, -12],
-  });
-};
-
-// Get icon based on region status
-function getRegionIcon(region: RegionSummary): L.DivIcon {
-  const onlineCount = region.nodes.filter((n) => n.status === "online").length;
-  const totalCount = region.nodes.length;
-
-  // note: the markers are injected as raw HTML into a Leaflet DivIcon, so they take a CSS
-  // value rather than a Tailwind class. Reading the same --status-* custom properties is what
-  // keeps the map on the product's status palette in both themes instead of three hex
-  // literals that drift the first time a token is retuned.
-  if (onlineCount === totalCount) {
-    return createCustomIcon("hsl(var(--status-online))");
-  } else if (onlineCount > 0) {
-    return createCustomIcon("hsl(var(--status-pending))");
-  } else {
-    return createCustomIcon("hsl(var(--status-offline))");
-  }
-}
-
-// Create cluster icon
-function createClusterIcon(cluster: L.MarkerCluster): L.DivIcon {
-  const count = cluster.getChildCount();
-  let size = "small";
-  let color = "#6366f1"; // indigo
-
-  if (count >= 10) {
-    size = "large";
-    color = "#8b5cf6"; // purple
-  } else if (count >= 5) {
-    size = "medium";
-    color = "#a855f7"; // violet
-  }
-
-  const sizeMap = { small: 30, medium: 40, large: 50 };
-  const dimension = sizeMap[size as keyof typeof sizeMap];
-
-  return L.divIcon({
-    html: `
-      <div style="
-        background-color: ${color};
-        width: ${dimension}px;
-        height: ${dimension}px;
-        border-radius: 50%;
-        border: 3px solid white;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: bold;
-        font-size: ${size === "large" ? "16px" : size === "medium" ? "14px" : "12px"};
-      ">
-        ${count}
-      </div>
-    `,
-    className: "custom-cluster-icon",
-    iconSize: L.point(dimension, dimension),
-  });
-}
-
-// Format bytes to human readable
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-// Create popup content for a region
-function createPopupContent(region: RegionSummary): string {
-  const cardsTotal = region.hardware.gpu_cards_total ?? region.hardware.gpu_total;
-  const row = (label: string, value: string | number) =>
-    `<div style="display: flex; justify-content: space-between;">
-         <span>${label}:</span>
-         <span style="font-weight: 500;">${value}</span>
-       </div>`;
-  const gpuSection =
-    region.hardware.gpu_total > 0
-      ? row("Compute GPUs", region.hardware.gpu_total) +
-        (cardsTotal > region.hardware.gpu_total ? row("Cards detected", cardsTotal) : "")
-      : "";
-
-  const facilitySection = region.facility_name
-    ? `<p style="font-size: 11px; color: #888; margin-bottom: 4px; display: flex; align-items: center; gap: 4px;">
-        <span style="display: inline-block; width: 8px; height: 8px; background: #6366f1; border-radius: 2px;"></span>
-        ${region.facility_name}${region.facility_provider ? ` — ${region.facility_provider}` : ""}
-      </p>`
-    : "";
-
-  return `
-    <div style="min-width: 200px; padding: 4px;">
-      <h3 style="font-weight: bold; font-size: 14px; margin-bottom: 4px;">${region.region_name}</h3>
-      <p style="font-size: 12px; color: #666; margin-bottom: 4px;">
-        ${region.city}, ${region.country_name}
-      </p>
-      ${facilitySection}
-      
-      <div style="font-size: 12px; display: flex; flex-direction: column; gap: 4px; margin-top: 8px;">
-        <div style="display: flex; justify-content: space-between;">
-          <span>Nodes:</span>
-          <span style="font-weight: 500;">${region.node_count}</span>
-        </div>
-        <div style="display: flex; justify-content: space-between;">
-          <span>Instances:</span>
-          <span style="font-weight: 500;">${region.instance_count}</span>
-        </div>
-        <div style="display: flex; justify-content: space-between;">
-          <span>CPU:</span>
-          <span style="font-weight: 500;">${region.hardware.cpu_total} cores</span>
-        </div>
-        <div style="display: flex; justify-content: space-between;">
-          <span>Memory:</span>
-          <span style="font-weight: 500;">${formatBytes(region.hardware.memory_total)}</span>
-        </div>
-        ${gpuSection}
-      </div>
-    </div>
-  `;
-}
+/** Repeated failures mean the endpoint is wrong or gone; one is a hiccup on a single tile. */
+const TILE_ERROR_LIMIT = 4;
 
 interface MarkerClusterLayerProps {
   regions: RegionSummary[];
   selectedRegion: string | null;
   onSelectRegion: (regionId: string) => void;
+  focusZoom: number;
 }
 
-// Component to manage marker cluster layer
-function MarkerClusterLayer({ regions, selectedRegion, onSelectRegion }: MarkerClusterLayerProps) {
+function MarkerClusterLayer({
+  regions,
+  selectedRegion,
+  onSelectRegion,
+  focusZoom,
+}: MarkerClusterLayerProps) {
   const map = useMap();
   const clusterGroupRef = React.useRef<L.MarkerClusterGroup | null>(null);
 
-  // Handle fly to selected region
   React.useEffect(() => {
     if (selectedRegion && map) {
       const region = regions.find((r) => r.region_id === selectedRegion);
       if (region) {
-        map.flyTo([region.latitude, region.longitude], 10, { duration: 1.5 });
+        map.flyTo([region.latitude, region.longitude], focusZoom, { duration: 1.5 });
       }
     }
-  }, [selectedRegion, regions, map]);
+  }, [selectedRegion, regions, map, focusZoom]);
 
-  // Create and manage cluster group
   React.useEffect(() => {
     if (!map) return;
 
-    // Remove existing cluster group
     if (clusterGroupRef.current) {
       map.removeLayer(clusterGroupRef.current);
     }
 
-    // Create new cluster group
     const clusterGroup = L.markerClusterGroup({
       iconCreateFunction: createClusterIcon,
       maxClusterRadius: 60,
       spiderfyOnMaxZoom: true,
       showCoverageOnHover: false,
       chunkedLoading: true,
+      // note: no colour here, and a class of our own rather than markercluster's. It only
+      // attaches .leaflet-cluster-spider-leg on its animated branch, so at rest the legs
+      // carry no class at all and a stylesheet cannot reach them. Leaflet does apply
+      // options.className to the SVG path in every branch, so this one always lands and the
+      // stroke can follow the theme live instead of being frozen at construction.
       spiderLegPolylineOptions: {
         weight: 1.5,
-        color: "#6366f1",
-        opacity: 0.5,
+        opacity: 0.6,
+        className: "orcastra-spider-leg",
       },
     });
 
-    // Add markers for each region
     regions.forEach((region) => {
       const marker = L.marker([region.latitude, region.longitude], {
         icon: getRegionIcon(region),
+        title: region.region_name,
       });
 
       marker.bindPopup(createPopupContent(region), {
@@ -236,21 +101,109 @@ function MarkerClusterLayer({ regions, selectedRegion, onSelectRegion }: MarkerC
   return null;
 }
 
-interface RegionsMapProps {
+/**
+ * MapContainer reads maxZoom once, at construction. When a failing tile endpoint drops the
+ * map back to the bundled outline the ceiling has to be lowered on the live instance, or
+ * the operator can keep zooming into blank land the outline cannot fill.
+ */
+function MaxZoomSync({ maxZoom }: { maxZoom: number }) {
+  const map = useMap();
+
+  React.useEffect(() => {
+    if (!map) return;
+    map.setMaxZoom(maxZoom);
+    if (map.getZoom() > maxZoom) map.setZoom(maxZoom);
+  }, [map, maxZoom]);
+
+  return null;
+}
+
+interface BasemapLayerProps {
+  basemap: BasemapConfig;
+  onFallback: () => void;
+}
+
+/**
+ * Draws whichever basemap the deployment resolved to.
+ *
+ * A configured tile endpoint that keeps failing falls back to the bundled outline rather
+ * than leaving a grid of broken image icons, which is what the page used to degrade into
+ * once the previous hardcoded CDN started refusing anonymous requests.
+ */
+function BasemapLayer({ basemap, onFallback }: BasemapLayerProps) {
+  const { resolvedTheme } = useTheme();
+  const errorCount = React.useRef(0);
+
+  if (basemap.mode === "offline") {
+    return <OfflineBasemap onLoadError={onFallback} />;
+  }
+
+  const url =
+    resolvedTheme === "dark" && basemap.darkUrl !== null ? basemap.darkUrl : basemap.url;
+
+  return (
+    <TileLayer
+      // Remounts the layer on a theme swap so Leaflet refetches from the other endpoint
+      // instead of keeping the tiles it already had.
+      key={url}
+      url={url}
+      attribution={basemap.attribution}
+      maxZoom={basemap.maxZoom}
+      {...(basemap.subdomains !== null ? { subdomains: basemap.subdomains } : {})}
+      eventHandlers={{
+        tileerror: () => {
+          errorCount.current += 1;
+          if (errorCount.current === TILE_ERROR_LIMIT) onFallback();
+        },
+        load: () => {
+          errorCount.current = 0;
+        },
+      }}
+    />
+  );
+}
+
+export interface RegionsMapProps {
   regions: RegionSummary[];
   selectedRegion: string | null;
   onSelectRegion: (regionId: string) => void;
+  basemap: BasemapConfig;
+  onBasemapFallback?: () => void;
 }
 
 export default function RegionsMap({
   regions,
   selectedRegion,
   onSelectRegion,
+  basemap,
+  onBasemapFallback,
 }: RegionsMapProps) {
-  // Create max bounds for Indonesia to restrict panning
-  const maxBounds = L.latLngBounds(
-    [INDONESIA_BOUNDS.maxBounds.south, INDONESIA_BOUNDS.maxBounds.west],  // Southwest corner
-    [INDONESIA_BOUNDS.maxBounds.north, INDONESIA_BOUNDS.maxBounds.east]   // Northeast corner
+  // A tile endpoint that fails at runtime drops this map back to the bundled outline for
+  // the rest of the session.
+  const [tilesFailed, setTilesFailed] = React.useState(false);
+  const effectiveBasemap: BasemapConfig = React.useMemo(
+    () => (tilesFailed || basemap.mode === "offline" ? OFFLINE_BASEMAP : basemap),
+    [tilesFailed, basemap]
+  );
+
+  const handleFallback = React.useCallback(() => {
+    setTilesFailed(true);
+    onBasemapFallback?.();
+  }, [onBasemapFallback]);
+
+  // The bundled outline carries no streets or labels, so zooming past its useful level
+  // only magnifies the same coastline. A configured tile provider keeps its own ceiling.
+  const maxZoom =
+    effectiveBasemap.mode === "offline" ? OFFLINE_MAX_ZOOM : effectiveBasemap.maxZoom;
+  const focusZoom = Math.min(10, maxZoom);
+
+  const maxBounds = React.useMemo(
+    () =>
+      L.latLngBounds(
+        [INDONESIA_BOUNDS.maxBounds.south, INDONESIA_BOUNDS.maxBounds.west],
+        [INDONESIA_BOUNDS.maxBounds.north, INDONESIA_BOUNDS.maxBounds.east]
+      ),
+    []
   );
 
   return (
@@ -258,26 +211,32 @@ export default function RegionsMap({
       center={[INDONESIA_BOUNDS.center.lat, INDONESIA_BOUNDS.center.lng]}
       zoom={INDONESIA_BOUNDS.zoom}
       minZoom={INDONESIA_BOUNDS.minZoom}
-      maxZoom={INDONESIA_BOUNDS.maxZoom}
+      maxZoom={maxZoom}
       maxBounds={maxBounds}
-      maxBoundsViscosity={1.0}  // Fully restrict to bounds (no rubber-banding)
+      maxBoundsViscosity={1.0}
       className="h-[400px] w-full rounded-lg z-0"
       attributionControl={false}
       zoomControl={false}
       scrollWheelZoom={true}
     >
-      <TileLayer
-        attribution='<a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-      />
+      <MaxZoomSync maxZoom={maxZoom} />
+
+      {/* important: before the basemap, not after. Leaflet only wires an attribution's
+          removal through its `layeradd` handler; layers already present when the control
+          mounts are scanned and added directly, with no cleanup hook (leaflet-src.js, the
+          block its own author marked "TODO ugly, refactor"). Mounting the control second
+          left a failed tile provider credited underneath the basemap that replaced it. */}
       <AttributionControl position="bottomright" prefix={false} />
-      
+
+      <BasemapLayer basemap={effectiveBasemap} onFallback={handleFallback} />
+
       <ZoomControl position="topright" />
-      
+
       <MarkerClusterLayer
         regions={regions}
         selectedRegion={selectedRegion}
         onSelectRegion={onSelectRegion}
+        focusZoom={focusZoom}
       />
     </MapContainer>
   );

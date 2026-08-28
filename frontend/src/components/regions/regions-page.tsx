@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import dynamic from "next/dynamic";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,9 +10,7 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
-import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatLabel } from "@/lib/utils";
-import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE } from "@/lib/gpu";
+import { formatBytes } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -31,153 +28,17 @@ import {
   ChevronUp,
   RefreshCw,
   MapPin,
-  Loader2,
   Activity,
   Box,
   Building2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useRegionsOverview } from "@/hooks/use-lxd";
-import { RegionSummary, ExtendedHardwareInfo, ClusterStatus } from "@/types/api";
+import { HardwareSummary } from "./regions-hardware-summary";
+import { BasemapConfig } from "@/lib/map-basemap";
+import { RegionsMapCard } from "./regions-map-card";
+import { REGIONS } from "./regions-table-config";
+import { RegionSummary } from "@/types/api";
 
-// Props interface for the map component
-interface RegionsMapProps {
-  regions: RegionSummary[];
-  selectedRegion: string | null;
-  onSelectRegion: (regionId: string) => void;
-}
-
-// Dynamically import the map component to avoid SSR issues
-const RegionsMap = dynamic<RegionsMapProps>(
-  () => import("./regions-map").then((mod) => mod.default),
-  {
-    ssr: false,
-    loading: () => (
-      <div className="h-[400px] bg-muted/30 rounded-lg flex items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    ) }
-);
-
-// Format bytes to human readable
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
-}
-
-
-// Hardware summary component
-function HardwareSummary({ hardware, compact = false }: { hardware: ExtendedHardwareInfo; compact?: boolean }) {
-  // Compute GPUs and detected cards are different numbers about the same hardware, so the
-  // card count only appears when it says something the GPU count did not.
-  const cardsTotal = hardware.gpu_cards_total ?? hardware.gpu_total;
-  const extraCards = Math.max(0, cardsTotal - hardware.gpu_total);
-  if (compact) {
-    return (
-      <div className="flex flex-wrap gap-2 text-xs">
-        <Badge variant="outline" className="gap-1">
-          <Cpu className="h-3 w-3 text-foreground" />
-          {hardware.cpu_total} cores
-        </Badge>
-        <Badge variant="outline" className="gap-1">
-          <MemoryStick className="h-3 w-3 text-foreground" />
-          {formatBytes(hardware.memory_total)}
-        </Badge>
-        {hardware.gpu_total > 0 && (
-          <Badge variant="outline" className="gap-1">
-            <Sparkles className="h-3 w-3 text-foreground" />
-            {hardware.gpu_total} GPU
-          </Badge>
-        )}
-        <Badge variant="outline" className="gap-1">
-          <HardDrive className="h-3 w-3 text-foreground" />
-          {formatBytes(hardware.storage_total)}
-        </Badge>
-      </div>
-    );
-  }
-
-  return (
-    <div className="grid grid-cols-2 gap-4">
-      {/* CPU */}
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Cpu className="h-4 w-4 text-foreground" />
-          CPU
-        </div>
-        <div className="pl-6 text-sm text-muted-foreground">
-          <p>{hardware.cpu_total} cores ({hardware.cpu_sockets} sockets)</p>
-          <p>{hardware.cpu_architecture}</p>
-          {hardware.cpu_vendor && <p>{hardware.cpu_vendor}</p>}
-        </div>
-      </div>
-
-      {/* Memory */}
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <MemoryStick className="h-4 w-4 text-foreground" />
-          Memory
-        </div>
-        <div className="pl-6 text-sm text-muted-foreground">
-          <p>{formatBytes(hardware.memory_total)}</p>
-          <p>{formatBytes(hardware.memory_used)} used</p>
-        </div>
-      </div>
-
-      {/* GPU */}
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <Sparkles className="h-4 w-4 text-foreground" />
-          GPU
-        </div>
-        <div className="pl-6 text-sm text-muted-foreground">
-          {hardware.gpu_total > 0 ? (
-            <>
-              <p>
-                {hardware.gpu_total} compute {hardware.gpu_total === 1 ? "GPU" : "GPUs"}
-              </p>
-              {hardware.gpu_vendors.length > 0 && (
-                <p>{hardware.gpu_vendors.join(", ")}</p>
-              )}
-              {hardware.gpu_models.length > 0 && (
-                <p className="break-words">{hardware.gpu_models.join(", ")}</p>
-              )}
-              {extraCards > 0 && <p className="text-xs">{cardsTotal} cards detected</p>}
-            </>
-          ) : cardsTotal > 0 ? (
-            <>
-              <p>{GPU_NO_COMPUTE_TITLE}</p>
-              <p className="text-xs">{cardsTotal} cards detected</p>
-            </>
-          ) : (
-            <p>{GPU_EMPTY_TITLE}</p>
-          )}
-        </div>
-      </div>
-
-      {/* Storage */}
-      <div className="space-y-1">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <HardDrive className="h-4 w-4 text-foreground" />
-          Storage
-        </div>
-        <div className="pl-6 text-sm text-muted-foreground">
-          <p>{formatBytes(hardware.storage_total)}</p>
-          {hardware.storage_types.length > 0 && (
-            <p>{hardware.storage_types.join(", ")}</p>
-          )}
-          {hardware.storage_drivers.length > 0 && (
-            <p className="text-xs">{hardware.storage_drivers.join(", ")}</p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Region card component
 function RegionCard({
   region,
   isExpanded,
@@ -318,47 +179,7 @@ function RegionCard({
   );
 }
 
-// Main Regions Page Component
-// A card list rather than a table, so it takes the shared toolbar and filter engine but
-// none of the table plumbing: no sortable heads, no pagination, no empty row.
-const REGIONS = defineTable<any>()({
-  searchPlaceholder: "Search regions",
-  defaultSort: { field: "region_name", direction: "asc" },
-  searchExtra: (r) => [r.city, r.country_name, r.country_code, r.facility_name, r.facility_provider],
-  columns: [
-    { field: "region_name", label: "Region", sort: (r) => r.region_name, search: (r) => r.region_name, filter: fromSort("text") },
-    {
-      field: "continent",
-      label: "Continent",
-      sort: (r) => r.continent,
-      facet: (r) => r.continent,
-      facetSpec: { primary: true, format: formatLabel } },
-    {
-      field: "country",
-      label: "Country",
-      sort: (r) => r.country_name,
-      facet: (r) => r.country_name,
-      facetSpec: {} },
-    {
-      field: "provider",
-      label: "Facility Provider",
-      sort: (r) => r.facility_provider,
-      facet: (r) => r.facility_provider,
-      facetSpec: { emptyLabel: "(no provider)" } },
-    {
-      field: "node_status",
-      label: "Node Status",
-      // A region matches when any of its nodes matches.
-      facet: (r) => (r.nodes ?? []).map((n: any) => n.status).filter(Boolean),
-      facetSpec: { primary: true, format: formatLabel, emptyLabel: "(no nodes)" } },
-    {
-      field: "node_type",
-      label: "Node Type",
-      facet: (r) => (r.nodes ?? []).map((n: any) => n.node_type).filter(Boolean),
-      facetSpec: { emptyLabel: "(no nodes)" } },
-  ] });
-
-function RegionsContent() {
+function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   const { data, isLoading, error, refetch, refreshNow, dataUpdatedAt } = useRegionsOverview();
   const [expandedRegions, setExpandedRegions] = React.useState<Set<string>>(new Set());
   const [selectedRegion, setSelectedRegion] = React.useState<string | null>(null);
@@ -380,7 +201,12 @@ function RegionsContent() {
   };
 
   // Select region from map marker - scroll to region card and expand it
-  const handleSelectRegion = (regionId: string) => {
+  // important: memoised because the map's marker layer keys its rebuild effect on this
+  // callback. As a plain function it took a new identity on every render, so selecting a
+  // region re-rendered, tore the whole cluster layer down and rebuilt it, and destroyed the
+  // popup the click had just opened. The card promises "click a marker to view region
+  // details" and only the scroll-to-card half of that ever worked.
+  const handleSelectRegion = React.useCallback((regionId: string) => {
     setSelectedRegion(regionId);
     // Expand the selected region
     setExpandedRegions((prev) => {
@@ -400,7 +226,7 @@ function RegionsContent() {
         }, 2000);
       }
     }, 100);
-  };
+  }, []);
 
   // View region on map - scroll to map and zoom to location
   const handleViewOnMap = (regionId: string) => {
@@ -508,25 +334,13 @@ function RegionsContent() {
       )}
 
       {/* Map */}
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-lg">Cluster Locations</CardTitle>
-          <CardDescription>
-            Click on a marker to view region details below. Scroll to zoom.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <Skeleton className="h-[400px] w-full" />
-          ) : (
-            <RegionsMap
-              regions={filteredRegions}
-              selectedRegion={selectedRegion}
-              onSelectRegion={handleSelectRegion}
-            />
-          )}
-        </CardContent>
-      </Card>
+      <RegionsMapCard
+        regions={filteredRegions}
+        selectedRegion={selectedRegion}
+        onSelectRegion={handleSelectRegion}
+        basemap={basemap}
+        isLoading={isLoading}
+      />
 
       {/* Region List */}
       <div className="space-y-4">
@@ -587,10 +401,10 @@ function RegionsContent() {
 
 // The boundary sits next to the component that reads the query string rather than in the
 // route file, so it stays visible to anyone editing this component and to the guard.
-export function RegionsPage() {
+export function RegionsPage({ basemap }: { basemap: BasemapConfig }) {
   return (
     <React.Suspense fallback={<LoadingLottiePage />}>
-      <RegionsContent />
+      <RegionsContent basemap={basemap} />
     </React.Suspense>
   );
 }

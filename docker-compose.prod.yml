@@ -144,6 +144,15 @@ services:
       - TRUSTED_CLIENT_IP_HEADERS=${TRUSTED_CLIENT_IP_HEADERS:-cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-forwarded-for,x-real-ip}
       # Internal Docker URL for server-side API proxying (avoids external DNS/firewall issues)
       - INTERNAL_BACKEND_URL=http://backend:4050
+      # Regions map basemap. Left unset the dashboard draws the outline map bundled with
+      # the image: no outbound request, no API key, works air-gapped. Point MAP_TILE_URL at
+      # an XYZ tile template to use your own provider instead. Runtime only, no rebuild.
+      - MAP_TILE_URL=${MAP_TILE_URL:-}
+      - MAP_TILE_URL_DARK=${MAP_TILE_URL_DARK:-}
+      - MAP_TILE_ATTRIBUTION=${MAP_TILE_ATTRIBUTION:-}
+      - MAP_TILE_ATTRIBUTION_URL=${MAP_TILE_ATTRIBUTION_URL:-}
+      - MAP_TILE_SUBDOMAINS=${MAP_TILE_SUBDOMAINS:-}
+      - MAP_TILE_MAX_ZOOM=${MAP_TILE_MAX_ZOOM:-}
       - AUTHENTIK_ISSUER=${AUTHENTIK_ISSUER}
       - AUTHENTIK_CLIENT_ID=${AUTHENTIK_CLIENT_ID}
       - AUTHENTIK_CLIENT_SECRET=${AUTHENTIK_CLIENT_SECRET}

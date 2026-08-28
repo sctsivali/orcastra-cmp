@@ -1,0 +1,81 @@
+/* Leaflet chrome on the product tokens.
+   Leaflet ships a light-only palette for the container, controls, attribution and popups,
+   which reads as grey and white boxes dropped onto a themed map. These selectors mirror
+   Leaflet's own shapes rather than out-specifying them, because this file is imported after
+   leaflet.css in regions-map.tsx and equal specificity then resolves on order. Putting them
+   here rather than in globals.css is what makes that true: a component-level stylesheet is
+   injected after the global one, so the same rules there lost the cascade. */
+
+.leaflet-container {
+  background: hsl(var(--background));
+  font-family: inherit;
+}
+
+.leaflet-container a {
+  color: hsl(var(--muted-foreground));
+}
+
+.leaflet-container .leaflet-control-attribution {
+  background: hsl(var(--background) / 0.8);
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+}
+
+.leaflet-container .leaflet-control-attribution a {
+  color: hsl(var(--muted-foreground));
+}
+
+.leaflet-bar {
+  border: 1px solid hsl(var(--border));
+}
+
+.leaflet-bar a {
+  background-color: hsl(var(--card));
+  color: hsl(var(--foreground));
+  border-bottom-color: hsl(var(--border));
+}
+
+.leaflet-bar a:hover,
+.leaflet-bar a:focus {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.leaflet-bar a.leaflet-disabled {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--muted-foreground));
+}
+
+.leaflet-bar a:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+
+.leaflet-popup-content-wrapper,
+.leaflet-popup-tip {
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+  box-shadow: 0 4px 14px hsl(var(--foreground) / 0.18);
+}
+
+.leaflet-popup-content-wrapper {
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.5rem;
+}
+
+.leaflet-container a.leaflet-popup-close-button {
+  color: hsl(var(--muted-foreground));
+}
+
+.leaflet-container a.leaflet-popup-close-button:hover,
+.leaflet-container a.leaflet-popup-close-button:focus {
+  color: hsl(var(--foreground));
+}
+
+/* Cluster spider legs. The class comes from spiderLegPolylineOptions in regions-map.tsx, not
+   from markercluster: it only adds .leaflet-cluster-spider-leg while animating, so targeting
+   that selector styled nothing once the legs settled. Verified in the browser: four SVG paths,
+   zero elements carrying markercluster's class. */
+.orcastra-spider-leg {
+  stroke: hsl(var(--primary));
+}
