@@ -75,6 +75,11 @@ tasks/
 # that make test-frontend and CI run, so that directory is tracked.
 scripts/*
 !scripts/checks/
+# Operator-facing upgrade tooling has to be fetchable from the repo: the person running
+# it is on a production VM with no access to this working tree.
+!scripts/upgrade_preflight.sh
+!scripts/rollback_release.sh
+!scripts/setup_opensearch_dashboards.sh
 config/
 backup/
 documentation/
