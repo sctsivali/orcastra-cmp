@@ -464,6 +464,20 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
   );
 }
 
+// A quota chip prints "19.9 of 512.0" over "GiB", so both numbers have to share one unit. The
+// unit comes from the limit and stops at TiB, which is what keeps the value line short enough for
+// three chips to sit across a card: an 8 TiB pool would otherwise print "0.0 of 8192.0".
+function formatQuota(usedBytes: number, limitBytes: number): { value: string; unit: string } {
+  const GIB = 1024 * 1024 * 1024;
+  const useTiB = limitBytes >= 1024 * GIB;
+  const divisor = useTiB ? 1024 * GIB : GIB;
+
+  return {
+    value: `${(usedBytes / divisor).toFixed(1)} of ${(limitBytes / divisor).toFixed(1)}`,
+    unit: useTiB ? "TiB" : "GiB",
+  };
+}
+
 function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances, stats, toggleProject, refetch, isReadOnly = false }: ProjectCardProps) {
   const deleteProject = useDeleteProject();
   const updateProject = useUpdateProject();
@@ -805,54 +819,54 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         </div>
         
         {/* Resource Usage */}
-        {/* important: one chip per row, not a 3-up grid. Measured in the live app, a chip in the
-            grid was 99px wide at 1440 and 53px at 1024, leaving the text column 59px and 13px
-            against the 70px "Unlimited" needs. Numeric readouts like "19.9 of 66.0 GiB" did not
-            fit either. A quota an operator has to hover to read is not a readout, so the row is
-            the unit now: icon and value on the left, resource on the right, one line each. That
-            costs about one line of card height, not the two a stacked grid would. `truncate` and
-            `title` stay as a backstop for a very narrow card. */}
-        <div className="grid grid-cols-1 gap-2 pt-2">
+        {/* important: the chip grid sizes itself from the card, not from a viewport breakpoint.
+            The sidebar collapses, so one viewport gives two different card widths and an `lg:`
+            rule would lie about the room available. `auto-fit` measures the real container: three
+            chips across a 385px card at 1728, two then one as the card narrows, so a chip is
+            never handed less room than its text needs. The 104px floor is measured rather than
+            guessed. Chip chrome costs 36px (padding, icon, gap, border) and the widest short
+            value, "Unlimited", is 59px in Geist 12px/600, so even the narrowest chip clears it.
+            note: the value wraps, it does not truncate. A quota is what an operator acts on, and
+            a wrapped "19.9 of 512.0" still says 512 where a clipped one says "19.9 of 5". */}
+        <div className="grid gap-2 pt-2 grid-cols-[repeat(auto-fit,minmax(104px,1fr))]">
           {[
             {
               key: "cpu",
               Icon: Cpu,
               label: "CPU",
-              value: limits.cpuLimit
-                ? `${resourceUsage.cpuUsed} of ${limits.cpuLimit} cores`
-                : "Unlimited",
+              spec: limits.cpuLimit
+                ? { value: `${resourceUsage.cpuUsed} of ${limits.cpuLimit}`, unit: "cores" }
+                : { value: "Unlimited", unit: "CPU" },
             },
             {
               key: "ram",
               Icon: MemoryStick,
               label: "RAM",
-              value: limits.ramLimitBytes
-                ? `${(resourceUsage.ramUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of ${(limits.ramLimitBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`
-                : "Unlimited",
+              spec: limits.ramLimitBytes
+                ? formatQuota(resourceUsage.ramUsedBytes, limits.ramLimitBytes)
+                : { value: "Unlimited", unit: "RAM" },
             },
             {
               key: "storage",
               Icon: HardDrive,
               label: "Storage",
-              value: limits.storageLimitBytes
-                ? `${(resourceUsage.storageUsedBytes / 1024 / 1024 / 1024).toFixed(1)} of ${(limits.storageLimitBytes / 1024 / 1024 / 1024).toFixed(1)} GiB`
-                : "Unlimited",
+              spec: limits.storageLimitBytes
+                ? formatQuota(resourceUsage.storageUsedBytes, limits.storageLimitBytes)
+                : { value: "Unlimited", unit: "Storage" },
             },
-          ].map(({ key, Icon, label, value }) => (
+          ].map(({ key, Icon, label, spec }) => (
             <div
               key={key}
-              className="flex items-center gap-1.5 p-2 rounded-md bg-muted/40 border border-border"
+              className="flex items-center gap-1.5 px-1.5 py-2 rounded-md bg-muted/40 border border-border"
             >
-              <Icon className="h-4 w-4 text-foreground/80 flex-shrink-0" />
-              <span
-                className="text-xs font-semibold text-foreground/80 truncate"
-                title={`${value} ${label}`}
-              >
-                {value}
-              </span>
-              <span className="text-[10px] text-muted-foreground ml-auto shrink-0">
-                {label}
-              </span>
+              <Icon className="h-4 w-4 text-foreground/80 shrink-0" />
+              <div className="flex flex-col min-w-0 break-words">
+                {/* the icon is the only thing naming CPU against RAM against Storage once the
+                    unit line reads "GiB" twice, so a screen reader gets the name in words. */}
+                {spec.unit !== label && <span className="sr-only">{label}</span>}
+                <span className="text-xs font-semibold text-foreground/80">{spec.value}</span>
+                <span className="text-[10px] text-muted-foreground">{spec.unit}</span>
+              </div>
             </div>
           ))}
         </div>
