@@ -75,6 +75,15 @@ TARGET_BACKEND="${REGISTRY_REPO}:backend-${TO}"
 TARGET_FRONTEND="${REGISTRY_REPO}:frontend-${TO}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
+# note: caught here rather than later because the rest of this script would happily
+# recreate both containers to land on the version already running, which during an incident
+# reads as "the rollback did nothing" instead of "you asked for the version you have".
+if [ -n "$CURRENT" ] && [ "$CURRENT" = "$TO" ]; then
+    echo -e "${YEL}APP_VERSION is already ${TO}; there is nothing to roll back to.${NC}"
+    echo "  Pass the version you want to return to, for example --to 1.0.0-RC3."
+    exit 1
+fi
+
 echo -e "${YEL}Rolling back ${CURRENT:-unknown} -> ${TO}${NC}"
 echo "  compose: $COMPOSE"
 echo "  env:     $ENV_FILE"
