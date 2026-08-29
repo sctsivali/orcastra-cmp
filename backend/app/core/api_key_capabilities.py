@@ -21,6 +21,7 @@ an empty one.
 
 import logging
 from typing import Any, Dict, Optional, Set
+from urllib.parse import unquote
 
 from fastapi import HTTPException
 
@@ -113,3 +114,54 @@ def assert_capability(api_key: Dict[str, Any], capability: str) -> None:
 def default_capabilities_for(app_type: str) -> Set[str]:
     """Capabilities to issue when a create request names a type but no capabilities."""
     return set(APP_TYPE_CAPABILITIES.get(app_type, set()))
+
+
+# ── the raw LXD proxy's path guard ─────────────────────────────────────────────────────────────
+
+# LXD API paths an integration must never reach through the proxy, whatever its cluster grant.
+#
+# important: a refusal list, not an allowlist, and that is a deliberate trade. An allowlist would
+# be safer and would also break OrcaHub the first time it used a path nobody had enumerated, so
+# the choice was to close what is provably dangerous and leave the rest working.
+#
+# `/certificates` is the sharp one. It is not project-scoped, so the per-key project allow-list
+# does not touch it, and it returns every client certificate trusted by that cluster. A key with
+# nothing but `read` on one cluster could enumerate the trust store of the whole control plane.
+# `/cluster/members` and `/resources` are omitted deliberately: they are topology, an integration
+# has legitimate reasons to read them, and the audit rated them lower than the certificate store.
+_REFUSED_PROXY_PREFIXES = ("/certificates",)
+
+
+def assert_proxy_path_allowed(path: str) -> None:
+    """Raise 403 for a proxy path no integration may reach, or 400 for a malformed one.
+
+    Traversal is refused rather than normalised. `requests` does not remove dot segments, so a
+    `..` reached LXD, whose Go mux cleaned the path and answered a redirect to somewhere outside
+    `/1.0`; following it carried the cluster's client certificate along. Redirects are no longer
+    followed (`services/lxd/proxy.py`), and this refuses the input that produced them, because
+    one of those two alone leaves the other as the only thing standing.
+    """
+    raw = path or ""
+    # Compare on the decoded form: `%2e%2e` and `..` must not be two different answers, which is
+    # the same lesson the project-smuggling filter in raw_proxy already learned.
+    decoded = unquote(unquote(raw))
+    if ".." in decoded or "\\" in decoded:
+        raise HTTPException(
+            status_code=400,
+            detail="Path may not contain traversal segments",
+        )
+
+    normalised = decoded.split("?", 1)[0]
+    if normalised.startswith("/1.0"):
+        normalised = normalised[4:]
+    if not normalised.startswith("/"):
+        normalised = "/" + normalised
+
+    lowered = normalised.lower().rstrip("/")
+    for prefix in _REFUSED_PROXY_PREFIXES:
+        if lowered == prefix or lowered.startswith(prefix + "/"):
+            logger.warning("Refusing proxy request to %s", prefix)
+            raise HTTPException(
+                status_code=403,
+                detail=f"The proxy does not expose {prefix}",
+            )

@@ -1175,7 +1175,19 @@ async def monitoring_websocket(ws: WebSocket):
 
     # Validate auth token from query param
     settings = get_settings()
-    if settings.auth_enabled and settings.authentik_issuer:
+    if settings.auth_enabled:
+        # important: gated on auth_enabled ALONE, and the issuer is checked separately below.
+        # Requiring the issuer here as well made the whole block, including the admin-only check,
+        # skip itself on the one configuration where it was most needed: an auth-enabled server
+        # that cannot verify a token used to serve this socket to anyone. This handler validates
+        # inline rather than through get_ws_user, so it carries its own copy of the refusal.
+        if not settings.authentik_issuer:
+            logger.error(
+                "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing the "
+                "monitoring WebSocket rather than serving it unauthenticated"
+            )
+            await ws.close(code=1011, reason="Authentication is enabled but not configured")
+            return
         token = ws.query_params.get("token")
         if not token:
             await ws.close(code=1008, reason="Authentication required")

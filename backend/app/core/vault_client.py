@@ -92,6 +92,31 @@ class VaultClientError(Exception):
     pass
 
 
+def _safe_vault_url(vault_addr: str, path: str) -> str:
+    """Build a Vault URL whose path cannot escape the segment the caller asked for.
+
+    important: every call site interpolated the path straight into the URL, and several build
+    that path from request data. `save_user_mapping_to_vault` puts a caller-supplied
+    `external_user_id` in it, so `../../../../clusters/<id>` produced a URL that Vault's own HTTP
+    layer normalised, and a user-mapping write landed on a cluster's certificate material.
+
+    Refusing rather than encoding, because no legitimate Vault path in this codebase contains a
+    dot segment, and an encoded `..` would still be a caller steering the path. Each segment is
+    percent-encoded so a stray slash cannot add a level either.
+    """
+    from urllib.parse import quote
+
+    clean = (path or "").strip("/")
+    if not clean:
+        raise VaultClientError("Empty Vault path")
+    segments = clean.split("/")
+    if any(segment in ("", ".", "..") for segment in segments):
+        raise VaultClientError(f"Refusing Vault path with a traversal or empty segment: {path!r}")
+    encoded = "/".join(quote(segment, safe="") for segment in segments)
+    return f"{vault_addr}/v1/{encoded}"
+
+
+
 class VaultClient:
     """
     Client for interacting with HashiCorp Vault.
@@ -136,30 +161,40 @@ class VaultClient:
         
         return session
     
-    def _is_sensitive_path(self, path: str) -> bool:
+    def _is_cacheable_path(self, path: str) -> bool:
         """
-        Check if a path contains sensitive data that should NEVER be cached in Redis.
-        
-        - Certificates and private keys should NEVER be cached externally
-        - Only Vault should hold sensitive credentials
-        - Memory caching in connection manager is acceptable (process-local)
+        Whether this path's contents may be mirrored into Redis.
+
+        important: an allowlist, and it replaced a denylist that had already failed. That
+        denylist matched the substrings '/certs', '/certificates', '/keys', '/private' and
+        '/secrets', and the API key credential path
+        ``secret/data/integrations/api_keys/<id>/secret`` slipped past it twice over: the path
+        contains ``api_keys``, which is ``_keys`` and not ``/keys``, and it ends in ``secret``,
+        singular, not ``secrets``. The plaintext key secret was therefore written to Redis in
+        clear for the cache TTL, which was confirmed against a running deployment rather than
+        inferred.
+
+        A denylist that has already missed two spellings of the same word is the wrong shape.
+        Anything not named here is not cached, so a new path is safe by default and the failure
+        mode of getting this wrong is a slower read rather than a leaked credential.
         """
-        sensitive_patterns = ['/certs', '/certificates', '/keys', '/private', '/secrets']
-        path_lower = path.lower()
-        return any(pattern in path_lower for pattern in sensitive_patterns)
-    
+        return path.lower().rstrip('/').endswith(self.CACHEABLE_PATH_SUFFIXES)
+
+    # Vault path suffixes whose contents carry no credential material. `/metadata` holds cluster
+    # and key descriptors; every sibling suffix in use (`/secret`, `/secrets`, `/certs`,
+    # `/credentials`) holds exactly the material that must never leave Vault.
+    CACHEABLE_PATH_SUFFIXES = ("/metadata",)
+
     def vault_read(self, path: str, use_cache: bool = True) -> Dict[str, Any]:
         """
         Read data from Vault with optional caching.
-        
-        Paths containing sensitive data (/certs, /keys, /secrets) are NEVER cached
-        in Redis, regardless of use_cache parameter.
-        This is to prevent credential leakage via cache.
+
+        Only paths on the cacheable allowlist are mirrored into Redis, regardless of the
+        ``use_cache`` parameter. See ``_is_cacheable_path``.
         """
         start = time.perf_counter()
-        # SECURITY: Never cache sensitive paths in Redis
-        is_sensitive = self._is_sensitive_path(path)
-        should_cache = use_cache and not is_sensitive
+        # SECURITY: only allowlisted paths may reach Redis
+        should_cache = use_cache and self._is_cacheable_path(path)
         
         # Try cache first (only for non-sensitive paths)
         cache = get_cache()
@@ -168,7 +203,7 @@ class VaultClient:
             if cached_data is not None:
                 return cached_data
         
-        url = f"{self.vault_addr}/v1/{path}"
+        url = _safe_vault_url(self.vault_addr, path)
         
         try:
             # Use faster timeout: (connect_timeout, read_timeout)
@@ -192,7 +227,7 @@ class VaultClient:
             _audit_vault_operation(
                 "vault.secret.read", path,
                 duration_ms=duration,
-                details={"cached": False, "sensitive": is_sensitive},
+                details={"cached": False, "cacheable": should_cache},
             )
 
             return data
@@ -230,8 +265,8 @@ class VaultClient:
             
             if "/metadata" in path:
                 return settings.cache_ttl_vault_metadata
-            # Note: /certs paths are never cached due to _is_sensitive_path check
-            # This branch exists for completeness but won't be used for caching
+            # Note: only /metadata reaches the cache at all (_is_cacheable_path), so this
+            # branch is unreachable for caching and stays as an explicit zero.
             elif "/certs" in path:
                 return 0  # Never cache
             elif "/secrets" in path:
@@ -246,7 +281,7 @@ class VaultClient:
         Write data to Vault (general purpose, including PKI operations).
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = _safe_vault_url(self.vault_addr, path)
         
         try:
             response = self.session.post(url, headers=self.headers, json=data, timeout=(2, 3))
@@ -277,7 +312,7 @@ class VaultClient:
         Invalidates cache for the path.
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = _safe_vault_url(self.vault_addr, path)
         
         payload = {"data": data}
         
@@ -320,7 +355,7 @@ class VaultClient:
         Invalidates cache for the path.
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = _safe_vault_url(self.vault_addr, path)
         
         try:
             response = self.session.delete(url, headers=self.headers, timeout=10)
@@ -371,7 +406,7 @@ class VaultClient:
             path: Vault metadata path to delete (ex; "secret/metadata/clusters/cluster-id")
         """
         start = time.perf_counter()
-        url = f"{self.vault_addr}/v1/{path}"
+        url = _safe_vault_url(self.vault_addr, path)
         
         try:
             response = self.session.delete(url, headers=self.headers, timeout=10)
@@ -425,7 +460,7 @@ class VaultClient:
             if cached_data is not None:
                 return cached_data
         
-        url = f"{self.vault_addr}/v1/{path}"
+        url = _safe_vault_url(self.vault_addr, path)
         
         try:
             response = self.session.request('LIST', url, headers=self.headers, timeout=(2, 3))

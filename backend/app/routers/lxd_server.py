@@ -17,6 +17,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.services.lxd.resources import public_config, public_environment
 from app.core.type_utils import detect_cluster_type_from_metadata
 from app.core.node_metadata import get_node_metadata_store
 from pydantic import BaseModel, Field
@@ -96,8 +97,8 @@ def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Opti
             node_type=detected_type,
             api_version=server_data.get('api_version', ''),
             auth=server_data.get('auth', ''),
-            config=server_data.get('config', {}),
-            environment=server_data.get('environment', {}),
+            config=public_config(server_data.get('config', {})),
+            environment=public_environment(server_data.get('environment', {})),
             public=server_data.get('public', False)
         )
     except LXDConnectionError:
@@ -207,8 +208,8 @@ async def get_server_info(
             node_type=detected_type,
             api_version=server_data.get('api_version', ''),
             auth=server_data.get('auth', ''),
-            config=server_data.get('config', {}),
-            environment=server_data.get('environment', {}),
+            config=public_config(server_data.get('config', {})),
+            environment=public_environment(server_data.get('environment', {})),
             public=server_data.get('public', False)
         )
     except HTTPException:
@@ -236,7 +237,9 @@ async def get_server_config(
     try:
         client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
         server_data = client.host_info
-        return server_data.get('config', {})
+        # important: the same allowlist as the two ServerInfo builders above. This endpoint
+        # returned the raw block, which is where an LXD daemon keeps core.trust_password.
+        return public_config(server_data.get('config', {}))
     except HTTPException:
         # broad handler below converts it into a 500
         # important: let require_client's 503 through. Without this the

@@ -18,6 +18,7 @@ from app.core.dependencies import (
     require_tenant,
 )
 from app.core.rbac import resolve_roles, get_highest_role
+from app.core.org_scope import get_owned_clusters_ignoring_admin
 from app.services.organization_service import OrganizationService
 from app.services.organization_preferences import (
     get_org_preferences_payload,
@@ -383,6 +384,23 @@ async def bind_cluster(
 
     if not await svc.user_has_access(org_id, user.email, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No access to this organization")
+
+    # important: `user_has_access` checks the ORGANISATION, which is the caller's own. Nothing
+    # checked the CLUSTER, and org scope is derived from exactly the row this writes
+    # (org_scope._query_owned_clusters). A partner could therefore create an org, bind another
+    # tenant's cluster id to it, and gain full org scope over that cluster: instances, networks,
+    # storage, console and terminal, with break-glass treating it as owned rather than foreign.
+    #
+    # Same rule the API-key doors already apply: you may only grant what you already hold.
+    # Personally registered clusters count as owned, so the org-less partner bootstrap that
+    # reconcile_personal_clusters exists for still works.
+    if role != "admin":
+        owned = await get_owned_clusters_ignoring_admin(user, db)
+        if body.cluster_id not in owned:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Not permitted to bind cluster {body.cluster_id}",
+            )
 
     try:
         binding = await svc.bind_cluster(org_id, body.cluster_id, registered_by=user.email)

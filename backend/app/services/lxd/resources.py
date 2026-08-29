@@ -557,3 +557,39 @@ class ResourceManager:
         except Exception as e:
             logger.error(f"Error getting metrics for '{instance_name}' on {host}: {e}")
             raise LXDOperationError(f"Failed to get metrics: {str(e)}")
+
+
+# Keys of the LXD server `config` block that may reach a client.
+#
+# important: allowlist, for the same reason PUBLIC_ENVIRONMENT_KEYS is one, and arguably a
+# sharper need. The raw config block is where an LXD daemon keeps `core.trust_password`, the
+# cluster join secret, `core.https_address` and every candid/OIDC setting. It was returned whole
+# by GET /server, GET /server/{node} and GET /server/{node}/config, all of which sit on a
+# require_tenant() router.
+#
+# The page that renders this filtered certificate keys in the browser
+# (frontend/src/app/inventory/server/page.tsx), which narrows what is displayed and not what is
+# sent; the API response carried the lot regardless of what the page chose to draw.
+#
+# Nothing in the backend reads ServerInfo.config, so narrowing this is contained to the wire.
+PUBLIC_CONFIG_KEYS = frozenset(
+    {
+        "core.https_address",
+        "cluster.https_address",
+        "core.proxy_ignore_hosts",
+        "images.auto_update_cached",
+        "images.auto_update_interval",
+        "images.compression_algorithm",
+        "images.remote_cache_expiry",
+        "instances.nic.host_name",
+        "storage.backups_volume",
+        "storage.images_volume",
+    }
+)
+
+
+def public_config(config: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The server config block minus anything a client has no business holding."""
+    if not config:
+        return config
+    return {key: value for key, value in config.items() if key in PUBLIC_CONFIG_KEYS}

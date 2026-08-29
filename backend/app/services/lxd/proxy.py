@@ -103,15 +103,28 @@ def raw_request(
     body: Optional[Dict[str, Any]],
     timeout: Tuple[int, int],
 ) -> requests.Response:
-    """Blocking half of raw_proxy. Only ever runs on proxy_executor, never on the event loop."""
+    """Blocking half of raw_proxy. Only ever runs on proxy_executor, never on the event loop.
+
+    important: redirects are not followed. `requests` follows them by default and does not remove
+    dot segments from a path, so a caller-supplied `..` reached LXD, whose Go mux cleans the path
+    and answers 301, and the client then followed that redirect to a location outside `/1.0` with
+    the cluster's mTLS client certificate attached. Refusing to follow means the caller sees the
+    301 and the credential never travels anywhere it was not authorised to go. Nothing in this
+    proxy has a legitimate need for a redirect: every path is a direct LXD API endpoint.
+
+    note: `timeout=` is spelled out on every call rather than collapsed into a **kwargs dict.
+    `tests/test_no_untimed_http_calls.py` reads these statements with the AST and cannot see
+    through a dict, so folding them would silently retire a ratchet that exists to stop an
+    untimed call from parking a worker forever.
+    """
     if method == "GET":
-        return session.get(url, verify=False, timeout=timeout)
+        return session.get(url, verify=False, timeout=timeout, allow_redirects=False)
     if method == "POST":
-        return session.post(url, json=body, verify=False, timeout=timeout)
+        return session.post(url, json=body, verify=False, timeout=timeout, allow_redirects=False)
     if method == "PUT":
-        return session.put(url, json=body, verify=False, timeout=timeout)
+        return session.put(url, json=body, verify=False, timeout=timeout, allow_redirects=False)
     if method == "PATCH":
-        return session.patch(url, json=body, verify=False, timeout=timeout)
+        return session.patch(url, json=body, verify=False, timeout=timeout, allow_redirects=False)
     if method == "DELETE":
-        return session.delete(url, verify=False, timeout=timeout)
+        return session.delete(url, verify=False, timeout=timeout, allow_redirects=False)
     raise ValueError(f"Unsupported method: {method}")

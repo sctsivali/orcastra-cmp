@@ -42,10 +42,12 @@ from app.core.api_key_capabilities import (
     CAPABILITIES,
     ELEVATED_CAPABILITIES,
     assert_capability,
+    assert_proxy_path_allowed,
     default_capabilities_for,
     granted_capabilities,
 )
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
@@ -128,7 +130,17 @@ class ClusterPermission(BaseModel):
 
 class ExternalUserMapping(BaseModel):
     """Maps external user to Orcastra identity."""
-    external_user_id: str = Field(..., description="User ID from external system (ex;, Authentik)")
+    # important: this value is interpolated into a Vault KV path by save_user_mapping_to_vault.
+    # Unconstrained, `../../../../clusters/<id>` reached Vault, whose HTTP layer normalises the
+    # path, and the mapping JSON overwrote a cluster's stored certificate material. The charset
+    # is the boundary half of the fix; vault_client percent-encodes the segment as the other.
+    external_user_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_](?:[A-Za-z0-9._@|-]*[A-Za-z0-9_])?$",
+        description="User ID from external system (ex;, Authentik)",
+    )
     external_email: str = Field(..., description="User email from external system")
     external_name: Optional[str] = Field(None, description="User display name")
     orcastra_identity_id: Optional[str] = Field(None, description="Mapped Orcastra identity ID")
@@ -272,7 +284,13 @@ class APIKeyValidateResponse(BaseModel):
 
 class UserMappingRequest(BaseModel):
     """Request to create/update user mapping."""
-    external_user_id: str = Field(..., description="External user ID")
+    external_user_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_](?:[A-Za-z0-9._@|-]*[A-Za-z0-9_])?$",
+        description="External user ID",
+    )
     external_email: str = Field(..., description="External user email")
     external_name: Optional[str] = Field(None, description="External user name")
     cluster_permissions: List[ClusterPermission] = Field(
@@ -311,6 +329,25 @@ class SyncDataRequest(BaseModel):
     )
     # Callback URL for on-demand data pull
     app_url: Optional[str] = Field(None, description="External app base URL for callbacks")
+
+    @field_validator("app_url")
+    @classmethod
+    def _refuse_a_callback_this_server_must_not_call(cls, value: Optional[str]) -> Optional[str]:
+        """`app_url` is stored and then fetched by this server, so it is an SSRF sink.
+
+        Three separate outbound requests are built from it: the member push in
+        `orcahub_sync.push_members_to_orcahub`, which sends the key's own PLAINTEXT secret; the
+        organization pull in `refresh_organizations`, whose response is fed straight into
+        organization creation; and the lifecycle webhook, which sends a valid HMAC. Pointed at
+        169.254.169.254 or at this network's own Vault, each of those becomes a credential
+        delivery or an injection channel.
+
+        The capability gate on this field answers "may you set it", never "is this value safe".
+        https is required because every one of those requests carries a credential.
+        """
+        if value is None:
+            return None
+        return assert_url_is_fetchable(value, field="app_url", require_https=True)
     # Member data pushed from external app (ex; OrcaHub)
     members: List[SyncMember] = Field(
         default_factory=list,
@@ -1009,10 +1046,21 @@ async def _upsert_synced_organizations(
                     api_key_id=api_key_id,
                     is_active=True,
                 ))
-            elif slug_owner.source == "orcahub" and slug_owner.external_id not in incoming_ids:
+            elif (
+                slug_owner.source == "orcahub"
+                and slug_owner.external_id not in incoming_ids
+                and (not slug_owner.api_key_id or slug_owner.api_key_id == api_key_id)
+            ):
                 # The row's OrcaHub identity is RETIRED (its external_id is absent from this
                 # push) and OrcaHub slugs are globally unique, so this row is the deleted
                 # predecessor of the incoming org that reused the slug. Re-link it in place.
+                #
+                # important: the ownership term is load-bearing and was missing. Pass 1 refuses to
+                # touch an organisation owned by another key, with a comment saying why; this
+                # branch reassigns `api_key_id` outright, so without the same test any key could
+                # take over another integration's organisation by pushing an org that merely
+                # reused its slug with a fresh external_id. Owning it then passes every later
+                # check, including the member sync that pushes roles into Authentik.
                 slug_owner.name = org_data.name
                 slug_owner.description = org_data.description
                 slug_owner.external_id = org_data.id
@@ -2242,6 +2290,8 @@ async def raw_proxy(
         if method not in ALLOWED_METHODS:
             raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
 
+        assert_proxy_path_allowed(request.path)
+
         required_permission = "read"
 
         if method in ["POST", "PUT", "PATCH"]:
@@ -2789,11 +2839,12 @@ async def refresh_organizations(
 
     vault_client = get_vault_integrations_client()
 
-    # Retrieve API key metadata including app_url and credentials
-    try:
-        metadata, _ = get_api_key_from_vault(vault_client, api_key_id)
-    except HTTPException:
-        raise HTTPException(status_code=404, detail="API key not found")
+    # important: every other single-key handler here scopes through _authorize_api_key, and this
+    # one took `api_key_id` straight from a query parameter. Any partner could therefore name any
+    # key in any organisation and make this server issue an authenticated request to that key's
+    # stored callback, then have the response upserted as organizations. Same overlap rule, same
+    # 404-for-out-of-scope shape, so an id cannot be probed apart from a nonexistent one.
+    metadata = _authorize_api_key(vault_client, api_key_id)
 
     app_url = metadata.get("app_url")
     if not app_url:
@@ -2825,7 +2876,9 @@ async def refresh_organizations(
             resp.raise_for_status()
             data = resp.json()
     except httpx.HTTPStatusError as e:
-        logger.error(f"External app returned {e.response.status_code}: {e.response.text}")
+        # note: status only. Logging the body put the fetched content into the log,
+        # which turns a blind SSRF into a returned one for anyone who can read logs.
+        logger.error("External app returned %s for the configured callback", e.response.status_code)
         raise HTTPException(status_code=502, detail=f"External app returned {e.response.status_code}")
     except Exception as e:
         logger.error(f"Failed to reach external app at {callback_url}: {e}")
@@ -2917,8 +2970,13 @@ async def sync_policies_from_external(
     for sync_policy in body.policies:
         try:
             # find org by external_id
+            # important: `source` is filtered here as every sibling lookup in this file does.
+            # Without it a dashboard-created organisation that happens to carry an external_id
+            # was writable through this endpoint, which grants tenants operate and console access
+            # to clusters. The ownership test below is the second half.
             org_stmt = select(Organization).where(
                 and_(
+                    Organization.source == "orcahub",
                     Organization.external_id == sync_policy.org_external_id,
                     Organization.is_active == True,
                 )
@@ -2933,10 +2991,14 @@ async def sync_policies_from_external(
             # tenant access policies, which are authorization data. Without binding the key to
             # the org, any valid key could write policies into another integration's tenants.
             # Reported as not-found so a caller cannot probe which external ids exist.
-            if org.api_key_id and org.api_key_id != api_key_id:
+            # important: `if org.api_key_id and ...` skipped the check entirely for an
+            # unclaimed organisation, so a NULL owner was an open door rather than a closed one.
+            # Writing tenant access policies is an authorization write; an organisation no key
+            # has claimed is not one this key may write to.
+            if org.api_key_id != api_key_id:
                 logger.warning(
                     "Refusing policy sync into organization %s: owned by api key %s, caller is %s",
-                    org.slug, org.api_key_id, api_key_id,
+                    org.slug, org.api_key_id or "<none>", api_key_id,
                 )
                 errors.append(f"Organization with external_id '{sync_policy.org_external_id}' not found")
                 continue

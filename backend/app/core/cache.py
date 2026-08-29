@@ -239,10 +239,15 @@ class CacheManager:
     
     def _is_sensitive_field(self, field_name: str) -> bool:
         """Check if a field name indicates sensitive data."""
+        # important: 'raw' is here because the field that leaked was named `raw`, not anything
+        # this list would have guessed. The Vault path allowlist is the primary control now
+        # (vault_client._is_cacheable_path); this is the second layer, and it only helps if it
+        # covers field names chosen for brevity rather than for description. Over-matching costs
+        # a needless encrypt/decrypt round trip, which is the cheap direction to be wrong in.
         sensitive_patterns = [
             'password', 'token', 'secret', 'key', 'cert', 'certificate',
             'credential', 'auth', 'private', 'trust_password', 'client.crt',
-            'client.key', 'ca.pem', 'pem', 'crt'
+            'client.key', 'ca.pem', 'pem', 'crt', 'raw'
         ]
         field_lower = field_name.lower()
         return any(pattern in field_lower for pattern in sensitive_patterns)

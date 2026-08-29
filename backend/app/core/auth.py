@@ -12,7 +12,7 @@ from typing import Optional
 
 import httpx
 import jwt
-from fastapi import Depends, HTTPException, Request, WebSocket, status
+from fastapi import Depends, HTTPException, Request, WebSocket, WebSocketException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import Settings, get_settings
@@ -353,11 +353,27 @@ async def get_ws_user(
     Extracts token from the ``token`` query parameter
     (WebSocket connections cannot use HTTP Authorization headers after upgrade).
     Returns ``None`` when auth is disabled; validates JWT otherwise.
-    Does NOT close the socket - callers decide how to handle ``None``.
+    Does NOT close the socket for a bad token - callers decide how to handle ``None``.
+
+    important: it DOES close the socket for a misconfigured server, and that asymmetry is the
+    whole point. `None` means "no authentication is expected here", which every caller reads as
+    permission to continue. Returning it for an auth-enabled server that cannot verify tokens
+    made one unset variable open the sockets to anyone, and the guards could not catch it because
+    they were gated on the same unset variable. See the matching branch in `get_current_user`.
     """
 
-    if not settings.auth_enabled or not settings.authentik_issuer:
+    if not settings.auth_enabled:
         return None
+
+    if not settings.authentik_issuer:
+        logger.error(
+            "AUTH_ENABLED=true but AUTHENTIK_ISSUER is not configured; refusing every WebSocket "
+            "until it is set, rather than serving them unauthenticated"
+        )
+        raise WebSocketException(
+            code=status.WS_1011_INTERNAL_ERROR,
+            reason="Authentication is enabled but not configured on this server",
+        )
 
     token = websocket.query_params.get("token")
     if not token:

@@ -1236,7 +1236,11 @@ async def console_websocket(
     # Validate auth when enabled
     from app.core.config import get_settings as _gs
     _settings = _gs()
-    if _settings.auth_enabled and _settings.authentik_issuer and user is None:
+    # important: gated on auth_enabled ALONE. This used to also require
+    # `_settings.authentik_issuer`, which is the variable whose absence produces the
+    # unauthenticated `user`, so the guard switched itself off in exactly the situation it
+    # existed to catch. get_ws_user now refuses a misconfigured server itself.
+    if _settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
 

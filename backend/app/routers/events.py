@@ -35,7 +35,11 @@ async def events_websocket(
     """Stream a node's LXD operation events (incl. image-pull progress) to the
     browser. Auth token is passed as the ``token`` query parameter."""
     settings = get_settings()
-    if settings.auth_enabled and settings.authentik_issuer and user is None:
+    # important: gated on auth_enabled ALONE. This used to also require
+    # `_settings.authentik_issuer`, which is the variable whose absence produces the
+    # unauthenticated `user`, so the guard switched itself off in exactly the situation it
+    # existed to catch. get_ws_user now refuses a misconfigured server itself.
+    if settings.auth_enabled and user is None:
         await websocket.close(code=1008, reason="Authentication required")
         return
 
