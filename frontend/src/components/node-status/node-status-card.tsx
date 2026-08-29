@@ -34,6 +34,7 @@ import { Label } from "@/components/ui/label";
 import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { usePermissions } from "@/hooks/use-permissions";
 import { cn } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
@@ -52,6 +53,11 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
   const updateNodeTags = useUpdateNodeTags();
   const updateNodeDisplayName = useUpdateNodeDisplayName();
   const { isReadOnly } = useReadOnlyMode();
+  // important: this card is mounted ungated on the Overview, which every role reaches. The
+  // node name and its status are the tenant's business, because their instance runs there.
+  // The control-plane endpoint, the raw connection error, the rename action and the upgrade
+  // runbook are the operator's, and a tenant is shown none of them anywhere else.
+  const { isPartner } = usePermissions();
   const [editNameDialogOpen, setEditNameDialogOpen] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [newDisplayName, setNewDisplayName] = useState(node.display_name || node.name);
@@ -168,13 +174,15 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
                   {node.name}
                 </p>
               )}
-              <p className="text-xs text-muted-foreground">
-                <OverflowText
-                  value={node.endpoint}
-                  label={`endpoint for ${node.display_name || node.name}`}
-                  mono
-                />
-              </p>
+              {isPartner && (
+                <p className="text-xs text-muted-foreground">
+                  <OverflowText
+                    value={node.endpoint}
+                    label={`endpoint for ${node.display_name || node.name}`}
+                    mono
+                  />
+                </p>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
@@ -184,29 +192,33 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               <StatusIcon className="h-3 w-3" />
               {statusMeta.label}
             </Badge>
-            <div onClick={(e) => e.stopPropagation()}>
-              <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for node ${node.name}`}>
-                    <MoreVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem 
-                    className="cursor-pointer"
-                    onSelect={(e) => {
-                      e.preventDefault();
-                      setNewDisplayName(node.display_name || node.name);
-                      setEditNameDialogOpen(true);
-                      setDropdownOpen(false); // Close dropdown when opening dialog
-                    }}
-                  >
-                    <Edit className="mr-2 h-4 w-4" />
-                    Edit Name
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+            {/* the endpoint behind this is require_partner() (backend nodes.py), so offering it
+                to a tenant is a button that can only ever answer 403 */}
+            {isPartner && (
+              <div onClick={(e) => e.stopPropagation()}>
+                <DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Actions for node ${node.name}`}>
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem 
+                      className="cursor-pointer"
+                      onSelect={(e) => {
+                        e.preventDefault();
+                        setNewDisplayName(node.display_name || node.name);
+                        setEditNameDialogOpen(true);
+                        setDropdownOpen(false); // Close dropdown when opening dialog
+                      }}
+                    >
+                      <Edit className="mr-2 h-4 w-4" />
+                      Edit Name
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            )}
           </div>
         </div>
         {node.connected && node.server_version && (
@@ -220,8 +232,12 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
                 <span className="font-medium">Hypervisor API:</span> {node.api_version}
               </span>
             )}
-            {/* Version checker supports the current hypervisor families. */}
-            <LXDVersionChecker currentVersion={node.server_version} nodeType={node.node_type ?? undefined} />
+            {/* Version checker supports the current hypervisor families. Partner+ only: it
+                carries the upgrade command and warns about instance restarts, which is a
+                maintenance instruction a tenant can neither run nor act on. */}
+            {isPartner && (
+              <LXDVersionChecker currentVersion={node.server_version} nodeType={node.node_type ?? undefined} />
+            )}
           </div>
         )}
         {node.connected && node.resources && (
@@ -290,7 +306,10 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             </div>
           </div>
         )}
-        {!node.connected && node.error && (
+        {/* node.error is the backend exception verbatim (str(e) at services/lxd/lxd_service.py),
+            so it carries the endpoint, port and TLS detail. The status badge above already tells
+            a tenant the node is not answering, which is the part that concerns them. */}
+        {isPartner && !node.connected && node.error && (
           <p className="mt-3 text-xs text-destructive">{node.error}</p>
         )}
 

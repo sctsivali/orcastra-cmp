@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ServerOff } from "lucide-react";
 import {
   Dialog,
@@ -63,6 +64,11 @@ export function NodeDetailModal({
   listCollectedAt,
   isOrphaned = false,
 }: NodeDetailModalProps) {
+  // important: this dialog opens from the node card on the Overview, which every role reaches.
+  // The card no longer shows the control-plane endpoint to a tenant, so showing it one click
+  // deeper would make that gate cosmetic. Placed here, not next to its use, because of the
+  // early return below.
+  const { isPartner } = usePermissions();
   const [tab, setTab] = React.useState<NodeDetailTab>("system");
 
   React.useEffect(() => {
@@ -111,13 +117,18 @@ export function NodeDetailModal({
           <div className="flex-1">
             <DialogTitle className="flex items-center gap-2 text-2xl">
               {label}
-              {isPendingTrust && (
+              {/* certificate-handshake state, and the page that resolves it is partner-gated */}
+              {isPartner && isPendingTrust && (
                 <Badge className="text-xs" variant="secondary">
                   Pending Trust
                 </Badge>
               )}
             </DialogTitle>
-            <DialogDescription className="font-mono">{node.endpoint}</DialogDescription>
+            {/* a tenant gets the cluster id, which is already the Node column on every table,
+                rather than the hypervisor endpoint they cannot address */}
+            <DialogDescription className="font-mono">
+              {isPartner ? node.endpoint : node.name}
+            </DialogDescription>
             <LiveTimestamp
               className="mt-1"
               forceStale={isOrphaned || unreachable || liveFailed}

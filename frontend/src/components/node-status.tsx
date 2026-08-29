@@ -16,7 +16,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LXDVersionChecker } from "./lxd-version-checker";
 import { NodeConnectionSummary } from "./node-connection-summary";
 import {
   DropdownMenu,

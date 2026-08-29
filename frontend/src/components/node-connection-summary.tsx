@@ -8,6 +8,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { NodeStatus } from "@/types";
+import { usePermissions } from "@/hooks/use-permissions";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { cn } from "@/lib/utils";
 
@@ -27,12 +28,26 @@ export function NodeConnectionSummary({
   nodes = [],
   allConnected = false,
 }: NodeConnectionSummaryProps) {
+  const { isPartner } = usePermissions();
+
   if (nodes.length === 0) {
     return <p className="text-xs text-muted-foreground mt-1">No Clusters</p>;
   }
 
   if (allConnected) {
     return <p className="text-xs text-muted-foreground mt-1">All Connected</p>;
+  }
+
+  // important: the tooltip below is a diagnosis, not a status. It carries the node id, the
+  // control-plane endpoint, the breaker state and the raw connection error. A tenant gets the
+  // same count as plain text rather than a control that opens onto operator detail, because a
+  // trigger that reveals nothing is worse than no trigger.
+  if (!isPartner) {
+    return (
+      <p className="text-xs text-muted-foreground mt-1">
+        {`${nodes.filter((n) => n.connected).length} of ${nodes.length} connected`}
+      </p>
+    );
   }
 
   const disconnectedNodes = nodes.filter((node) => !node.connected || !node.server_version);

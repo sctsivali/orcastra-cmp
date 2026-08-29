@@ -1,8 +1,11 @@
+"use client";
+
 import { memo } from "react";
 import { Play, Server } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { clusterStatusMeta } from "@/lib/cluster-status";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ClusterStatus } from "@/types/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -27,6 +30,7 @@ interface NodeCardProps {
 }
 
 export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
+  const { isPartner } = usePermissions();
   const gpu = summarizeGpus(node);
   // note: this endpoint still emits "pending_trust", which is not in the ClusterStatus enum.
   // clusterStatusMeta accepts it as a documented alias, so this card reads the same vocabulary
@@ -50,7 +54,10 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
             <Server className="h-5 w-5 text-muted-foreground" />
             <CardTitle className="text-base">{node.node_name}</CardTitle>
           </div>
-          {node.status_message && !node.is_online ? (
+          {/* status_message is the backend exception reflected back (monitoring.py builds it
+              from node.error, which is str(e)), so it carries the endpoint, port and TLS
+              detail. The badge already says the node is not answering. */}
+          {isPartner && node.status_message && !node.is_online ? (
             <UITooltip>
               <TooltipTrigger asChild>
                 <div className="cursor-help">
@@ -138,9 +145,11 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
           <div className="text-center py-4 text-muted-foreground">
             <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
             <p className="text-sm font-medium">
-              {node.cluster_status === "pending_trust" ? "Pending Trust" : "Node is offline"}
+              {/* "Pending Trust" is certificate-handshake vocabulary. Both states mean the same
+                  thing to a tenant: this node is not answering right now. */}
+              {isPartner && node.cluster_status === "pending_trust" ? "Pending Trust" : "Node is offline"}
             </p>
-            {node.status_message && (
+            {isPartner && node.status_message && (
               <p className="text-xs mt-1 max-w-[200px] mx-auto">{node.status_message}</p>
             )}
           </div>
