@@ -69,7 +69,28 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Orcastra Dashboard API...")
     settings = get_settings()
-    
+
+    # important: the per-key budget only isolates integrations from each other while it is
+    # strictly below the per-IP one. Buckets are evaluated together and the request is refused by
+    # whichever is reached first, so at or above it the IP bucket always refuses first and the
+    # per-key bucket never binds. Nothing fails when that happens: the feature is simply absent,
+    # and a chatty key goes back to spending everyone else's budget. It is a two-variable
+    # relationship an operator can break by tuning either one, so it is checked out loud here
+    # rather than left to whoever reads the config comment.
+    if (
+        settings.rate_limit_enabled
+        and settings.rate_limit_api_key_requests > 0
+        and settings.rate_limit_api_key_requests >= settings.rate_limit_requests
+    ):
+        logger.warning(
+            "RATE_LIMIT_API_KEY_REQUESTS (%s) is not below RATE_LIMIT_REQUESTS (%s), so the "
+            "per-API-key budget can never be reached and one integration can still exhaust the "
+            "budget every other integration behind the same address depends on. Set it below "
+            "the per-IP limit, or to 0 to disable it deliberately.",
+            settings.rate_limit_api_key_requests,
+            settings.rate_limit_requests,
+        )
+
     # Pre-warm JWKS cache to avoid blocking first auth request (~5s savings)
     if settings.auth_enabled and settings.authentik_issuer:
         try:

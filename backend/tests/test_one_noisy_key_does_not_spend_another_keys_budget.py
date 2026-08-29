@@ -21,7 +21,7 @@ from unittest import mock
 
 from starlette.requests import Request
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.middleware import security
 from app.middleware.security import RequestSecurityMiddleware, consume_api_key_budget
 
@@ -125,22 +125,59 @@ class AuthenticatedBudgetTests(unittest.TestCase):
 
 
 class BudgetSizingTests(unittest.TestCase):
-    def test_the_per_key_budget_binds_before_the_ip_budget(self) -> None:
-        """The property the whole bucket depends on, and the one easy to get backwards.
+    """The property the whole bucket depends on, and the one easy to get backwards.
 
-        At or above the per-IP limit the IP bucket is always reached first, the per-key bucket
-        never binds, and a runaway key still spends every other integration's budget. Isolation
-        exists only while this is strictly lower, which also guarantees a second key behind the
-        same address always retains `rate_limit_requests - rate_limit_api_key_requests` headroom.
-        """
-        settings = get_settings()
-        if settings.rate_limit_api_key_requests == 0:
-            self.skipTest("per-key bucket disabled in this environment")
+    At or above the per-IP limit the IP bucket is always reached first, the per-key bucket never
+    binds, and a runaway key still spends every other integration's budget. Isolation exists only
+    while the per-key figure is strictly lower, which also guarantees a second key behind the same
+    address always retains `rate_limit_requests - rate_limit_api_key_requests` headroom.
+
+    important: asserted against the DEFAULTS, not against `get_settings()`. Reading the live
+    settings couples the suite to whatever `.env` the box happens to carry, so a deployment that
+    lowers RATE_LIMIT_REQUESTS would fail this test for an environmental reason while CI, which
+    has no .env, stayed green. That is the flaky-for-environmental-reasons shape, and the runtime
+    already warns about the misconfiguration at startup, which is where an operator can act on it.
+    """
+
+    def test_the_default_per_key_budget_binds_before_the_default_ip_budget(self) -> None:
+        fields = Settings.model_fields
+        per_key = fields["rate_limit_api_key_requests"].default
+        per_ip = fields["rate_limit_requests"].default
+        self.assertGreater(per_key, 0, "the shipped default must not disable the bucket")
         self.assertLess(
-            settings.rate_limit_api_key_requests,
-            settings.rate_limit_requests,
+            per_key,
+            per_ip,
             "a per-key budget at or above the per-IP budget can never bind, so it isolates nothing",
         )
+
+    def test_a_deployment_that_breaks_the_relationship_is_warned_about(self) -> None:
+        """The other half: defaults cannot protect an operator who tunes either variable.
+
+        important: reads the file rather than importing `app.main`. Importing it constructs the
+        whole FastAPI app as a side effect, including every router prefix, so this test failed
+        intermittently with "A path prefix must start with '/'" depending on which other test the
+        randomised order had already run. A structural assertion must not depend on application
+        import succeeding.
+        """
+        import ast
+        from pathlib import Path
+
+        main = Path(__file__).resolve().parents[1] / "app" / "main.py"
+        tree = ast.parse(main.read_text())
+        lifespan = next(
+            (
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "lifespan"
+            ),
+            None,
+        )
+        self.assertIsNotNone(lifespan, "app/main.py no longer defines lifespan")
+
+        source = ast.unparse(lifespan)
+        self.assertIn("RATE_LIMIT_API_KEY_REQUESTS", source)
+        self.assertIn("rate_limit_api_key_requests >= settings.rate_limit_requests", source)
 
 
 class SpendPlacementTests(unittest.TestCase):
