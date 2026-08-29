@@ -1530,6 +1530,9 @@ export interface APIKeyInfo {
   name: string;
   app_name: string;
   app_type: string;
+  // null marks a key issued before capabilities existed. It keeps unrestricted access to the
+  // external router, which is why the UI flags it rather than rendering it as "no access".
+  capabilities?: string[] | null;
   created_at: string;
   expires_at?: string | null;
   is_active: boolean;
@@ -1543,8 +1546,29 @@ export interface APIKeyCreateRequest {
   name: string;
   app_name: string;
   app_type?: string;
+  // Omit to take the application type's defaults. An empty array is rejected by the API.
+  capabilities?: string[];
   cluster_permissions: ClusterPermission[];
   expire_days?: number | null;
+}
+
+export interface CapabilityOption {
+  name: string;
+  description: string;
+  // Writes authorization data (organizations, member roles, tenant access grants) rather than
+  // reading or driving infrastructure. The picker marks these instead of listing all
+  // capabilities as equivalent ticks.
+  elevated: boolean;
+}
+
+export interface ApplicationTypeOption {
+  name: string;
+  default_capabilities: string[];
+}
+
+export interface CapabilityVocabularyResponse {
+  capabilities: CapabilityOption[];
+  application_types: ApplicationTypeOption[];
 }
 
 export interface APIKeyCreateResponse {

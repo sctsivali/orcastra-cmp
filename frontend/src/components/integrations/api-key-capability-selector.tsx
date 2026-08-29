@@ -1,0 +1,91 @@
+"use client";
+
+import * as React from "react";
+import { ShieldAlert } from "lucide-react";
+
+import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+import type { CapabilityOption } from "@/types";
+
+interface ApiKeyCapabilitySelectorProps {
+  capabilities: CapabilityOption[];
+  selected: string[];
+  onToggle: (capability: string) => void;
+  disabled?: boolean;
+}
+
+// Which endpoint families a key may use, as opposed to which clusters it may reach. The two
+// compose: a key needs lxd.proxy to use the proxy at all, and still needs the right per-cluster
+// level once it is there.
+//
+// Selection is tracked by name and mirrors the cluster picker's idiom next to it, including the
+// label-wraps-input pattern, so the whole row is a hit target for a pointer and the checkbox is
+// reachable by keyboard.
+export function ApiKeyCapabilitySelector({
+  capabilities,
+  selected,
+  onToggle,
+  disabled = false,
+}: ApiKeyCapabilitySelectorProps) {
+  const safeList = Array.isArray(capabilities) ? capabilities : [];
+
+  return (
+    <div className="space-y-2">
+      <Label>Capabilities</Label>
+      <div className="space-y-2 rounded-md border p-3">
+        {safeList.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            No capabilities available.
+          </p>
+        ) : (
+          safeList.map((capability) => {
+            if (!capability || typeof capability.name !== "string") return null;
+            const name = capability.name;
+            const isSelected = selected.includes(name);
+
+            return (
+              <label
+                key={name}
+                htmlFor={`capability-${name}`}
+                className={cn(
+                  "flex items-start gap-3 rounded-md p-2 transition-colors",
+                  disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+                  isSelected
+                    ? "border border-primary bg-primary/10"
+                    : "bg-muted/50 hover:bg-muted"
+                )}
+              >
+                <input
+                  type="checkbox"
+                  id={`capability-${name}`}
+                  checked={isSelected}
+                  onChange={() => onToggle(name)}
+                  disabled={disabled}
+                  className="mt-0.5 h-4 w-4 rounded border-primary text-primary focus:ring-primary"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-sm font-medium">{name}</span>
+                    {capability.elevated && (
+                      <Badge variant="warning" className="gap-1 px-2">
+                        <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+                        Writes access control
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {capability.description}
+                  </p>
+                </div>
+              </label>
+            );
+          })
+        )}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Selected: {selected.length} of {safeList.length} capability(s)
+      </p>
+    </div>
+  );
+}

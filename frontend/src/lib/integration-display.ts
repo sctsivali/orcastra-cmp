@@ -1,5 +1,5 @@
 import type { AvailableCluster, ClusterPermission } from "@/types";
-import { formatHypervisorType } from "@/lib/utils";
+import { formatHypervisorType, formatLabel } from "@/lib/utils";
 
 export interface ClusterAccessDisplay {
   id: string;
@@ -77,4 +77,28 @@ export function getClusterAccessDisplay(
       projectsLabel: formatProjectsLabel(permission.projects),
     };
   });
+}
+
+// The application type identifiers the API serves, in operator language. formatLabel would
+// render "mcp" as "Mcp", so the known ones are spelled out here and anything the API adds later
+// falls back to a readable form rather than showing a raw identifier.
+const APP_TYPE_LABELS: Record<string, string> = {
+  orcahub: "Orcahub",
+  mcp: "MCP Server",
+  automation: "Automation / CI",
+  agent: "Agent",
+  custom: "Custom Application",
+};
+
+export function formatApplicationType(appType: string | null | undefined): string {
+  if (!appType) return "Unknown";
+  return APP_TYPE_LABELS[appType] ?? formatLabel(appType);
+}
+
+// important: null and empty are opposites, exactly as they are for `projects` above. A key whose
+// `capabilities` field is absent predates capabilities and retains unrestricted access to the
+// external router, so rendering it as "no capabilities" would understate a credential on the one
+// surface that exists to say what a credential can do.
+export function isLegacyUnscopedKey(capabilities: string[] | null | undefined): boolean {
+  return capabilities == null;
 }

@@ -1738,6 +1738,7 @@ import type {
   ExternalUserMapping,
   UserMappingRequest,
   AvailableClustersResponse,
+  CapabilityVocabularyResponse,
   IntegrationOrganization,
 } from "@/types";
 
@@ -1798,6 +1799,12 @@ export const integrationsAPI = {
   // Available Clusters
   getAvailableClusters: async (): Promise<AvailableClustersResponse> => {
     return fetchAPI<AvailableClustersResponse>("/integrations/available-clusters");
+  },
+
+  // The capability vocabulary is served rather than hardcoded so the picker cannot offer a
+  // capability the external router does not enforce, or miss one it does.
+  getCapabilities: async (): Promise<CapabilityVocabularyResponse> => {
+    return fetchAPI<CapabilityVocabularyResponse>("/integrations/capabilities");
   },
 
   // Synced Organizations from external apps

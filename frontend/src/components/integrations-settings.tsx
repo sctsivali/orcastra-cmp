@@ -5,7 +5,6 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Key,
-  Plus,
   Copy,
   CheckCircle2,
   XCircle,
@@ -27,20 +26,12 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Dialog,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -55,176 +46,21 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
-import { getClusterAccessDisplay, summarizeClusterAccessLevel } from "@/lib/integration-display";
+import {
+  formatApplicationType,
+  getClusterAccessDisplay,
+  isLegacyUnscopedKey,
+  summarizeClusterAccessLevel,
+} from "@/lib/integration-display";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { ClusterAccessSelector } from "@/components/cluster-access-selector";
+import { CreateAPIKeyDialog } from "@/components/integrations/create-api-key-dialog";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
   APIKeyCreateResponse,
-  ClusterPermission,
   AvailableCluster,
 } from "@/types";
 import { copyText } from "@/lib/clipboard";
-
-// Create API Key Dialog Component
-function CreateAPIKeyDialog({
-  clusters,
-  onSubmit,
-  isSubmitting,
-}: {
-  clusters: AvailableCluster[];
-  onSubmit: (data: APIKeyCreateRequest) => void;
-  isSubmitting: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [appName, setAppName] = useState("");
-  const [appType, setAppType] = useState("orcahub");
-  const [expireDays, setExpireDays] = useState<string>("never");
-  const [selectedClusterIds, setSelectedClusterIds] = useState<string[]>([]);
-  const [permissionLevel, setPermissionLevel] = useState("read");
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    const permissions: ClusterPermission[] = selectedClusterIds.map(clusterId => ({
-      cluster_id: clusterId,
-      permissions: [permissionLevel],
-      projects: ["*"],
-    }));
-
-    onSubmit({
-      name,
-      app_name: appName,
-      app_type: appType,
-      cluster_permissions: permissions,
-      expire_days: expireDays === "never" ? null : parseInt(expireDays),
-    });
-    
-    // Reset form
-    setName("");
-    setAppName("");
-    setAppType("orcahub");
-    setExpireDays("never");
-    setSelectedClusterIds([]);
-    setPermissionLevel("read");
-    setOpen(false);
-  };
-
-  const toggleCluster = (clusterId: string) => {
-    setSelectedClusterIds(prev => 
-      prev.includes(clusterId) 
-        ? prev.filter(id => id !== clusterId)
-        : [...prev, clusterId]
-    );
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm">
-          <Plus className="h-4 w-4 mr-2" />
-          Create API Key
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Create New API Key</DialogTitle>
-          <DialogDescription>
-            Generate an API key for external application integration.
-          </DialogDescription>
-        </DialogHeader>
-        <form onSubmit={handleSubmit}>
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Key Name</Label>
-                <Input
-                  id="name"
-                  placeholder="e.g., Production Orcahub"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="app_name">Application Name</Label>
-                <Input
-                  id="app_name"
-                  placeholder="e.g., Orcahub Production"
-                  value={appName}
-                  onChange={(e) => setAppName(e.target.value)}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Application Type</Label>
-                <Select value={appType} onValueChange={setAppType}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="orcahub">Orcahub</SelectItem>
-                    <SelectItem value="custom">Custom Application</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Expiration</Label>
-                <Select value={expireDays} onValueChange={setExpireDays}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="never">Never expires</SelectItem>
-                    <SelectItem value="30">30 days</SelectItem>
-                    <SelectItem value="90">90 days</SelectItem>
-                    <SelectItem value="365">1 year</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Permission Level</Label>
-              <Select value={permissionLevel} onValueChange={setPermissionLevel}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="read">Read Only</SelectItem>
-                  <SelectItem value="write">Read & Write</SelectItem>
-                  <SelectItem value="admin">Full Admin</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <ClusterAccessSelector
-              clusters={clusters}
-              selectedClusterIds={selectedClusterIds}
-              onToggle={toggleCluster}
-            />
-          </div>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              disabled={isSubmitting || !name || !appName || selectedClusterIds.length === 0}
-            >
-              {isSubmitting ? "Creating..." : "Create API Key"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // API Key Secret Dialog
 function APIKeySecretDialog({
@@ -371,6 +207,15 @@ export function IntegrationsSettings() {
     staleTime: 60000,
   });
 
+  // Fetch the capability vocabulary. Served rather than hardcoded so the picker always matches
+  // what the external router enforces. It only changes on deploy, so it is cached for an hour.
+  const { data: capabilityData } = useQuery({
+    queryKey: ["integrations", "capabilities"],
+    queryFn: () => api.integrations.getCapabilities(),
+    enabled: mounted,
+    staleTime: 3600000,
+  });
+
   // Create mutation
   const createMutation = useMutation({
     mutationFn: (request: APIKeyCreateRequest) => api.integrations.createAPIKey(request),
@@ -488,7 +333,9 @@ export function IntegrationsSettings() {
           />
           <CreateAPIKeyDialog
             clusters={clusters}
-            onSubmit={(data) => createMutation.mutate(data)}
+            capabilities={capabilityData?.capabilities ?? []}
+            applicationTypes={capabilityData?.application_types ?? []}
+            onSubmit={(data) => createMutation.mutateAsync(data)}
             isSubmitting={createMutation.isPending}
           />
         </div>
@@ -545,7 +392,9 @@ export function IntegrationsSettings() {
               </div>
               <CreateAPIKeyDialog
                 clusters={clusters}
-                onSubmit={(data) => createMutation.mutate(data)}
+                capabilities={capabilityData?.capabilities ?? []}
+                applicationTypes={capabilityData?.application_types ?? []}
+                onSubmit={(data) => createMutation.mutateAsync(data)}
                 isSubmitting={createMutation.isPending}
               />
             </div>
@@ -623,6 +472,26 @@ export function IntegrationsSettings() {
                       <span className="text-muted-foreground">Expires:</span>
                       <span className="font-medium whitespace-nowrap">{expiryLabel}</span>
                     </div>
+                  </div>
+
+                  {/* What the key may DO, as opposed to which clusters it may reach. A legacy key
+                      carries no capability field and still reaches every external endpoint, so it
+                      is called out rather than rendered as an empty list, which would read as the
+                      safe case while being the broad one. */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{formatApplicationType(apiKey.app_type)}</Badge>
+                    {isLegacyUnscopedKey(apiKey.capabilities) ? (
+                      <Badge variant="warning" className="gap-1">
+                        <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+                        Unscoped legacy key
+                      </Badge>
+                    ) : (
+                      (apiKey.capabilities ?? []).map((capability) => (
+                        <Badge key={capability} variant="muted" className="font-mono font-normal">
+                          {capability}
+                        </Badge>
+                      ))
+                    )}
                   </div>
                   <IntegrationClusterAccessList
                     clusters={clusterAccess}
