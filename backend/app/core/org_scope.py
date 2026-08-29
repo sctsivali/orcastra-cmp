@@ -575,6 +575,35 @@ async def get_tenant_acl_rules(
 
 
 # ---------------------------------------------------------------------------
+# Tenant ACL narrowing (shared by the HTTP dependency and the WS setter)
+# ---------------------------------------------------------------------------
+
+def _narrow_by_tenant_acl(
+    allowed: Optional[set[str]],
+    acl: Optional[dict],
+) -> Optional[set[str]]:
+    """
+    Intersect the org-derived cluster set with the clusters the tenant's ACL grants.
+
+    important: an EMPTY acl dict is a real answer, not a missing one. It means the tenant holds
+    no active policy assignment, and check_tenant_permission already denies every cluster for
+    it. Keeping the org-wide set here contradicted that: the tenant saw zero instances while
+    unreachable_nodes still named every down cluster in the partner's organisation, and every
+    power route whose ACL check sits behind TENANT_PERM_ENFORCEMENT_ENABLED still passed
+    verify_cluster_access. Empty ACL means empty scope, so the two layers agree.
+
+    note: None stays unrestricted and is returned untouched. get_user_allowed_clusters returns
+    None only for an admin and get_tenant_acl_rules returns None only for admin or partner, so
+    both are non-None for tenants and only for tenants. The guard is kept anyway: without it a
+    future role answering None for one and a dict for the other would raise inside a
+    router-level dependency, which is a 500 on every request rather than a visible mistake.
+    """
+    if acl is None or allowed is None:
+        return allowed
+    return allowed.intersection(acl.keys())
+
+
+# ---------------------------------------------------------------------------
 # FastAPI dependency (add to router-level dependencies list)
 # ---------------------------------------------------------------------------
 
@@ -585,7 +614,6 @@ async def org_scope_dependency(
     """
     Router-level dependency that sets the org-scope context variable
     and tenant ACL if applicable.
-        )
     """
     if user is None:
         # dev mode - no filter
@@ -600,15 +628,8 @@ async def org_scope_dependency(
     acl = await get_tenant_acl_rules(user, db)
     _tenant_acl_var.set(acl)
 
-    # for tenants with ACL: further restrict allowed clusters to ACL clusters
-    if acl is not None and allowed is not None:
-        acl_clusters = set(acl.keys())
-        # tenant can only see clusters that are both in org scope AND in ACL
-        # if ACL is empty dict, tenant has no access (newly assigned, no policy yet)
-        if acl_clusters:
-            allowed = allowed.intersection(acl_clusters)
-        # else: keep org-scoped clusters (tenant without ACL assignment has org-level view)
-        _allowed_clusters_var.set(allowed)
+    # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
+    _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
 
     # push org names into RequestContext for audit logs
     from app.core.request_context import get_request_context
@@ -645,12 +666,10 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
         acl = await get_tenant_acl_rules(user, db)
         _tenant_acl_var.set(acl)
 
-        # for tenants: restrict clusters to ACL scope
-        if acl is not None and allowed is not None:
-            acl_clusters = set(acl.keys())
-            if acl_clusters:
-                allowed = allowed.intersection(acl_clusters)
-            _allowed_clusters_var.set(allowed)
+        # important: the same narrowing as the HTTP dependency, through the same helper. These
+        # were two duplicated blocks, which is how the empty-ACL fallback survived: fixing one
+        # copy leaves console, terminal and events on the old behaviour, with nothing to notice.
+        _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
 
         # push org names into RequestContext for audit logs
         from app.core.request_context import get_request_context

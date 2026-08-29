@@ -5,7 +5,7 @@ handler is shaped correctly; this proves the shape produces the right response.
 
 It exists because the live fleet cannot answer the question. `org_scope_dependency` narrows a
 tenant's reachable clusters to org-scope INTERSECTED with their ACL clusters
-(app/core/org_scope.py:604-611), so `verify_cluster_access` refuses anything outside that set
+(`_narrow_by_tenant_acl` in app/core/org_scope.py), so `verify_cluster_access` refuses anything outside that set
 before the handler runs. The leak was therefore never reachable across organisations: it was
 reachable on a cluster the tenant IS granted, for projects on that cluster their ACL does not
 cover. Exercising it end to end needs a reachable cluster that some tenant's ACL grants, and on
