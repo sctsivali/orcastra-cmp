@@ -15,6 +15,7 @@ from app.core.config import get_settings
 from app.core.request_context import get_request_context
 from app.core.request_security import resolve_client_ip
 from app.core.logging_config import get_access_logger
+from app.core.error_sanitizer import sanitize_error
 
 
 # Paths to exclude from access logging (health checks, metrics, etc.)
@@ -23,6 +24,20 @@ EXCLUDED_PATHS = {
     "/metrics",
     "/favicon.ico",
 }
+
+
+# Query-parameter names that must never reach the log. Matched as substrings on the lowercased
+# name, so `access_token`, `X-Api-Key` and `client_secret` are all covered by their stem.
+_SENSITIVE_PARAM_STEMS = (
+    "token", "password", "secret", "api_key", "apikey", "api-key",
+    "authorization", "auth", "credential", "signature", "code", "key",
+)
+
+
+def _is_sensitive_param(name: str) -> bool:
+    lowered = name.lower()
+    return any(stem in lowered for stem in _SENSITIVE_PARAM_STEMS)
+
 
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
@@ -69,7 +84,10 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as e:
-            error_message = str(e)
+            # note: sanitised on the way into the log, not just on the way to the client. This
+            # value lands in OpenSearch, and an unhandled exception's text carries the same
+            # control-plane URLs and paths the response handler redacts.
+            error_message = sanitize_error(str(e))
             raise
         finally:
             # Calculate latency
@@ -117,11 +135,17 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
     ) -> dict:
         """Build structured access log entry."""
         # Extract query params (sanitized)
-        query_params = dict(request.query_params)
-        # Mask sensitive params
-        for sensitive_key in ["token", "password", "secret", "api_key", "authorization"]:
-            if sensitive_key in query_params:
-                query_params[sensitive_key] = "[REDACTED]"
+        #
+        # important: substring match on a lowercased name, not `name in dict`. The exact-match
+        # version missed `access_token`, `refresh_token`, `id_token`, `client_secret`, `apikey`,
+        # `api-key`, `code`, `signature` and every capitalisation, while the WebSocket token
+        # parameter happened to be spelled `token` and so looked covered. This is the shape
+        # `activity_logger._sanitize_details` already uses; two divergent redaction policies in
+        # one application is the durable defect, so they now agree.
+        query_params = {
+            name: ("[REDACTED]" if _is_sensitive_param(name) else value)
+            for name, value in request.query_params.items()
+        }
         
         # Build user info
         user_info = None

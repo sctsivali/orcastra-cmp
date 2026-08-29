@@ -323,8 +323,12 @@ class SyncDataRequest(BaseModel):
     include_projects: bool = Field(True, description="Include projects")
     cluster_ids: Optional[List[str]] = Field(None, description="Specific clusters to sync")
     # Organization data pushed from external app (ex; OrcaHub)
+    # important: bounded. Each element costs a SELECT plus its own commit, and members also
+    # cost an Authentik call each, so an unbounded list is a single request that holds a worker
+    # and the connection pool for as long as it takes. No real push approaches these numbers.
     organizations: List[SyncOrganization] = Field(
         default_factory=list,
+        max_length=1000,
         description="Organizations to sync from external app"
     )
     # Callback URL for on-demand data pull
@@ -351,6 +355,7 @@ class SyncDataRequest(BaseModel):
     # Member data pushed from external app (ex; OrcaHub)
     members: List[SyncMember] = Field(
         default_factory=list,
+        max_length=5000,
         description="Organization members to sync from external app"
     )
 
@@ -1724,6 +1729,75 @@ async def update_api_key_permissions(
         logger.error(f"Error updating API key permissions: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+class APIKeyCapabilitiesRequest(BaseModel):
+    """Request to replace an API key's capability set."""
+    capabilities: List[str] = Field(..., min_length=1)
+
+    @field_validator("capabilities")
+    @classmethod
+    def _reject_unknown_capabilities(cls, value: List[str]) -> List[str]:
+        unknown = sorted({name for name in value if name not in CAPABILITIES})
+        if unknown:
+            raise ValueError(
+                f"unknown capability/capabilities: {', '.join(unknown)}. "
+                f"Valid capabilities are {', '.join(CAPABILITIES)}."
+            )
+        return value
+
+
+@router.put(
+    "/api-keys/{key_id}/capabilities",
+    response_model=APIKeyInfo,
+    summary="Set an API key's capabilities",
+    description="Narrow or widen what an existing key may do, without reissuing it.",
+)
+async def update_api_key_capabilities(
+    key_id: str,
+    request: APIKeyCapabilitiesRequest,
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """Give a key a capability set it can be narrowed with.
+
+    important: without this there was no migration path at all. A key issued before capabilities
+    existed carries no field, which means unrestricted, and nothing could add one; the only way
+    to narrow such a key was to revoke it and have the integration reconfigured. That is a strong
+    incentive to leave the legacy keys alone, which is the opposite of what the capability model
+    is for.
+
+    Read-modify-write like every other metadata writer here, so the field this adds is the only
+    one that changes. The cache is evicted because the old capability set would otherwise keep
+    authorising requests until its TTL expired.
+    """
+    vault_client = get_vault_integrations_client()
+    _authorize_api_key(vault_client, key_id)
+
+    try:
+        metadata, _secret_hash = get_api_key_from_vault(vault_client, key_id)
+        was_legacy = "capabilities" not in metadata
+        metadata["capabilities"] = sorted(set(request.capabilities))
+        vault_client.vault_kv_put(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
+            metadata,
+        )
+        logger.info(
+            "Set capabilities on API key %s to %s (was %s)",
+            key_id, metadata["capabilities"], "legacy/unrestricted" if was_legacy else "a set",
+        )
+
+        cache = get_cache_manager()
+        cache.delete_pattern("api_responses", "integrations:api_keys:list*")
+        evict_api_key_cache(key_id)
+
+        user_mappings = get_user_mappings_from_vault(vault_client, key_id)
+        return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating API key capabilities: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to update capabilities")
+
+
 @router.post(
     "/api-keys/{key_id}/revoke",
     response_model=APIKeyInfo,
@@ -1928,7 +2002,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         
         # Verify secret
         if not verify_api_key_secret(request.api_key_secret, secret_hash):
-            return APIKeyValidateResponse(valid=False, error="Invalid secret")
+            return APIKeyValidateResponse(valid=False, error="Invalid API key or secret")
         
         # Check if revoked
         if metadata.get("is_revoked", False):
@@ -2003,7 +2077,9 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         )
         
     except HTTPException:
-        return APIKeyValidateResponse(valid=False, error="API key not found")
+        # note: the same wording as a wrong secret. This endpoint takes no authentication, so
+        # distinguishing the two turned it into a free oracle for which key ids exist.
+        return APIKeyValidateResponse(valid=False, error="Invalid API key or secret")
     except Exception as e:
         logger.error(f"Error validating API key: {e}")
         return APIKeyValidateResponse(valid=False, error="Validation failed")
@@ -2928,7 +3004,8 @@ class SyncPolicy(BaseModel):
 
 class SyncPoliciesRequest(BaseModel):
     """Request body for syncing policies from OrcaHub."""
-    policies: List[SyncPolicy]
+    # Same reasoning as SyncDataRequest: several queries per policy, no natural ceiling.
+    policies: List[SyncPolicy] = Field(default_factory=list, max_length=1000)
 
 
 @external_router.post(

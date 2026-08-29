@@ -86,6 +86,21 @@ def _staging_path(session_id: str) -> str:
     return os.path.join(UPLOAD_DIR, f"{session_id}.img")
 
 
+def _assert_session_owner(api_key: Dict[str, Any], row: Any) -> None:
+    """A session belongs to the key that opened it, not to everyone on its cluster.
+
+    important: every handler here resolved the row and then checked only
+    `_assert_cluster_permission(api_key, row.cluster_id, ...)`. The row records `api_key_id` and
+    nothing compared it, so any key with `write` on the same cluster could HEAD, PATCH, finalize
+    or read another integration's in-flight upload, including corrupting its bytes. Reported as
+    404 rather than 403: the id is the only thing an attacker needs, so a distinguishable refusal
+    would confirm the session exists.
+    """
+    owner = getattr(row, "api_key_id", None)
+    if owner and owner != api_key.get("id"):
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+
 def _assert_cluster_permission(api_key: Dict[str, Any], cluster_id: str, required: str) -> None:
     """Thin alias so the call sites below read unchanged. The check itself is shared."""
     assert_cluster_permission(api_key, cluster_id, required)
@@ -158,11 +173,20 @@ async def create_upload(
     await _gc_expired(db)
 
     # Bound concurrency so staging disk cannot be exhausted by parallel uploads.
+    #
+    # important: counted PER KEY. The count used to be platform-wide, so any key with
+    # storage.upload on any single cluster could open the two allowed sessions, never send a
+    # byte, and every other tenant's uploads answered 503 until the expiry sweep hours later.
+    # The disk-watermark check below is the global bound, and it is the one that actually
+    # protects staging space; this one is about fairness between integrations.
     active = await db.execute(
-        select(func.count()).select_from(ImageUploadSession).where(ImageUploadSession.status.in_(_ACTIVE))
+        select(func.count()).select_from(ImageUploadSession).where(
+            ImageUploadSession.status.in_(_ACTIVE),
+            ImageUploadSession.api_key_id == x_api_key_id,
+        )
     )
     if (active.scalar_one() or 0) >= MAX_ACTIVE_SESSIONS:
-        raise HTTPException(status_code=503, detail="Another image upload is in progress; please retry shortly")
+        raise HTTPException(status_code=503, detail="Another image upload is in progress for this integration; please retry shortly")
 
     # Disk-watermark: refuse if importing this file would not leave headroom.
     free = shutil.disk_usage(UPLOAD_DIR).free
@@ -210,6 +234,7 @@ async def head_upload(
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
+    _assert_session_owner(api_key, row)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
     return Response(
         status_code=200,
@@ -243,6 +268,7 @@ async def patch_upload(
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
+    _assert_session_owner(api_key, row)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
 
     if row.status in _TERMINAL or row.status in ("uploaded", "importing"):
@@ -283,6 +309,7 @@ async def finalize_upload(
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
+    _assert_session_owner(api_key, row)
     _assert_cluster_permission(api_key, row.cluster_id, "write")
 
     if row.status in ("ready", "failed", "importing"):
@@ -305,6 +332,7 @@ async def get_upload_status(
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
+    _assert_session_owner(api_key, row)
     _assert_cluster_permission(api_key, row.cluster_id, "read")
     return _status_payload(row)
 

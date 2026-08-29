@@ -314,6 +314,22 @@ async def list_policies(
         )
 
     stmt = stmt.order_by(TenantAccessPolicy.organization_id, TenantAccessPolicy.name)
+    if highest == Role.TENANT:
+        # important: a TENANT sees only their own assignments here. Scoping stopped at the
+        # organisation, which handed every tenant the org's full access matrix and, on the
+        # assignments endpoint, every other member's email. `get_my_access` already exists as
+        # the tenant-facing view, which is the clue that these list endpoints were never meant
+        # for them. Partner and Admin keep the org-wide view they administer with.
+        stmt = stmt.where(
+            TenantAccessPolicy.assignments.any(
+                TenantPolicyAssignment.org_member_id.in_(
+                    select(OrganizationMember.id).where(
+                        OrganizationMember.user_email == user.email
+                    )
+                )
+            )
+        )
+
     result = await db.execute(stmt)
     policies = result.scalars().unique().all()
 
@@ -590,6 +606,14 @@ async def list_assignments(
 
     if user_email:
         stmt = stmt.where(OrganizationMember.user_email == user_email)
+
+    if highest == Role.TENANT:
+        # important: a TENANT sees only their own assignments here. Scoping stopped at the
+        # organisation, which handed every tenant the org's full access matrix and, on the
+        # assignments endpoint, every other member's email. `get_my_access` already exists as
+        # the tenant-facing view, which is the clue that these list endpoints were never meant
+        # for them. Partner and Admin keep the org-wide view they administer with.
+        stmt = stmt.where(OrganizationMember.user_email == user.email)
 
     result = await db.execute(stmt)
     assignments = result.scalars().unique().all()

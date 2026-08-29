@@ -4,9 +4,8 @@ Application-level security middleware for request hardening.
 
 from __future__ import annotations
 
+import hashlib
 import logging
-import base64
-import json
 import os
 import time
 from typing import Iterable, Optional
@@ -113,25 +112,26 @@ def _rate_limit_subject(request: Request, client_ip: str) -> str:
     """
     Bucket identity for the bypass budget.
 
-    note: the claim is read by decoding the payload segment directly, WITHOUT
-    verifying the signature and without a JWT library, so the hermetic test suite
-    keeps running on a host that has no crypto dependencies installed. That is safe for
-    this purpose and only this purpose: the value picks a counter, it grants nothing.
-    A forged token buys a fresh counter and then fails authentication downstream, so
-    it cannot be used to read data. Real abuse comes from a valid token, which
-    carries exactly one real subject.
+    The budget must be per operator rather than per address: the dashboard proxies every browser
+    through one container, so an IP-keyed budget would let one person's refreshes throttle the
+    whole tenancy.
+
+    important: keyed on a digest of the PRESENTED TOKEN, not on the `sub` claim inside it. This
+    middleware runs before authentication, so any claim it reads is unverified, attacker-supplied
+    text, and the counter is spent here whether or not the request later authenticates. Keying on
+    the claim therefore let anyone who knew a victim's email exhaust that operator's forced-
+    refresh budget from unauthenticated requests. Reaching a victim's bucket now requires the
+    victim's token, and holding that already means being them.
+
+    The trade is deliberate and small: a token rotation starts a fresh counter, which loosens the
+    budget briefly. The budget exists to bound cluster fan-out cost, and that stays bounded per
+    token; what it must not do is let a stranger spend someone else's.
     """
     header = request.headers.get("authorization", "")
     if header[:7].lower() == "bearer ":
-        try:
-            claims = header[7:].split(".")[1]
-            padded = claims + "=" * (-len(claims) % 4)
-            payload = json.loads(base64.urlsafe_b64decode(padded))
-            subject = payload.get("sub") or payload.get("email")
-            if subject:
-                return f"sub:{subject}"
-        except Exception:
-            pass
+        token = header[7:].strip()
+        if token:
+            return "tok:" + hashlib.sha256(token.encode()).hexdigest()[:32]
     return f"ip:{client_ip}"
 
 

@@ -89,13 +89,12 @@ def validate_network_config(config: Dict[str, str]) -> Dict[str, str]:
     return config
 
 
-# Strip URLs and filesystem paths out of daemon errors before they reach the
-# client, so internal hostnames/paths aren't leaked to the UI.
-_SENSITIVE_RE = re.compile(r"(https?://\S+|(?:/[\w.\-]+){2,})")
-
-
-def _sanitize_error(message: str, limit: int = 300) -> str:
-    return _SENSITIVE_RE.sub("[redacted]", message or "").strip()[:limit]
+# Strip URLs and filesystem paths out of daemon errors before they reach the client.
+#
+# note: this used to be defined here, and this file was the only caller in the whole backend
+# while 169 other handlers passed `str(e)` through untouched. It now lives in app/core so the
+# global 5xx handler and this router share one definition rather than diverging.
+from app.core.error_sanitizer import sanitize_error as _sanitize_error  # noqa: E402
 
 
 def _is_clustered(client) -> bool:

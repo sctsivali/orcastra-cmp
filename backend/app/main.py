@@ -6,9 +6,14 @@ Main FastAPI application entry point.
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from app.core.error_sanitizer import client_detail, reference_for
+from app.middleware.security import apply_security_headers
 import uvicorn
 import urllib3
 
@@ -593,6 +598,36 @@ Ensure your client certificates are properly configured.
             response["docs"] = "/docs"
         return response
     
+    @app.exception_handler(StarletteHTTPException)
+    async def sanitized_http_exception_handler(request: Request, exc: StarletteHTTPException):
+        """Answer server faults with a reference instead of the exception text.
+
+        important: 169 handlers do `raise HTTPException(status_code=500, detail=str(e))`, and the
+        frontend surfaces `detail` verbatim as `error.message`. The text is written by pylxd,
+        requests, asyncpg and hvac, and carries control-plane URLs and ports, TLS failures naming
+        certificates, backend filesystem paths, Vault paths and SQL fragments. Most of those
+        routers are reachable by a tenant.
+
+        Only 5xx is rewritten. A 4xx is the caller's own request described back to them and is
+        the message an integrator needs; replacing those would trade a real leak for a support
+        burden. The full text still reaches the server log, tied to the reference the client is
+        given, so an operator loses no diagnostic ability.
+        """
+        if exc.status_code < 500:
+            return await http_exception_handler(request, exc)
+
+        reference, full = reference_for(exc)
+        logger.error(
+            "Server fault %s on %s %s: %s",
+            reference, request.method, request.url.path, full,
+        )
+        response = JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": client_detail(reference), "reference": reference},
+            headers=getattr(exc, "headers", None),
+        )
+        return apply_security_headers(response)
+
     # Global exception handler
     @app.exception_handler(LXDLocalStorageError)
     async def lxd_local_storage_error_handler(

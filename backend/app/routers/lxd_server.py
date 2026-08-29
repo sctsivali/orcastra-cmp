@@ -15,7 +15,7 @@ from app.services.lxd_service import (
     get_lxd_service,
     require_client,
 )
-from app.core.dependencies import check_read_only_mode, require_tenant, require_admin, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.lxd.resources import public_config, public_environment
 from app.core.type_utils import detect_cluster_type_from_metadata
@@ -24,10 +24,15 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+# important: raised from require_tenant() to require_partner(). Every page that consumes this
+# router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
+# the API accepted a tenant. Mutations here were gated individually and reads were not, which is
+# the pattern this closes. Org scope still applies on top, so this narrows the tier rather than
+# replacing the boundary.
 router = APIRouter(
     prefix="/server",
     tags=["Server"],
-    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
 # Thread pool for parallel operations

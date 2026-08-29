@@ -24,7 +24,7 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.core.dependencies import check_read_only_mode, require_tenant, require_admin, require_partner, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_admin, require_partner, AuthenticatedUser
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
@@ -39,10 +39,15 @@ from app.services.activity_logger import get_activity_logger
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
+# important: raised from require_tenant() to require_partner(). Every page that consumes this
+# router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
+# the API accepted a tenant. Mutations here were gated individually and reads were not, which is
+# the pattern this closes. Org scope still applies on top, so this narrows the tier rather than
+# replacing the boundary.
 router = APIRouter(
     prefix="/my-keys",
     tags=["My Keys"],
-    dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
+    dependencies=[Depends(require_partner()), Depends(org_scope_dependency)],
 )
 
 # Vault path for storing keys (without secret/data prefix - will be added by vault methods)
@@ -252,6 +257,11 @@ def create_pfx(cert_pem: bytes, key_pem: bytes, password: str = "") -> bytes:
     return pfx_data
 
 
+def _short_fingerprint(fingerprint: str) -> str:
+    """The first 16 characters, as the audit log in this file already uses."""
+    return f"{fingerprint[:16]}..." if fingerprint else ""
+
+
 def _authorize_key(vault_client, key_id: str) -> Dict[str, Any]:
     """Return a key's metadata only if the caller may reach the cluster it belongs to.
 
@@ -270,8 +280,13 @@ def _authorize_key(vault_client, key_id: str) -> Dict[str, Any]:
         # from a non-existent one by probing.
         raise HTTPException(status_code=404, detail="Key not found")
     node = metadata.get("node")
-    if node:
-        verify_cluster_access(node)
+    if not node:
+        # important: this used to skip the check entirely, and it guards a PKCS#12 download that
+        # contains the private key. A record with no node cannot be scoped, so it cannot be
+        # authorised. Reported as 404 to match the deliberate non-distinguishable shape above.
+        logger.warning("Refusing key %s: the record carries no node to scope it by", key_id)
+        raise HTTPException(status_code=404, detail="Key not found")
+    verify_cluster_access(node)
     return metadata
 
 
@@ -530,6 +545,12 @@ async def create_key(
             "identity_id": identity_id,
             "group_name": group_name,
             "fingerprint": fingerprint,
+            # important: the record carried no owner at all, so `list_keys` could only scope by
+            # cluster and two people in the same scope saw each other's key records. There is
+            # nothing to backfill from on existing records (no created_by, and identity_id is the
+            # LXD identity rather than the requester), so this closes it going forward and the
+            # filter falls back to cluster scope for records issued before it.
+            "owner_email": _rbac.email,
         }
         
         # Save to Vault (secure storage)
@@ -586,6 +607,7 @@ async def list_keys(
     status_filter: Optional[str] = Query(None, description="Filter by status: active, expired, or all"),
     search: Optional[str] = Query(None, description="Search by name, project, or node"),
     fresh: bool = False,
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """List all keys from Vault."""
     vault_client = get_vault_keys_client()
@@ -608,9 +630,15 @@ async def list_keys(
         # unrestricted context (admin, dev mode, background task) and keeps everything.
         allowed = get_current_allowed_clusters()
         if allowed is not None:
+            # important: `not k.get("node") or ...` let a record with no node through to
+            # everyone. A key record is meaningless without the cluster it belongs to, so an
+            # absent node is a record nobody should be shown rather than one everybody should.
             keys_metadata = [
                 k for k in keys_metadata
-                if not k.get("node") or k.get("node") in allowed
+                if k.get("node") in allowed
+                # A record that names an owner is that person's alone. One that does not predates
+                # the field, and stays on cluster scope rather than disappearing from its owner.
+                and (not k.get("owner_email") or k.get("owner_email") == _rbac.email)
             ]
         
         # Process keys and check expiration
@@ -667,7 +695,8 @@ async def list_keys(
                 is_expired=is_expired,
                 identity_id=key_meta["identity_id"],
                 group_name=key_meta["group_name"],
-                fingerprint=key_meta.get("fingerprint", ""),
+                # note: truncated to match what this file already does for its own audit log.
+            fingerprint=_short_fingerprint(key_meta.get("fingerprint", "")),
             )
             processed_keys.append(key_info)
         

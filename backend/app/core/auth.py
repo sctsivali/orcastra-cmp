@@ -37,6 +37,8 @@ class JWKSClient:
         self._cache_ttl: int = 3600  # default 1h
         self._lock = asyncio.Lock()
         self._warmed_up: bool = False
+        # kid -> when a fresh JWKS was confirmed not to contain it. See _remember_absent_kid.
+        self._absent_kids: dict = {}
 
     def _discover_jwks_uri_sync(self, issuer: str) -> str:
         """Fetch JWKS URI synchronously (fallback for non-async contexts)."""
@@ -152,6 +154,21 @@ class JWKSClient:
             if key_data.get("kid") == kid:
                 return jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
 
+        # important: the refresh below runs BEFORE any signature is verified, on a blocking HTTP
+        # client, from inside the async request path. Without a memory of what has already been
+        # asked for, a stream of tokens carrying random `kid` values turns each unauthenticated
+        # request into an outbound round trip to the identity provider and a parked worker: a
+        # denial of service against this server and an amplifier pointed at Authentik.
+        #
+        # A kid that was absent from a freshly fetched JWKS is remembered for a short window and
+        # refused without refetching. The window is deliberately shorter than the JWKS cache TTL,
+        # so a genuine key rotation is still picked up promptly; it only collapses the repeats.
+        if self._kid_is_known_absent(kid):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unable to find the token's signing key",
+            )
+
         # key not found - try refreshing JWKS once (key rotation scenario)
         logger.warning(f"Key '{kid}' not found in cached JWKS, refreshing...")
         self._jwks = self._fetch_jwks_sync(self._jwks_uri)
@@ -159,12 +176,38 @@ class JWKSClient:
 
         for key_data in self._jwks.get("keys", []):
             if key_data.get("kid") == kid:
+                self._forget_absent_kid(kid)
                 return jwt.algorithms.RSAAlgorithm.from_jwk(key_data)
 
+        self._remember_absent_kid(kid)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Unable to find signing key '{kid}' in JWKS",
+            # note: the kid is the caller's own input echoed back; it is not secret, but it is
+            # also not useful to them, and leaving it out keeps the reply uniform.
+            detail="Unable to find the token's signing key",
         )
+
+    # A bounded set of kids that a fresh JWKS did not contain, with the time each was recorded.
+    _ABSENT_KID_TTL = 60.0
+    _ABSENT_KID_MAX = 512
+
+    def _kid_is_known_absent(self, kid: str) -> bool:
+        recorded = self._absent_kids.get(kid)
+        if recorded is None:
+            return False
+        if time.time() - recorded > self._ABSENT_KID_TTL:
+            self._absent_kids.pop(kid, None)
+            return False
+        return True
+
+    def _remember_absent_kid(self, kid: str) -> None:
+        # Bounded so the negative cache cannot itself become the memory exhaustion it prevents.
+        if len(self._absent_kids) >= self._ABSENT_KID_MAX:
+            self._absent_kids.clear()
+        self._absent_kids[kid] = time.time()
+
+    def _forget_absent_kid(self, kid: str) -> None:
+        self._absent_kids.pop(kid, None)
 
 
 # module-level singleton
@@ -211,6 +254,24 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
         # build audience list - Authentik may issue tokens with client_id as audience
         audience = settings.authentik_audience or None
 
+        # important: `verify_aud` used to be `bool(audience)`, so leaving AUTHENTIK_AUDIENCE
+        # unset turned audience checking off silently. An issuer typically hosts several
+        # applications, and without this check any RS256 token that issuer minted for any of them
+        # is accepted here, with its `groups` claim driving RBAC. A user with a token for some
+        # low-value app on the same Authentik becomes whatever their groups say they are.
+        #
+        # Same rule as the missing issuer: a server that asks for authentication and cannot
+        # perform it properly refuses, rather than accepting a weaker proof without saying so.
+        if not audience:
+            logger.error(
+                "AUTH_ENABLED=true but AUTHENTIK_AUDIENCE is not configured; refusing rather "
+                "than accepting any token this issuer minted for any application"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication is enabled but not fully configured on this server",
+            )
+
         payload = jwt.decode(
             token,
             key=signing_key,
@@ -220,8 +281,8 @@ def validate_jwt(token: str, settings: Settings) -> AuthenticatedUser:
             options={
                 "verify_exp": True,
                 "verify_iss": True,
-                "verify_aud": bool(audience),
-                "require": ["exp", "iss", "sub"],
+                "verify_aud": True,
+                "require": ["exp", "iss", "sub", "aud"],
             },
         )
 
