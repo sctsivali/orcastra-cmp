@@ -308,10 +308,15 @@ export const authConfig: NextAuthConfig = {
       const isLoggedIn = !!auth?.user;
       const isOnAuthPage = nextUrl.pathname.startsWith("/auth");
       const isApiRoute = nextUrl.pathname.startsWith("/api");
+      // important: `pathname.includes(".")` treated ANY route containing a dot as a public
+      // asset, so it skipped both the sign-in redirect and the role check below. The backend
+      // enforces RBAC independently, so this leaked chrome rather than data, but a
+      // defence-in-depth layer that silently does not apply is worse than none. Matched on a
+      // real file extension at the end of the path instead.
       const isPublicAsset =
         nextUrl.pathname.startsWith("/_next") ||
         nextUrl.pathname.startsWith("/favicon") ||
-        nextUrl.pathname.includes(".");
+        /\.[a-z0-9]{2,5}$/i.test(nextUrl.pathname);
 
       // Allow public assets and API routes
       if (isPublicAsset || isApiRoute) {

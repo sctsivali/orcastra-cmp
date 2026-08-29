@@ -577,21 +577,29 @@ Ensure your client certificates are properly configured.
                 temp_storage.get("total_mib"),
                 temp_storage.get("path"),
             )
+        # important: unauthenticated, and excluded from access logging, so probing it leaves no
+        # trace. `describe_usage()` includes the host filesystem path backing the TLS scratch
+        # space, which tells an unauthenticated caller how this box is laid out. The health
+        # signal an orchestrator needs is the degraded flag and the percentage; the path is kept
+        # for the log line above and dropped from the response.
+        public_storage = {
+            key: value for key, value in (temp_storage or {}).items() if key != "path"
+        }
         return {
             "status": "healthy",
             "service": "orcastra-dashboard-api",
-            "temp_storage": temp_storage,
+            "temp_storage": public_storage,
         }
     
     # Root endpoint
     @app.get("/", tags=["Root"])
     async def root():
         """Root endpoint with API information."""
+        # note: the build commit and date name the exact source an unauthenticated caller is
+        # talking to. The version stays because clients and the footer read it.
         response = {
             "name": settings.api_title,
             "version": settings.app_version,
-            "build_date": getattr(settings, 'build_date', None),
-            "build_commit": getattr(settings, 'build_commit', None),
             "health": "/health",
         }
         if is_debug:

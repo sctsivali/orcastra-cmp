@@ -1,40 +1,49 @@
+# important: every entry carries an upper bound. They were all bare `>=` with no lock file, so a
+# rebuild silently adopted whatever upstream had published, including a new major. That is not
+# reproducible, and it is a supply-chain path: the build that ships is not the build that was
+# tested.
+#
+# Ceilings come from the version this deployment actually runs, recorded in the trailing comment.
+# For a 0.x package the ceiling is the next MINOR, because that is the breaking axis there; for
+# 1.0 and above it is the next major. Floors are left where they were: raising them is a separate
+# decision from bounding them.
 # FastAPI and server
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-email-validator>=2.0.0
+fastapi>=0.109.0,<0.142.0  # running 0.141.1
+uvicorn[standard]>=0.27.0,<0.53.0  # running 0.52.4
+pydantic>=2.5.0,<3.0.0  # running 2.13.5
+pydantic-settings>=2.1.0,<3.0.0  # running 2.15.0
+email-validator>=2.0.0,<3.0.0  # running 2.3.0
 
 # Database (PostgreSQL with async support)
-sqlalchemy[asyncio]>=2.0.0
-asyncpg>=0.29.0
-greenlet>=3.0.0
-alembic>=1.13.0
+sqlalchemy[asyncio]>=2.0.0,<3.0.0  # running 2.0.52
+asyncpg>=0.29.0,<0.32.0  # running 0.31.0
+greenlet>=3.0.0,<4.0.0  # running 3.5.5
+alembic>=1.13.0,<2.0.0  # running 1.19.1
 
 # LXD client
-pylxd>=2.3.2
+pylxd>=2.3.2,<3.0.0  # running 2.4.2
 
 # HTTP client (used by pylxd)
-requests>=2.31.0
-urllib3>=2.0.0
-httpx>=0.27.0
+requests>=2.31.0,<3.0.0  # running 2.34.2
+urllib3>=2.0.0,<3.0.0  # running 2.7.0
+httpx>=0.27.0,<0.29.0  # running 0.28.1
 
 # WebSocket client (for LXD exec)
-websockets>=12.0
+websockets>=12.0,<18.0.0  # running 17.1
 
 # Certificate and cryptography operations
-cryptography>=41.0.0
-pyOpenSSL>=23.3.0
+cryptography>=41.0.0,<51.0.0  # running 50.0.1
+pyOpenSSL>=23.3.0,<27.0.0  # running 26.4.0
 
 # Cache
-redis>=5.0.0
+redis>=5.0.0,<9.0.0  # running 8.1.0
 
 # JWT / Auth
-PyJWT[crypto]>=2.8.0
+PyJWT[crypto]>=2.8.0,<3.0.0  # running 2.13.0
 
 # System monitoring
-psutil>=5.9.0
+psutil>=5.9.0,<8.0.0  # running 7.2.2
 
 # Additional utilities
-python-multipart>=0.0.6
-python-dotenv>=1.0.0
+python-multipart>=0.0.6,<0.1.0  # running 0.0.32
+python-dotenv>=1.0.0,<2.0.0  # running 1.2.3

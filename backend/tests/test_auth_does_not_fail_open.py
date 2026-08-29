@@ -38,7 +38,6 @@ ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
 AUTH_ENTRY_POINTS = (
     "get_current_user",
     "get_ws_user",
-    "get_optional_user",
     "validate_jwt",
 )
 
@@ -62,7 +61,7 @@ def _issuer_branch(func) -> str:
 
 @pytest.mark.parametrize("name", ["get_current_user", "get_ws_user"])
 def test_a_missing_issuer_refuses_instead_of_returning_none(name: str) -> None:
-    """Both real entry points. `get_optional_user` is exempt and asserted separately below."""
+    """Both entry points that hand a principal to a caller."""
     branch = _issuer_branch(getattr(auth_module, name))
     assert branch, f"{name} no longer has a branch on an unset authentik_issuer"
     assert "return None" not in branch, (
@@ -110,20 +109,16 @@ def test_the_verifier_itself_cannot_return_an_unverified_principal() -> None:
     )
 
 
-def test_get_optional_user_has_no_callers() -> None:
-    """It fails open by design, so its safety is that nothing uses it.
+def test_the_fail_open_dependency_is_gone() -> None:
+    """`get_optional_user` returned None instead of refusing, and nothing used it.
 
-    It is exempt from the refusal rule above only while that stays true. The moment a route
-    depends on it, the exemption is wrong and this fails.
+    An unused fail-open dependency is a trap for whoever writes the next endpoint: it looks like
+    the polite version of get_current_user and behaves like no authentication at all. Deleted
+    rather than hardened, because there was no caller to keep working.
     """
-    callers = [
-        path.name
-        for path in ROUTERS.glob("*.py")
-        if "get_optional_user" in path.read_text()
-    ]
-    assert not callers, (
-        f"get_optional_user returns None rather than refusing, and is now used by {callers}. "
-        f"Either give it the same refusal or stop depending on it."
+    assert not hasattr(auth_module, "get_optional_user"), (
+        "get_optional_user is back. If a route genuinely needs an optional principal, give it "
+        "the same refusal the other entry points have rather than a None return."
     )
 
 

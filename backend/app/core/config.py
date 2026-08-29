@@ -250,9 +250,14 @@ class Settings(BaseSettings):
         description="OpenSearch admin password"
     )
     opensearch_ssl_verify: bool = Field(
-        default=False,
+        default=True,
         alias="OPENSEARCH_SSL_VERIFY",
-        description="Verify SSL certs when connecting to OpenSearch"
+        description=(
+            "Verify SSL certs when connecting to OpenSearch. Defaults on: the admin password "
+            "travels on this connection, and an unverified TLS channel carrying a credential is "
+            "the shape a network attacker wants. Set it false deliberately for a self-signed "
+            "development cluster rather than inheriting it."
+        )
     )
     opensearch_snapshot_repo: str = Field(
         default="orcastra-archive",
