@@ -144,6 +144,19 @@ def test_only_server_faults_are_rewritten() -> None:
     assert "return await http_exception_handler(request, exc)" in source
 
 
+def test_an_availability_status_keeps_its_diagnosis() -> None:
+    """Found by driving the live proxy: replacing every 5xx swallowed the useful ones.
+
+    "Cluster X recently unreachable: certificate not trusted" became "Internal server error",
+    which is exactly the sentence an operator needed. 502/503/504 are answers this application
+    writes on purpose, so they keep their message with URLs and paths stripped; 500 is an
+    unexpected fault whose text is a driver exception and is replaced outright.
+    """
+    source = (ROUTERS.parent / "main.py").read_text()
+    assert "if exc.status_code in (502, 503, 504):" in source
+    assert "sanitize_error(str(exc.detail))" in source
+
+
 # ── access-log redaction ───────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize(

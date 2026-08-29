@@ -12,7 +12,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.core.error_sanitizer import client_detail, reference_for
+from app.core.error_sanitizer import client_detail, reference_for, sanitize_error
 from app.middleware.security import apply_security_headers
 import uvicorn
 import urllib3
@@ -629,9 +629,22 @@ Ensure your client certificates are properly configured.
             "Server fault %s on %s %s: %s",
             reference, request.method, request.url.path, full,
         )
+
+        # important: 500 and the availability statuses are not the same thing, and treating them
+        # alike was wrong in both directions. A 500 is an unexpected fault whose text is a driver
+        # or database exception, and there is nothing in it a caller can act on, so it is replaced
+        # outright. A 502/503/504 is a deliberate answer this application wrote: "cluster X
+        # recently unreachable: certificate not trusted", "proxy saturated, retry shortly". That
+        # is exactly what an operator needs, and replacing it turned a diagnosis into a shrug.
+        # Those keep their message with URLs and paths stripped out of it.
+        if exc.status_code in (502, 503, 504):
+            detail = sanitize_error(str(exc.detail))
+        else:
+            detail = client_detail(reference)
+
         response = JSONResponse(
             status_code=exc.status_code,
-            content={"detail": client_detail(reference), "reference": reference},
+            content={"detail": detail, "reference": reference},
             headers=getattr(exc, "headers", None),
         )
         return apply_security_headers(response)

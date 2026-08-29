@@ -241,6 +241,58 @@ class LXDConnectionManager:
         gc.collect()
         logger.debug("Cleared all credentials from memory")
     
+    def _enforce_certificate_pin(self, cluster_id: str, endpoint: str) -> None:
+        """Pin on first sight, refuse on change, and never turn a network fault into an alarm."""
+        from app.core.config import get_settings
+
+        if not get_settings().lxd_pin_server_certificate:
+            return
+
+        from app.services.lxd_certs.pinning import FINGERPRINT_FIELD, check_or_record_pin
+
+        try:
+            metadata = self._read_cluster_metadata(cluster_id)
+        except Exception as exc:
+            # Vault unreachable is not a certificate problem, and refusing here would make an
+            # outage in one dependency look like an attack on another.
+            logger.warning("Could not read the pin for %s (%s); connecting unpinned", cluster_id, exc)
+            return
+
+        outcome, fingerprint = check_or_record_pin(
+            cluster_id, endpoint, (metadata or {}).get(FINGERPRINT_FIELD)
+        )
+        if outcome == "pinned" and fingerprint:
+            try:
+                self._write_cluster_pin(cluster_id, metadata or {}, fingerprint)
+            except Exception as exc:
+                # Failing to record it means the next connection pins again, which is harmless.
+                logger.warning("Could not record the pin for %s: %s", cluster_id, exc)
+
+    def _read_cluster_metadata(self, cluster_id: str) -> dict:
+        from app.core.config import get_settings
+        from app.core.vault_client import get_vault_client
+
+        settings = get_settings()
+        if not (settings.vault_enabled and settings.vault_token):
+            return {}
+        client = get_vault_client(settings.vault_addr, settings.vault_token)
+        return client.vault_read(f"{settings.vault_clusters_path}/{cluster_id}/metadata") or {}
+
+    def _write_cluster_pin(self, cluster_id: str, metadata: dict, fingerprint: str) -> None:
+        from datetime import datetime, timezone
+
+        from app.core.config import get_settings
+        from app.core.vault_client import get_vault_client
+        from app.services.lxd_certs.pinning import FINGERPRINT_FIELD, PINNED_AT_FIELD
+
+        settings = get_settings()
+        client = get_vault_client(settings.vault_addr, settings.vault_token)
+        # Read-modify-write, like every other metadata writer here, so nothing else is dropped.
+        updated = dict(metadata)
+        updated[FINGERPRINT_FIELD] = fingerprint
+        updated[PINNED_AT_FIELD] = datetime.now(timezone.utc).isoformat()
+        client.vault_kv_put(f"{settings.vault_clusters_path}/{cluster_id}/metadata", updated)
+
     def connect_with_vault_cert(
         self,
         cluster_id: str,
@@ -285,7 +337,14 @@ class LXDConnectionManager:
             # lands atomically, so removing it first would only open a window where a thread
             # already inside a handshake finds no file at all.
             cert_path, key_path = self._create_temp_cert_files(cluster_id, cert_content, key_content)
-            
+
+            # important: BEFORE the client is built, so a substituted endpoint never receives the
+            # client certificate. LXD has no CA, so `verify=False` here is not a relaxed check,
+            # it is the absence of server authentication; the pin is what replaces it. Trust on
+            # first use, refuse on change. See services/lxd_certs/pinning.py for why this rather
+            # than requiring an operator to type the fingerprint at registration.
+            self._enforce_certificate_pin(cluster_id, endpoint)
+
             # Create LXD client with faster timeout for quick failure detection
             client = pylxd.Client(
                 endpoint=endpoint,

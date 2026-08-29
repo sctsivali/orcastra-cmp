@@ -69,6 +69,17 @@ class Settings(BaseSettings):
             "real fan-out to every cluster in scope instead of a cache read."
         )
     )
+    lxd_pin_server_certificate: bool = Field(
+        default=True,
+        alias="LXD_PIN_SERVER_CERTIFICATE",
+        description=(
+            "Remember each cluster's server certificate on first connection and refuse a "
+            "connection that later presents a different one. LXD has no certificate authority, "
+            "so this is its actual trust model rather than an extra: without it there is no "
+            "server authentication at all and anyone on the path can take the mTLS session. "
+            "Set false only to unblock an enrolment problem, and re-enable it."
+        )
+    )
     rate_limit_api_key_requests: int = Field(
         default=300,
         alias="RATE_LIMIT_API_KEY_REQUESTS",

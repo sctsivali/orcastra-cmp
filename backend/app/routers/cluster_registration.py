@@ -28,7 +28,7 @@ from app.core.vault_client import get_vault_client
 from app.services.lxd_cert_manager import LXDCertificateManager, LXDCertManagerError
 from app.services.lxd.exceptions import LXDLocalStorageError
 from app.services.lxd.exceptions import LXDAuthorizationError
-from app.core.dependencies import check_read_only_mode, require_partner, require_tenant, AuthenticatedUser
+from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.cache import (
     NODES_AVAILABILITY_CACHE_KEY,
     NODES_STATUS_CACHE_KEY,
@@ -1221,3 +1221,86 @@ async def update_cluster_location(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update location: {str(e)}"
         )
+
+
+@router.post(
+    "/{cluster_id}/repin",
+    summary="Re-pin a cluster's server certificate",
+    description="Record the certificate the cluster is presenting now, replacing the pinned one.",
+)
+async def repin_cluster_certificate(
+    cluster_id: str,
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_admin()),
+):
+    """Accept a rotated server certificate deliberately.
+
+    important: pinning is only safe to enable if there is a way to accept a legitimate rotation.
+    Without one, the first time an operator rotates a hypervisor certificate the cluster goes
+    dark and the fix is to turn pinning off, which is how a control ends up permanently disabled.
+
+    Admin only, and it takes no fingerprint from the caller: it records what the endpoint is
+    presenting right now. A caller-supplied fingerprint would let someone pin a cluster to a
+    certificate they hold rather than to the one it actually serves.
+    """
+    verify_cluster_access(cluster_id)
+
+    settings = get_settings()
+    if not (settings.vault_enabled and settings.vault_token):
+        raise HTTPException(status_code=503, detail="Vault is not configured")
+
+    from app.core.vault_client import get_vault_client
+    from app.services.lxd_certs.pinning import (
+        FINGERPRINT_FIELD,
+        PINNED_AT_FIELD,
+        fetch_server_fingerprint,
+    )
+
+    vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
+    metadata = vault_client.vault_read(f"{settings.vault_clusters_path}/{cluster_id}/metadata")
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+
+    endpoint_url = metadata.get("endpoint")
+    if not endpoint_url:
+        raise HTTPException(status_code=409, detail="Cluster has no endpoint recorded")
+
+    fingerprint = await asyncio.to_thread(fetch_server_fingerprint, endpoint_url)
+    if not fingerprint:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not read the certificate the cluster is presenting",
+        )
+
+    previous = metadata.get(FINGERPRINT_FIELD)
+    from datetime import datetime, timezone
+    updated = dict(metadata)
+    updated[FINGERPRINT_FIELD] = fingerprint
+    updated[PINNED_AT_FIELD] = datetime.now(timezone.utc).isoformat()
+    vault_client.vault_kv_put(f"{settings.vault_clusters_path}/{cluster_id}/metadata", updated)
+
+    # The cluster metadata this just rewrote is what the availability and region reads render,
+    # and a pooled client built before the re-pin still holds the old pin, so drop both.
+    from app.core.cache import get_cache_manager
+    from app.services.lxd_service import get_lxd_service
+
+    cache = get_cache_manager()
+    cache.delete_pattern("api_responses", f"{NODES_AVAILABILITY_CACHE_KEY}*")
+    cache.delete_pattern("api_responses", "regions:*")
+    # A client pooled before the re-pin was built against the old certificate, so drop it and
+    # let the next call reconnect and re-check against the pin this just wrote.
+    get_lxd_service().connection_manager.remove_connection(cluster_id)
+
+    logger.warning(
+        "Re-pinned %s from %s… to %s… by %s",
+        cluster_id,
+        (previous or "<unpinned>")[:16],
+        fingerprint[:16],
+        _rbac.email,
+    )
+    return {
+        "cluster_id": cluster_id,
+        "previous_fingerprint": (previous[:16] + "...") if previous else None,
+        "fingerprint": fingerprint[:16] + "...",
+        "repinned_by": _rbac.email,
+    }

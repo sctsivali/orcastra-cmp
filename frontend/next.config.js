@@ -90,6 +90,55 @@ const nextConfig = {
           {
             key: 'Permissions-Policy',
             value: 'camera=(), microphone=(), geolocation=()'
+          },
+          // Content-Security-Policy, staged.
+          //
+          // There was none at all, which matters more here than on most apps: the access token
+          // is readable by client JavaScript (auth.ts), and the console renders untrusted guest
+          // framebuffer and terminal output through spice-html5 and xterm. Any script that lands
+          // in this origin gets an operator's bearer.
+          //
+          // The enforcing policy below carries only directives that cannot break a working page:
+          // nothing here embeds objects, sets a <base>, is meant to be framed, or posts a form
+          // off-origin. Those are real protections and they are free.
+          //
+          // script-src is deliberately NOT in the enforcing policy. Tightening it needs
+          // per-request nonces threaded through middleware and the root layout, because Next
+          // emits inline bootstrap scripts, and shipping a strict script-src blind to an app
+          // whose console is xterm and SPICE is how the console breaks for operators. It is in
+          // the report-only policy instead, so the violations arrive as reports and the
+          // enforcing switch is flipped once they are clean rather than guessed at.
+          {
+            key: 'Content-Security-Policy',
+            // important: NO default-src here, deliberately. default-src is the fallback for every
+            // directive not listed, so `default-src 'self'` would silently become the script-src
+            // and style-src too, block Next's inline bootstrap and every inline style Radix and
+            // Tailwind emit, and take the whole frontend down. Listing only the directives that
+            // are safe to enforce leaves the rest as unrestricted as they are today, which is
+            // the definition of a change that cannot break a working page.
+            value: [
+              "object-src 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+              "frame-ancestors 'self'",
+            ].join('; '),
+          },
+          {
+            key: 'Content-Security-Policy-Report-Only',
+            value: [
+              "default-src 'self'",
+              // The shape being aimed at. Everything it would break shows up as a report first.
+              "script-src 'self'",
+              "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+              "img-src 'self' data: blob: https://*.cloudinary.com",
+              "font-src 'self' data:",
+              // Same-origin API plus the WebSocket the console, terminal and event stream use.
+              "connect-src 'self' ws: wss:",
+              "object-src 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+              "frame-ancestors 'self'",
+            ].join('; '),
           }
         ],
       },
