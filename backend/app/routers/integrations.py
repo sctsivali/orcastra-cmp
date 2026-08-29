@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Union
-from fastapi import APIRouter, HTTPException, Depends, Query, Header, Request
+from fastapi import APIRouter, HTTPException, Depends, Query, Header
 from pydantic import BaseModel, Field, field_validator
 import requests
 
@@ -36,7 +36,17 @@ from app.services.lxd.proxy import (
     socket_timeout_for,
 )
 from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
+from app.core.api_key_capabilities import (
+    APP_TYPE_CAPABILITIES,
+    APP_TYPES,
+    CAPABILITIES,
+    ELEVATED_CAPABILITIES,
+    assert_capability,
+    default_capabilities_for,
+    granted_capabilities,
+)
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.middleware.security import consume_api_key_budget
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
 from app.core.cache import get_cache_manager
@@ -135,7 +145,17 @@ class APIKeyInfo(BaseModel):
     id: str = Field(..., description="Unique API key identifier")
     name: str = Field(..., description="Descriptive name for the API key")
     app_name: str = Field(..., description="Name of the connected application")
-    app_type: str = Field(default="orcahub", description="Application type: orcahub, custom")
+    # note: deliberately an unconstrained str, unlike the create request. Keys already in Vault
+    # are read back straight into this model, so validating here would turn an unfamiliar stored
+    # value into a 500 on a list that used to render.
+    app_type: str = Field(default="orcahub", description=f"Application type: {', '.join(APP_TYPES)}")
+    capabilities: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Endpoint families this key may use. null means a legacy key issued before "
+            "capabilities existed, which retains unrestricted access."
+        ),
+    )
     created_at: str = Field(..., description="Creation timestamp")
     expires_at: Optional[str] = Field(None, description="Expiration timestamp")
     is_active: bool = Field(True, description="Whether the key is active")
@@ -152,17 +172,68 @@ class APIKeyCreateRequest(BaseModel):
     """Request to create a new API key."""
     name: str = Field(..., min_length=1, max_length=100, description="API key name")
     app_name: str = Field(..., min_length=1, max_length=100, description="Application name")
-    app_type: str = Field(default="orcahub", description="Application type")
+    app_type: str = Field(
+        default="orcahub",
+        description=f"Application type, one of: {', '.join(APP_TYPES)}",
+    )
+    capabilities: Optional[List[str]] = Field(
+        default=None,
+        description=(
+            "Endpoint families this key may use. Omit to take the application type's defaults."
+        ),
+    )
     cluster_permissions: List[ClusterPermission] = Field(
         default_factory=list,
         description="Initial cluster permissions"
     )
     expire_days: Optional[int] = Field(
-        None, 
-        ge=1, 
-        le=3650, 
+        None,
+        ge=1,
+        le=3650,
         description="Expiration in days (None for no expiration)"
     )
+
+    @field_validator("app_type")
+    @classmethod
+    def _reject_an_unknown_application_type(cls, value: str) -> str:
+        """Refuse a type the capability defaults cannot answer for.
+
+        The field used to accept any string because nothing read it. Now it seeds the key's
+        capabilities, so an unrecognised value would quietly produce a key that grants nothing.
+        Boundary-only, like ClusterPermission.permissions: stored keys never pass through here.
+        """
+        if value not in APP_TYPES:
+            raise ValueError(
+                f"unknown application type '{value}'. Valid types are {', '.join(APP_TYPES)}."
+            )
+        return value
+
+    @field_validator("capabilities")
+    @classmethod
+    def _reject_a_capability_set_that_grants_nothing(
+        cls, value: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        """Refuse an empty or unrecognised capability set at the boundary.
+
+        None is fine and means "use the type's defaults". An explicit empty list is not: it
+        produces a key that authenticates and can then do nothing, which is never what the
+        operator meant. An unrecognised name is refused for the same reason the permission
+        validator refuses one, so a typo is caught where it is made rather than on first use.
+        """
+        if value is None:
+            return None
+        if not value:
+            raise ValueError(
+                "capabilities must name at least one entry. An empty list grants nothing, "
+                "which is never a useful key. Omit the field to take the type's defaults."
+            )
+        unknown = sorted({name for name in value if name not in CAPABILITIES})
+        if unknown:
+            raise ValueError(
+                f"unknown capability/capabilities: {', '.join(unknown)}. "
+                f"Valid capabilities are {', '.join(CAPABILITIES)}."
+            )
+        return value
 
 
 class APIKeyCreateResponse(BaseModel):
@@ -191,6 +262,10 @@ class APIKeyValidateResponse(BaseModel):
     valid: bool
     app_name: Optional[str] = None
     app_type: Optional[str] = None
+    capabilities: Optional[List[str]] = Field(
+        default=None,
+        description="Granted capabilities, or null for a legacy key with unrestricted access",
+    )
     cluster_permissions: List[ClusterPermission] = Field(default_factory=list)
     error: Optional[str] = None
 
@@ -1284,9 +1359,42 @@ async def validate_api_key(
         if datetime.utcnow() > exp_date:
             raise HTTPException(status_code=401, detail="API key has expired")
 
+    # note: after the secret verifies, never before. The key id is public, so counting it in the
+    # middleware would let anyone holding a victim's id spend that integration's budget with a
+    # wrong secret. See consume_api_key_budget.
+    if not consume_api_key_budget(x_api_key_id):
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded for this API key. Please try again later.",
+            headers={"Retry-After": "30"},
+        )
+
     _schedule_last_used_update(x_api_key_id)
 
     return metadata
+
+
+def require_capability(capability: str):
+    """Authenticate the key, then refuse it unless it carries ``capability``.
+
+    Every handler on `external_router` must depend on one of these rather than on
+    `validate_api_key` directly. Authentication alone used to be the whole gate, so a key issued
+    for one job could do every other job on this router; the capability is what separates them.
+    `tests/test_every_external_endpoint_declares_a_capability.py` is the ratchet that keeps a new
+    endpoint from quietly skipping it.
+
+    note: FastAPI caches a dependency per request, so the nested `validate_api_key` still costs
+    exactly one Vault round trip even where a handler also takes the key for its own use.
+    """
+    async def _dep(api_key: Dict[str, Any] = Depends(validate_api_key)) -> Dict[str, Any]:
+        assert_capability(api_key, capability)
+        return api_key
+
+    # Name it after the capability so a traceback, a dependency-graph dump and the OpenAPI
+    # schema all say which one was required, rather than reporting every gate as `_dep`.
+    _dep.__name__ = f"require_{capability.replace('.', '_')}"
+    _dep.__qualname__ = _dep.__name__
+    return _dep
 
 
 # ============================================
@@ -1333,12 +1441,31 @@ async def create_api_key(
         if request.expire_days:
             expires_at = created_at + timedelta(days=request.expire_days)
         
+        # important: always written as a concrete list, never left absent. An absent field means
+        # "legacy, unrestricted" when the key is read back, so a new key that omitted it would be
+        # issued with more access than the operator chose. A caller that names no capabilities
+        # gets the application type's defaults instead.
+        capabilities = sorted(
+            request.capabilities
+            if request.capabilities is not None
+            else default_capabilities_for(request.app_type)
+        )
+        if not capabilities:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Application type '{request.app_type}' has no default capabilities, so the "
+                    f"request must name them. Valid capabilities are {', '.join(CAPABILITIES)}."
+                ),
+            )
+
         # Prepare metadata (include creator for org-level ownership)
         metadata = {
             "id": key_id,
             "name": request.name,
             "app_name": request.app_name,
             "app_type": request.app_type,
+            "capabilities": capabilities,
             "created_by": _rbac.email,
             "created_at": created_at.isoformat(),
             "expires_at": expires_at.isoformat() if expires_at else None,
@@ -1807,10 +1934,23 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             enriched_perm["cluster_name"] = cluster_names.get(cluster_id, cluster_id)
             enriched_permissions.append(ClusterPermission(**enriched_perm))
         
+        # note: this endpoint takes credentials in the body, so it never passes through
+        # validate_api_key and would otherwise be the one metered path a valid key could spend
+        # without limit. Counted here, after the secret verified, for the same reason.
+        if not consume_api_key_budget(request.api_key_id):
+            return APIKeyValidateResponse(
+                valid=False, error="Rate limit exceeded for this API key"
+            )
+
+        # note: granted_capabilities returns None for a legacy key, which is exactly what the
+        # response means by null. An integrator reads this to discover what it may call before
+        # it calls it, so it must not be flattened into an empty list.
+        granted = granted_capabilities(metadata)
         return APIKeyValidateResponse(
             valid=True,
             app_name=metadata.get("app_name"),
             app_type=metadata.get("app_type"),
+            capabilities=sorted(granted) if granted is not None else None,
             cluster_permissions=enriched_permissions,
         )
         
@@ -1829,7 +1969,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
 )
 async def sync_data(
     request: SyncDataRequest,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     lxd_service: LXDService = Depends(get_lxd_service),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1837,6 +1977,14 @@ async def sync_data(
     try:
         result = SyncDataResponse()
         api_key_id = api_key.get("id", "")
+
+        # important: this handler does two unrelated jobs. Reading inventory back is what most
+        # integrations want and is covered by the dependency above. Pushing organizations and
+        # members is an authorization write: it creates orgs and hands members a role that is
+        # propagated to Authentik as a global system role. Gate that half separately so a key
+        # issued to read inventory cannot mint an organization.
+        if request.organizations or request.members:
+            assert_capability(api_key, "org.sync")
 
         # ── Sync organizations from external app ──
         if request.organizations:
@@ -1864,6 +2012,13 @@ async def sync_data(
 
         # ── Store callback URL in Vault API key metadata ──
         if request.app_url:
+            # important: this is the third write in this handler, not bookkeeping. `app_url` is
+            # the base that `refresh_organizations` fetches `/api/external/organizations` from,
+            # and it feeds the response straight into _upsert_synced_organizations. A key that
+            # could set it without org.sync would therefore get organization creation through the
+            # back door, which is the exact power this handler gates above, and would also aim an
+            # authenticated server-side request at a host of its choosing.
+            assert_capability(api_key, "org.sync")
             # note: Vault write, so off the loop like the rest of this handler. Best effort:
             # a bookkeeping write must not fail or slow the sync.
             try:
@@ -1973,7 +2128,7 @@ async def _integration_hardware_totals(
     description="Return non-sensitive geographic region coordinates for clusters allowed by the API key.",
 )
 async def get_integration_regions(
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Expose real cluster location metadata to external integrations using API-key auth."""
@@ -2050,7 +2205,7 @@ async def get_integration_regions(
 )
 async def raw_proxy(
     request: RawProxyRequest,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("lxd.proxy")),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
@@ -2286,7 +2441,7 @@ async def raw_proxy(
 )
 async def proxy_operation(
     request: ProxyRequest,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("lxd.proxy")),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
 ):
@@ -2401,6 +2556,65 @@ async def proxy_operation(
             success=False,
             error=str(e),
         )
+
+
+# ============================================
+# Capability Vocabulary Endpoint
+# ============================================
+
+class CapabilityOption(BaseModel):
+    """One capability an API key can be granted."""
+    name: str = Field(..., description="Capability identifier, ex; inventory.read")
+    description: str = Field(..., description="What the capability allows, in operator language")
+    elevated: bool = Field(
+        default=False,
+        description="Writes authorization data (organizations, roles, tenant access grants)",
+    )
+
+
+class ApplicationTypeOption(BaseModel):
+    """One application type and the capabilities it seeds."""
+    name: str = Field(..., description="Application type identifier, ex; mcp")
+    default_capabilities: List[str] = Field(
+        default_factory=list,
+        description="Capabilities preselected for this type. Not a ceiling.",
+    )
+
+
+class CapabilityVocabularyResponse(BaseModel):
+    capabilities: List[CapabilityOption]
+    application_types: List[ApplicationTypeOption]
+
+
+@router.get(
+    "/capabilities",
+    response_model=CapabilityVocabularyResponse,
+    summary="List API key capabilities and application types",
+    description="The vocabulary the create-key form renders. Served so the picker cannot drift "
+                "from what the external router actually enforces.",
+    dependencies=[Depends(require_partner())],
+)
+async def list_capabilities():
+    """Serve the capability table rather than duplicating it in the client.
+
+    The form that grants capabilities and the router that enforces them have to agree. Hard
+    coding the list in the frontend means a capability added here is silently ungrantable, and
+    one removed here stays on offer. Same reason `available-clusters` exists.
+    """
+    return CapabilityVocabularyResponse(
+        capabilities=[
+            CapabilityOption(
+                name=name,
+                description=description,
+                elevated=name in ELEVATED_CAPABILITIES,
+            )
+            for name, description in CAPABILITIES.items()
+        ],
+        application_types=[
+            ApplicationTypeOption(name=app_type, default_capabilities=sorted(defaults))
+            for app_type, defaults in APP_TYPE_CAPABILITIES.items()
+        ],
+    )
 
 
 # ============================================
@@ -2672,7 +2886,7 @@ class SyncPoliciesRequest(BaseModel):
 )
 async def sync_policies_from_external(
     body: SyncPoliciesRequest,
-    request: Request,
+    api_key: Dict[str, Any] = Depends(require_capability("tenant.provision")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -2680,6 +2894,13 @@ async def sync_policies_from_external(
 
     Creates or updates policies based on external_id matching.
     Handles rules and assignments as part of the sync.
+
+    important: this used to authenticate by hand, comparing a plain SHA-256 of the presented
+    secret against the stored hash. Keys are stored as HMAC-SHA256 keyed with SECRET_KEY
+    (generate_api_key_pair), so the two could never match and this endpoint answered 401 to every
+    caller, including OrcaHub. The hand-rolled block also skipped the expiry check and the
+    cross-worker revocation tombstone. It now shares the one dependency the rest of this router
+    uses, which fixes all three at once.
     """
     from app.models.db_models import (
         TenantAccessPolicy,
@@ -2688,26 +2909,7 @@ async def sync_policies_from_external(
         OrganizationMember,
     )
 
-    # authenticate via API key
-    api_key_id = request.headers.get("X-API-Key-ID", "") or ""
-    api_key_secret = request.headers.get("X-API-Key-Secret", "") or ""
-
-    if not api_key_id or not api_key_secret:
-        raise HTTPException(status_code=401, detail="API key credentials required")
-
-    try:
-        vault_client = get_vault_integrations_client()
-        metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
-    except HTTPException:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    # verify secret
-    computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
-    if not hmac.compare_digest(computed_hash, stored_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
-
-    if metadata.get("is_revoked"):
-        raise HTTPException(status_code=403, detail="API key has been revoked")
+    api_key_id = api_key.get("id", "")
 
     synced_count = 0
     errors = []
@@ -2843,28 +3045,17 @@ async def sync_policies_from_external(
 )
 async def get_policies_for_external(
     org_external_id: Optional[str] = Query(None, description="Filter by organization external ID"),
-    request: Request = None,
+    api_key: Dict[str, Any] = Depends(require_capability("tenant.provision")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Read policies for external app pull sync."""
+    """Read policies for external app pull sync.
+
+    Carried the same unusable plain-SHA-256 comparison as its sibling above, so it too answered
+    401 to every caller. Same fix: the shared dependency.
+    """
     from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
 
-    # authenticate via API key
-    api_key_id = request.headers.get("X-API-Key-ID", "") if request else ""
-    api_key_secret = request.headers.get("X-API-Key-Secret", "") if request else ""
-
-    if not api_key_id or not api_key_secret:
-        raise HTTPException(status_code=401, detail="API key credentials required")
-
-    try:
-        vault_client = get_vault_integrations_client()
-        metadata, stored_hash = get_api_key_from_vault(vault_client, api_key_id)
-    except HTTPException:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-
-    computed_hash = hashlib.sha256(api_key_secret.encode()).hexdigest()
-    if not hmac.compare_digest(computed_hash, stored_hash):
-        raise HTTPException(status_code=401, detail="Invalid API key secret")
+    api_key_id = api_key.get("id", "")
 
     # build query
     stmt = (
@@ -2960,7 +3151,7 @@ class ProvisionTenantAccessResponse(BaseModel):
 )
 async def provision_tenant_access(
     body: ProvisionTenantAccessRequest,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("tenant.provision")),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -3333,7 +3524,7 @@ class RevokeTenantAccessResponse(BaseModel):
 )
 async def revoke_tenant_access(
     body: RevokeTenantAccessRequest,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("tenant.provision")),
     db: AsyncSession = Depends(get_db),
 ):
     """Inverse of provision-tenant-access. Reactivation re-grants via provision (find-or-create)."""

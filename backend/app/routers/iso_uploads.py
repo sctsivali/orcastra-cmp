@@ -41,7 +41,7 @@ from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import append_request_body
 from app.models.db_models import IsoUploadSession
-from app.routers.integrations import validate_api_key
+from app.routers.integrations import require_capability
 from app.services.lxd_service import get_lxd_service
 import logging
 
@@ -148,7 +148,7 @@ class CreateUploadRequest(BaseModel):
 @router.post("/iso-uploads")
 async def create_upload(
     body: CreateUploadRequest,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("storage.upload")),
     db: AsyncSession = Depends(get_db),
     x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
 ):
@@ -227,7 +227,7 @@ async def create_upload(
 @router.head("/iso-uploads/{session_id}")
 async def head_upload(
     session_id: str,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("storage.upload")),
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
@@ -260,7 +260,7 @@ async def options_upload(session_id: str):
 async def patch_upload(
     session_id: str,
     request: Request,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("storage.upload")),
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
@@ -298,7 +298,7 @@ async def patch_upload(
 @router.post("/iso-uploads/{session_id}/finalize")
 async def finalize_upload(
     session_id: str,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("storage.upload")),
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
@@ -318,7 +318,7 @@ async def finalize_upload(
 @router.get("/iso-uploads/{session_id}")
 async def get_upload_status(
     session_id: str,
-    api_key: Dict[str, Any] = Depends(validate_api_key),
+    api_key: Dict[str, Any] = Depends(require_capability("storage.upload")),
     db: AsyncSession = Depends(get_db),
 ):
     row = await _get_session(db, session_id)
