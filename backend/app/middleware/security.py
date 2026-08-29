@@ -134,6 +134,35 @@ def _rate_limit_subject(request: Request, client_ip: str) -> str:
             pass
     return f"ip:{client_ip}"
 
+
+def consume_api_key_budget(key_id: str) -> bool:
+    """Spend one request against an API key's own budget. True when it may proceed.
+
+    important: this is called from `validate_api_key` AFTER the secret verifies, deliberately
+    not from the middleware. An API key id is a public identifier, not a credential: it is
+    returned to any partner listing organizations (`IntegrationOrgResponse.api_key_id`), it is
+    written to logs, and it travels in the header of every outbound callback. Counting in the
+    middleware would count unauthenticated requests too, so anyone holding a victim's id could
+    present it with a garbage secret and burn that integration's whole minute. That is a
+    targeted denial of service against a named integration, which is worse than the shared-budget
+    problem this bucket exists to solve. Unauthenticated traffic stays on the per-IP bucket,
+    which is where it belongs.
+
+    Fails open when the shared store cannot answer, like every other limiter here: the per-IP
+    bucket still applies, and a Redis outage must not throttle every integration at once.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return True
+    limit = settings.rate_limit_api_key_requests
+    if limit <= 0:
+        return True
+    allowed = _shared_allow(f"apikey:{key_id}", limit, settings.rate_limit_window_seconds)
+    return True if allowed is None else allowed
+
+
 class WindowedRateLimiter:
     """Small in-memory sliding-window limiter with bounded storage."""
 
@@ -236,7 +265,9 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
             # important: the bypass budget is meant to be a deployment-wide figure, and
             # the in-memory limiter cannot be one because each worker keeps its own
             # counters. Redis is already a hard dependency, so the shared counter lives
-            # there and the configured number means what it says.
+            # there and the configured number means what it says. The per-key budget uses
+            # the same store through consume_api_key_budget, but is spent after
+            # authentication rather than here.
             if key.startswith("fresh:"):
                 shared = _shared_allow(key, limit, window)
                 if shared is not None:

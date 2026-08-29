@@ -69,6 +69,22 @@ class Settings(BaseSettings):
             "real fan-out to every cluster in scope instead of a cache read."
         )
     )
+    rate_limit_api_key_requests: int = Field(
+        default=300,
+        alias="RATE_LIMIT_API_KEY_REQUESTS",
+        description=(
+            "Requests per window per external API key. External integrations share one egress "
+            "IP, so without this a single chatty key spends the whole per-IP budget and "
+            "throttles every other integration behind that address. "
+            "important: this only isolates keys while it is BELOW rate_limit_requests. At or "
+            "above it the IP bucket is always reached first and the per-key one never binds, "
+            "which is no isolation at all. At 300 against the default 500, one runaway key is "
+            "cut at 300 and a second integration behind the same IP still has 200 left. "
+            "A chunked upload client (tus PATCH per chunk) counts against this, so a client "
+            "using very small chunks on a multi-GB image may need it raised; the symptom is 429 "
+            "on PATCH. 0 disables the per-key bucket."
+        )
+    )
     rate_limit_window_seconds: int = Field(
         default=60,
         alias="RATE_LIMIT_WINDOW_SECONDS",
