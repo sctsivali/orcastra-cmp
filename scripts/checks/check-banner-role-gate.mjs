@@ -63,8 +63,25 @@ if (!/^"use client";$/m.test(code.split('\n').slice(0, 2).join('\n'))) {
   offenders.push('the banner calls a session hook but does not open with "use client"');
 }
 
-if (!code.includes('usePermissions()')) {
-  offenders.push('the banner does not call usePermissions(), so it cannot know the role');
+// important: bind the gate to the hook, not to the spelling of the hook. Asserting that the
+// source merely CONTAINS "usePermissions()" is satisfied by a comment naming it, and separately
+// by an import line, so the check passes while `hasRole` comes from somewhere else entirely.
+// Ablated: replacing the call with `= { isLoading: false, hasRole: () => true }` and leaving a
+// comment behind kept this green, on code that hands every tenant the operator copy. Match the
+// destructuring itself and require the two names the rules below depend on to come out of it.
+const bind = executable.match(/const\s*\{([^}]*)\}\s*=\s*usePermissions\(\)\s*;/);
+if (!bind) {
+  offenders.push(
+    'the banner does not destructure usePermissions(), so whatever the gate reads, it is not ' +
+      'the session role',
+  );
+} else {
+  const bound = bind[1].split(',').map((n) => n.trim()).filter(Boolean);
+  for (const name of ['isLoading', 'hasRole']) {
+    if (!bound.includes(name)) {
+      offenders.push(`${name} is not bound from usePermissions(), so the rule below asserts nothing`);
+    }
+  }
 }
 
 const gates = executable.match(/hasRole\(Role\.PARTNER\)/g) ?? [];
