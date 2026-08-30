@@ -109,32 +109,49 @@ def test_an_admin_keeps_the_unrestricted_scope() -> None:
     assert scope is None
 
 
-class BothScopeSettersNarrowThroughOneHelperTests:
-    """Kept as a plain class so pytest collects the functions below, not this docstring."""
-
-
-def _function_source(name: str) -> str:
+def _setter_node(name: str) -> ast.AST:
+    """The AST node for one scope setter in org_scope.py."""
     source = Path(inspect.getfile(org_scope)).read_text(encoding="utf-8")
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef)) and node.name == name:
-            return ast.get_source_segment(source, node)
+            return node
     raise AssertionError(f"{name} not found in org_scope.py")
+
+
+def _calls(node: ast.AST) -> set:
+    """Every name actually CALLED inside `node`, direct or via an attribute.
+
+    important: this walks for ast.Call rather than searching the source text. The first version
+    of these two tests asserted `"_narrow_by_tenant_acl(" in body` and `".intersection(" not in
+    body` against the unparsed source, and a comment naming the helper satisfied the first one.
+    Ablated: deleting the narrowing from set_org_scope_for_ws entirely, which reinstates the
+    empty-ACL fallback on the console, terminal and events sockets, left all of these green
+    because the words were still in a comment two lines up. A string test asserts a spelling.
+    """
+    called = set()
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        if isinstance(func, ast.Name):
+            called.add(func.id)
+        elif isinstance(func, ast.Attribute):
+            called.add(func.attr)
+    return called
 
 
 @pytest.mark.parametrize("setter", ["org_scope_dependency", "set_org_scope_for_ws"])
 def test_both_scope_setters_narrow_through_the_shared_helper(setter: str) -> None:
-    body = _function_source(setter)
-    assert "_narrow_by_tenant_acl(" in body, (
-        f"{setter} does not narrow through the shared helper, so the HTTP and WebSocket paths "
-        "can disagree about what a tenant may see"
+    assert "_narrow_by_tenant_acl" in _calls(_setter_node(setter)), (
+        f"{setter} does not call the shared helper, so the HTTP and WebSocket paths can "
+        "disagree about what a tenant may see"
     )
 
 
 @pytest.mark.parametrize("setter", ["org_scope_dependency", "set_org_scope_for_ws"])
 def test_neither_scope_setter_intersects_on_its_own(setter: str) -> None:
-    body = _function_source(setter)
-    assert ".intersection(" not in body, (
+    assert "intersection" not in _calls(_setter_node(setter)), (
         f"{setter} intersects inline. That is how the empty-ACL fallback survived: two copies "
         "of the same block, one of which nobody edited."
     )
