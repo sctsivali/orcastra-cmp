@@ -16,26 +16,30 @@ less.
 """
 
 import logging
-from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Tuple
 
 from fastapi import HTTPException
 
 from .availability import require_client
-from .proxy import PROXY_OP_TIMEOUT
+from .guest_exec import exec_instance
+from .instance_view import instance_detail, instance_summary, status_name
+from .proxy import EXEC_TIMEOUT, PROXY_OP_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "CLUSTER_WIDE_OPERATIONS",
-    "status_name",
+    "GUEST_ACCESS_OPERATIONS",
     "PROXY_ERROR_CODES",
-    "assert_required_params",
     "PROXY_OPERATION_LEVELS",
     "PROXY_WAIT_OPERATIONS",
+    "assert_required_params",
     "execute_proxy_operation",
     "fetch_operation_status",
-    "instance_summary",
+    # Re-exported so the router keeps one import site for the whole proxy vocabulary.
     "instance_detail",
+    "instance_summary",
+    "status_name",
 ]
 
 
@@ -54,6 +58,10 @@ PROXY_OPERATION_LEVELS: Dict[str, str] = {
     "list_profiles": "read",
     "list_snapshots": "read",
     "get_operation": "read",
+    # Reaching inside a guest. Priced `write` because it changes the instance's state, but the
+    # level is not what bounds it: GUEST_ACCESS_OPERATIONS below demands an explicit capability
+    # on top, which no application-type preset seeds and no legacy key inherits.
+    "exec_instance": "write",
     # Writes: changing an instance that already exists, or creating one.
     "create_instance": "write",
     "update_instance": "write",
@@ -85,6 +93,13 @@ CLUSTER_WIDE_OPERATIONS: FrozenSet[str] = frozenset({
     "create_network",
     "delete_network",
 })
+
+# Operations that reach inside a guest, and the capability each costs on top of `lxd.proxy` and
+# the per-cluster level. Kept beside the price list because it is the same kind of fact: what an
+# operation costs before it may run.
+GUEST_ACCESS_OPERATIONS: Dict[str, str] = {
+    "exec_instance": "instance.exec",
+}
 
 # Operations that poll an LXD operation to completion. They need a wider read window than the
 # pooled client's default, and they are the ones a caller may run with ``wait=false``.
@@ -149,108 +164,6 @@ def classify_proxy_error(error: Exception) -> str:
     return "operation_failed"
 
 
-# LXD's own status codes, which are lossless where the dashboard's VMStatus enum is not.
-#
-# important: `parse_vm_status` (services/lxd/utils.py) maps four names and collapses everything
-# else to UNKNOWN, which is right for a dashboard badge and wrong for a caller polling a
-# transition. An agent that starts an instance and waits for it to leave "Starting" would see
-# "Unknown" and could not tell it from a real fault. The code survives the enum, so read it.
-LXD_STATUS_NAMES: Dict[int, str] = {
-    100: "Operation created", 101: "Started", 102: "Stopped", 103: "Running",
-    104: "Cancelling", 105: "Pending", 106: "Starting", 107: "Stopping",
-    108: "Aborting", 109: "Freezing", 110: "Frozen", 111: "Thawed", 112: "Error",
-    200: "Success", 400: "Failure", 401: "Cancelled",
-}
-
-
-def status_name(status_code: Optional[int], fallback: Any) -> Any:
-    """The status LXD reported, preferring its code over a lossy enum round trip."""
-    if status_code in LXD_STATUS_NAMES:
-        return LXD_STATUS_NAMES[status_code]
-    return getattr(fallback, "value", fallback)
-
-
-# ── serialising an instance ────────────────────────────────────────────────────────────────
-
-
-def _resources_from(
-    config: Optional[Dict[str, Any]], expanded_devices: Optional[Dict[str, Any]]
-) -> Dict[str, Optional[str]]:
-    """CPU, memory and root disk as LXD records them.
-
-    important: the effective root disk lives in ``expanded_devices``, not ``devices``. An
-    instance that overrides nothing still has a root disk, inherited from its profile, and
-    reading ``devices`` alone reports None for the common case.
-    """
-    config = config or {}
-    root = (expanded_devices or {}).get("root") or {}
-    return {
-        "cpu": config.get("limits.cpu"),
-        "memory": config.get("limits.memory"),
-        "disk": root.get("size") or root.get("size.state"),
-    }
-
-
-def instance_summary(
-    *,
-    name: str,
-    cluster_id: str,
-    project: Optional[str],
-    status: Optional[str],
-    instance_type: Optional[str],
-    architecture: Optional[str] = None,
-    config: Optional[Dict[str, Any]] = None,
-    expanded_devices: Optional[Dict[str, Any]] = None,
-    status_code: Optional[int] = None,
-    ip_addresses: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """Enough for a caller to pick a target without a second round trip."""
-    return {
-        "name": name,
-        "cluster_id": cluster_id,
-        "project": project or "default",
-        "status": status,
-        "status_code": status_code,
-        "type": instance_type,
-        "architecture": architecture,
-        "ip_addresses": list(ip_addresses or []),
-        **_resources_from(config, expanded_devices),
-    }
-
-
-def instance_detail(
-    *,
-    devices: Optional[Dict[str, Any]] = None,
-    expanded_devices: Optional[Dict[str, Any]] = None,
-    config: Optional[Dict[str, Any]] = None,
-    profiles: Optional[List[str]] = None,
-    location: Optional[str] = None,
-    description: Optional[str] = None,
-    created_at: Any = None,
-    last_used_at: Any = None,
-    **summary_fields: Any,
-) -> Dict[str, Any]:
-    """The full specification, for a caller that has already chosen its target."""
-    detail = instance_summary(
-        config=config, expanded_devices=expanded_devices, **summary_fields
-    )
-    detail.update(
-        {
-            "config": dict(config or {}),
-            "devices": dict(devices or {}),
-            "expanded_devices": dict(expanded_devices or {}),
-            "profiles": list(profiles or []),
-            "location": location,
-            "description": description,
-            "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
-            "last_used_at": (
-                last_used_at.isoformat() if hasattr(last_used_at, "isoformat") else last_used_at
-            ),
-        }
-    )
-    return detail
-
-
 # ── the dispatcher ─────────────────────────────────────────────────────────────────────────
 
 
@@ -313,7 +226,16 @@ def _client_for(lxd_service: Any, cluster_id: str, project: str, operation: str)
     client = require_client(
         lxd_service.connection_manager.get_client(cluster_id), cluster_id
     )
-    needs_scope = (project and project != "default") or operation in PROXY_WAIT_OPERATIONS
+    # important: exec belongs here too, and leaving it out was a real defect rather than a
+    # tidiness one. It is not in PROXY_WAIT_OPERATIONS, so it took the pooled client's 8s read
+    # window while being budgeted at EXEC_TIMEOUT. Measured live: `sleep 10` failed after 10.5s
+    # with a message claiming it had exceeded a 30s budget it never reached. Any legitimate
+    # command slower than the socket window was refused, and told the wrong reason.
+    needs_scope = (
+        (project and project != "default")
+        or operation in PROXY_WAIT_OPERATIONS
+        or operation in GUEST_ACCESS_OPERATIONS
+    )
     if not needs_scope:
         return client
     # important: the socket read window has to outlast the response budget, not undercut it.
@@ -329,8 +251,11 @@ def _client_for(lxd_service: Any, cluster_id: str, project: str, operation: str)
     # 90s to roughly 195s on one of PROXY_POOL_WORKERS threads. Raise
     # ORCASTRA_PROXY_POOL_WORKERS if a fleet does enough slow creates to shed reads, or push
     # integrations towards `"wait": false`, which returns in about a second and holds nothing.
+    # The window is derived from whichever budget bounds this call, so the budget is always the
+    # binding limit and the timeout arrives on the path that can explain it.
+    budget = EXEC_TIMEOUT if operation in GUEST_ACCESS_OPERATIONS else PROXY_OP_TIMEOUT
     scoped = lxd_service.connection_manager.get_project_client(
-        cluster_id, project or "default", timeout=(3, int(PROXY_OP_TIMEOUT) + 5)
+        cluster_id, project or "default", timeout=(3, int(budget) + 5)
     )
     if scoped:
         return scoped
@@ -358,6 +283,7 @@ _REQUIRED_PARAMS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "restore_snapshot": (("name", "Instance name"), ("snapshot_name", "Snapshot name")),
     "delete_snapshot": (("name", "Instance name"), ("snapshot_name", "Snapshot name")),
     "get_operation": (("operation_id", "Operation id"),),
+    "exec_instance": (("name", "Instance name"), ("command", "Command")),
     "create_network": (("name", "Network name"),),
     "delete_network": (("name", "Network name"),),
     "delete_storage_pool": (("name", "Storage pool name"),),
@@ -516,6 +442,9 @@ def execute_proxy_operation(
         else:
             target.restart(force=force, wait=True)
         return {"name": target.name, "status": "Stopped" if action == "stop" else "Running"}
+
+    if operation == "exec_instance":
+        return exec_instance(instance(), params)
 
     if operation == "create_snapshot":
         # note: validate before the lookup. Reversed, a request missing snapshot_name spent a

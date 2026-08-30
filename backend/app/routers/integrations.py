@@ -25,19 +25,24 @@ from app.services.lxd.proxy import (
     API_KEY_CACHE_TTL,
     LAST_USED_WRITE_INTERVAL,
     PROXY_CONNECT_TIMEOUT,
+    EXEC_MAX_IN_FLIGHT,
+    EXEC_TIMEOUT,
     PROXY_MAX_IN_FLIGHT,
     PROXY_OP_TIMEOUT,
     RAW_PROXY_TIMEOUT,
     SYNC_CLUSTER_TIMEOUT,
     VALIDATE_KEY_TIMEOUT,
     auth_executor,
+    exec_executor,
     proxy_executor,
     raw_request,
     socket_timeout_for,
 )
+from app.services.activity_logger import get_activity_logger
 from app.services.lxd.availability import require_client, unreachable_detail
 from app.services.lxd.proxy_operations import (
     CLUSTER_WIDE_OPERATIONS,
+    GUEST_ACCESS_OPERATIONS,
     PROXY_OPERATION_LEVELS,
     PROXY_WAIT_OPERATIONS,
     classify_proxy_error,
@@ -49,6 +54,12 @@ from app.services.lxd.proxy_operations import (
 )
 from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
 from app.core.api_key_capabilities import (
+    ELEVATED_REASONS,
+    GUEST_ACCESS_CAPABILITIES,
+    assert_explicit_capability,
+    assert_guest_access_allowed,
+    config_reaches_inside,
+    guest_access_capability_for,
     project_grant_is_unrestricted,
     APP_TYPE_CAPABILITIES,
     APP_TYPES,
@@ -92,6 +103,8 @@ external_router = APIRouter(
 
 # Vault path for integration data
 VAULT_INTEGRATIONS_PATH = "integrations"
+
+activity_logger = get_activity_logger()
 
 
 # ============================================
@@ -423,7 +436,9 @@ class RawProxyRequest(BaseModel):
     """Request to proxy a raw HTTP request to LXD."""
     cluster_id: str = Field(..., description="Target cluster ID")
     method: str = Field(..., description="HTTP method: GET, POST, PUT, DELETE, PATCH")
-    path: str = Field(..., description="LXD API path, ex;, /1.0/instances")
+    path: str = Field(
+        ..., max_length=2048, description="LXD API path, ex;, /1.0/instances"
+    )
     body: Optional[Dict[str, Any]] = Field(None, description="Request body for POST/PUT/PATCH")
     project: Optional[str] = Field(None, description="LXD project (added to query params)")
     external_user_id: Optional[str] = Field(None, description="External user making the request")
@@ -2329,6 +2344,91 @@ async def _integration_hardware_totals(
 # cluster_permissions. What changes is the shape.
 
 
+# Which audit action a raw-proxy path belongs under. A call that reaches inside a guest is the
+# same kind of event as opening a console, so it is named and rated like one; everything else is
+# ordinary proxy traffic.
+_PROXY_AUDIT_ACTIONS: Dict[Optional[str], str] = {
+    "instance.exec": "integration.instance.exec",
+    "instance.files": "integration.instance.files",
+}
+
+
+def _audit_key_action(
+    api_key: Dict[str, Any],
+    *,
+    action: str,
+    target_id: str,
+    cluster_id: str,
+    project: Optional[str],
+    result: str = "success",
+    details: Optional[Dict[str, Any]] = None,
+    external_user_email: Optional[str] = None,
+    error_message: Optional[str] = None,
+) -> None:
+    """Record what a key did, in the index a human reviews rather than only the app log.
+
+    important: this surface had no audit record at all. The one `logger.info` beside it names the
+    method and path but never the body, is not routed to the audit index, and is subject to
+    `LogDeduplicationFilter`, so a hundred different commands against the same instance inside a
+    minute collapsed to a single line. For a path that runs code inside a customer's guest that
+    is not a trail.
+
+    important: the actor is the KEY, not `external_user_email`. That field is supplied by the
+    caller on the request body and is never verified, so treating it as identity would let the
+    caller write its own audit entry. It is recorded as an untrusted annotation instead.
+    """
+    try:
+        activity_logger.log_activity(
+            action=action,
+            target_type="instance" if action.startswith("integration.instance.") else "cluster",
+            target_id=target_id,
+            target_host=cluster_id,
+            target_project=project,
+            result=result,
+            error_message=error_message,
+            details={
+                **(details or {}),
+                "api_key_id": api_key.get("id"),
+                "app_name": api_key.get("app_name"),
+                "app_type": api_key.get("app_type"),
+                "claimed_user_email": external_user_email,
+            },
+        )
+    except Exception:  # pragma: no cover - a failed audit write must not fail the request
+        logger.warning("Could not write the audit record for %s", action, exc_info=True)
+
+
+def _audit_raw_proxy(
+    api_key: Dict[str, Any],
+    request: Any,
+    method: str,
+    project: Optional[str],
+    result: str,
+    *,
+    lxd_status: Optional[int] = None,
+    error: Optional[str] = None,
+) -> None:
+    """One record per raw-proxy call, whatever became of it.
+
+    note: a call that timed out or was shed still reached the cluster, or may have. Recording
+    only the ones that answered would leave the slowest, which are the ones worth reviewing,
+    out of the index entirely.
+    """
+    _audit_key_action(
+        api_key,
+        action=_PROXY_AUDIT_ACTIONS.get(
+            guest_access_capability_for(request.path), "integration.proxy.request"
+        ),
+        target_id=request.path[:512],
+        cluster_id=request.cluster_id,
+        project=project,
+        result=result,
+        details={"method": method, "lxd_status": lxd_status},
+        external_user_email=request.external_user_email,
+        error_message=error,
+    )
+
+
 def _clusters_for_key(api_key: Dict[str, Any], cluster_id: Optional[str]) -> set:
     """The clusters this request may touch: the key's grant, optionally narrowed by one id.
 
@@ -2745,6 +2845,32 @@ async def raw_proxy(
             raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
 
         assert_proxy_path_allowed(request.path)
+        # important: reaching inside a guest is a different power from managing it, and this path
+        # never asked for it. `_REFUSED_PROXY_PREFIXES` holds only `/certificates`, so
+        # `POST /1.0/instances/<n>/exec` ran arbitrary commands as root for any key with
+        # `lxd.proxy` + `write`, and a GET of `/files` needed only `read`. Both were demonstrated
+        # against this deployment before the fix. The capability is never inherited by a legacy
+        # key, so this closes the door for the 17 of 22 keys that hold everything by default.
+        try:
+            assert_guest_access_allowed(request.path, api_key)
+        except HTTPException as refusal:
+            # note: a refused attempt to reach inside a guest is the record most worth having.
+            # Success is expected traffic; a key trying a path it was never granted is the
+            # signal, and it is invisible if only successes are written.
+            _audit_key_action(
+                api_key,
+                action=_PROXY_AUDIT_ACTIONS.get(
+                    guest_access_capability_for(request.path), "integration.proxy.request"
+                ),
+                target_id=request.path[:512],
+                cluster_id=request.cluster_id,
+                project=project,
+                result="failure",
+                details={"method": method, "refused": "capability_not_granted"},
+                external_user_email=request.external_user_email,
+                error_message=str(refusal.detail),
+            )
+            raise
         # important: the project check above binds the REQUEST to a granted project, which does
         # not bound a resource whose identity is itself a project name. A key granted only
         # "tenant-a" could send DELETE /1.0/projects/tenant-b with project=tenant-a and pass
@@ -2872,11 +2998,15 @@ async def raw_proxy(
             except Exception:
                 data = {"raw": response.text if hasattr(response, 'text') else str(response)}
 
-            # Log the operation for audit
             logger.info(
                 f"Raw proxy: {method} {request.path} on {request.cluster_id}/{project} "
                 f"by {request.external_user_email or 'unknown'} via {api_key.get('app_name', 'unknown')} "
                 f"-> {status_code}"
+            )
+            _audit_raw_proxy(
+                api_key, request, method, project,
+                "success" if status_code < 400 else "failure",
+                lxd_status=status_code,
             )
 
             # A raw call can be anything, so on a mutating verb the safe assumption is that
@@ -2897,6 +3027,7 @@ async def raw_proxy(
 
         except BlockingTimeout as timeout_error:
             health.record_failure(request.cluster_id, str(timeout_error))
+            _audit_raw_proxy(api_key, request, method, project, "failure", error="timeout")
             logger.warning(
                 f"Raw proxy timeout: {method} {request.path} on {request.cluster_id}/{project} "
                 f"after {RAW_PROXY_TIMEOUT}s"
@@ -2907,6 +3038,7 @@ async def raw_proxy(
                 error=str(timeout_error),
             )
         except BlockingPoolFull as pool_error:
+            _audit_raw_proxy(api_key, request, method, project, "failure", error="overloaded")
             return RawProxyResponse(
                 status_code=503,
                 data=None,
@@ -2946,8 +3078,19 @@ def _still_running_message(operation: str, cluster_id: str) -> str:
     """What to say when we stopped waiting but the cluster did not stop working.
 
     important: "timed out" alone is what makes an unattended caller retry, and a retried create
-    collides with the instance the first attempt is still building. Both timeout paths use this.
+    collides with the instance the first attempt is still building. Every timeout path uses this.
+
+    note: the budget and the advice both differ by operation. Exec has its own, shorter budget
+    and no asynchronous form, so telling an exec caller to resend with `"wait": false` would send
+    it to a flag that operation does not read.
     """
+    if operation in GUEST_ACCESS_OPERATIONS:
+        return (
+            f"{operation} exceeded the {EXEC_TIMEOUT:g}s exec budget and may still be running "
+            f"inside the instance on {cluster_id}. Exec is synchronous, so there is no operation "
+            "id to poll: check the command's effects instead, and run genuinely long work as a "
+            "service rather than through exec."
+        )
     return (
         f"{operation} exceeded the {PROXY_OP_TIMEOUT:g}s response budget and may still be "
         f"running on {cluster_id}. Do not retry: poll GET /api/v1/integrations/instances to see "
@@ -3013,6 +3156,43 @@ async def proxy_operation(
         # both.
         assert_cluster_permission(api_key, request.cluster_id, required_permission)
 
+        # important: an operation that reaches inside a guest costs a capability of its own, on
+        # top of lxd.proxy and the level. It is never inherited by a key issued before
+        # capabilities existed and never seeded by an application type, so an operator has to
+        # grant it deliberately. Same rule the raw proxy path guard applies to /exec.
+        guest_capability = GUEST_ACCESS_OPERATIONS.get(operation)
+        if guest_capability is None and operation in ("update_instance", "create_instance"):
+            # important: `raw.lxc` with an lxc hook runs as root on the HOST, and a disk device
+            # sourced from a host path mounts it into the guest. Both were reachable at `write`
+            # alone, which would have left the new capability guarding the front door of a room
+            # with an open window.
+            guest_capability = config_reaches_inside(
+                (request.params or {}).get("config"), (request.params or {}).get("devices")
+            )
+        if guest_capability:
+            try:
+                assert_explicit_capability(api_key, guest_capability)
+            except HTTPException as refusal:
+                # The same record the raw proxy writes for the same refusal. A key trying to
+                # reach inside a guest it was never granted is the signal worth alerting on, and
+                # it is invisible if only the successful calls are written.
+                _audit_key_action(
+                    api_key,
+                    action=_PROXY_AUDIT_ACTIONS[guest_capability],
+                    target_id=str(request.params.get("name", "")),
+                    cluster_id=request.cluster_id,
+                    project=request.project,
+                    result="failure",
+                    details={
+                        "operation": operation,
+                        "command": request.params.get("command"),
+                        "refused": "capability_not_granted",
+                    },
+                    external_user_email=request.external_user_email,
+                    error_message=str(refusal.detail),
+                )
+                raise
+
         # important: authorising request.project binds the ambient project, not the target. These
         # operations name their target in params, and a project is not bounded by a project, so a
         # key granted only "tenant-a" could delete_project "tenant-b" and pass every check above.
@@ -3053,13 +3233,52 @@ async def proxy_operation(
                 request.params or {},
                 request.project,
                 request.wait,
-                timeout=PROXY_OP_TIMEOUT,
+                # note: exec holds a worker for as long as the command runs, so it gets its own
+                # budget rather than the operation one. A command that needs longer is a job.
+                timeout=EXEC_TIMEOUT if operation == "exec_instance" else PROXY_OP_TIMEOUT,
                 label=f"proxy_operation[{operation} {request.cluster_id}]",
-                executor=proxy_executor,
-                max_in_flight=PROXY_MAX_IN_FLIGHT,
+                # note: a runaway exec holds its worker until the command ends, because
+                # run_blocking frees the caller and not the thread. Its own pool means the blast
+                # radius of that is other execs rather than every read on this router.
+                executor=exec_executor if operation == "exec_instance" else proxy_executor,
+                max_in_flight=(
+                    EXEC_MAX_IN_FLIGHT if operation == "exec_instance" else PROXY_MAX_IN_FLIGHT
+                ),
             )
             health.clear(request.cluster_id)
         except BlockingTimeout as timeout_error:
+            # important: exec lands HERE, not in the generic handler below, so its audit record
+            # and its "still running" message have to be written on this path too. They were only
+            # on the other one, which the QA run happened to reach because a socket read expired
+            # first. `exec_instance` is also not in PROXY_WAIT_OPERATIONS, so without this it fell
+            # through to record_failure and tripped the process-wide breaker: one integration's
+            # slow command would make the cluster read as offline for every other caller.
+            if operation == "exec_instance":
+                _audit_key_action(
+                    api_key,
+                    action="integration.instance.exec",
+                    target_id=str(request.params.get("name", "")),
+                    cluster_id=request.cluster_id,
+                    project=request.project,
+                    result="failure",
+                    details={
+                        "command": request.params.get("command"),
+                        "cwd": request.params.get("cwd"),
+                        "run_as_user": request.params.get("user"),
+                        "outcome": "timeout",
+                    },
+                    external_user_email=request.external_user_email,
+                    error_message="timeout",
+                )
+                logger.warning(
+                    "Exec timeout: %s on %s after %ss",
+                    request.params.get("name"), request.cluster_id, EXEC_TIMEOUT,
+                )
+                return ProxyResponse(
+                    success=False,
+                    error_code="timeout",
+                    error=_still_running_message(operation, request.cluster_id),
+                )
             long_running = operation in PROXY_WAIT_OPERATIONS and request.wait
             # important: a long operation is not an unreachable cluster. Tripping the breaker
             # here made one slow create return 503 for every other caller of that cluster for
@@ -3108,6 +3327,30 @@ async def proxy_operation(
                     if isinstance(row, dict) and row.get("name") in allowed
                 ]
 
+        if operation == "exec_instance" and isinstance(result_data, dict):
+            # important: the command is recorded, the OUTPUT is not. Output is whatever the
+            # caller chose to read out of the guest, so an audit index that stored it would
+            # become a copy of every secret anyone ever cat-ed. Byte counts and the exit code
+            # carry the forensic value without the liability.
+            _audit_key_action(
+                api_key,
+                action="integration.instance.exec",
+                target_id=str(request.params.get("name", "")),
+                cluster_id=request.cluster_id,
+                project=request.project,
+                result="success",
+                details={
+                    "command": result_data.get("command"),
+                    "exit_code": result_data.get("exit_code"),
+                    "cwd": request.params.get("cwd"),
+                    "run_as_user": request.params.get("user"),
+                    "stdout_bytes": len(result_data.get("stdout") or ""),
+                    "stderr_bytes": len(result_data.get("stderr") or ""),
+                    "truncated": result_data.get("truncated"),
+                },
+                external_user_email=request.external_user_email,
+            )
+
         # An accepted-but-unfinished operation carries its id at the top level too, so a
         # caller does not have to know it is nested in data.
         operation_id = (
@@ -3124,6 +3367,35 @@ async def proxy_operation(
     except Exception as e:
         logger.error(f"Error in proxy operation: {e}", exc_info=True)
         error_code = classify_proxy_error(e)
+        if request.operation == "exec_instance":
+            # important: a command that outlived the budget still ran. Auditing only the calls
+            # that answered in time would leave the longest-running commands, which are the ones
+            # most worth reviewing, out of the record entirely.
+            _audit_key_action(
+                api_key,
+                action="integration.instance.exec",
+                target_id=str(request.params.get("name", "")),
+                cluster_id=request.cluster_id,
+                project=request.project,
+                result="failure",
+                details={
+                    "command": request.params.get("command"),
+                    "cwd": request.params.get("cwd"),
+                    "run_as_user": request.params.get("user"),
+                    "outcome": error_code,
+                },
+                external_user_email=request.external_user_email,
+                error_message=error_code,
+            )
+        if request.operation == "exec_instance" and error_code == "timeout":
+            # important: a socket read can still expire before the budget on the pooled path, and
+            # the underlying message is a urllib3 string naming the LXD host's address, which is
+            # infrastructure an integration has no business learning from a timeout.
+            return ProxyResponse(
+                success=False,
+                error_code=error_code,
+                error=_still_running_message(request.operation, request.cluster_id),
+            )
         # important: a socket read timeout reaches here rather than as BlockingTimeout, and it
         # carries the same hazard: the cluster kept working after we stopped listening. Observed
         # live, a create that timed out this way left a real instance behind while the caller
@@ -3151,7 +3423,20 @@ class CapabilityOption(BaseModel):
     description: str = Field(..., description="What the capability allows, in operator language")
     elevated: bool = Field(
         default=False,
-        description="Writes authorization data (organizations, roles, tenant access grants)",
+        description="Needs a deliberate decision rather than an application-type default",
+    )
+    # note: the reason belongs on the server because there is more than one. The create form used
+    # to label every elevated capability "Writes access control", which is true of org.sync and
+    # tenant.provision and false of the two that reach inside a guest.
+    elevated_reason: Optional[str] = Field(
+        default=None, description="Why this capability is marked, in operator language"
+    )
+    never_inherited: bool = Field(
+        default=False,
+        description=(
+            "Never granted by an application type and never inherited by a key issued before "
+            "capabilities existed; an operator has to grant it deliberately"
+        ),
     )
 
 
@@ -3190,6 +3475,8 @@ async def list_capabilities():
                 name=name,
                 description=description,
                 elevated=name in ELEVATED_CAPABILITIES,
+                elevated_reason=ELEVATED_REASONS.get(name),
+                never_inherited=name in GUEST_ACCESS_CAPABILITIES,
             )
             for name, description in CAPABILITIES.items()
         ],

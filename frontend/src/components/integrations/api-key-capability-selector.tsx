@@ -70,7 +70,12 @@ export function ApiKeyCapabilitySelector({
                     {capability.elevated && (
                       <Badge variant="warning" className="gap-1 px-2">
                         <ShieldAlert className="h-3 w-3" aria-hidden="true" />
-                        Writes access control
+                        {capability.elevated_reason ?? "Needs a deliberate decision"}
+                      </Badge>
+                    )}
+                    {capability.never_inherited && (
+                      <Badge variant="muted" className="px-2">
+                        Grant explicitly
                       </Badge>
                     )}
                   </div>

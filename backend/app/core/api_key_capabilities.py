@@ -35,7 +35,20 @@ CAPABILITIES: Dict[str, str] = {
     "storage.upload": "Upload disk images and ISO volumes",
     "org.sync": "Create and update organizations and their members",
     "tenant.provision": "Create and revoke tenant access policies",
+    "instance.exec": "Run commands inside an instance, as root unless a user is named",
+    "instance.files": "Read and write files inside an instance",
 }
+
+# Reaching INSIDE a guest, rather than managing it from outside.
+#
+# important: these two are excluded from every preset and from the legacy grandfather rule below,
+# and both exclusions are load-bearing rather than tidy. `orcahub` is `set(CAPABILITIES)`, so
+# without the first a new vocabulary entry silently widens the one integration in production. And
+# `granted_capabilities` returns None for a key issued before capabilities existed, which
+# `has_capability` reads as everything; 17 of the 22 keys in this deployment are in that state, so
+# without the second, shipping this grants root-in-guest to most of the fleet with nobody deciding
+# it. A power that did not exist when a key was issued cannot already have been granted to it.
+GUEST_ACCESS_CAPABILITIES = frozenset({"instance.exec", "instance.files"})
 
 # What each application type gets when the caller does not name capabilities itself. These are
 # defaults, not a ceiling: the operator may tick any capability for any type.
@@ -43,7 +56,7 @@ CAPABILITIES: Dict[str, str] = {
 # important: `orcahub` is every capability on purpose. It is the only integration in production,
 # and this is the value that keeps its behaviour identical to before capabilities existed.
 APP_TYPE_CAPABILITIES: Dict[str, Set[str]] = {
-    "orcahub": set(CAPABILITIES),
+    "orcahub": set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES,
     "mcp": {"inventory.read", "lxd.proxy"},
     "automation": {"inventory.read", "lxd.proxy", "storage.upload"},
     "agent": {"inventory.read", "lxd.proxy"},
@@ -60,7 +73,22 @@ APP_TYPES = tuple(APP_TYPE_CAPABILITIES)
 # global system roles; `tenant.provision` binds clusters to organizations and grants tenants
 # operate and console access. Granting either to an unattended caller is a real decision, so the
 # create form marks them instead of listing all five as equivalent ticks.
-ELEVATED_CAPABILITIES = frozenset({"org.sync", "tenant.provision"})
+# `instance.exec` and `instance.files` are elevated for a different reason: they cross from
+# managing an instance to reaching inside it. Exec runs as root in the guest by default, and the
+# file API reads any path, so either one turns a key into a credential for the guest's contents
+# rather than for its lifecycle.
+ELEVATED_CAPABILITIES = frozenset(
+    {"org.sync", "tenant.provision"} | GUEST_ACCESS_CAPABILITIES
+)
+
+# The operator-facing reason a capability is marked, so the create form stops claiming that every
+# elevated capability "writes access control", which is true of two of them and false of two.
+ELEVATED_REASONS: Dict[str, str] = {
+    "org.sync": "Writes access control",
+    "tenant.provision": "Writes access control",
+    "instance.exec": "Reaches inside the guest",
+    "instance.files": "Reaches inside the guest",
+}
 
 
 def granted_capabilities(api_key: Dict[str, Any]) -> Optional[Set[str]]:
@@ -91,6 +119,39 @@ def has_capability(api_key: Dict[str, Any], capability: str) -> bool:
     if granted is None:
         return True
     return capability in granted
+
+
+def has_explicit_capability(api_key: Dict[str, Any], capability: str) -> bool:
+    """Like ``has_capability``, but a legacy key does NOT satisfy it.
+
+    important: the only difference is the grandfather rule, and that difference is the whole
+    point. ``has_capability`` answers "was this key issued before we started restricting", which
+    is the right question for a power that existed then. It is the wrong question for a power
+    that did not: nobody chose to grant it, so nobody can be said to already hold it.
+    """
+    granted = granted_capabilities(api_key)
+    return granted is not None and capability in granted
+
+
+def assert_explicit_capability(api_key: Dict[str, Any], capability: str) -> None:
+    """Raise 403 unless the key was explicitly issued ``capability``."""
+    if has_explicit_capability(api_key, capability):
+        return
+    legacy = granted_capabilities(api_key) is None
+    logger.warning(
+        "Refusing %s for API key %s (%s): %s",
+        capability, api_key.get("id", "unknown"), api_key.get("app_name", "unknown"),
+        "key predates capabilities and this one is never inherited" if legacy
+        else "capability not granted",
+    )
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            f"API key does not have the '{capability}' capability. It reaches inside a guest, so "
+            "it is never inherited by a key issued before capabilities existed and is never "
+            "seeded by an application type: an operator has to grant it deliberately."
+        ),
+    )
 
 
 def assert_capability(api_key: Dict[str, Any], capability: str) -> None:
@@ -148,6 +209,106 @@ _REFUSED_PROXY_PREFIXES = ("/certificates",)
 _PROJECT_UNBOUNDABLE_PREFIXES = ("/projects", "/storage-pools", "/networks", "/profiles")
 
 _MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# LXD paths that reach INSIDE a guest rather than managing it from outside, and the capability
+# each one costs.
+#
+# important: this closes a hole rather than adding a rule. `_REFUSED_PROXY_PREFIXES` holds exactly
+# one entry, so `POST /1.0/instances/<n>/exec` was never refused: any key with `lxd.proxy` and
+# `write` ran arbitrary commands as root in any guest in an allowed project, and a GET of
+# `/files` needed only `read`, which made a read-only monitoring key an exfiltration tool.
+# Demonstrated against this deployment before the fix: `uid=0(root)` from a `write` key, and
+# /etc/shadow read with a `read` key. The integrator document actively recommended the exec path.
+#
+# `/logs` is here because exec output lands there as `exec_<uuid>.stdout`, and listing the
+# directory exposes another caller's. A key using the first-class `exec_instance` operation gets
+# its output in the response and never needs it.
+_GUEST_ACCESS_PREFIXES: Dict[str, str] = {
+    "/exec": "instance.exec",
+    # important: `/console` hands back the same thing the endpoint removed from terminal.py did.
+    # A POST returns the operation's file-descriptor secrets (see services/console_service.py,
+    # which reads metadata.metadata.fds to build its wss URL), so a caller can attach to the
+    # guest's console directly, outside this proxy and outside every session control. A GET
+    # returns the console log buffer, which is guest tty output.
+    "/console": "instance.exec",
+    "/files": "instance.files",
+    # A backup or a published image is the guest's filesystem in a tarball, which is the same
+    # disclosure as reading its files one at a time.
+    "/backups": "instance.files",
+}
+
+# Log files whose contents are the output of a command someone ran. Ordinary instance logs
+# (lxc.log, console.log) stay readable at `read`, because a monitoring integration has a real
+# reason to want them and forcing it to hold root-in-guest to read a crash log is worse than the
+# disclosure it prevents.
+_EXEC_LOG_PREFIX = "exec_"
+
+
+# Instance configuration keys and device shapes that are execution by another name.
+#
+# important: `raw.lxc` reaches the container runtime and `lxc.hook.pre-start` runs as root ON THE
+# HOST, which is more than exec-in-guest, not less. `security.privileged` plus a disk device whose
+# source is a host path is the same reach by a slower road. All of it was available to any key
+# with `lxd.proxy` and `write`, which would have made the new capability a door beside an open
+# window. Gated at the same capability rather than refused outright, because a key that may run
+# commands in a guest is not made more dangerous by being able to configure one.
+_EXECUTION_EQUIVALENT_CONFIG_PREFIXES = ("raw.", "security.privileged", "security.nesting")
+
+
+def config_reaches_inside(config: Any, devices: Any) -> Optional[str]:
+    """The capability an instance-configuration change costs, or None when it is ordinary.
+
+    Ordinary is the common case and stays at `write`: limits, descriptions, user metadata, a
+    profile change. Refusing those would break configuration management for no gain.
+    """
+    for key in (config or {}) if isinstance(config, dict) else {}:
+        lowered = str(key).lower()
+        if any(lowered.startswith(prefix) for prefix in _EXECUTION_EQUIVALENT_CONFIG_PREFIXES):
+            return "instance.exec"
+    for device in ((devices or {}).values() if isinstance(devices, dict) else []):
+        if not isinstance(device, dict):
+            continue
+        source = str(device.get("source") or "")
+        if device.get("type") == "disk" and source.startswith("/"):
+            # A host path mounted into the guest is the file API with extra steps.
+            return "instance.files"
+    return None
+
+
+def guest_access_capability_for(path: str) -> Optional[str]:
+    """The capability a raw-proxy path costs, or None when it stays outside the guest.
+
+    Matches on the segment after the instance name, so `/1.0/instances/<n>/exec` is caught while
+    an instance whose NAME contains "exec" is not. Decodes first, the way the traversal guard
+    beside it does, so a percent-encoded spelling is not a second answer.
+    """
+    normalised = unquote(unquote(path or "")).split("?", 1)[0]
+    if normalised.startswith("/1.0"):
+        normalised = normalised[4:]
+    if not normalised.startswith("/"):
+        normalised = "/" + normalised
+    segments = [segment for segment in normalised.lower().split("/") if segment]
+    # instances/<name>/<action>...
+    if len(segments) < 3 or segments[0] not in ("instances", "containers", "virtual-machines"):
+        return None
+    for prefix, capability in _GUEST_ACCESS_PREFIXES.items():
+        if segments[2] == prefix.lstrip("/"):
+            return capability
+
+    # `/logs` is split: the directory listing and any exec_<uuid>.stdout is exec output and costs
+    # the exec capability; a named ordinary log does not.
+    if segments[2] == "logs":
+        if len(segments) == 3 or segments[3].startswith(_EXEC_LOG_PREFIX):
+            return "instance.exec"
+    return None
+
+
+def assert_guest_access_allowed(path: str, api_key: Dict[str, Any]) -> None:
+    """Refuse a raw-proxy path that reaches inside a guest without the capability for it."""
+    capability = guest_access_capability_for(path)
+    if capability is None:
+        return
+    assert_explicit_capability(api_key, capability)
 
 
 def project_grant_is_unrestricted(allowed_projects: Optional[List[str]]) -> bool:

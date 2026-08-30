@@ -7,7 +7,7 @@ import asyncio
 import json
 import logging
 from typing import Optional
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
 import websockets
 from websockets.exceptions import ConnectionClosed
 from websockets.protocol import State as WebSocketState
@@ -16,8 +16,8 @@ from app.services.terminal_service import get_terminal_service
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.services.session_models import new_session_id
-from app.core.dependencies import require_tenant, AuthenticatedUser, get_ws_user
-from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws
+from app.core.dependencies import AuthenticatedUser, get_ws_user
+from app.core.org_scope import set_org_scope_for_ws
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -28,76 +28,15 @@ router = APIRouter(
 )
 
 
-@router.get(
-    "/session",
-    summary="Create terminal session",
-    description="Create a new terminal session for an instance and get WebSocket connection info.",
-    dependencies=[Depends(org_scope_dependency)],
-)
-async def create_terminal_session(
-    instance: str = Query(..., description="Instance name"),
-    host: str = Query(..., description="Host/cluster name"),
-    project: str = Query("default", description="LXD project name"),
-    width: int = Query(120, ge=10, le=500, description="Terminal width in columns"),
-    height: int = Query(40, ge=5, le=200, description="Terminal height in rows"),
-    _rbac: AuthenticatedUser = Depends(require_tenant()),
-):
-    """
-    Create a terminal session for an instance.
-    Returns WebSocket URLs for connecting to the terminal.
-    """
-    # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
-    # active grant (raises 403 break_glass_required). In-scope self-service / dev unaffected.
-    from app.services.break_glass_service import enforce_sensitive_access
-    from app.core.org_scope import resolve_cluster_org
-    from app.core.database import async_session_maker
-    async with async_session_maker() as _bg_db:
-        _bg_grant = await enforce_sensitive_access(_rbac, host, _bg_db)
-        _target_org_id, _target_org_slug = await resolve_cluster_org(host, _bg_db)
-    _bg_grant_id = _bg_grant.id if _bg_grant else None
-
-    terminal_service = get_terminal_service()
-
-    session_info, error = await terminal_service.create_exec_session(
-        instance_name=instance,
-        host=host,
-        project=project,
-        width=width,
-        height=height,
-    )
-
-    if error:
-        # Log activity: terminal session creation failure
-        activity_logger.log_activity(
-            action="terminal.session.create",
-            target_type="instance",
-            target_id=instance,
-            target_host=host,
-            target_project=project,
-            result="failure",
-            error_message=error,
-            target_organization_id=_target_org_id,
-            target_organization_slug=_target_org_slug,
-        )
-        raise HTTPException(status_code=400, detail=error)
-
-    # Log activity: terminal session creation success (HIGH SEVERITY - security audit)
-    activity_logger.log_activity(
-        action="terminal.session.create",
-        target_type="instance",
-        target_id=instance,
-        target_host=host,
-        target_project=project,
-        result="success",
-        details={"width": width, "height": height, "break_glass_grant_id": _bg_grant_id},
-        target_organization_id=_target_org_id,
-        target_organization_slug=_target_org_slug,
-    )
-    
-    return {
-        "success": True,
-        "session": session_info,
-    }
+# note: `GET /terminal/session` used to live here. It created a real LXD exec operation and
+# returned `session_info` verbatim, which carries `ws_url` and `control_url` complete with the
+# operation's `?secret=` file-descriptor tokens and the cluster endpoint. Anyone holding that
+# response could talk to LXD directly: outside this proxy, outside session tracking, outside the
+# kill paths, and outside `watch_grant_while_open`, which is what revokes a break-glass session
+# mid-flight. Measured before removing it: zero calls in seven days and no caller anywhere in
+# `frontend/src`. The app uses the WebSocket below, which mints its own session internally and
+# never discloses the secret. Removed rather than redacted, because without the secret the
+# endpoint answers nothing anyone wanted.
 
 
 class TerminalProxy:
@@ -508,17 +447,28 @@ async def terminal_websocket(
     # set org scope for WebSocket (context variable)
     await set_org_scope_for_ws(user)
 
-    # Per-project enforcement (flag-gated). No-op for admin/partner (acl is None); for a tenant a
-    # missing/insufficient 'console' rule closes the socket with 1008 rather than raising.
-    if _settings.tenant_perm_enforcement_enabled and user is not None:
-        from app.core.org_scope import verify_tenant_permission
-        from fastapi import HTTPException as _HTTPExc
-        try:
+    # important: the console WebSocket added this and the terminal one never had it, so the
+    # organisation boundary here rested entirely on the break-glass gate below and on a flag that
+    # is off by default. verify_cluster_access appeared seventeen times in console.py and not
+    # once here, which is why this file was blanket-exempt from the cluster-scope ratchet; that
+    # exemption is gone now, so the ratchet enforces this call. Closing rather than raising,
+    # since HTTPException is meaningless once the socket is being negotiated.
+    from fastapi import HTTPException as _HTTPExc
+    try:
+        from app.core.org_scope import verify_cluster_access, verify_tenant_permission
+
+        verify_cluster_access(host)
+        # Per-project enforcement (flag-gated). No-op for admin/partner (acl is None); for a
+        # tenant a missing or insufficient 'console' rule closes the socket rather than raising.
+        if _settings.tenant_perm_enforcement_enabled and user is not None:
             verify_tenant_permission(host, project, instance_name, "console")
-        except _HTTPExc:
-            await websocket.close(code=1008, reason="permission_denied")
-            logger.warning(f"Terminal WS blocked (no console permission): {instance_name}@{host} user={user.email}")
-            return
+    except _HTTPExc as exc:
+        await websocket.close(code=1008, reason="forbidden")
+        logger.warning(
+            "Terminal WS blocked (%s): %s@%s user=%s",
+            exc.detail, instance_name, host, getattr(user, "email", "?"),
+        )
+        return
 
     # Break-glass gate (defense in depth). An admin reaching a tenant cluster they do not
     # own must hold an active grant; otherwise reject. Dev/no-user skips inside enforce.
@@ -543,6 +493,23 @@ async def terminal_websocket(
     await websocket.accept()
     user_id = user.user_id if user else "anonymous"
     logger.info(f"Terminal WebSocket connected: {instance_name}@{host} user={user_id}")
+
+    # important: this is the only emitter of terminal.session.create now, and until this line
+    # there was none on the socket at all. The removed REST endpoint carried it, so a client
+    # that connected straight to the WebSocket, which is what the app itself does, opened a root
+    # shell in a guest and left nothing in the activity index. Session tracking recorded it; the
+    # index a human reviews did not.
+    activity_logger.log_activity(
+        action="terminal.session.create",
+        target_type="instance",
+        target_id=instance_name,
+        target_host=host,
+        target_project=project,
+        result="success",
+        details={"transport": "websocket", "break_glass_grant_id": _bg_grant_id},
+        target_organization_id=_target_org_id,
+        target_organization_slug=_target_org_slug,
+    )
 
     # Extract user details for session tracking
     user_id = user.user_id if user else "anonymous"

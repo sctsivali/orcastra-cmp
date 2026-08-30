@@ -77,6 +77,33 @@ RAW_PROXY_TIMEOUT = _env_float("ORCASTRA_RAW_PROXY_TIMEOUT", 20.0)
 PROXY_CONNECT_TIMEOUT = _env_float("ORCASTRA_PROXY_CONNECT_TIMEOUT", 15.0)
 PROXY_OP_TIMEOUT = _env_float("ORCASTRA_PROXY_OP_TIMEOUT", 60.0)
 
+# An exec holds a proxy worker for its whole run, so it gets its own budget rather than borrowing
+# the operation one. Deliberately short: a command that needs longer than this is a job, not a
+# request, and should be started by the caller in a way that survives the connection.
+EXEC_TIMEOUT = _env_float("ORCASTRA_EXEC_TIMEOUT", 30.0)
+
+# Per stream. Nothing on this surface capped a response before, and exec output is caller-chosen:
+# `cat /dev/urandom` would otherwise stream until the timeout with the whole buffer held in the
+# worker's memory. The response says when it truncated.
+EXEC_OUTPUT_LIMIT = _env_int("ORCASTRA_EXEC_OUTPUT_LIMIT", 256 * 1024)
+
+# important: exec gets its own pool, small and separate. run_blocking's own contract says the
+# worker thread keeps running after the caller gives up, until fn's per-attempt socket timeout
+# fires (core/blocking.py), and pylxd's exec polls its operation over a websocket with no such
+# bound. So a runaway command holds a thread until it ends, and on the shared proxy pool eight of
+# them would take every read, every raw proxy call and every fan-out with them. On its own pool
+# the blast radius of a runaway exec is other execs. Same reasoning that gave auth its own pool.
+EXEC_POOL_WORKERS = _env_int("ORCASTRA_EXEC_POOL_WORKERS", 4)
+EXEC_MAX_IN_FLIGHT = _env_int("ORCASTRA_EXEC_MAX_IN_FLIGHT", EXEC_POOL_WORKERS)
+
+exec_executor = ThreadPoolExecutor(
+    max_workers=EXEC_POOL_WORKERS, thread_name_prefix="integrations_exec"
+)
+
+# stdin exists so a caller does not have to stuff data into argv, which is worse for quoting and
+# worse for the audit record. It is not a file upload; that is what instance.files is for.
+EXEC_STDIN_LIMIT = _env_int("ORCASTRA_EXEC_STDIN_LIMIT", 64 * 1024)
+
 # Per-cluster budget for the OrcaHub sync fan-out. Applied per cluster, and the clusters run
 # concurrently, so total wall clock is the slowest cluster rather than the sum.
 SYNC_CLUSTER_TIMEOUT = _env_float("ORCASTRA_SYNC_CLUSTER_TIMEOUT", 20.0)

@@ -1,0 +1,451 @@
+"""What a command run inside a guest costs, returns, and leaves behind.
+
+The raw-proxy route to the same power had none of this: no cap on the output it buffered, no
+bound on how long it held a worker, and an audit record that named the path but never the command
+and was collapsed by the log deduplication filter, so a hundred different commands against one
+instance inside a minute produced a single line.
+"""
+
+import ast
+from pathlib import Path
+
+import pytest
+from fastapi import HTTPException
+
+from app.services.lxd.guest_exec import exec_instance
+from app.services.lxd.proxy import EXEC_OUTPUT_LIMIT, EXEC_STDIN_LIMIT, EXEC_TIMEOUT, PROXY_OP_TIMEOUT
+
+ROUTER = Path(__file__).resolve().parents[1] / "app" / "routers" / "integrations.py"
+
+
+class _Result:
+    def __init__(self, exit_code=0):
+        self.exit_code = exit_code
+
+
+class _Instance:
+    """Stands in for pylxd, and drives the handlers the way pylxd actually does.
+
+    important: it feeds `frames` to `stdout_handler` one at a time, as BYTES, because that is
+    what `decode=False` produces and it is the whole reason the cap can bound memory. An earlier
+    version of this double returned a finished `.stdout` string, which meant the truncation and
+    binary tests exercised a code path production does not have.
+    """
+
+    name = "web-1"
+
+    def __init__(self, exit_code=0, frames=(), stderr_frames=()):
+        self.result = _Result(exit_code)
+        self.frames = list(frames)
+        self.stderr_frames = list(stderr_frames)
+        self.seen = None
+
+    def execute(self, commands, **kwargs):
+        self.seen = {"commands": commands, **kwargs}
+        for frame in self.frames:
+            kwargs["stdout_handler"](frame)
+        for frame in self.stderr_frames:
+            kwargs["stderr_handler"](frame)
+        return self.result
+
+
+# ── the command ────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_shell_string_is_refused_with_the_argv_it_should_have_sent() -> None:
+    """Accepting a string would mean inventing a quoting rule at this boundary.
+
+    Every quoting rule invented at a boundary is a place where the audit record and what actually
+    ran can disagree, which is the one thing an audit record may not do.
+    """
+    with pytest.raises(HTTPException) as raised:
+        exec_instance(_Instance(), {"command": "rm -rf /tmp/x"})
+    assert raised.value.status_code == 400
+    assert "/bin/sh" in raised.value.detail
+
+
+@pytest.mark.parametrize("command", [None, [], {}, ["ls", 3], [None]])
+def test_a_command_that_is_not_argv_is_refused(command) -> None:
+    with pytest.raises(HTTPException) as raised:
+        exec_instance(_Instance(), {"command": command})
+    assert raised.value.status_code == 400
+
+
+def test_a_shell_is_available_when_asked_for_explicitly() -> None:
+    instance = _Instance(frames=[b"ok"])
+    result = exec_instance(instance, {"command": ["/bin/sh", "-c", "echo ok"]})
+    assert instance.seen["commands"] == ["/bin/sh", "-c", "echo ok"]
+    assert result["command"] == ["/bin/sh", "-c", "echo ok"], "the audit sees what ran"
+
+
+# ── the answer ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_a_failed_command_is_a_successful_call() -> None:
+    """"grep found nothing" must not be indistinguishable from "the cluster is unreachable"."""
+    instance = _Instance(exit_code=1, stderr_frames=[b"no match"])
+    result = exec_instance(instance, {"command": ["grep", "x"]})
+    assert result["exit_code"] == 1
+    assert result["stderr"] == "no match"
+
+
+def test_output_is_capped_as_frames_arrive_not_afterwards() -> None:
+    """The bound has to hold at arrival, or the worker has already buffered the whole thing.
+
+    Fed in 64 KiB frames well past the limit: once the cap is reached the handler must stop
+    keeping anything, so `cat /dev/zero` cannot grow until the container dies.
+    """
+    frames = [b"A" * 65536] * ((EXEC_OUTPUT_LIMIT // 65536) + 8)
+    instance = _Instance(frames=frames)
+    result = exec_instance(instance, {"command": ["cat", "/dev/zero"]})
+    assert result["stdout_bytes"] == EXEC_OUTPUT_LIMIT
+    assert len(result["stdout"].encode("utf-8")) == EXEC_OUTPUT_LIMIT
+    assert result["truncated"] is True
+    assert result["output_limit_bytes"] == EXEC_OUTPUT_LIMIT
+
+
+def test_the_cap_counts_bytes_not_characters() -> None:
+    """The limit is advertised in bytes; multibyte output would otherwise return several times it."""
+    frames = [("\u00e9" * 32768).encode("utf-8")] * 16  # 2 bytes per character
+    result = exec_instance(_Instance(frames=frames), {"command": ["cat", "/tmp/utf8"]})
+    assert result["stdout_bytes"] <= EXEC_OUTPUT_LIMIT
+    assert len(result["stdout"].encode("utf-8")) <= EXEC_OUTPUT_LIMIT
+
+
+def test_output_within_the_cap_is_not_flagged() -> None:
+    result = exec_instance(_Instance(frames=[b"small"]), {"command": ["echo", "small"]})
+    assert result["stdout"] == "small"
+    assert result["truncated"] is False
+    assert result["stdout_bytes"] == 5
+
+
+def test_binary_output_does_not_raise() -> None:
+    """`cat` on a binary must give replacement characters, not a failed call.
+
+    pylxd's own decode is a bare `buffer.decode("utf-8")` with no error handler, so this only
+    holds because the exec asks for `decode=False` and does the decoding itself.
+    """
+    result = exec_instance(_Instance(frames=[b"\xff\xfe\x00ok"]), {"command": ["cat", "/bin/ls"]})
+    assert "ok" in result["stdout"]
+
+
+def test_the_exec_asks_pylxd_not_to_decode() -> None:
+    """Without this the bound counts characters and a binary stream raises inside pylxd."""
+    instance = _Instance(frames=[b"x"])
+    exec_instance(instance, {"command": ["true"]})
+    assert instance.seen["decode"] is False
+    assert callable(instance.seen["stdout_handler"])
+    assert callable(instance.seen["stderr_handler"])
+
+
+# ── stdin ──────────────────────────────────────────────────────────────────────────────────
+
+
+def test_stdin_is_passed_through() -> None:
+    instance = _Instance()
+    exec_instance(instance, {"command": ["tee", "/tmp/x"], "stdin": "hello"})
+    assert instance.seen["stdin_payload"] == "hello"
+
+
+def test_oversized_stdin_is_refused_and_points_at_the_right_tool() -> None:
+    with pytest.raises(HTTPException) as raised:
+        exec_instance(_Instance(), {"command": ["tee"], "stdin": "x" * (EXEC_STDIN_LIMIT + 1)})
+    assert raised.value.status_code == 400
+    assert "instance.files" in raised.value.detail
+
+
+def test_a_bad_environment_is_refused_before_it_reaches_the_guest() -> None:
+    with pytest.raises(HTTPException):
+        exec_instance(_Instance(), {"command": ["env"], "environment": {"A": 1}})
+    with pytest.raises(HTTPException):
+        exec_instance(_Instance(), {"command": ["env"], "environment": ["A=1"]})
+
+
+def test_dropping_privilege_inside_the_guest_is_possible() -> None:
+    """LXD execs as root by default, so naming a user is the only way to run as anything else."""
+    instance = _Instance()
+    exec_instance(instance, {"command": ["id"], "user": 1000, "group": 1000, "cwd": "/srv"})
+    assert instance.seen["user"] == 1000
+    assert instance.seen["group"] == 1000
+    assert instance.seen["cwd"] == "/srv"
+
+
+# ── the bounds and the record ──────────────────────────────────────────────────────────────
+
+
+def test_exec_has_a_budget_of_its_own() -> None:
+    """It holds a worker for the whole command, so borrowing the operation budget would let one
+    caller's slow command occupy a thread for as long as any other operation may take."""
+    assert EXEC_TIMEOUT < PROXY_OP_TIMEOUT
+
+    tree = ast.parse(ROUTER.read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "proxy_operation"
+    )
+    # note: a Name node, not the spelling. The constant is imported at module scope, so a
+    # substring match over the handler's source would be satisfied by nothing at all changing.
+    uses_it = any(
+        isinstance(node, ast.Name) and node.id == "EXEC_TIMEOUT" for node in ast.walk(handler)
+    )
+    assert uses_it, "the exec branch takes the ordinary operation budget, so its own is decorative"
+
+
+def test_the_audit_records_the_command_and_never_the_output() -> None:
+    """An audit index that stored exec output would become a copy of every secret anyone read.
+
+    Byte counts and the exit code carry the forensic value without the liability.
+    """
+    tree = ast.parse(ROUTER.read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "proxy_operation"
+    )
+    call = next(
+        node
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "_audit_key_action"
+    )
+    details = next(kw.value for kw in call.keywords if kw.arg == "details")
+    recorded = {key.value for key in details.keys if isinstance(key, ast.Constant)}
+    assert {"command", "exit_code"} <= recorded, f"the audit omits the command: {recorded}"
+    assert "stdout" not in recorded and "stderr" not in recorded, (
+        f"the audit stores guest output: {recorded}"
+    )
+    assert {"stdout_bytes", "stderr_bytes"} <= recorded
+
+
+def test_the_actor_is_the_key_not_a_field_the_caller_supplies() -> None:
+    """`external_user_email` arrives on the request body and is never verified, so treating it as
+    identity would let a caller write its own audit entry."""
+    tree = ast.parse(ROUTER.read_text())
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_audit_key_action"
+    )
+    # note: read the dict keys rather than grepping the source. ast.unparse normalises string
+    # quoting, so a double-quoted literal in the file arrives here single-quoted, and a
+    # substring match on the quoted form silently passes whatever the code does.
+    recorded = {
+        key.value
+        for node in ast.walk(helper)
+        if isinstance(node, ast.Dict)
+        for key in node.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
+    assert {"api_key_id", "app_name", "claimed_user_email"} <= recorded, (
+        f"the audit helper does not distinguish the key from the caller's claim: {recorded}"
+    )
+
+
+def test_a_timed_out_exec_says_the_command_survived_and_names_no_host() -> None:
+    """Two things go wrong with the raw message.
+
+    The command did not stop when the wait did, so a bare failure invites a retry that runs it
+    twice. And the underlying error is a urllib3 string carrying the LXD host's address, which is
+    infrastructure an integration has no business learning from a timeout.
+    """
+    tree = ast.parse(ROUTER.read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "proxy_operation"
+    )
+    branches = [
+        node
+        for node in ast.walk(handler)
+        if isinstance(node, ast.If) and "exec_instance" in ast.unparse(node.test)
+        and "timeout" in ast.unparse(node.test)
+    ]
+    assert branches, "a timed-out exec returns the transport's own message verbatim"
+    body = ast.unparse(branches[0])
+    assert "still" in body and "running" in body, "the caller is not told the command survived"
+    assert "str(e)" not in body, "the raw transport message, and the host in it, still reaches the caller"
+
+
+def test_an_exec_is_recorded_whether_it_finished_or_not() -> None:
+    """A command that outlived the budget still ran inside the guest.
+
+    Auditing only the calls that answered in time would leave the longest-running commands, the
+    ones most worth reviewing, out of the record.
+    """
+    tree = ast.parse(ROUTER.read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "proxy_operation"
+    )
+    exec_audits = [
+        node
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "_audit_key_action"
+        and any(
+            isinstance(kw.value, ast.Constant)
+            and kw.value.value == "integration.instance.exec"
+            for kw in node.keywords
+        )
+    ]
+    assert len(exec_audits) >= 2, (
+        "only the successful exec path writes an audit record, so a timed-out or failed command "
+        "leaves no trace of having run"
+    )
+    outcomes = {
+        kw.value.value
+        for call in exec_audits
+        for kw in call.keywords
+        if kw.arg == "result" and isinstance(kw.value, ast.Constant)
+    }
+    assert {"success", "failure"} <= outcomes, f"outcomes recorded: {outcomes}"
+
+
+def test_a_refused_reach_into_a_guest_is_recorded() -> None:
+    """Success is expected traffic. A key trying a path it was never granted is the signal."""
+    tree = ast.parse(ROUTER.read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "raw_proxy"
+    )
+    # note: the try whose BODY is the assert itself, not the handler's outer try that merely
+    # contains it. ast.walk yields the outer one first, and matching that passed while the
+    # refusal was re-raised with no record.
+    guarded = [
+        node
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Try)
+        and len(node.body) == 1
+        and "assert_guest_access_allowed" in ast.unparse(node.body[0])
+    ]
+    assert guarded, "the guest-access refusal is raised without an audit record"
+    handled = "\n".join(ast.unparse(h) for h in guarded[0].handlers)
+    assert "_audit_key_action" in handled, "the refusal is re-raised without being recorded"
+    assert "raise" in handled, "the refusal is recorded but swallowed"
+
+
+def test_the_public_key_id_survives_the_audit_sanitizer() -> None:
+    """`api_key_id` contains the substring `api_key`, which the denylist matched.
+
+    It is the PUBLIC half of the credential: returned in create and validate responses and shown
+    on the key card. Redacting it removed the only actor an API-key action has, so the record of
+    what a key did could not say which key. The secret never reaches details at all.
+    """
+    from app.services.activity_logger import get_activity_logger
+
+    sanitized = get_activity_logger()._sanitize_details(
+        {"api_key_id": "oak_abc", "api_key_secret": "oas_shhh", "token": "t", "command": ["id"]}
+    )
+    assert sanitized["api_key_id"] == "oak_abc"
+    assert sanitized["api_key_secret"] == "[REDACTED]"
+    assert sanitized["token"] == "[REDACTED]"
+    assert sanitized["command"] == ["id"]
+
+
+def test_both_doors_record_a_refused_reach_into_a_guest() -> None:
+    tree = ast.parse(ROUTER.read_text())
+    for handler_name in ("raw_proxy", "proxy_operation"):
+        handler = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == handler_name
+        )
+        refusal_audits = [
+            node
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Try)
+            and len(node.body) == 1
+            and "assert_" in ast.unparse(node.body[0])
+            and "_audit_key_action" in "\n".join(ast.unparse(h) for h in node.handlers)
+        ]
+        assert refusal_audits, f"{handler_name} refuses guest access without recording it"
+
+
+def test_a_runaway_exec_cannot_take_the_shared_proxy_pool() -> None:
+    """`run_blocking` frees the caller, not the thread (core/blocking.py says so explicitly).
+
+    pylxd's exec polls its operation over a websocket with no per-attempt bound, so a command that
+    never returns holds its worker until it does. On the shared pool eight of those would take
+    every read, every raw-proxy call and every fan-out with them. Its own pool means the blast
+    radius is other execs.
+    """
+    from app.services.lxd.proxy import exec_executor, proxy_executor
+
+    assert exec_executor is not proxy_executor
+
+    tree = ast.parse(ROUTER.read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "proxy_operation"
+    )
+    assert any(
+        isinstance(node, ast.Name) and node.id == "exec_executor" for node in ast.walk(handler)
+    ), "exec still runs on the pool shared with every other read on this router"
+
+
+def test_the_timeout_path_exec_actually_takes_is_the_one_that_records_it() -> None:
+    """`BlockingTimeout` is caught before the generic handler, so exec landed on a path with no
+    audit record, no "still running" message, and a `record_failure` that tripped the shared
+    circuit breaker for every other caller of that cluster.
+
+    The live QA missed it because a socket read expired first and took the other branch.
+    """
+    tree = ast.parse(ROUTER.read_text())
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "proxy_operation"
+    )
+    blocking_timeout = next(
+        h
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Try)
+        for h in node.handlers
+        if h.type is not None and "BlockingTimeout" in ast.unparse(h.type)
+    )
+    body = ast.unparse(blocking_timeout)
+    assert "exec_instance" in body, "the exec timeout falls through to the generic timeout reply"
+    assert "_audit_key_action" in body, "a timed-out exec leaves no record of having run"
+    assert "_still_running_message" in body, "the caller is told only that it timed out"
+
+    # And it must return before record_failure, or one slow command condemns the cluster.
+    exec_branch = next(
+        node
+        for node in ast.walk(blocking_timeout)
+        if isinstance(node, ast.If) and "exec_instance" in ast.unparse(node.test)
+    )
+    assert any(isinstance(n, ast.Return) for n in ast.walk(exec_branch)), (
+        "the exec branch falls through to health.record_failure and trips the breaker"
+    )
+
+
+def test_the_timeout_message_states_the_budget_that_actually_bound_the_call() -> None:
+    """One message served both operations and quoted the wrong number for one of them.
+
+    A timed-out exec was told it had exceeded a 60s budget it was never given, and pointed at
+    `"wait": false`, a flag exec does not read. Both halves send a caller somewhere useless.
+    """
+    from app.routers.integrations import _still_running_message
+
+    exec_message = _still_running_message("exec_instance", "nuc2")
+    assert f"{EXEC_TIMEOUT:g}s" in exec_message
+    assert str(int(PROXY_OP_TIMEOUT)) not in exec_message
+    assert "wait" not in exec_message, "exec has no asynchronous form to point at"
+    assert "still" in exec_message and "running" in exec_message, (
+        "the caller is not told the command survived the wait"
+    )
+
+    create_message = _still_running_message("create_instance", "nuc2")
+    assert f"{PROXY_OP_TIMEOUT:g}s" in create_message
+    assert "wait" in create_message, "create does have one, and it is the right advice there"

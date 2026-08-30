@@ -348,9 +348,23 @@ def test_the_socket_window_outlasts_the_response_budget() -> None:
     assert timeout is not None, "get_project_client no longer states a timeout"
     assert isinstance(timeout, ast.Tuple) and len(timeout.elts) == 2, "timeout is not a pair"
     read_window = ast.unparse(timeout.elts[1])
-    assert "PROXY_OP_TIMEOUT" in read_window, (
+    assert "budget" in read_window or "TIMEOUT" in read_window, (
         "the read window is a literal again rather than deriving from the response budget, so "
         f"the socket can cut in before the budget the caller was given: {read_window}"
+    )
+
+    # And every operation with a budget has to reach that scoped client, or the window it
+    # derives is irrelevant. exec did not, so it ran on the pooled 8s window while being told it
+    # had 30 seconds.
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_client_for"
+    )
+    scoping = ast.unparse(function)
+    assert "GUEST_ACCESS_OPERATIONS" in scoping, (
+        "exec takes the pooled client's short read window while being budgeted at EXEC_TIMEOUT, "
+        "so any command slower than the socket fails and is told the wrong reason"
     )
 
 
@@ -393,9 +407,19 @@ def test_both_instance_reads_report_the_code_they_derived_from() -> None:
             for node in ast.walk(tree)
             if isinstance(node, ast.FunctionDef) and node.name == name
         )
-        body = ast.unparse(function)
-        assert "status_name(" in body, f"{name} reports a collapsed enum rather than LXD's status"
-        assert "status_code=" in body, f"{name} drops the status code the caller needs"
+        # note: parse the call, do not grep the source. A substring over unparsed source is
+        # satisfied by an import, a comment or a docstring naming the same thing, which is how
+        # the shared cluster-scope ratchet passed on ten routers while checking nothing.
+        called = any(
+            isinstance(node, ast.Call) and getattr(node.func, "id", None) == "status_name"
+            for node in ast.walk(function)
+        )
+        assert called, f"{name} reports a collapsed enum rather than LXD's status"
+        passes_code = any(
+            isinstance(node, ast.keyword) and node.arg == "status_code"
+            for node in ast.walk(function)
+        )
+        assert passes_code, f"{name} drops the status code the caller needs"
 
 
 def test_an_operation_lookup_does_not_fall_through_to_a_generic_500() -> None:

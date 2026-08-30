@@ -22,6 +22,7 @@ from fastapi import HTTPException
 from app.core.api_key_capabilities import (
     APP_TYPE_CAPABILITIES,
     CAPABILITIES,
+    GUEST_ACCESS_CAPABILITIES,
     assert_capability,
     default_capabilities_for,
     granted_capabilities,
@@ -112,9 +113,29 @@ def test_the_dependency_passes_the_key_through_when_granted() -> None:
 
 # ── the application type presets ───────────────────────────────────────────────────────────────
 
-def test_orcahub_keeps_every_capability() -> None:
-    """The only integration in production. Its defaults are what preserve today's behaviour."""
-    assert default_capabilities_for("orcahub") == set(CAPABILITIES)
+def test_orcahub_keeps_every_capability_except_reaching_inside_a_guest() -> None:
+    """The only integration in production. Its defaults preserve today's behaviour, with one
+    deliberate exception.
+
+    `orcahub` is written as `set(CAPABILITIES)`, so it widens automatically whenever the
+    vocabulary grows. That is right for another read or another proxy verb and wrong for
+    `instance.exec` and `instance.files`, which run commands and read files inside a customer's
+    guest. Widening into those would grant the production integration a power nobody chose for
+    it, on the deploy that introduced them.
+    """
+    assert default_capabilities_for("orcahub") == set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES
+    assert GUEST_ACCESS_CAPABILITIES, "the exclusion is meaningless if the set is empty"
+
+
+@pytest.mark.parametrize("app_type", sorted(APP_TYPE_CAPABILITIES))
+@pytest.mark.parametrize("capability", sorted(GUEST_ACCESS_CAPABILITIES))
+def test_no_preset_seeds_guest_access(app_type: str, capability: str) -> None:
+    """Reaching inside a guest is never a default of an application type.
+
+    An operator picking "MCP Server" is choosing a shape of integration, not consenting to root
+    in someone's container. Every one of these has to be ticked on purpose.
+    """
+    assert capability not in default_capabilities_for(app_type)
 
 
 @pytest.mark.parametrize("app_type", ["mcp", "agent"])
@@ -136,7 +157,7 @@ def test_a_preset_default_is_a_copy() -> None:
     """Callers sort and mutate this; handing out the module's own set would corrupt the table."""
     first = default_capabilities_for("orcahub")
     first.clear()
-    assert default_capabilities_for("orcahub") == set(CAPABILITIES)
+    assert default_capabilities_for("orcahub") == set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES
 
 
 # ── nothing may silently promote a scoped key back to legacy ───────────────────────────────────

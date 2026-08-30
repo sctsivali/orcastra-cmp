@@ -87,6 +87,14 @@ ACTION_CATEGORIES = {
     # Admin
     "terminal.session.create": EventCategory.ADMIN,
     "console.session.create": EventCategory.ADMIN,
+    # The key-authenticated surface. `integration.instance.exec` and `integration.instance.files`
+    # are the API-key equivalents of the two session actions above: they reach inside a guest.
+    # `integration.proxy.request` covers everything else that goes through the raw proxy, which
+    # had no audit record at all before, only an app log line that the deduplication filter
+    # collapsed.
+    "integration.instance.exec": EventCategory.ADMIN,
+    "integration.instance.files": EventCategory.ADMIN,
+    "integration.proxy.request": EventCategory.ADMIN,
     "admin.audit.view": EventCategory.ADMIN,
     
     # Settings
@@ -135,6 +143,8 @@ HIGH_SEVERITY_ACTIONS = {
     "network.delete",
     "terminal.session.create",
     "console.session.create",
+    "integration.instance.exec",
+    "integration.instance.files",
     "break_glass.grant.create",
     "break_glass.grant.revoke",
     "user.ssh_key.create",
@@ -251,11 +261,26 @@ class ActivityLogger:
             "password", "secret", "token", "api_key", "private_key",
             "client_secret", "trust_password", "credential"
         }
-        
+        # important: substring matching against `api_key` also catches `api_key_id`, which is the
+        # PUBLIC half of the credential: it is returned in create and validate responses and
+        # rendered on the key card. Redacting it removed the only actor an API-key action has,
+        # so a record of what a key did could not say which key. The secret never travels in
+        # details at all; it is verified and discarded in validate_api_key.
+        public_keys = {"api_key_id"}
+
         sanitized = {}
         for key, value in details.items():
             key_lower = key.lower()
-            if any(sensitive in key_lower for sensitive in sensitive_keys):
+            # note: the allowlist exempts a name from REDACTION, not from the recursion below.
+            # Placing it first would have let a dict under an allowlisted name pass through
+            # unsanitised, and the allowlist is meant to say "this identifier is public", not
+            # "stop looking".
+            public = key_lower in public_keys
+            if isinstance(value, dict):
+                sanitized[key] = self._sanitize_details(value)
+            elif public:
+                sanitized[key] = value
+            elif any(sensitive in key_lower for sensitive in sensitive_keys):
                 sanitized[key] = "[REDACTED]"
             elif isinstance(value, dict):
                 sanitized[key] = self._sanitize_details(value)

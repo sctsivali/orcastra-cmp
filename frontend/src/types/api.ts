@@ -1573,10 +1573,16 @@ export interface APIKeyValidateResponse {
 export interface CapabilityOption {
   name: string;
   description: string;
-  // Writes authorization data (organizations, member roles, tenant access grants) rather than
-  // reading or driving infrastructure. The picker marks these instead of listing all
-  // capabilities as equivalent ticks.
+  // Needs a deliberate decision rather than an application-type default. The picker marks these
+  // instead of listing all capabilities as equivalent ticks.
   elevated: boolean;
+  // note: the reason comes from the server because there is more than one. Some elevated
+  // capabilities write access control; others reach inside a guest. A single hardcoded label
+  // was wrong for half of them.
+  elevated_reason?: string | null;
+  // Never seeded by an application type and never inherited by a key issued before capabilities
+  // existed, so the form says so rather than letting a tick look routine.
+  never_inherited?: boolean;
 }
 
 export interface ApplicationTypeOption {

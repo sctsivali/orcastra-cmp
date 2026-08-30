@@ -29,7 +29,6 @@ EXEMPT = {
     ("organizations.py", "unbind_cluster"): "org membership checked via user_has_access",
     # Break-glass is the mechanism for reaching a cluster you do not own; it has its own gate.
     ("break_glass.py", "*"): "enforce_sensitive_access / require_admin is the gate",
-    ("terminal.py", "*"): "enforce_sensitive_access is the gate",
 }
 
 
@@ -60,8 +59,19 @@ def test_every_cluster_taking_handler_checks_the_cluster() -> None:
         if reason:
             continue
         checked += 1
-        body = ast.unparse(node)
-        if "verify_cluster_access" not in body:
+        # important: a CALL, not the name appearing anywhere in the body. Several handlers
+        # import verify_cluster_access inside the function, so a substring match was satisfied
+        # by the import line alone: deleting the call and leaving the import kept this green.
+        # Proven by ablation on terminal.py before this was tightened.
+        called = any(
+            isinstance(inner, ast.Call)
+            and (
+                getattr(inner.func, "id", None) == "verify_cluster_access"
+                or getattr(inner.func, "attr", None) == "verify_cluster_access"
+            )
+            for inner in ast.walk(node)
+        )
+        if not called:
             offenders.append(f"{filename}:{node.lineno} {node.name}")
 
     assert checked > 0, "the scan found nothing, so it is not actually checking anything"
