@@ -1738,6 +1738,8 @@ import type {
   ExternalUserMapping,
   UserMappingRequest,
   AvailableClustersResponse,
+  APIKeyValidateRequest,
+  APIKeyValidateResponse,
   CapabilityVocabularyResponse,
   IntegrationOrganization,
 } from "@/types";
@@ -1805,6 +1807,17 @@ export const integrationsAPI = {
   // capability the external router does not enforce, or miss one it does.
   getCapabilities: async (): Promise<CapabilityVocabularyResponse> => {
     return fetchAPI<CapabilityVocabularyResponse>("/integrations/capabilities");
+  },
+
+  // note: this is the one integrations call that authenticates with the credential in the BODY
+  // rather than with a session, because it is the endpoint an external app uses before it has
+  // anything else. The dialog uses it to prove a freshly issued key works before the operator
+  // walks away from the only screen that will ever show the secret.
+  validate: async (request: APIKeyValidateRequest): Promise<APIKeyValidateResponse> => {
+    return fetchAPI<APIKeyValidateResponse>("/integrations/validate", {
+      method: "POST",
+      body: JSON.stringify(request),
+    });
   },
 
   // Synced Organizations from external apps

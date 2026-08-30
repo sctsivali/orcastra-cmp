@@ -30,6 +30,13 @@ EXEMPT = {
     ): "the credential oracle a caller uses before it has done anything; it grants no access "
        "and only reports what the presented key already carries",
     (
+        "integrations.py",
+        "whoami",
+    ): "the same answer as /validate, through the usual headers rather than a body. It grants "
+       "no access and reports only what the presented key already holds, so requiring a "
+       "capability would make the one call that diagnoses a key fail for keys that need "
+       "diagnosing",
+    (
         "image_uploads.py",
         "options_upload",
     ): "tus CORS/capability discovery; takes no api_key and reads no session",

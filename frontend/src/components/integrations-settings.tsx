@@ -27,6 +27,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Dialog,
+  DialogBody,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -54,6 +55,7 @@ import {
 } from "@/lib/integration-display";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { CreateAPIKeyDialog } from "@/components/integrations/create-api-key-dialog";
+import { ApiKeyConnectionGuide } from "@/components/integrations/api-key-connection-guide";
 import type {
   APIKeyInfo,
   APIKeyCreateRequest,
@@ -97,8 +99,8 @@ function APIKeySecretDialog({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
+      <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle>
             API Key Created Successfully
           </DialogTitle>
@@ -106,56 +108,62 @@ function APIKeySecretDialog({
             Save these credentials now. The secret will not be shown again.
           </DialogDescription>
         </DialogHeader>
-        <div className="space-y-4 py-4">
-          <div className="space-y-2">
-            <Label>API Key ID</Label>
-            <div className="flex gap-2">
-              <Input 
-                value={response.api_key_id} 
-                readOnly 
-                className="font-mono text-sm"
-              />
-              <Button
-                size="icon"
-                variant="outline"
-                onClick={() => copyToClipboard(response.api_key_id, "ID")}
-              >
-                {copied === "ID" ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-              </Button>
+        <DialogBody className="-mr-2 pr-2">
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>API Key ID</Label>
+              <div className="flex gap-2">
+                <Input 
+                  value={response.api_key_id} 
+                  readOnly 
+                  className="font-mono text-sm"
+                />
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={() => copyToClipboard(response.api_key_id, "ID")}
+                >
+                  {copied === "ID" ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
             </div>
-          </div>
-          <div className="space-y-2">
-            <Label>API Key Secret</Label>
-            <div className="flex gap-2">
-              <Input 
-                value={showSecret ? response.api_key_secret : "••••••••••••••••••••••••"} 
-                readOnly 
-                className="font-mono text-sm"
-              />
-              <Button
-                size="icon"
-                variant="outline"
-                onClick={() => setShowSecret(!showSecret)}
-              >
-                {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </Button>
-              <Button
-                size="icon"
-                variant="outline"
-                onClick={() => copyToClipboard(response.api_key_secret, "Secret")}
-              >
-                {copied === "Secret" ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-              </Button>
+            <div className="space-y-2">
+              <Label>API Key Secret</Label>
+              <div className="flex gap-2">
+                <Input 
+                  value={showSecret ? response.api_key_secret : "••••••••••••••••••••••••"} 
+                  readOnly 
+                  className="font-mono text-sm"
+                />
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={() => setShowSecret(!showSecret)}
+                >
+                  {showSecret ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </Button>
+                <Button
+                  size="icon"
+                  variant="outline"
+                  onClick={() => copyToClipboard(response.api_key_secret, "Secret")}
+                >
+                  {copied === "Secret" ? <CheckCircle2 className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
             </div>
+            <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-md p-3 text-sm">
+              <p className="font-medium text-yellow-600">⚠️ Important</p>
+              <p className="text-muted-foreground mt-1">
+                Copy and store these credentials securely. The secret cannot be retrieved later.
+              </p>
+            </div>
+            {/* The credentials alone were the whole dialog, and a key holder had no way to learn
+                the base URL, the header names, or which endpoints the key reaches. The obvious
+                first call is a JWT route and answers 401, which reads as "this needs a login". */}
+            <ApiKeyConnectionGuide response={response} />
           </div>
-          <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-md p-3 text-sm">
-            <p className="font-medium text-yellow-600">⚠️ Important</p>
-            <p className="text-muted-foreground mt-1">
-              Copy and store these credentials securely. The secret cannot be retrieved later.
-            </p>
-          </div>
-        </div>
-        <DialogFooter>
+        </DialogBody>
+        <DialogFooter className="shrink-0 border-t pt-3">
           <Button onClick={onClose}>I have saved the credentials</Button>
         </DialogFooter>
       </DialogContent>

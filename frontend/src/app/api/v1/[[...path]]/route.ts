@@ -26,7 +26,20 @@ const BACKEND_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:4050";
 
-const FORWARD_CLIENT_IP_HEADERS = process.env.FORWARD_CLIENT_IP_HEADERS !== "false";
+// important: OFF unless a deployment opts in, and it used to be the other way round.
+//
+// The headers below are read off the INBOUND request and re-emitted as `x-orcastra-client-ip`,
+// which the backend treats as the highest-priority truth because this container sits inside the
+// default trusted-proxy CIDRs. That is correct when a real reverse proxy sets them. This port is
+// also reachable straight off the internet, and there the value is whatever the caller typed, so
+// an unauthenticated caller could choose the address the backend rate-limits on and writes to the
+// audit trail, and rotate it to make the per-IP bucket bound nothing.
+//
+// Turning it off costs legitimate traffic nothing: a browser does not send X-Forwarded-For, so
+// dashboard requests already resolve to this container either way. Only a deployment that
+// genuinely sits behind a trusted proxy should set FORWARD_CLIENT_IP_HEADERS=true, and there the
+// header means what it says.
+const FORWARD_CLIENT_IP_HEADERS = process.env.FORWARD_CLIENT_IP_HEADERS === "true";
 const TRUSTED_CLIENT_IP_HEADERS = (
   process.env.TRUSTED_CLIENT_IP_HEADERS || "cf-connecting-ip,true-client-ip,cf-connecting-ipv6,x-forwarded-for,x-real-ip"
 )

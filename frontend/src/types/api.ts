@@ -1511,6 +1511,9 @@ export interface SystemWarningsResponse {
 
 export interface ClusterPermission {
   cluster_id: string;
+  // Present on the /validate response, which resolves the display name from Vault so an
+  // integrator sees a cluster they recognise rather than an id. Absent on a stored grant.
+  cluster_name?: string | null;
   permissions: string[];  // read, write, admin
   projects: string[];
 }
@@ -1550,6 +1553,21 @@ export interface APIKeyCreateRequest {
   capabilities?: string[];
   cluster_permissions: ClusterPermission[];
   expire_days?: number | null;
+}
+
+export interface APIKeyValidateRequest {
+  api_key_id: string;
+  api_key_secret: string;
+}
+
+export interface APIKeyValidateResponse {
+  valid: boolean;
+  app_name?: string | null;
+  app_type?: string | null;
+  // null means a legacy key issued before capabilities existed, which is unrestricted.
+  capabilities?: string[] | null;
+  cluster_permissions: ClusterPermission[];
+  error?: string | null;
 }
 
 export interface CapabilityOption {

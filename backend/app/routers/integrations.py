@@ -2246,6 +2246,124 @@ async def _integration_hardware_totals(
     return totals
 
 
+# ============================================
+# Resource-shaped reads for integrations
+# ============================================
+#
+# important: these exist because the key-authenticated surface was proxy-shaped and nothing else.
+# Reading instances meant POST /integrations/raw-proxy with a body naming an HTTP verb and a
+# cluster id the key had no way to discover, while GET /instances, /nodes and /projects all
+# answered 401 because they are the JWT routers. An integrator's first call therefore failed and
+# read as "this needs a login", which is exactly the conclusion that was drawn.
+#
+# They add no reach. Each one is the data POST /integrations/sync already returns to the same
+# caller, through the same fetch helpers, narrowed by the same intersection with the key's
+# cluster_permissions. What changes is the shape.
+
+
+def _clusters_for_key(api_key: Dict[str, Any], cluster_id: Optional[str]) -> set:
+    """The clusters this request may touch: the key's grant, optionally narrowed by one id.
+
+    Intersection, not a lookup, and the same one sync_data performs. A caller-supplied cluster
+    that is not in the grant simply is not in the result, so an unknown id and an unauthorised
+    one are indistinguishable and neither can be probed.
+    """
+    allowed = {
+        grant["cluster_id"]
+        for grant in api_key.get("cluster_permissions", [])
+        if isinstance(grant, dict) and "cluster_id" in grant
+    }
+    if cluster_id:
+        return allowed & {cluster_id}
+    return allowed
+
+
+@external_router.get(
+    "/whoami",
+    response_model=APIKeyValidateResponse,
+    summary="Describe the presented API key",
+    description="What this key is and what it may do, authenticated by the usual headers.",
+)
+async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
+    """The natural first call, and the one that makes a copy-pasted credential prove itself.
+
+    `/validate` already answers this, but it takes the credentials in the BODY, so an integrator
+    who sends the headers every other endpoint wants gets a 422 and reasonably concludes the key
+    is broken. This is the same answer through the same headers as everything else.
+
+    No capability is required, and it is exempt in the capability ratchet for the reason
+    `/validate` carries: it grants nothing and reports only what the presented key already holds.
+    """
+    granted = granted_capabilities(api_key)
+    return APIKeyValidateResponse(
+        valid=True,
+        app_name=api_key.get("app_name"),
+        app_type=api_key.get("app_type"),
+        capabilities=sorted(granted) if granted is not None else None,
+        cluster_permissions=[
+            ClusterPermission(**grant)
+            for grant in api_key.get("cluster_permissions", [])
+            if isinstance(grant, dict) and "cluster_id" in grant
+        ],
+    )
+
+
+@external_router.get(
+    "/clusters",
+    summary="List the clusters this key may reach",
+    description="The clusters in the key's grant, with their live status.",
+)
+async def list_integration_clusters(
+    cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
+):
+    """The answer to "which cluster_id do I pass", which nothing previously told a key holder."""
+    settings = get_settings()
+    if not (settings.vault_enabled and settings.vault_token):
+        raise HTTPException(status_code=503, detail="Vault is not configured")
+
+    from app.services.lxd_cert_manager import LXDCertificateManager
+
+    cert_manager = LXDCertificateManager(
+        vault_client=get_vault_client(settings.vault_addr, settings.vault_token),
+        clusters_path=settings.vault_clusters_path,
+    )
+    clusters = await _gather_per_cluster(
+        _fetch_cluster_info, cert_manager, _clusters_for_key(api_key, cluster_id), "cluster_info"
+    )
+    return {"clusters": clusters, "total": len(clusters)}
+
+
+@external_router.get(
+    "/projects",
+    summary="List projects across the clusters this key may reach",
+)
+async def list_integration_projects(
+    cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    projects = await _gather_per_cluster(
+        _fetch_cluster_projects, lxd_service, _clusters_for_key(api_key, cluster_id), "projects"
+    )
+    return {"projects": projects, "total": len(projects)}
+
+
+@external_router.get(
+    "/instances",
+    summary="List instances across the clusters this key may reach",
+)
+async def list_integration_instances(
+    cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    instances = await _gather_per_cluster(
+        _fetch_cluster_instances, lxd_service, _clusters_for_key(api_key, cluster_id), "instances"
+    )
+    return {"instances": instances, "total": len(instances)}
+
+
 @external_router.get(
     "/regions",
     summary="Get integration region coordinates",
