@@ -818,9 +818,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
       </CardHeader>
       <CardContent className="space-y-2">
         {project.description && (
-          // note: the card itself is clickable, so the reveal has to stop its click from also
-          // opening the project. Same guard the tags row below already uses.
-          <div className="text-xs text-muted-foreground" onClick={(e) => e.stopPropagation()}>
+          <div className="text-xs text-muted-foreground">
             <OverflowText
               value={project.description}
               label={`description for project ${project.name}`}
@@ -830,10 +828,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         )}
 
         {/* Tags */}
-        <div 
-          className="pt-1"
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div className="pt-1">
           <TagManager
             tags={project.tags || []}
             onTagsChange={handleTagsChange}
