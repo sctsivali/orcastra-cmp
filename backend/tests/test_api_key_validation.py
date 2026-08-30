@@ -133,6 +133,16 @@ async def test_revocation_is_immediate_not_ttl_delayed(monkeypatch) -> None:
         ({"is_revoked": True}, "revoked"),
         ({"is_active": False}, "inactive"),
         ({"expires_at": "2000-01-01T00:00:00"}, "expired"),
+        # note: the naive case above was the only one covered, which is why nothing caught that
+        # the other notations answered 500 instead of 401. Measured against the deployment before
+        # the fix: the Z and offset forms raised TypeError on the comparison, the malformed one
+        # raised ValueError, and neither had a handler on this path. The empty string skipped the
+        # check entirely and the key was accepted.
+        ({"expires_at": "2000-01-01T00:00:00Z"}, "expired, Z suffix"),
+        ({"expires_at": "2000-01-01T00:00:00+00:00"}, "expired, explicit offset"),
+        ({"expires_at": "2000-01-01T07:00:00+07:00"}, "expired, non-UTC offset"),
+        ({"expires_at": "not-a-date"}, "unreadable expiry"),
+        ({"expires_at": ""}, "empty expiry"),
     ],
 )
 async def test_state_is_rechecked_on_cache_hits(monkeypatch, overrides, reason) -> None:

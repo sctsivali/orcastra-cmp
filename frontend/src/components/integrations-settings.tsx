@@ -292,6 +292,7 @@ export function IntegrationsSettings() {
   const totalKeys = typeof apiKeysData?.total === 'number' ? apiKeysData.total : 0;
   const activeKeys = typeof apiKeysData?.active === 'number' ? apiKeysData.active : 0;
   const revokedKeys = typeof apiKeysData?.revoked === 'number' ? apiKeysData.revoked : 0;
+  const expiredKeys = typeof apiKeysData?.expired === 'number' ? apiKeysData.expired : 0;
 
   // Vault not configured — show informative banner instead of full UI
   if (vaultUnavailable) {
@@ -350,7 +351,7 @@ export function IntegrationsSettings() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center justify-between">
@@ -370,6 +371,19 @@ export function IntegrationsSettings() {
                 <p className="text-2xl font-bold text-muted-foreground">{activeKeys}</p>
               </div>
               <CheckCircle2 className="h-8 w-8 text-muted-foreground" />
+            </div>
+          </CardContent>
+        </Card>
+        {/* An expired key is no longer counted as active, so without this tile the figures stop
+            adding up and the drop reads as keys having been deleted. */}
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-muted-foreground">Expired Keys</p>
+                <p className="text-2xl font-bold text-muted-foreground">{expiredKeys}</p>
+              </div>
+              <CalendarClock className="h-8 w-8 text-muted-foreground" />
             </div>
           </CardContent>
         </Card>
@@ -420,6 +434,11 @@ export function IntegrationsSettings() {
             const expiryLabel = apiKey.expires_at
               ? new Date(apiKey.expires_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })
               : "Never";
+            // note: the state is computed on the server, from the same helper the authentication
+            // path uses, so the badge and the refusal cannot disagree. Deriving it here would
+            // mean parsing the stored string in the browser, where an offsetless value is read
+            // as local time and lands a day out either side of midnight.
+            const expiryState = apiKey.expiry_state ?? (apiKey.expires_at ? "active" : "never");
             
             return (
               <Card key={apiKey.id}>
@@ -455,8 +474,19 @@ export function IntegrationsSettings() {
                     <div className="shrink-0">
                       {apiKey.is_revoked ? (
                         <Badge variant="destructive">Revoked</Badge>
+                      ) : expiryState === "expired" ? (
+                        // Six keys on this deployment read a green "Active" while lapsed, which
+                        // is the distinction that was actually missing.
+                        //
+                        // note: Expired shares the red family with Revoked deliberately. Both
+                        // mean the key does not work, and giving the same outcome two colours
+                        // would be decoration; the word carries the cause, which is the part
+                        // that differs. The tones are the solid --status-* ones whose ratios
+                        // ui/badge.tsx records for both themes, not the translucent tints it
+                        // measures at 2.73:1 on --card in light mode.
+                        <Badge variant="negative">Expired</Badge>
                       ) : apiKey.is_active ? (
-                        <Badge className="bg-green-600">Active</Badge>
+                        <Badge variant="positive">Active</Badge>
                       ) : (
                         <Badge variant="secondary">Inactive</Badge>
                       )}
@@ -479,6 +509,9 @@ export function IntegrationsSettings() {
                       <CalendarClock className="h-4 w-4 shrink-0 text-muted-foreground" />
                       <span className="text-muted-foreground">Expires:</span>
                       <span className="font-medium whitespace-nowrap">{expiryLabel}</span>
+                      {expiryState === "expiring" && (
+                        <Badge variant="caution">Expiring soon</Badge>
+                      )}
                     </div>
                   </div>
 

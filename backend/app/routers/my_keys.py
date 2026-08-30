@@ -25,6 +25,7 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, AuthenticatedUser
+from app.core.api_key_expiry import is_expired as key_expired, now_utc
 from app.core.cache import get_cache_manager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
@@ -642,21 +643,20 @@ async def list_keys(
             ]
         
         # Process keys and check expiration
-        now = datetime.utcnow()
+        #
+        # important: this used to parse inside a bare `except: pass` with `is_expired` seeded
+        # False, so an unreadable expiry, an offset-bearing one included, reported the key as
+        # active and counted it in the Active tab. That is the only place in this chain where a
+        # surprise reads as "still valid" rather than failing, and it is the reason the decision
+        # now lives in one helper for both surfaces.
+        now = now_utc()
         processed_keys = []
         active_count = 0
         expired_count = 0
         
         for key_meta in keys_metadata:
             expires_at_str = key_meta.get("expires_at")
-            is_expired = False
-            
-            if expires_at_str:
-                try:
-                    expires_at = datetime.fromisoformat(expires_at_str)
-                    is_expired = now > expires_at
-                except:
-                    pass
+            is_expired = key_expired(expires_at_str, now)
 
             # important: count before the filters, not after. These two are the tab labels,
             # so counting inside the filtered branch made "Expired (0)" always read 0 while

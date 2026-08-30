@@ -52,6 +52,14 @@ from app.services.lxd.proxy_operations import (
     instance_summary,
     status_name,
 )
+from app.core.api_key_expiry import (
+    days_remaining,
+    expiry_state,
+    is_expired,
+    now_utc,
+    tally_keys,
+    utc_isoformat,
+)
 from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
 from app.core.api_key_capabilities import (
     ELEVATED_REASONS,
@@ -199,6 +207,16 @@ class APIKeyInfo(BaseModel):
     expires_at: Optional[str] = Field(None, description="Expiration timestamp")
     is_active: bool = Field(True, description="Whether the key is active")
     is_revoked: bool = Field(False, description="Whether the key has been revoked")
+    # note: derived from expires_at on every read, never stored. Expiry is a fact about a
+    # timestamp, so writing an is_expired flag would need a writer, and the only path that reads
+    # a key often enough to notice is the authentication hot path, where a Vault write does not
+    # belong. `expiry_state` is what the card renders; `is_expired` is the one an integration
+    # branches on.
+    is_expired: bool = Field(False, description="Whether the key is past its expiration")
+    expiry_state: str = Field(
+        default="never",
+        description="never, active, expiring (inside the warning window) or expired",
+    )
     last_used_at: Optional[str] = Field(None, description="Last usage timestamp")
     cluster_permissions: List[ClusterPermission] = Field(
         default_factory=list,
@@ -287,6 +305,10 @@ class APIKeyListResponse(BaseModel):
     total: int
     active: int
     revoked: int
+    # note: additive. `active` used to include expired keys, so the two numbers together used to
+    # be one number that was wrong; a client reading only `active` now gets the honest figure and
+    # one reading both can show the split.
+    expired: int = 0
     keys: List[APIKeyInfo]
 
 
@@ -301,6 +323,16 @@ class APIKeyValidateResponse(BaseModel):
     valid: bool
     app_name: Optional[str] = None
     app_type: Optional[str] = None
+    # note: an integration could not previously find out when its own key lapses. Nothing warned
+    # before expiry, in the UI or the logs, so the first signal was a 401 in production. These two
+    # let an unattended caller check itself on the call it already makes to prove it is connected.
+    expires_at: Optional[str] = Field(
+        default=None, description="When this key stops working, or null if it never does"
+    )
+    expires_in_days: Optional[int] = Field(
+        default=None,
+        description="Whole days until expiry, negative once passed, null if it never expires",
+    )
     capabilities: Optional[List[str]] = Field(
         default=None,
         description="Granted capabilities, or null for a legacy key with unrestricted access",
@@ -1485,11 +1517,14 @@ async def validate_api_key(
         raise HTTPException(status_code=401, detail="API key is not active")
 
     # Check expiration
-    expires_at = metadata.get("expires_at")
-    if expires_at:
-        exp_date = datetime.fromisoformat(expires_at)
-        if datetime.utcnow() > exp_date:
-            raise HTTPException(status_code=401, detail="API key has expired")
+    #
+    # important: this used to parse with `fromisoformat` and compare against a naive
+    # `datetime.utcnow()`, outside any try. An offset-bearing stored value raised TypeError and a
+    # malformed one raised ValueError, both of which left this as a 500 on every request the key
+    # made, including for a key whose expiry was years away. An empty string took the other
+    # branch entirely and was accepted. All four measured against the running deployment.
+    if is_expired(metadata.get("expires_at")):
+        raise HTTPException(status_code=401, detail="API key has expired")
 
     # note: after the secret verifies, never before. The key id is public, so counting it in the
     # middleware would let anyone holding a victim's id spend that integration's budget with a
@@ -1568,9 +1603,15 @@ async def create_api_key(
         key_id, key_secret, secret_hash = generate_api_key_pair()
         
         # Calculate expiration
-        created_at = datetime.utcnow()
+        # note: aware, so the stored string carries an offset and stops being UTC by convention
+        # alone. Values already in Vault are naive and keep working, because parse_expiry reads a
+        # naive value as UTC, which is what every writer in this repo meant by it.
+        created_at = now_utc()
         expires_at = None
-        if request.expire_days:
+        # `is not None` rather than truthiness: `ge=1` makes 0 unreachable today, but the two
+        # spellings disagree the moment that constraint changes, and this is the line that
+        # decides whether a key ever expires.
+        if request.expire_days is not None:
             expires_at = created_at + timedelta(days=request.expire_days)
         
         # important: always written as a concrete list, never left absent. An absent field means
@@ -1599,8 +1640,8 @@ async def create_api_key(
             "app_type": request.app_type,
             "capabilities": capabilities,
             "created_by": _rbac.email,
-            "created_at": created_at.isoformat(),
-            "expires_at": expires_at.isoformat() if expires_at else None,
+            "created_at": utc_isoformat(created_at),
+            "expires_at": utc_isoformat(expires_at) if expires_at else None,
             "is_active": True,
             "is_revoked": False,
             "last_used_at": None,
@@ -1622,7 +1663,7 @@ async def create_api_key(
             logger.warning(f"reconcile_personal_clusters failed for {_rbac.email}: {e}")
 
         return APIKeyCreateResponse(
-            api_key=APIKeyInfo(**metadata, user_mappings_count=0),
+            api_key=_key_info(metadata),
             api_key_id=key_id,
             api_key_secret=key_secret,
         )
@@ -1694,28 +1735,24 @@ async def list_api_keys(fresh: bool = False):
             all_metadata = cached_data
         
         # Process and count
-        keys = []
-        active_count = 0
-        revoked_count = 0
-        
-        for metadata in all_metadata:
-            if metadata.get("is_revoked", False):
-                revoked_count += 1
-            elif metadata.get("is_active", True):
-                active_count += 1
-            
-            # Get user mapping count
-            user_mappings = get_user_mappings_from_vault(vault_client, metadata["id"])
-            
-            keys.append(APIKeyInfo(
-                **metadata,
-                user_mappings_count=len(user_mappings)
-            ))
-        
+        # important: an expired key is not active. It was counted here, so the dashboard
+        # reported six lapsed keys among its active ones and an operator had to read each date
+        # to find out otherwise. The counting lives in `tally_keys` rather than in this loop so
+        # it can be asserted on fixtures: an earlier structural test only checked that the
+        # counter was incremented, and stayed green when the branch bodies were swapped.
+        records = [m for m in all_metadata if isinstance(m, dict)]
+        counts = tally_keys(records)
+
+        keys = [
+            _key_info(metadata, len(get_user_mappings_from_vault(vault_client, metadata["id"])))
+            for metadata in records
+        ]
+
         return APIKeyListResponse(
             total=len(keys),
-            active=active_count,
-            revoked=revoked_count,
+            active=counts["active"],
+            revoked=counts["revoked"],
+            expired=counts["expired"],
             keys=keys,
         )
         
@@ -1741,7 +1778,7 @@ async def get_api_key(key_id: str):
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
         
-        return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+        return _key_info(metadata, len(user_mappings))
         
     except HTTPException:
         raise
@@ -1800,7 +1837,7 @@ async def update_api_key_permissions(
         evict_api_key_cache(key_id)
 
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
-        return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+        return _key_info(metadata, len(user_mappings))
 
     except HTTPException:
         raise
@@ -1869,7 +1906,7 @@ async def update_api_key_capabilities(
         evict_api_key_cache(key_id)
 
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
-        return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+        return _key_info(metadata, len(user_mappings))
     except HTTPException:
         raise
     except Exception as e:
@@ -1917,7 +1954,7 @@ async def revoke_api_key(
         logger.info(f"API key {key_id} revoked")
         
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
-        return APIKeyInfo(**metadata, user_mappings_count=len(user_mappings))
+        return _key_info(metadata, len(user_mappings))
         
     except HTTPException:
         raise
@@ -2091,12 +2128,13 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
         if not metadata.get("is_active", True):
             return APIKeyValidateResponse(valid=False, error="API key not active")
         
-        # Check expiration
+        # Check expiration. Same decision as the header dependency, and for the same reason:
+        # this handler's broad `except Exception` below would otherwise turn a TypeError from a
+        # naive/aware comparison into a generic "Validation failed", which tells an integrator
+        # nothing about why its key stopped working.
         expires_at = metadata.get("expires_at")
-        if expires_at:
-            exp_date = datetime.fromisoformat(expires_at)
-            if datetime.utcnow() > exp_date:
-                return APIKeyValidateResponse(valid=False, error="API key expired")
+        if is_expired(expires_at):
+            return APIKeyValidateResponse(valid=False, error="API key expired")
         
         # Valid!
         raw_permissions = metadata.get("cluster_permissions", [])
@@ -2152,6 +2190,8 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             app_name=metadata.get("app_name"),
             app_type=metadata.get("app_type"),
             capabilities=sorted(granted) if granted is not None else None,
+            expires_at=metadata.get("expires_at"),
+            expires_in_days=days_remaining(metadata.get("expires_at")),
             cluster_permissions=enriched_permissions,
         )
         
@@ -2398,6 +2438,27 @@ def _audit_key_action(
         logger.warning("Could not write the audit record for %s", action, exc_info=True)
 
 
+def _key_info(metadata: Dict[str, Any], user_mappings_count: int = 0) -> "APIKeyInfo":
+    """One builder for every APIKeyInfo, so the derived fields cannot be right on one path only.
+
+    important: five handlers construct this model and only the list passed the two derived
+    fields, so `GET /integrations/api-keys/{id}` on a key that lapsed in 2020 answered
+    `expiry_state: "never"` beside its own past date. Deriving them here means a new handler
+    cannot forget.
+
+    note: `is_expired` is derived from the timestamp, NOT from `classify_key`. The classifier
+    ranks revocation above expiry so the badge reads "Revoked", which is what an operator needs,
+    but the field is documented as "past its expiration" and an integration branches on it. A
+    key that is both would otherwise report `is_expired: false` next to `expiry_state: expired`.
+    """
+    return APIKeyInfo(
+        **metadata,
+        is_expired=is_expired(metadata.get("expires_at")),
+        expiry_state=expiry_state(metadata.get("expires_at")),
+        user_mappings_count=user_mappings_count,
+    )
+
+
 def _audit_raw_proxy(
     api_key: Dict[str, Any],
     request: Any,
@@ -2508,6 +2569,8 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
         app_name=api_key.get("app_name"),
         app_type=api_key.get("app_type"),
         capabilities=sorted(granted) if granted is not None else None,
+        expires_at=api_key.get("expires_at"),
+        expires_in_days=days_remaining(api_key.get("expires_at")),
         cluster_permissions=[
             ClusterPermission(**grant)
             for grant in api_key.get("cluster_permissions", [])

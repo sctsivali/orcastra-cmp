@@ -1538,6 +1538,11 @@ export interface APIKeyInfo {
   capabilities?: string[] | null;
   created_at: string;
   expires_at?: string | null;
+  // note: both derived server-side from expires_at on every read, never stored. `is_expired` is
+  // what a client branches on; `expiry_state` is what the card renders, and it carries the
+  // "expiring" case the UI had no way to compute.
+  is_expired?: boolean;
+  expiry_state?: "never" | "active" | "expiring" | "expired";
   is_active: boolean;
   is_revoked: boolean;
   last_used_at?: string | null;
@@ -1605,6 +1610,10 @@ export interface APIKeyListResponse {
   total: number;
   active: number;
   revoked: number;
+  // note: expired keys used to be counted in `active`. Without this the three tiles stopped
+  // adding up: on a fleet with six lapsed keys the Active figure simply dropped by six with
+  // nowhere for them to go, which reads as keys having been deleted.
+  expired?: number;
   keys: APIKeyInfo[];
 }
 

@@ -186,7 +186,8 @@ export function ApiKeyConnectionGuide({
                 day: "2-digit",
                 month: "short",
                 year: "numeric",
-              })}.`
+              })}. Nothing warns you before that date, so have the integration read
+                expires_in_days from GET /integrations/whoami.`
             : "Does not expire."}
         </p>
       </div>
