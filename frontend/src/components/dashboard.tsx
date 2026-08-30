@@ -107,6 +107,12 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
   const canOperate = hasPermission(vm.host, vm.project || "default", vm.name, "operate");
   const canConsole = hasPermission(vm.host, vm.project || "default", vm.name, "console");
 
+  // important: an instance name is unique only within one project on one host, and the projects
+  // grid can hold two expanded cards at once, so `Start instance web-01` was capable of naming
+  // two different buttons on one screen. check-icon-button-names.mjs counts buttons with no name,
+  // never buttons whose name is ambiguous, so nothing was catching it.
+  const rowLabel = `${vm.name} in ${vm.project || "default"} on ${vm.host}`;
+
   const handleTagsChange = async (newTags: string[]) => {
     if (isReadOnly) {
       toast({
@@ -305,7 +311,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleStart}
-                  aria-label={`Start instance ${vm.name}`}
+                  aria-label={`Start instance ${rowLabel}`}
                   disabled={isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {startVM.isPending ? (
@@ -326,7 +332,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleStop}
-                  aria-label={`Stop instance ${vm.name}`}
+                  aria-label={`Stop instance ${rowLabel}`}
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {stopVM.isPending ? (
@@ -347,7 +353,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   size="icon"
                   className="h-7 w-7"
                   onClick={handleRestart}
-                  aria-label={`Restart instance ${vm.name}`}
+                  aria-label={`Restart instance ${rowLabel}`}
                   disabled={!isRunning || isPending || isReadOnly || !canOperate}
                 >
                   {restartVM.isPending ? (
@@ -375,7 +381,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   }}
                   disabled={!isRunning || !canConsole}
                   title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Terminal"}
-                  aria-label={`Open terminal for instance ${vm.name}`}
+                  aria-label={`Open terminal for instance ${rowLabel}`}
                 >
                   <Terminal className="h-3.5 w-3.5" />
                 </Button>
@@ -399,7 +405,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                   }}
                   disabled={!isRunning || !canConsole}
                   title={!canConsole ? "No console permission" : !isRunning ? "Instance must be running" : "Open Console"}
-                  aria-label={`Open console for instance ${vm.name}`}
+                  aria-label={`Open console for instance ${rowLabel}`}
                 >
                   <Monitor className="h-3.5 w-3.5" />
                 </Button>
@@ -418,7 +424,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
                       size="icon"
                       className="h-7 w-7 text-destructive hover:text-destructive"
                       disabled={isPending || isDeleting || isReadOnly}
-                      aria-label={`Delete instance ${vm.name}`}
+                      aria-label={`Delete instance ${rowLabel}`}
                     >
                       {isDeleting ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />
