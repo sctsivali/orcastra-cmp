@@ -1,4 +1,5 @@
 import * as React from "react";
+import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
 
@@ -59,14 +60,25 @@ export type BadgeTone = "positive" | "caution" | "neutral" | "negative";
 
 export interface BadgeProps
   extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof badgeVariants> {}
+    VariantProps<typeof badgeVariants> {
+  /**
+   * Render the chip as its child element instead of a div.
+   *
+   * important: a badge is a div, and a div inside a button is invalid per the HTML content
+   * model. A chip that has to sit inside a real control, such as the instance count inside the
+   * project card's disclosure button, passes asChild with a span so the markup stays valid.
+   * Same device as button.tsx, and for the same reason.
+   */
+  asChild?: boolean;
+}
 
-function Badge({ className, variant, ...props }: BadgeProps) {
+function Badge({ className, variant, asChild = false, ...props }: BadgeProps) {
   // note: data-slot is the stable handle for "this is a chip". The QA harness used to select
   // pills by the base class string, which turns four assertions into silent no-ops the moment
   // that string is restyled.
+  const Comp = asChild ? Slot : "div";
   return (
-    <div
+    <Comp
       data-slot="badge"
       className={cn(badgeVariants({ variant }), className)}
       {...props}

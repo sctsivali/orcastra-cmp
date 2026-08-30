@@ -512,6 +512,9 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
   const [editDialogOpen, setEditDialogOpen] = React.useState(false);
   const [isSaving, setIsSaving] = React.useState(false);
   const { isPartner } = usePermissions();
+  // useId rather than an id built from projectKey: the key carries a colon and the project name
+  // is operator-supplied, so neither is safe to put in the DOM id the disclosure points at.
+  const instancesRegionId = React.useId();
 
   const handleTagsChange = async (newTags: string[]) => {
     if (isReadOnly) {
@@ -894,23 +897,35 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         <div className="space-y-2 pt-2 border-t">
           <div className="flex items-center justify-between">
             <span className="text-xs text-muted-foreground">Instances</span>
-            <div className="flex items-center gap-2">
-              <Badge 
-                variant={instanceCount > 0 ? "default" : "secondary"}
-                className={instanceCount > 0 ? "cursor-pointer hover:bg-primary/80 transition-colors" : ""}
-                onClick={() => instanceCount > 0 && toggleProject(projectKey)}
+            {/* important: one real button. The count badge carried the onClick and the chevron
+                beside it was a bare div, and Badge renders a div (ui/badge.tsx), so neither took
+                focus and the only way to open this card was a mouse. Everything inside the
+                expanded region, the instance actions and now its pager, was therefore unreachable
+                by keyboard. The badge passes asChild so a span carries the chip styling, because
+                a div inside a button is invalid per the HTML content model. */}
+            {instanceCount > 0 ? (
+              <button
+                type="button"
+                onClick={() => toggleProject(projectKey)}
+                aria-expanded={isExpanded}
+                aria-controls={instancesRegionId}
+                className="flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
-                {instanceCount}
-              </Badge>
-              {instanceCount > 0 && (
-                <div onClick={() => toggleProject(projectKey)} className="cursor-pointer">
-                  {isExpanded ? 
-                    <ChevronUp className="h-4 w-4 text-muted-foreground" /> : 
-                    <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                  }
-                </div>
-              )}
-            </div>
+                <Badge asChild variant="default" className="hover:bg-primary/80 transition-colors">
+                  <span>{instanceCount}</span>
+                </Badge>
+                <span className="sr-only">
+                  {isExpanded ? "Hide" : "Show"} instances in {project.name} on {project.host}
+                </span>
+                {isExpanded ? (
+                  <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                )}
+              </button>
+            ) : (
+              <Badge variant="secondary">{instanceCount}</Badge>
+            )}
           </div>
           {instanceCount > 0 && (
             <div className="flex items-center gap-2 text-xs">
@@ -934,7 +949,7 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
 
         {/* Expanded Instance List */}
         {isExpanded && instanceCount > 0 && (
-          <div className="mt-3 pt-3 border-t space-y-2">
+          <div id={instancesRegionId} className="mt-3 pt-3 border-t space-y-2">
             {instances.map((vm) => (
               <InstanceRow key={vm.name} vm={vm} onTagsUpdate={refetch} isReadOnly={isReadOnly} />
             ))}
