@@ -15,7 +15,11 @@ import { InstanceDetailDialog } from "@/components/instance-detail/instance-deta
 import { TagManager, TagFilter } from "@/components/tag-manager";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
+import { useTableSort } from "@/hooks/use-table-sort";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { SortSelect } from "@/components/ui/sort-select";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -69,7 +73,6 @@ interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
   projectsLoading: boolean;
   vmsData: VMInfo[];
-  projectInstanceCounts: Map<string, number>;
   refetch: () => void;
   lastUpdatedAt: number | null;
 }
@@ -82,6 +85,15 @@ interface ProjectCardProps {
   instances: VMInfo[];
   stats: { running: number; stopped: number; other: number; total: number };
   toggleProject: (key: string) => void;
+  /**
+   * The page of the expanded instance list.
+   *
+   * important: owned by ProjectsSection, not by this component. The grid pager slices the card
+   * list, so a card off the current page unmounts and loses its own state while the expanded set
+   * survives, and a card held page would bring the card back open but showing different rows.
+   */
+  instancePage: number;
+  onInstancePageChange: (key: string, page: number) => void;
   refetch: () => void;
   isReadOnly?: boolean;
 }
@@ -503,7 +515,11 @@ function formatQuota(usedBytes: number, limitBytes: number): { value: string; un
   };
 }
 
-function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances, stats, toggleProject, refetch, isReadOnly = false }: ProjectCardProps) {
+// One page of instances inside an expanded project card. Five, the same number the app's other
+// in-card pager uses, so the two compact pagers do not disagree about what a page is.
+const INSTANCE_PAGE_SIZE = 5;
+
+function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances, stats, toggleProject, instancePage, onInstancePageChange, refetch, isReadOnly = false }: ProjectCardProps) {
   const deleteProject = useDeleteProject();
   const updateProject = useUpdateProject();
   const updateProjectTags = useUpdateProjectTags();
@@ -739,8 +755,25 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
     }
   };
 
+  const instanceTotalPages = Math.max(1, Math.ceil(instances.length / INSTANCE_PAGE_SIZE));
+
+  // important: clamped on read, never corrected in an effect. getProjectInstances builds a new
+  // array on every ProjectsSection render and useInstances polls, so an effect keyed on
+  // `instances` would reset every open card twice per tick while the operator was mid-task, and
+  // one keyed on the overflow would still paint an empty frame before it caught up.
+  //
+  // note: the stored page is deliberately left alone. A node that fails to answer drops its
+  // instances from the list and they come back on the next poll, so clamping on read returns the
+  // card to where the operator left it, where correcting the stored page would strand it lower
+  // after one flaky fan-out.
+  const instanceCurrentPage = Math.min(instancePage, instanceTotalPages);
+  const visibleInstances = instances.slice(
+    (instanceCurrentPage - 1) * INSTANCE_PAGE_SIZE,
+    instanceCurrentPage * INSTANCE_PAGE_SIZE,
+  );
+
   return (
-    <Card className="hover:border-primary/50 transition-colors">
+    <Card data-slot="project-card" className="hover:border-primary/50 transition-colors">
       <CardHeader className="pb-3 px-3 md:px-6">
         <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -950,9 +983,22 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
         {/* Expanded Instance List */}
         {isExpanded && instanceCount > 0 && (
           <div id={instancesRegionId} className="mt-3 pt-3 border-t space-y-2">
-            {instances.map((vm) => (
+            {visibleInstances.map((vm) => (
               <InstanceRow key={vm.name} vm={vm} onTagsUpdate={refetch} isReadOnly={isReadOnly} />
             ))}
+            {/* note: no count sentence beside this pager, unlike the cluster access panel. There
+                the denominator moves under a search so the count had to be spoken. Here nothing
+                filters, the badge above already carries the total, and one aria-live region per
+                card across a dozen cards would re-announce all of them on every poll tick. */}
+            {instanceTotalPages > 1 && (
+              <DataTablePagination
+                variant="compact"
+                currentPage={instanceCurrentPage}
+                totalPages={instanceTotalPages}
+                onPageChange={(nextPage) => onInstancePageChange(projectKey, nextPage)}
+                label={`instances in ${project.name} on ${project.host}`}
+              />
+            )}
           </div>
         )}
       </CardContent>
@@ -1108,6 +1154,27 @@ const PROJECTS = defineTable<ProjectInfo, ProjectsContext>()({
       facetSpec: { role: "node", primary: true } },
     { field: "description", label: "Description", sort: (p) => p.description, search: (p) => p.description, filter: fromSort("text") },
     {
+      field: "instances",
+      label: "Instances",
+      // The count is not a field on a project. It comes off the same index the search and the
+      // Tags facet already read, which is why this is the context-aware `filter` spelling rather
+      // than fromSort: a sort accessor is handed the row and nothing else, so there is no sort
+      // accessor here for a filter to be derived from. The sort side is merged in inside the
+      // component, where the index is in scope.
+      //
+      // note: declared rather than left as a sort-only dimension. check-table-filters.mjs bans a
+      // column an operator can order by but not filter by, and a locally merged accessor would
+      // slip past that rule only because the parser cannot see where the accessor was put.
+      // The None preset also answers "which projects are empty", which nothing else here does.
+      filter: {
+        kind: "number",
+        value: (p, ctx) => ctx.index.get(`${p.host}:${p.name}`)?.count ?? 0,
+        unit: "count",
+        presets: [
+          { label: "None", min: null, max: 0 },
+          { label: "Any", min: 1, max: null },
+        ] } },
+    {
       field: "tags",
       label: "Tags",
       facet: (p, ctx) => {
@@ -1117,9 +1184,34 @@ const PROJECTS = defineTable<ProjectInfo, ProjectsContext>()({
       facetSpec: { emptyLabel: "(untagged)" } },
   ] });
 
-function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstanceCounts, refetch, lastUpdatedAt }: ProjectsSectionProps) {
+// The card grid has no column headers to click, so the sort dimension needs a control of its
+// own. Three of the five columns: Description and Tags are not orders anyone asks a project list
+// for. The labels are read off the table so this control and the toolbar cannot end up naming one
+// dimension two different ways.
+type ProjectSortField = "name" | "host" | "instances";
+
+const PROJECT_SORT_OPTIONS: readonly { value: ProjectSortField; label: string }[] = [
+  { value: "name", label: PROJECTS.byField.name.label },
+  { value: "host", label: PROJECTS.byField.host.label },
+  { value: "instances", label: PROJECTS.byField.instances.label },
+];
+
+function ProjectsSection({ projectsData, projectsLoading, vmsData, refetch, lastUpdatedAt }: ProjectsSectionProps) {
   const lastUpdated = useRelativeTime(lastUpdatedAt);
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
+  // important: the page inside each expanded card lives here, beside expandedProjects, rather
+  // than inside ProjectCard. The grid pager below slices the card list, so a card off the current
+  // page unmounts and loses any state it held, while this Set survives. A child-held page would
+  // therefore bring the card back looking restored and showing different rows, which is worse
+  // than either losing the state cleanly or keeping it.
+  const [instancePages, setInstancePages] = React.useState<Map<string, number>>(new Map());
+
+  // note: page and size stay in component state and out of the URL. lib/table-filter.ts records
+  // that decision for the whole console, and a page number is not a stable thing to share: it
+  // resolves against the reader's page size, sort and today's fleet, not the writer's.
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(12);
+  const resetPage = React.useCallback(() => setPage(1), []);
   // note: one index built once, instead of getProjectInstances re-scanning the whole
   // instance list inside a predicate that ran from both a reduce and a map on every render.
   const projectIndex = React.useMemo(() => {
@@ -1161,11 +1253,38 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
   const filters = useTableFilters(PROJECTS, allProjects, {
     context: filterContext,
     extraSearch: searchProjectIndex,
+    // One line covers every way the result set can change: the toolbar search, the Node facet,
+    // the Instances range, chip removal, Clear all, and the separate TagFilter below, which
+    // reaches setFacet and therefore the same callback.
+    onFilterChange: resetPage,
     // Tags render through TagFilter rather than the toolbar, so keep the facet out of the
     // toolbar's own controls. It still applies, and it still shows as a removable chip.
     availableFields: PROJECTS.facetFields.filter((f) => f !== "tags") });
   const selectedTags = filters.selectedValues("tags");
   const { isReadOnly } = useReadOnlyMode();
+
+  // The instance count is not a field on a project: it lives in the index built from the
+  // instances query, and a declared sort accessor is handed the row and nothing else. So this one
+  // is merged in here, where the index is in scope, while the rest still come from PROJECTS so
+  // the control and the table cannot drift apart.
+  //
+  // important: keyed off projectIndex, which is memoised on vmsData. The old projectInstanceCounts
+  // prop computed the identical number but was rebuilt as a fresh Map on every Dashboard render,
+  // so closing over it would hand sortItems a new identity every render and re-sort the whole
+  // list each time.
+  const sortAccessors = React.useMemo(
+    () => ({
+      ...PROJECTS.sortAccessors,
+      instances: (p: ProjectInfo) => projectIndex.get(`${p.host}:${p.name}`)?.count ?? 0 }),
+    [projectIndex],
+  );
+
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    sortAccessors,
+    PROJECTS.defaultSort.field,
+    PROJECTS.defaultSort.direction,
+    resetPage,
+  );
 
   // Get unique nodes from projects
   // Collect all unique tags from projects and instances
@@ -1197,11 +1316,28 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
     const newExpanded = new Set(expandedProjects);
     if (newExpanded.has(projectKey)) {
       newExpanded.delete(projectKey);
+      // Collapsing is the operator putting the card away, so reopening starts at the top. Done at
+      // the source of the change rather than from an effect watching isExpanded. Dropping the
+      // entry rather than writing 1 also keeps the map to the cards that are actually open.
+      setInstancePages((pages) => {
+        if (!pages.has(projectKey)) return pages;
+        const next = new Map(pages);
+        next.delete(projectKey);
+        return next;
+      });
     } else {
       newExpanded.add(projectKey);
     }
     setExpandedProjects(newExpanded);
   };
+
+  const setInstancePage = React.useCallback((projectKey: string, nextPage: number) => {
+    setInstancePages((pages) => {
+      const next = new Map(pages);
+      next.set(projectKey, nextPage);
+      return next;
+    });
+  }, []);
 
   const getProjectInstances = (host: string, projectName: string) => {
     return vmsData.filter(vm => 
@@ -1221,7 +1357,27 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
   // through the facet masks, so a project the Node or Tags facet excluded still rendered a card,
   // and the toolbar counted filteredRows while the grid showed more. The search now reaches the
   // index through the hook's extraSearch, so one set feeds both.
-  const visibleProjects = filters.filteredRows;
+  //
+  // Filter, then sort, then slice, in that order, which is the contract use-table-filters.ts
+  // states: the sort covers the whole filtered set rather than the page an operator happens to be
+  // looking at. Before this the grid rendered filteredRows unsorted, so the order was whatever the
+  // per-node fan-out returned and a card could move between pages on any refetch.
+  const sortedProjects = React.useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
+
+  // important: clamped on read, never corrected in an effect. useAllProjects polls, and an effect
+  // keyed on the row count would snap an operator back a page mid-task on any refresh that shrank
+  // the list, and would still paint one wrong frame before it caught up. Math.max(1, ...) rather
+  // than a bare Math.ceil because an empty result gives 0 pages, and Math.min would then hand the
+  // slice a page zero.
+  const totalPages = Math.max(1, Math.ceil(sortedProjects.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleProjects = sortedProjects.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
 
   return (
     <div className="space-y-4">
@@ -1236,7 +1392,22 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
         </div>
       </div>
 
-      <TableToolbar filters={filters} noun="projects" />
+      {/* The sort control rides the toolbar's actions slot rather than taking a row of its own.
+          A card grid has no column headers to click, so this is the only place the order can be
+          read or changed, and it belongs beside the other controls rather than above a grid that
+          already carries a filter row and a tag row. */}
+      <TableToolbar
+        filters={filters}
+        noun="projects"
+        actions={
+          <SortSelect
+            options={PROJECT_SORT_OPTIONS}
+            value={sortField as ProjectSortField}
+            direction={sortDirection}
+            onSort={handleSort}
+          />
+        }
+      />
 
       {/* Tag Filter: an alternative renderer for the same facet, not a second control. Its
           colours come from the tag prefix, which the generic popover cannot show. */}
@@ -1263,11 +1434,11 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
           <>
             {visibleProjects.map((project) => {
                   const projectKey = `${project.host}:${project.name}`;
-                  const instanceCount = projectInstanceCounts.get(projectKey) || 0;
+                  const instanceCount = projectIndex.get(projectKey)?.count ?? 0;
                   const isExpanded = expandedProjects.has(projectKey);
                   const instances = getProjectInstances(project.host, project.name);
                   const stats = getProjectStats(project.host, project.name);
-                  
+
                   return (
                     <ProjectCard
                       key={projectKey}
@@ -1278,25 +1449,59 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, projectInstan
                       instances={instances}
                       stats={stats}
                       toggleProject={toggleProject}
+                      instancePage={instancePages.get(projectKey) ?? 1}
+                      onInstancePageChange={setInstancePage}
                       refetch={refetch}
                       isReadOnly={isReadOnly}
                     />
                   );
                 })}
-            {filters.activeFilterCount > 0 && visibleProjects.length === 0 && (
-              <div className="col-span-full text-center py-12">
-                <FolderKanban className="h-12 w-12 text-muted-foreground mx-auto mb-3 opacity-50" />
-                <h3 className="text-lg font-semibold text-muted-foreground mb-2">
-                  No projects found
-                </h3>
-                <p className="text-sm text-muted-foreground">
-                  Try adjusting your search query
-                </p>
-              </div>
-            )}
+            {sortedProjects.length === 0 &&
+              (filters.activeFilterCount > 0 ? (
+                <div className="col-span-full">
+                  <EmptyState
+                    icon={FolderKanban}
+                    title="No projects found"
+                    description="Try a different search, or clear a filter."
+                  />
+                </div>
+              ) : (
+                // important: this branch never rendered. The block was gated on activeFilterCount
+                // alone, so a fleet with no projects at all, or one whose nodes all failed to
+                // answer, drew an empty grid and no explanation of any kind.
+                <div className="col-span-full">
+                  <EmptyState
+                    icon={FolderKanban}
+                    title="No projects yet"
+                    description="Projects appear here once a node reports one."
+                  />
+                </div>
+              ))}
           </>
         )}
       </div>
+
+      {/* note: 12, 24, 48 and 96 rather than the shared default of 10, 25, 50, 100, 200. The grid
+          is one, two or three columns wide and every one of these divides by all three, so a full
+          page never leaves a ragged last row.
+          No mt-4 wrapper, unlike the table pages: those follow a Table inside a CardContent with
+          no vertical rhythm of its own, while the parent here is already space-y-4. */}
+      {totalPages > 1 && (
+        <div data-slot="projects-pagination">
+          <DataTablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={sortedProjects.length}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+            pageSizeOptions={[12, 24, 48, 96]}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -1487,13 +1692,6 @@ export function Dashboard() {
     ]);
   }, [queryClient, refetch]);
 
-  // calculate instance count per project
-  const projectInstanceCounts = new Map<string, number>();
-  vmsData?.vms.forEach((vm) => {
-    const projectKey = `${vm.host}:${vm.project || "default"}`;
-    projectInstanceCounts.set(projectKey, (projectInstanceCounts.get(projectKey) || 0) + 1);
-  });
-
   const isPrimaryLoading = vmsLoading || projectsLoading || clustersLoading;
   // important: never hard-block the dashboard forever on a slow/stuck query.
   // After a grace period, surface a retry panel instead of an infinite 95%
@@ -1552,7 +1750,6 @@ export function Dashboard() {
         projectsData={projectsData} 
         projectsLoading={projectsLoading}
         vmsData={vmsData?.vms || []}
-        projectInstanceCounts={projectInstanceCounts}
         refetch={refetch}
         lastUpdatedAt={dataUpdatedAt}
       />
