@@ -56,8 +56,6 @@ TOLERATES_NONE = {
     ("permissions.py", "_fetch_identities_for_node"),
     ("permissions.py", "_fetch_groups_for_node"),
     ("storage_volumes.py", "_fetch_volumes_for_node"),
-    ("integrations.py", "_fetch_cluster_projects"),
-    ("integrations.py", "_fetch_cluster_instances"),
     ("regions.py", "get_regions_overview"),
     ("regions.py", "_process_cluster"),
     # Session bookkeeping. These count or tear down console sessions across the fleet; one
@@ -71,8 +69,6 @@ TOLERATES_NONE = {
     ("image_uploads.py", "_lxd_import_sync"),
     ("iso_uploads.py", "_resolve_volume_sync"),
     ("iso_uploads.py", "_lxd_import_iso_sync"),
-    # Surfaces the breaker's own reason as a 503 already, by a different route.
-    ("integrations.py", "_execute_proxy_operation"),
     # Best-effort cleanup after the database row is already gone. A dead node must not fail
     # a delete the caller has already committed to, and skipping one node is the entire
     # point of the per-node loop.

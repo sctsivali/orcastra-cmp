@@ -50,8 +50,19 @@ def assert_cluster_permission(
     if grant is None:
         raise HTTPException(status_code=403, detail=f"No permission for cluster {cluster_id}")
 
-    if granted_level(grant.get("permissions", ["read"])) < PERMISSION_LEVELS.get(required, 0):
+    held = grant.get("permissions", ["read"])
+    if granted_level(held) < PERMISSION_LEVELS.get(required, 0):
+        # note: naming what the key holds is deliberate. The bare "Operation requires read
+        # permission" was the message an operator saw while holding ["admin"], which pointed
+        # the investigation at the credential instead of at the check. The caller already has
+        # the key and can read the same list from GET /integrations/whoami, so this discloses
+        # nothing it does not already hold.
         raise HTTPException(
-            status_code=403, detail=f"Operation requires {required} permission"
+            status_code=403,
+            detail=(
+                f"Operation requires {required} on cluster {cluster_id}; "
+                f"this key holds {sorted(held) or ['nothing']}. "
+                "GET /api/v1/integrations/whoami lists what the key may do."
+            ),
         )
     return grant

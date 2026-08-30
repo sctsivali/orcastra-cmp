@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, NamedTuple, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header
 from pydantic import BaseModel, Field, field_validator
 import requests
@@ -35,13 +35,27 @@ from app.services.lxd.proxy import (
     raw_request,
     socket_timeout_for,
 )
+from app.services.lxd.availability import require_client, unreachable_detail
+from app.services.lxd.proxy_operations import (
+    CLUSTER_WIDE_OPERATIONS,
+    PROXY_OPERATION_LEVELS,
+    PROXY_WAIT_OPERATIONS,
+    classify_proxy_error,
+    execute_proxy_operation,
+    fetch_operation_status,
+    instance_detail,
+    instance_summary,
+    status_name,
+)
 from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
 from app.core.api_key_capabilities import (
+    project_grant_is_unrestricted,
     APP_TYPE_CAPABILITIES,
     APP_TYPES,
     CAPABILITIES,
     ELEVATED_CAPABILITIES,
     assert_capability,
+    assert_project_scope_allows_path,
     assert_proxy_path_allowed,
     default_capabilities_for,
     granted_capabilities,
@@ -394,6 +408,13 @@ class ProxyRequest(BaseModel):
     operation: str = Field(..., description="Operation type: list_instances, create_instance, etc.")
     project: str = Field(default="default", description="LXD project")
     params: Dict[str, Any] = Field(default_factory=dict, description="Operation parameters")
+    # note: the default keeps every existing caller synchronous. wait=false is for work that
+    # can outlive PROXY_OP_TIMEOUT, ex; a create that has to pull an image. It returns the LXD
+    # operation id immediately and the caller polls /integrations/operations/{id}.
+    wait: bool = Field(
+        default=True,
+        description="Wait for the LXD operation to finish. False returns an operation id to poll.",
+    )
     external_user_id: Optional[str] = Field(None, description="External user making the request")
     external_user_email: Optional[str] = Field(None, description="External user email")
 
@@ -420,6 +441,10 @@ class RawProxyResponse(BaseModel):
 class ProxyResponse(BaseModel):
     """Response from proxied operation."""
     success: bool
+    # note: additive, and only set on failure. The endpoint answers 200 with success=false for
+    # a failure inside the cluster, so without a code an unattended caller has to read English
+    # to tell "give up, it is not there" from "retry, the cluster is down".
+    error_code: Optional[str] = None
     # important: the list_* operations return a list, not a mapping. Typed as Dict only, every
     # one of them failed response validation and reported success:false, so this endpoint has
     # never returned data for any operation. Widened rather than wrapped so the payload shape
@@ -727,92 +752,6 @@ def _schedule_last_used_update(key_id: str) -> None:
         pass
 
 
-_PROXY_WAIT_OPERATIONS = frozenset({
-    "create_instance", "delete_instance", "start_instance",
-    "stop_instance", "restart_instance",
-})
-
-
-def _execute_proxy_operation(
-    lxd_service, cluster_id: str, operation: str, params: Dict[str, Any], project: str
-) -> Any:
-    """Blocking half of proxy_operation. Only ever runs on proxy_executor.
-
-    important: pylxd binds the project at the CLIENT level. Instance.all/get/create and
-    Project.all/Image.all take no `project=` kwarg (verified against the pylxd in the runtime
-    image), so the previous per-call `project=` raised TypeError before any network I/O and
-    every instance branch returned success=False. Project scoping now goes through
-    get_project_client, which is what that method exists for.
-    """
-    # The pooled client first: it populates the cached connection info and temp cert paths
-    # that get_project_client reuses, and it is what the reconnect logic maintains.
-    client = lxd_service.connection_manager.get_client(cluster_id)
-    if not client:
-        raise HTTPException(
-            status_code=503, detail=f"Cluster {cluster_id} is not connected"
-        )
-
-    # Operations that poll an LXD operation to completion need a wider read window than the
-    # pooled client's default, and a non-default project needs a scoped client either way.
-    needs_scope = (project and project != "default") or operation in _PROXY_WAIT_OPERATIONS
-    if needs_scope:
-        scoped = lxd_service.connection_manager.get_project_client(
-            cluster_id, project or "default", timeout=(3, 30)
-        )
-        if scoped:
-            client = scoped
-        elif project and project != "default":
-            raise HTTPException(
-                status_code=503,
-                detail=f"Cannot scope to project {project} on {cluster_id}",
-            )
-
-    def _named_instance():
-        name = params.get("name")
-        if not name:
-            raise HTTPException(status_code=400, detail="Instance name required")
-        return client.instances.get(name)
-
-    if operation == "list_instances":
-        return [
-            {"name": i.name, "status": i.status, "type": i.type,
-             "architecture": i.architecture}
-            for i in client.instances.all()
-        ]
-    if operation == "get_instance":
-        instance = _named_instance()
-        return {
-            "name": instance.name, "status": instance.status, "type": instance.type,
-            "architecture": instance.architecture, "config": dict(instance.config),
-        }
-    if operation == "create_instance":
-        instance = client.instances.create(params, wait=True)
-        return {"name": instance.name, "status": instance.status}
-    if operation == "delete_instance":
-        _named_instance().delete(wait=True)
-        return {"deleted": True}
-    if operation == "start_instance":
-        _named_instance().start(wait=True)
-        return {"status": "Running"}
-    if operation == "stop_instance":
-        _named_instance().stop(force=params.get("force", False), wait=True)
-        return {"status": "Stopped"}
-    if operation == "restart_instance":
-        _named_instance().restart(force=params.get("force", False), wait=True)
-        return {"status": "Running"}
-    if operation == "list_projects":
-        return [{"name": p.name, "description": p.description} for p in client.projects.all()]
-    if operation == "list_images":
-        return [
-            {"fingerprint": img.fingerprint[:12],
-             "description": img.properties.get("description", ""),
-             "size": img.size}
-            for img in client.images.all()
-        ]
-
-    raise HTTPException(status_code=400, detail=f"Unknown operation: {operation}")
-
-
 def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
     """Blocking half of the sync cluster-info fan-out. Reads Vault, so it must not run on the
     event loop. Returns a single-item list so it composes with the shared gather helper.
@@ -843,10 +782,16 @@ def _fetch_cluster_info(cert_manager, cluster_id: str) -> List[Dict[str, Any]]:
 
 
 def _fetch_cluster_projects(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
-    """Blocking half of the sync projects fan-out. Only ever runs on proxy_executor."""
-    client = lxd_service.connection_manager.get_client(cluster_id)
-    if not client:
-        return []
+    """Blocking half of the projects fan-out. Only ever runs on proxy_executor.
+
+    note: raises rather than returning empty for an unreachable cluster. _gather_per_cluster
+    records the reason and still answers with what the other clusters gave, which is the
+    contract the rest of the fan-out helpers already follow. Returning empty here made a dead
+    cluster and an empty cluster identical in the response.
+    """
+    client = require_client(
+        lxd_service.connection_manager.get_client(cluster_id), cluster_id
+    )
     return [
         {"name": p.name, "cluster_id": cluster_id, "description": p.description}
         for p in client.projects.all()
@@ -854,24 +799,125 @@ def _fetch_cluster_projects(lxd_service, cluster_id: str) -> List[Dict[str, Any]
 
 
 def _fetch_cluster_instances(lxd_service, cluster_id: str) -> List[Dict[str, Any]]:
-    """Blocking half of the sync instances fan-out. Only ever runs on proxy_executor."""
-    client = lxd_service.connection_manager.get_client(cluster_id)
-    if not client:
-        return []
+    """Blocking half of the instances fan-out. Only ever runs on proxy_executor.
+
+    important: this read ``client.instances.all()`` off the pooled client, which pylxd binds
+    to the default project. Every instance in every other project was therefore missing from
+    the answer entirely rather than merely unlabelled, and nothing in the response said so, so
+    an integration that provisions into its own project saw an empty fleet. The instance
+    manager's per-node fetch already walks every project with ``recursion=1`` and resolves
+    addresses for running instances, so this reuses it instead of growing a second copy that
+    would drift the same way.
+
+    note: reusing it also inherits its reconnect path, which reads Vault for the cluster's
+    certificate and records a breaker failure when the cluster does not answer. That is a real
+    change of behaviour on the API-key surface, where the old read was an in-memory client plus
+    one call. It is the right trade: the breaker is already shared with the dashboard, which
+    reaches the same function through list_all_vms, and a cluster that genuinely will not answer
+    is what the breaker exists to record. The alternative is a second implementation that does
+    not reconnect, which is exactly the duplication that hid the default-project bug.
+    """
+    vms, connected = lxd_service.instance_manager.fetch_node_instances(cluster_id)
+    if not connected:
+        # The manager reports reachability separately from the result, and discarding it made
+        # an unreachable cluster indistinguishable from one holding no instances.
+        raise HTTPException(status_code=503, detail=unreachable_detail(cluster_id))
     return [
-        {
-            "name": i.name,
-            "cluster_id": cluster_id,
-            "status": i.status,
-            "type": i.type,
-        }
-        for i in client.instances.all()
+        instance_summary(
+            name=vm.name,
+            cluster_id=cluster_id,
+            project=vm.project,
+            status=status_name(vm.status_code, vm.status),
+            status_code=vm.status_code,
+            instance_type=vm.type,
+            architecture=vm.architecture,
+            config=vm.config,
+            expanded_devices=vm.expanded_devices,
+            ip_addresses=vm.ip_addresses,
+        )
+        for vm in vms
     ]
 
 
-async def _gather_per_cluster(
-    fn, ctx, cluster_ids, label: str
+def _fetch_instance_detail(
+    lxd_service,
+    cluster_id: str,
+    name: str,
+    project: Optional[str],
+    granted: Optional[Dict[str, Optional[set]]] = None,
 ) -> List[Dict[str, Any]]:
+    """Blocking half of the instance detail read. Only ever runs on proxy_executor.
+
+    Returns a single-item list, or an empty one when the name is not on this cluster, so it
+    composes with the shared gather helper like every other fetch here.
+    """
+    from app.services.lxd.utils import find_instance_in_projects
+
+    client = require_client(
+        lxd_service.connection_manager.get_client(cluster_id), cluster_id
+    )
+    # important: search only what the key may see. find_instance_in_projects with project=None
+    # lists every project on the cluster and then does one GET per project, so a miss cost
+    # 1 + N round trips on the shared proxy pool for a key that may be allowed to see one of
+    # them, and the caller chooses the name. Narrowing is both the cheap and the correct answer.
+    search = [project] if project else sorted((granted or {}).get(cluster_id) or []) or [None]
+    instance = found_in = None
+    for candidate in search:
+        instance, found_in = find_instance_in_projects(client, name, candidate)
+        if instance is not None:
+            break
+    if instance is None:
+        return []
+    return [
+        instance_detail(
+            name=instance.name,
+            cluster_id=cluster_id,
+            project=found_in,
+            status=status_name(
+                getattr(instance, "status_code", None), getattr(instance, "status", None)
+            ),
+            status_code=getattr(instance, "status_code", None),
+            instance_type=getattr(instance, "type", None),
+            architecture=getattr(instance, "architecture", None),
+            config=dict(getattr(instance, "config", {}) or {}),
+            devices=dict(getattr(instance, "devices", {}) or {}),
+            expanded_devices=dict(getattr(instance, "expanded_devices", {}) or {}),
+            profiles=list(getattr(instance, "profiles", []) or []),
+            location=getattr(instance, "location", None),
+            description=getattr(instance, "description", None),
+            created_at=getattr(instance, "created_at", None),
+            last_used_at=getattr(instance, "last_used_at", None),
+        )
+    ]
+
+
+class ClusterFanout(NamedTuple):
+    """What a fan-out actually returned, and what it could not reach.
+
+    important: the second half is not decoration. Every failure path below contributes an
+    empty list, so a fleet read over a tripped cluster used to come back short with a `total`
+    that looked authoritative. A caller polling for its own instances cannot distinguish that
+    from the instances having been deleted, which is the worst possible ambiguity to hand an
+    unattended agent. Reporting the clusters that did not answer makes a partial answer say so.
+
+    note: this deliberately does not reuse the field name the dashboard routers report the same
+    idea under. Theirs is a `List[str]` of names, because a banner only has to say which nodes
+    are missing. This carries a reason per cluster, because an integration has to choose between
+    retrying and giving up. One name over two shapes would be worse for a client reading both
+    endpoints than two names are.
+    """
+
+    items: List[Dict[str, Any]]
+    unreachable: List[Dict[str, str]]
+
+    @property
+    def partial(self) -> bool:
+        return bool(self.unreachable)
+
+
+async def _gather_per_cluster(
+    fn, ctx, cluster_ids, label: str, *extra
+) -> ClusterFanout:
     """Run a blocking per-cluster fetch across clusters concurrently and off the event loop.
 
     important: this replaced a serial in-loop fan-out. With one silent cluster that shape
@@ -880,15 +926,22 @@ async def _gather_per_cluster(
     /health spike to 11s. Now the cost is the slowest cluster, paid on a worker thread, and a
     cluster the breaker has already tripped is skipped entirely.
     """
+    misses: List[Dict[str, str]] = []
+
     async def one(cluster_id: str) -> List[Dict[str, Any]]:
         if health.is_tripped(cluster_id):
             logger.debug(f"sync: skipping {label} for tripped cluster {cluster_id}")
+            misses.append({
+                "cluster_id": cluster_id,
+                "reason": health.get_reason(cluster_id) or "recently unreachable",
+            })
             return []
         try:
             return await run_blocking(
                 fn,
                 ctx,
                 cluster_id,
+                *extra,
                 timeout=SYNC_CLUSTER_TIMEOUT,
                 label=f"sync_{label}[{cluster_id}]",
                 executor=proxy_executor,
@@ -904,16 +957,27 @@ async def _gather_per_cluster(
                 f"sync: {label} for {cluster_id} timed out after {SYNC_CLUSTER_TIMEOUT}s; "
                 "returning partial results for this cluster"
             )
+            misses.append({
+                "cluster_id": cluster_id,
+                "reason": f"timed out after {SYNC_CLUSTER_TIMEOUT:g}s",
+            })
             return []
         except BlockingPoolFull:
             logger.warning(f"sync: {label} for {cluster_id} shed, proxy pool saturated")
+            misses.append({"cluster_id": cluster_id, "reason": "proxy pool saturated"})
             return []
         except Exception as e:
             logger.warning(f"Could not get {label} for {cluster_id}: {e}")
+            # note: str(HTTPException) renders as "503: <detail>". The status is already
+            # implied by the row being in `unreachable`, and the doubled prefix made two
+            # clusters with the same cause read as two different failures.
+            misses.append({
+                "cluster_id": cluster_id, "reason": getattr(e, "detail", None) or str(e)
+            })
             return []
 
     batches = await asyncio.gather(*[one(c) for c in cluster_ids])
-    return [item for batch in batches for item in batch]
+    return ClusterFanout([item for batch in batches for item in batch], misses)
 
 
 def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
@@ -2177,19 +2241,23 @@ async def sync_data(
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                result.clusters = await _gather_per_cluster(
+                result.clusters = (await _gather_per_cluster(
                     _fetch_cluster_info, cert_manager, cluster_ids, "cluster_info"
-                )
+                )).items
         
         if request.include_projects:
-            result.projects = await _gather_per_cluster(
+            projects = await _gather_per_cluster(
                 _fetch_cluster_projects, lxd_service, cluster_ids, "projects"
+            )
+            result.projects = _within_granted_projects(
+                api_key, projects.items, project_field="name"
             )
 
         if request.include_instances:
-            result.instances = await _gather_per_cluster(
+            instances = await _gather_per_cluster(
                 _fetch_cluster_instances, lxd_service, cluster_ids, "instances"
             )
+            result.instances = _within_granted_projects(api_key, instances.items)
 
         return result
         
@@ -2278,6 +2346,46 @@ def _clusters_for_key(api_key: Dict[str, Any], cluster_id: Optional[str]) -> set
     return allowed
 
 
+def _granted_projects(api_key: Dict[str, Any], cluster_id: str) -> Optional[set]:
+    """The projects this key may see on one cluster, or None for the `*` wildcard.
+
+    The same read the proxy, the raw proxy and both upload routers perform. Absent means
+    `["default"]`, which is what ClusterPermission declares as its default.
+    """
+    for grant in api_key.get("cluster_permissions", []):
+        if isinstance(grant, dict) and grant.get("cluster_id") == cluster_id:
+            projects = grant.get("projects", ["default"])
+            return None if "*" in projects else set(projects)
+    return set()
+
+
+def _within_granted_projects(
+    api_key: Dict[str, Any], rows: List[Dict[str, Any]], *, project_field: str = "project"
+) -> List[Dict[str, Any]]:
+    """Drop rows for a project the key was not granted on that row's cluster.
+
+    important: the fan-out reads every project on a cluster, because that is the only way to
+    see instances outside `default`. Narrowing back to the grant therefore has to happen here
+    or a key scoped to one project enumerates all of them. The proxy paths have always
+    enforced this; these read endpoints did not, which was a hole in the newer surface rather
+    than in the older one.
+
+    note: `project_field` exists because a project row names itself in `name` while an instance
+    row names its project in `project`. Defaulting to `project` silently kept every row for a
+    project listing, so the filter looked applied and did nothing. Callers state the field.
+    """
+    allowed_by_cluster: Dict[str, Optional[set]] = {}
+    kept = []
+    for row in rows:
+        cluster = row.get("cluster_id")
+        if cluster not in allowed_by_cluster:
+            allowed_by_cluster[cluster] = _granted_projects(api_key, cluster)
+        allowed = allowed_by_cluster[cluster]
+        if allowed is None or (row.get(project_field) or "default") in allowed:
+            kept.append(row)
+    return kept
+
+
 @external_router.get(
     "/whoami",
     response_model=APIKeyValidateResponse,
@@ -2328,10 +2436,15 @@ async def list_integration_clusters(
         vault_client=get_vault_client(settings.vault_addr, settings.vault_token),
         clusters_path=settings.vault_clusters_path,
     )
-    clusters = await _gather_per_cluster(
+    fanout = await _gather_per_cluster(
         _fetch_cluster_info, cert_manager, _clusters_for_key(api_key, cluster_id), "cluster_info"
     )
-    return {"clusters": clusters, "total": len(clusters)}
+    return {
+        "clusters": fanout.items,
+        "total": len(fanout.items),
+        "partial": fanout.partial,
+        "unreachable": fanout.unreachable,
+    }
 
 
 @external_router.get(
@@ -2343,25 +2456,172 @@ async def list_integration_projects(
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    projects = await _gather_per_cluster(
+    fanout = await _gather_per_cluster(
         _fetch_cluster_projects, lxd_service, _clusters_for_key(api_key, cluster_id), "projects"
     )
-    return {"projects": projects, "total": len(projects)}
+    projects = _within_granted_projects(api_key, fanout.items, project_field="name")
+    return {
+        "projects": projects,
+        "total": len(projects),
+        "partial": fanout.partial,
+        "unreachable": fanout.unreachable,
+    }
 
 
 @external_router.get(
     "/instances",
     summary="List instances across the clusters this key may reach",
+    description=(
+        "A summary per instance: status, type, address and the CPU, memory and root disk it "
+        "was given. Every project the key is granted is included. Use "
+        "/integrations/instances/{name} for the full specification."
+    ),
 )
 async def list_integration_instances(
     cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
+    project: Optional[str] = Query(None, description="Narrow to one LXD project"),
+    status: Optional[str] = Query(None, description="Narrow to one status, ex; Running"),
+    limit: int = Query(200, ge=1, le=1000, description="Maximum instances to return"),
+    offset: int = Query(0, ge=0, description="Instances to skip, for paging"),
     api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    instances = await _gather_per_cluster(
+    fanout = await _gather_per_cluster(
         _fetch_cluster_instances, lxd_service, _clusters_for_key(api_key, cluster_id), "instances"
     )
-    return {"instances": instances, "total": len(instances)}
+    rows = _within_granted_projects(api_key, fanout.items)
+    if project:
+        rows = [row for row in rows if (row.get("project") or "default") == project]
+    if status:
+        rows = [row for row in rows if (row.get("status") or "").lower() == status.lower()]
+    rows.sort(key=lambda row: (row.get("cluster_id") or "", row.get("project") or "", row["name"]))
+    window = rows[offset : offset + limit]
+    return {
+        "instances": window,
+        "total": len(rows),
+        "count": len(window),
+        "limit": limit,
+        "offset": offset,
+        # important: a caller that sees fewer instances than it expects must be able to tell
+        # "this cluster did not answer" from "they were deleted". Without this the two are
+        # identical, and an unattended agent will pick the wrong one.
+        "partial": fanout.partial,
+        "unreachable": fanout.unreachable,
+    }
+
+
+@external_router.get(
+    "/instances/{name}",
+    summary="The full specification of one instance",
+    description=(
+        "Configuration, devices after profile expansion, profiles and placement. Searches "
+        "every project the key is granted unless one is named."
+    ),
+)
+async def get_integration_instance(
+    name: str,
+    cluster_id: Optional[str] = Query(None, description="Narrow to one cluster"),
+    project: Optional[str] = Query(None, description="Look only in this LXD project"),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    clusters = _clusters_for_key(api_key, cluster_id)
+    fanout = await _gather_per_cluster(
+        _fetch_instance_detail,
+        lxd_service,
+        clusters,
+        "instance_detail",
+        name,
+        project,
+        {target: _granted_projects(api_key, target) for target in clusters},
+    )
+    matches = _within_granted_projects(api_key, fanout.items)
+    if not matches:
+        # note: 404 whether the name does not exist or sits in a project the key was not
+        # granted. Splitting the two would let a caller enumerate other tenants' instance
+        # names one guess at a time.
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No instance named {name} in the clusters and projects this key may reach"
+                + (
+                    " (these clusters did not answer, so the name may exist on one of them: "
+                    + ", ".join(m["cluster_id"] for m in fanout.unreachable) + ")"
+                    if fanout.unreachable
+                    else ""
+                )
+            ),
+        )
+    if len(matches) > 1:
+        # A name is unique per project, not per fleet. Say so rather than picking one.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{name} exists on more than one cluster or project: "
+                + ", ".join(f"{m['cluster_id']}/{m['project']}" for m in matches)
+                + ". Narrow the request with cluster_id and project."
+            ),
+        )
+    return matches[0]
+
+
+@external_router.get(
+    "/operations/{operation_id}",
+    summary="The state of a long-running cluster operation",
+    description=(
+        "What happened to an operation started with \"wait\": false, or one that outlived the "
+        "response budget. Poll this instead of retrying the request."
+    ),
+)
+async def get_integration_operation(
+    operation_id: str,
+    cluster_id: str = Query(..., description="The cluster the operation was started on"),
+    project: str = Query("default", description="The LXD project the operation belongs to"),
+    api_key: Dict[str, Any] = Depends(require_capability("inventory.read")),
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    if cluster_id not in _clusters_for_key(api_key, cluster_id):
+        raise HTTPException(status_code=403, detail=f"No permission for cluster {cluster_id}")
+    allowed = _granted_projects(api_key, cluster_id)
+    if allowed is not None and project not in allowed:
+        raise HTTPException(status_code=403, detail=f"No permission for project {project}")
+    try:
+        return await run_blocking(
+            fetch_operation_status,
+            lxd_service,
+            cluster_id,
+            operation_id,
+            project,
+            timeout=RAW_PROXY_TIMEOUT,
+            label=f"integration_operation[{cluster_id}]",
+            executor=proxy_executor,
+            max_in_flight=PROXY_MAX_IN_FLIGHT,
+        )
+    except BlockingTimeout as timeout_error:
+        raise HTTPException(status_code=504, detail=str(timeout_error))
+    except BlockingPoolFull as pool_error:
+        raise HTTPException(status_code=503, detail=str(pool_error))
+    except HTTPException:
+        raise
+    except Exception as e:
+        # important: an id LXD does not know raised out of here into the generic 500 handler,
+        # which the error sanitiser then renders as "Internal server error". A caller polling
+        # an operation that has already been reaped cannot act on that; it has to be able to
+        # tell "gone" from "the server is broken".
+        code = classify_proxy_error(e)
+        if code == "not_found":
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No operation {operation_id} on {cluster_id}. Completed operations are "
+                    "reaped by LXD, so a poll that starts too late sees this rather than a "
+                    "result: check the resource itself instead."
+                ),
+            )
+        if code == "cluster_unavailable":
+            raise HTTPException(status_code=503, detail=unreachable_detail(cluster_id))
+        logger.warning("Operation lookup failed on %s: %s", cluster_id, e)
+        raise HTTPException(status_code=502, detail=f"Could not read operation {operation_id}")
 
 
 @external_router.get(
@@ -2485,6 +2745,11 @@ async def raw_proxy(
             raise HTTPException(status_code=400, detail=f"Unsupported method: {method}")
 
         assert_proxy_path_allowed(request.path)
+        # important: the project check above binds the REQUEST to a granted project, which does
+        # not bound a resource whose identity is itself a project name. A key granted only
+        # "tenant-a" could send DELETE /1.0/projects/tenant-b with project=tenant-a and pass
+        # every check here. Same for a cluster-wide storage pool.
+        assert_project_scope_allows_path(request.path, method, allowed_projects)
 
         required_permission = "read"
 
@@ -2677,6 +2942,20 @@ async def raw_proxy(
         )
 
 
+def _still_running_message(operation: str, cluster_id: str) -> str:
+    """What to say when we stopped waiting but the cluster did not stop working.
+
+    important: "timed out" alone is what makes an unattended caller retry, and a retried create
+    collides with the instance the first attempt is still building. Both timeout paths use this.
+    """
+    return (
+        f"{operation} exceeded the {PROXY_OP_TIMEOUT:g}s response budget and may still be "
+        f"running on {cluster_id}. Do not retry: poll GET /api/v1/integrations/instances to see "
+        f'whether it completed, or send this request again with "wait": false to receive an '
+        f"operation id up front."
+    )
+
+
 @external_router.post(
     "/proxy",
     response_model=ProxyResponse,
@@ -2712,31 +2991,45 @@ async def proxy_operation(
                 detail=f"No permission for project {request.project}"
             )
         
-        # Check operation permission
+        # An unknown operation is refused here rather than after the client is built, so a
+        # typo costs a 400 instead of a connection attempt. Cluster and project authorization
+        # already happened above, so this leaks nothing an integrator cannot read in the docs.
         operation = request.operation
-        required_permission = "read"
-        
-        write_operations = [
-            "create_instance", "delete_instance", "start_instance", 
-            "stop_instance", "restart_instance", "update_instance"
-        ]
-        admin_operations = [
-            "create_network", "delete_network", "create_storage_pool",
-            "delete_storage_pool", "create_project", "delete_project"
-        ]
-        
-        if operation in write_operations:
-            required_permission = "write"
-        elif operation in admin_operations:
-            required_permission = "admin"
-        
-        allowed_permissions = perm.get("permissions", ["read"])
-        if required_permission not in allowed_permissions:
+        required_permission = PROXY_OPERATION_LEVELS.get(operation)
+        if required_permission is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unknown operation: {operation}. "
+                    f"Supported: {', '.join(sorted(PROXY_OPERATION_LEVELS))}"
+                ),
+            )
+
+        # important: hierarchical, not membership. This line tested `required in granted` and
+        # therefore refused every operation to the 33 of 38 grants in the fleet that hold
+        # exactly ["admin"], because "read" is not in ["admin"]. raw_proxy was migrated to
+        # assert_cluster_permission and this was not, so the whole /proxy surface was dead
+        # while the raw proxy beside it worked. tests/test_cluster_scope_ratchet.py now covers
+        # both.
+        assert_cluster_permission(api_key, request.cluster_id, required_permission)
+
+        # important: authorising request.project binds the ambient project, not the target. These
+        # operations name their target in params, and a project is not bounded by a project, so a
+        # key granted only "tenant-a" could delete_project "tenant-b" and pass every check above.
+        # A storage pool is cluster-wide and takes a caller-chosen source path on the LXD host.
+        # Reaching them needs a grant that is not project-limited, which is what `*` means.
+        if operation in CLUSTER_WIDE_OPERATIONS and not project_grant_is_unrestricted(
+            perm.get("projects", ["default"])
+        ):
             raise HTTPException(
                 status_code=403,
-                detail=f"Operation requires {required_permission} permission"
+                detail=(
+                    f"{operation} acts on a resource no project contains, so it needs a key "
+                    f"granted all projects on {request.cluster_id}. This key is limited to "
+                    f"{sorted(perm.get('projects', ['default']))}."
+                ),
             )
-        
+
         # important: the breaker check sits AFTER the permission checks so response timing
         # cannot be used to probe which clusters exist without permission.
         if health.is_tripped(request.cluster_id):
@@ -2748,19 +3041,18 @@ async def proxy_operation(
                 ),
             )
 
-        operation_id = None
-
-        # Every branch below is a blocking pylxd call, and the wait=True ones poll an LXD
+        # Every branch below is a blocking pylxd call, and the waiting ones poll an LXD
         # operation to completion. Inline on the loop that is the same failure mode as the
         # raw proxy, with a longer tail.
         try:
             result_data = await run_blocking(
-                _execute_proxy_operation,
+                execute_proxy_operation,
                 lxd_service,
                 request.cluster_id,
                 operation,
                 request.params or {},
                 request.project,
+                request.wait,
                 timeout=PROXY_OP_TIMEOUT,
                 label=f"proxy_operation[{operation} {request.cluster_id}]",
                 executor=proxy_executor,
@@ -2768,7 +3060,14 @@ async def proxy_operation(
             )
             health.clear(request.cluster_id)
         except BlockingTimeout as timeout_error:
-            health.record_failure(request.cluster_id, str(timeout_error))
+            long_running = operation in PROXY_WAIT_OPERATIONS and request.wait
+            # important: a long operation is not an unreachable cluster. Tripping the breaker
+            # here made one slow create return 503 for every other caller of that cluster for
+            # a full TTL, which is the mistake _gather_per_cluster already documents avoiding
+            # on its own timeout path. Only a read that ran out of time still counts as a
+            # symptom worth recording.
+            if not long_running:
+                health.record_failure(request.cluster_id, str(timeout_error))
             logger.warning(
                 f"Proxy operation timeout: {operation} on {request.cluster_id} "
                 f"after {PROXY_OP_TIMEOUT}s"
@@ -2776,9 +3075,19 @@ async def proxy_operation(
             # This path mutates cluster state on behalf of an external system, where nobody is
             # watching a UI to notice a stale list. Drop the cached reads it just invalidated.
             get_cache_manager().invalidate_resource_cache("instances", "vms", "monitoring")
-            return ProxyResponse(success=False, error=str(timeout_error))
+            if long_running:
+                return ProxyResponse(
+                    success=False,
+                    error_code="timeout",
+                    error=_still_running_message(operation, request.cluster_id),
+                )
+            return ProxyResponse(
+                success=False, error_code="timeout", error=str(timeout_error)
+            )
         except BlockingPoolFull as pool_error:
-            return ProxyResponse(success=False, error=str(pool_error))
+            return ProxyResponse(
+                success=False, error_code="overloaded", error=str(pool_error)
+            )
         
         # Log the operation for audit
         logger.info(
@@ -2786,6 +3095,24 @@ async def proxy_operation(
             f"by {request.external_user_email or 'unknown'} via {api_key.get('app_name', 'unknown')}"
         )
         
+        # important: list_projects answers about the whole cluster, not about the project the
+        # operation ran in, so authorising request.project does not bound it. A key granted
+        # only `default` could read every tenant project name, and those names carry customer
+        # slugs. The REST read was narrowed in this pass; this is the same leak through the
+        # other door.
+        if operation == "list_projects" and isinstance(result_data, list):
+            allowed = _granted_projects(api_key, request.cluster_id)
+            if allowed is not None:
+                result_data = [
+                    row for row in result_data
+                    if isinstance(row, dict) and row.get("name") in allowed
+                ]
+
+        # An accepted-but-unfinished operation carries its id at the top level too, so a
+        # caller does not have to know it is nested in data.
+        operation_id = (
+            result_data.get("operation_id") if isinstance(result_data, dict) else None
+        )
         return ProxyResponse(
             success=True,
             data=result_data,
@@ -2796,8 +3123,20 @@ async def proxy_operation(
         raise
     except Exception as e:
         logger.error(f"Error in proxy operation: {e}", exc_info=True)
+        error_code = classify_proxy_error(e)
+        # important: a socket read timeout reaches here rather than as BlockingTimeout, and it
+        # carries the same hazard: the cluster kept working after we stopped listening. Observed
+        # live, a create that timed out this way left a real instance behind while the caller
+        # was told it had failed. Same guidance, whichever timeout fired.
+        if error_code == "timeout" and request.operation in PROXY_WAIT_OPERATIONS and request.wait:
+            return ProxyResponse(
+                success=False,
+                error_code=error_code,
+                error=_still_running_message(request.operation, request.cluster_id),
+            )
         return ProxyResponse(
             success=False,
+            error_code=error_code,
             error=str(e),
         )
 

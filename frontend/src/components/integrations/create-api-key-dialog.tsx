@@ -219,9 +219,9 @@ export function CreateAPIKeyDialog({
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Application Type</Label>
+                  <Label htmlFor="app_type">Application Type</Label>
                   <Select value={appType} onValueChange={applyAppType}>
-                    <SelectTrigger>
+                    <SelectTrigger id="app_type">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -234,9 +234,9 @@ export function CreateAPIKeyDialog({
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Expiration</Label>
+                  <Label htmlFor="expire_days">Expiration</Label>
                   <Select value={expireDays} onValueChange={setExpireDays}>
-                    <SelectTrigger>
+                    <SelectTrigger id="expire_days">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -257,12 +257,12 @@ export function CreateAPIKeyDialog({
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Permission Level</Label>
+                  <Label htmlFor="permission_level">Permission Level</Label>
                   <Select
                     value={permissionLevel}
                     onValueChange={setPermissionLevel}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="permission_level">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -273,14 +273,14 @@ export function CreateAPIKeyDialog({
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Project Scope</Label>
+                  <Label htmlFor="project_scope">Project Scope</Label>
                   <Select
                     value={projectScope}
                     onValueChange={(value) =>
                       setProjectScope(value as ProjectScope)
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger id="project_scope">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

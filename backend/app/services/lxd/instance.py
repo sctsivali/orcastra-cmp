@@ -348,6 +348,22 @@ class InstanceManager:
         logger.info(f"Fetched {len(all_vms)} VMs from {len(connected_nodes)} nodes")
         return all_vms, connected_nodes
     
+    def fetch_node_instances(
+        self, node_name: str, node_endpoint: str = ""
+    ) -> Tuple[List[VMInfo], bool]:
+        """One node's instances across every project, for a caller that must not fan out.
+
+        important: this exists so the API-key surface can read instances without going through
+        ``list_all_vms``. An API-key request establishes no org scope, so
+        ``get_current_allowed_clusters()`` returns None and the cluster filter inside
+        ``get_client`` matches everything. A fleet-wide call from that context would therefore
+        reach past the key's own grant. Callers there iterate the grant and ask for one node at
+        a time, which is what this is.
+
+        ``node_endpoint`` only fills ``VMInfo.host_endpoint``; it has no effect on the fetch.
+        """
+        return self._fetch_vms_from_node(node_name, node_endpoint)
+
     def _fetch_vms_from_node(
         self, 
         node_name: str, 

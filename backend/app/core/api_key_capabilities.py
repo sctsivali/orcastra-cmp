@@ -20,7 +20,7 @@ an empty one.
 """
 
 import logging
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote
 
 from fastapi import HTTPException
@@ -130,6 +130,61 @@ def default_capabilities_for(app_type: str) -> Set[str]:
 # `/cluster/members` and `/resources` are omitted deliberately: they are topology, an integration
 # has legitimate reasons to read them, and the audit rated them lower than the certificate store.
 _REFUSED_PROXY_PREFIXES = ("/certificates",)
+
+# Resources the per-key project allow-list cannot bound.
+#
+# important: a grant of `projects: ["tenant-a"]` is enforced by binding the request to that
+# project, which is a real boundary for instances, images, volumes and snapshots. It is not a
+# boundary for a resource whose identity IS a project name, nor for one that lives above projects
+# entirely. `DELETE /1.0/projects/tenant-b` carrying `project=tenant-a` passes the project check
+# and destroys another tenant's project, and a storage pool is cluster-wide with a caller-chosen
+# source path on the LXD host.
+#
+# So mutating these needs a grant that is not project-limited. A key holding `["*"]` on the
+# cluster already reaches all of it and loses nothing; a key scoped to one project never had a
+# defensible claim to them. Reads are left alone: refusing `GET /1.0/networks` would break
+# integrations that legitimately enumerate topology, and disclosure is a smaller harm than
+# destruction.
+_PROJECT_UNBOUNDABLE_PREFIXES = ("/projects", "/storage-pools", "/networks", "/profiles")
+
+_MUTATING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def project_grant_is_unrestricted(allowed_projects: Optional[List[str]]) -> bool:
+    """True when the grant is the `*` wildcard, which is the only project-unlimited shape."""
+    return "*" in (allowed_projects or [])
+
+
+def assert_project_scope_allows_path(
+    path: str, method: str, allowed_projects: Optional[List[str]]
+) -> None:
+    """Refuse a mutation the caller's project grant cannot bound.
+
+    Paired with `assert_proxy_path_allowed`, which refuses paths nobody may reach. This one
+    refuses paths this particular grant may not reach, which is why it needs the grant.
+    """
+    if project_grant_is_unrestricted(allowed_projects):
+        return
+    if method.upper() not in _MUTATING_METHODS:
+        return
+
+    normalised = unquote(unquote(path or "")).split("?", 1)[0]
+    if normalised.startswith("/1.0"):
+        normalised = normalised[4:]
+    if not normalised.startswith("/"):
+        normalised = "/" + normalised
+    lowered = normalised.lower().rstrip("/")
+
+    for prefix in _PROJECT_UNBOUNDABLE_PREFIXES:
+        if lowered == prefix or lowered.startswith(prefix + "/"):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"{prefix} is not bounded by a project, so changing it needs a key granted "
+                    f"all projects on this cluster. This key is limited to "
+                    f"{sorted(allowed_projects or ['default'])}."
+                ),
+            )
 
 
 def assert_proxy_path_allowed(path: str) -> None:
