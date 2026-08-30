@@ -245,11 +245,30 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
   const isPending = startVM.isPending || stopVM.isPending || restartVM.isPending;
 
   return (
-    <div className="p-2 md:p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors border">
-      <div className="flex flex-col sm:flex-row items-start gap-2 md:gap-3">
+    <div
+      data-slot="project-instance-row"
+      className="p-2 md:p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors border"
+    >
+      {/* important: the wrap is decided by this row's own container, where the `sm:flex-row` it
+          replaces was decided by the viewport. The row lives inside a project card, and measured on
+          the live app that card gives it 359px of content at 1728 and 233px at 1280 while `sm`
+          reports a 640px viewport throughout, so the info block was squeezed to 159px at 1728 and
+          92px at 768 beside an action bar that will not shrink.
+
+          note: flex-wrap rather than an auto-fit grid. auto-fit builds tracks of EQUAL width, which
+          is right for the three quota chips above and wrong here, where one child flexes and the
+          other is fixed: a 173px track at 1728 cannot hold the 188px bar, and the bar drew 3px over
+          the column beside it. Flex items never overlap, so the bar moves to its own line instead.
+
+          The 180px basis is the wrap threshold, not a width. Measured, the bar is 188px at six
+          h-7 buttons, and 284px at or below a 768px viewport where globals.css raises every button
+          to a 44px touch target. Both are wider than any track a card of this size can offer, so
+          today the row stacks at every width the grid produces and goes side by side on its own if
+          a card ever gets wider. */}
+      <div className="flex flex-wrap items-start gap-2 md:gap-3">
         {/* Left: Instance Info - Clickable */}
-        <div 
-          className="flex-1 w-full sm:min-w-0 space-y-2 cursor-pointer" 
+        <div
+          className="min-w-0 flex-1 basis-[180px] space-y-2 cursor-pointer"
           onClick={() => setShowMonitoring(true)}
         >
           <div className="flex items-center gap-2 flex-wrap">
@@ -302,7 +321,7 @@ function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRowProps)
 
         {/* Right: Actions */}
         <TooltipProvider>
-          <div className="flex items-center gap-1 shrink-0">
+          <div className="flex items-center gap-1 shrink-0 ml-auto">
             {/* Start */}
             <Tooltip>
               <TooltipTrigger asChild>
