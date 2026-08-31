@@ -8,8 +8,12 @@ to the `default` project. Instances in every other project were absent from the 
 entirely, not merely unlabelled, so an integration that provisions into its own project saw an
 empty fleet and no error.
 
-The grant's `projects` allow-list was enforced on the proxy, the raw proxy and both upload
-routers, and not on these reads. A key scoped to one project could enumerate all of them.
+The grant's `projects` allow-list was enforced on the proxy and the raw proxy and not on these
+reads. A key scoped to one project could enumerate all of them.
+
+(That sentence used to claim both upload routers enforced it too. Only iso_uploads did.
+image_uploads checked the cluster and discarded the grant it was handed, so the same bypass sat
+there until it was closed separately. See test_an_image_import_cannot_leave_its_project.py.)
 
 And a cluster that did not answer contributed an empty list into a response whose `total` read
 as authoritative. An agent polling for the instance it just created cannot tell that from the

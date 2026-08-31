@@ -27,9 +27,14 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 
+from app.core.api_key_capabilities import (
+    is_valid_project_name,
+    project_grant_is_unrestricted,
+)
 from app.core.api_key_permissions import assert_cluster_permission
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, update
@@ -90,7 +95,7 @@ def _assert_session_owner(api_key: Dict[str, Any], row: Any) -> None:
     """A session belongs to the key that opened it, not to everyone on its cluster.
 
     important: every handler here resolved the row and then checked only
-    `_assert_cluster_permission(api_key, row.cluster_id, ...)`. The row records `api_key_id` and
+    `_assert_project_permission(api_key, row.cluster_id, ...)`. The row records `api_key_id` and
     nothing compared it, so any key with `write` on the same cluster could HEAD, PATCH, finalize
     or read another integration's in-flight upload, including corrupting its bytes. Reported as
     404 rather than 403: the id is the only thing an attacker needs, so a distinguishable refusal
@@ -101,9 +106,31 @@ def _assert_session_owner(api_key: Dict[str, Any], row: Any) -> None:
         raise HTTPException(status_code=404, detail="Upload session not found")
 
 
-def _assert_cluster_permission(api_key: Dict[str, Any], cluster_id: str, required: str) -> None:
-    """Thin alias so the call sites below read unchanged. The check itself is shared."""
-    assert_cluster_permission(api_key, cluster_id, required)
+def _assert_project_permission(
+    api_key: Dict[str, Any], cluster_id: str, project: str, required: str
+) -> None:
+    """Refuse a project this key was not granted, and a project name that is not one.
+
+    important: this router checked the cluster and nothing else. `assert_cluster_permission`
+    returns the matched grant precisely so the caller can read its `projects`, and its docstring
+    says so, but the return value was discarded here. A key granted `projects: ["tenant-a"]` with
+    `storage.upload` could therefore import an image into `tenant-b` on the same cluster, which
+    is the one boundary the proxy, the raw proxy and every key-authenticated read do enforce.
+    `iso_uploads.py` refuses a non-default project outright; this router had no equivalent.
+
+    The charset half matters separately: `project` is interpolated into the LXD query string
+    below, so an unconstrained value could reshape the request rather than merely name a project.
+    """
+    grant = assert_cluster_permission(api_key, cluster_id, required)
+    name = project or "default"
+    if not is_valid_project_name(name):
+        raise HTTPException(status_code=422, detail="Invalid project name")
+    allowed = grant.get("projects", ["default"])
+    if not project_grant_is_unrestricted(allowed) and name not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"No permission for project {name} on cluster {cluster_id}",
+        )
 
 
 async def _get_session(db: AsyncSession, session_id: str) -> ImageUploadSession:
@@ -159,7 +186,7 @@ async def create_upload(
     db: AsyncSession = Depends(get_db),
     x_api_key_id: str = Header(None, alias="X-API-Key-ID"),
 ):
-    _assert_cluster_permission(api_key, body.cluster_id, "write")
+    _assert_project_permission(api_key, body.cluster_id, body.project, "write")
     # Both figures come from the client, so clamp against the server ceiling too.
     if body.total_bytes > MAX_UPLOAD_BYTES or body.max_bytes > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -235,7 +262,7 @@ async def head_upload(
 ):
     row = await _get_session(db, session_id)
     _assert_session_owner(api_key, row)
-    _assert_cluster_permission(api_key, row.cluster_id, "write")
+    _assert_project_permission(api_key, row.cluster_id, row.project, "write")
     return Response(
         status_code=200,
         headers={
@@ -269,7 +296,7 @@ async def patch_upload(
 ):
     row = await _get_session(db, session_id)
     _assert_session_owner(api_key, row)
-    _assert_cluster_permission(api_key, row.cluster_id, "write")
+    _assert_project_permission(api_key, row.cluster_id, row.project, "write")
 
     if row.status in _TERMINAL or row.status in ("uploaded", "importing"):
         # Upload already complete; report the final offset so the client stops.
@@ -310,7 +337,7 @@ async def finalize_upload(
 ):
     row = await _get_session(db, session_id)
     _assert_session_owner(api_key, row)
-    _assert_cluster_permission(api_key, row.cluster_id, "write")
+    _assert_project_permission(api_key, row.cluster_id, row.project, "write")
 
     if row.status in ("ready", "failed", "importing"):
         return _status_payload(row)
@@ -333,7 +360,7 @@ async def get_upload_status(
 ):
     row = await _get_session(db, session_id)
     _assert_session_owner(api_key, row)
-    _assert_cluster_permission(api_key, row.cluster_id, "read")
+    _assert_project_permission(api_key, row.cluster_id, row.project, "read")
     return _status_payload(row)
 
 
@@ -416,7 +443,7 @@ def _resolve_alias_sync(cluster_id: str, alias: str, project: str) -> Optional[D
         return None
     endpoint = client.api._api_endpoint
     session = client.api.session
-    project_q = f"?project={project}" if project and project != "default" else ""
+    project_q = f"?project={quote(project, safe='')}" if project and project != "default" else ""
     r = session.get(f"{endpoint}/images/aliases/{alias}{project_q}", verify=False, timeout=60)
     if r.status_code >= 400:
         return None
@@ -443,7 +470,7 @@ def _lxd_import_sync(cluster_id: str, path: str, alias: str, project: str, descr
 
     endpoint = client.api._api_endpoint  # e.g. https://host:8443/1.0
     session = client.api.session
-    project_q = f"?project={project}" if project and project != "default" else ""
+    project_q = f"?project={quote(project, safe='')}" if project and project != "default" else ""
 
     fingerprint: Optional[str] = None
     size = None
