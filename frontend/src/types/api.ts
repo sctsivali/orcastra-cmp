@@ -1625,10 +1625,24 @@ export interface UserMappingRequest {
 }
 
 export interface AvailableCluster {
+  /** Cluster id. The exact value a grant stores as cluster_id. */
   id: string;
+  /** Display name, falling back to the id. */
   name: string;
-  endpoint: string;
-  server_type: string;
+  endpoint: string | null;
+  server_type: string | null;
+  /**
+   * Connection status, or absent when reachability could not be established.
+   *
+   * important: absent is not offline. A picker renders it as no marking at all rather than
+   * painting the fleet dead because one probe was slow.
+   */
+  status?: ClusterStatus | null;
+  reason_code?: AvailabilityReason | null;
+  reason?: string | null;
+  checked_at?: string | null;
+  /** Tri-state, mirroring `status`: true, false, or null when there is nothing to judge. */
+  available?: boolean | null;
 }
 
 export interface AvailableClustersResponse {

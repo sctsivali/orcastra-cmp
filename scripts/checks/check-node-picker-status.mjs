@@ -39,12 +39,9 @@ const PICKERS = new Map([
   ['components/policy-management-section.tsx', 'meta'],
   ['app/inventory/clustering/members/page.tsx', 'meta'],
   ['components/monitoring/node-filter-select.tsx', 'meta'],
-  // Deferred, with the reason. AvailableCluster carries no status field, so the fix starts at
-  // /api/v1/integrations/available-clusters rather than in the component.
-  [
-    'components/cluster-access-selector.tsx',
-    'AvailableCluster has no status field; needs the backend to send one first',
-  ],
+  // Closed. /api/v1/integrations/available-clusters now sends status, reason and checked_at, so
+  // the component resolves it like every other picker instead of offering bare names.
+  ['components/cluster-access-selector.tsx', 'meta'],
 ]);
 
 // Not pickers, though they trip the shape test below.
