@@ -587,8 +587,6 @@ deploy-package: ## Create deployment package (tar.gz) for on-prem installation
 	cp config/opensearch-dashboards/audit-logs-dashboard-v3.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
 	cp config/opensearch-dashboards/logs-overview-dashboard.ndjson /tmp/$$DEPLOY_DIR/config/opensearch-dashboards/ && \
 	cp scripts/setup_opensearch_dashboards.sh /tmp/$$DEPLOY_DIR/scripts/ && \
-	cp scripts/upgrade_preflight.sh /tmp/$$DEPLOY_DIR/scripts/ && \
-	cp scripts/rollback_release.sh /tmp/$$DEPLOY_DIR/scripts/ && \
 	chmod +x /tmp/$$DEPLOY_DIR/scripts/*.sh && \
 	printf '%s\n' \
 		"Orcastra Dashboard $(APP_VERSION)" \
@@ -597,8 +595,8 @@ deploy-package: ## Create deployment package (tar.gz) for on-prem installation
 		"  $(REGISTRY_REPO):backend-$(APP_VERSION)" \
 		"  $(REGISTRY_REPO):frontend-$(APP_VERSION)" \
 		"" \
-		"Before upgrading an existing deployment:" \
-		"  ./scripts/upgrade_preflight.sh --to $(APP_VERSION) --new-compose ./docker-compose.prod.yml" \
+		"Before upgrading an existing deployment, run the operator tooling your team keeps" \
+		"on the deployment VM. It is deliberately not shipped here: see the upgrade runbook." \
 		"" \
 		"The install and upgrade guides are not bundled on purpose. A copy frozen at package" \
 		"time is how the published deployment guide came to embed a compose file four releases" \
@@ -614,8 +612,8 @@ deploy-package: ## Create deployment package (tar.gz) for on-prem installation
 	echo "  .env.example                   annotated configuration template" && \
 	echo "  config/fluent-bit/             log pipeline config" && \
 	echo "  config/opensearch-dashboards/  dashboard templates" && \
-	echo "  scripts/                       OpenSearch setup, upgrade preflight, rollback" && \
-	echo "  README.txt                     pinned image tags and the preflight command" && \
+	echo "  scripts/                       OpenSearch dashboard setup" && \
+	echo "  README.txt                     pinned image tags and where the guides live" && \
 	echo "" && \
 	echo "$(COLOR_YELLOW)Transfer to deployment VM:$(COLOR_RESET)" && \
 	echo "  scp $$DEPLOY_DIR.tar.gz user@<VM_IP>:/opt/orcastra-dashboard/"
