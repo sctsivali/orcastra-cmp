@@ -113,7 +113,7 @@ export function NodeDetailModal({
   return (
     <Dialog onOpenChange={onClose} open={isOpen}>
       <DialogContent className="flex max-h-[90vh] max-w-5xl flex-col overflow-hidden">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <div className="flex-1">
             <DialogTitle className="flex items-center gap-2 text-2xl">
               {label}
