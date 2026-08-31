@@ -100,14 +100,17 @@ class RealGrantsStillWork(unittest.TestCase):
 class TheBoundaryRefusesTheMistake(unittest.TestCase):
     """The runtime 403 handles stored data; this catches the mistake where it is made.
 
-    Deliberately scoped to the request model. Keys already in Vault are read back without passing
-    through ClusterPermission, so tightening it cannot revoke access from a running integration.
-    That was the condition for adding it at all.
+    Scoped to the request model, and it now really is. This class used to assert against
+    ClusterPermission itself, under a docstring claiming stored keys never passed through that
+    model. They do: `_key_info` builds `APIKeyInfo(**metadata)` straight from Vault JSON, so the
+    rule ran over history too, and one legacy grant raising inside the list comprehension in
+    `list_api_keys` would 500 the entire key list. The validators moved to
+    ClusterPermissionRequest and the claim became true.
     """
 
     def _model(self):
-        from app.routers.integrations import ClusterPermission
-        return ClusterPermission
+        from app.routers.integrations import ClusterPermissionRequest
+        return ClusterPermissionRequest
 
     def test_an_empty_grant_is_rejected(self):
         with self.assertRaises(Exception) as caught:
@@ -132,6 +135,20 @@ class TheBoundaryRefusesTheMistake(unittest.TestCase):
     def test_a_stored_grant_with_an_unknown_name_still_authorises(self):
         """Proof the tightening is boundary-only: the runtime path never sees the validator."""
         assert_cluster_permission(_key(["read", "legacy-name"]), CLUSTER, "read")
+
+    def test_the_read_model_still_accepts_a_grant_that_grants_nothing(self):
+        """The other half of the move, and the reason it was made.
+
+        Every stored grant is read back through ClusterPermission. If it refused an empty or
+        unfamiliar grant, a single legacy key would take the whole key list down with a 500
+        rather than showing itself as the broken one.
+        """
+        from app.routers.integrations import ClusterPermission
+
+        self.assertEqual(ClusterPermission(cluster_id=CLUSTER, permissions=[]).permissions, [])
+        self.assertEqual(
+            ClusterPermission(cluster_id=CLUSTER, permissions=["owner"]).permissions, ["owner"]
+        )
 
 
 if __name__ == "__main__":

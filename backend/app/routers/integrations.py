@@ -68,6 +68,7 @@ from app.core.api_key_capabilities import (
     assert_guest_access_allowed,
     config_reaches_inside,
     guest_access_capability_for,
+    normalise_project_grant,
     project_grant_is_unrestricted,
     APP_TYPE_CAPABILITIES,
     APP_TYPES,
@@ -120,7 +121,18 @@ activity_logger = get_activity_logger()
 # ============================================
 
 class ClusterPermission(BaseModel):
-    """Permission for a specific cluster."""
+    """Permission for a specific cluster, as it is STORED and as it is read back.
+
+    important: deliberately lenient, with no validators at all. Every stored grant is read back
+    straight into this model (`_key_info` does `APIKeyInfo(**metadata)` on raw Vault JSON, and
+    `/whoami` and `/validate` construct it from stored dicts), so a validator here does not guard
+    a boundary, it re-judges history. One legacy key with a shape a newer rule dislikes would
+    raise inside the list comprehension in `list_api_keys` and 500 the whole key list, hiding
+    every other key. `APIKeyInfo.app_type` above carries the same note for the same reason.
+
+    New grants are checked by `ClusterPermissionRequest` below, which is what every request model
+    uses. Tighten that one, never this one.
+    """
     model_config = {"extra": "allow"}
     
     cluster_id: str = Field(..., description="Cluster ID to grant access to")
@@ -134,20 +146,29 @@ class ClusterPermission(BaseModel):
         description="Allowed projects within the cluster"
     )
 
+
+class ClusterPermissionRequest(ClusterPermission):
+    """A grant as it arrives from a client. Adds validators and no fields.
+
+    Adding no fields is load-bearing: `model_dump()` produces exactly the same keys as the base,
+    so what reaches Vault is byte-identical to what the lenient model would have written.
+    """
+
     @field_validator("permissions")
     @classmethod
     def _reject_a_grant_that_grants_nothing(cls, value: List[str]) -> List[str]:
         """Refuse an empty or unrecognised grant at the boundary.
-
-        important: this rejects new mistakes, it does not re-validate what Vault already holds.
-        Stored keys are read back without passing through this model, so an existing grant with
-        an unfamiliar name keeps working and nobody loses access to a running integration.
 
         An empty list was accepted before and reached a ``max()`` over nothing, which surfaced as
         HTTP 500. The runtime now answers 403 for it either way (app/core/api_key_permissions.py);
         this is the second half, so the mistake is caught where it is made rather than on first
         use. An unrecognised name is worth refusing for a different reason: at runtime it scores
         as "read" rather than as nothing, so a typo silently becomes a read grant.
+
+        note: this lives on the request model, not on ClusterPermission. It sat on the base with a
+        docstring claiming stored keys never passed through it, which was not true: `_key_info`
+        builds `APIKeyInfo(**metadata)` from raw Vault JSON, so the rule ran over history and a
+        single legacy grant could 500 the entire key list.
         """
         if not value:
             raise ValueError(
@@ -161,6 +182,18 @@ class ClusterPermission(BaseModel):
                 f"Valid levels are {', '.join(PERMISSION_LEVELS)}."
             )
         return value
+
+    @field_validator("projects")
+    @classmethod
+    def _normalise_the_project_allow_list(cls, value: List[str]) -> List[str]:
+        """Trim, dedupe and charset-check the projects this grant names.
+
+        A project name that names nothing produces a key that authenticates, reads as scoped on
+        every screen, and is refused by every project-bounded call for the rest of its life. The
+        console now picks these from the cluster's real project list; this is the same guarantee
+        for anything that posts to the API directly.
+        """
+        return normalise_project_grant(value)
 
 
 class ExternalUserMapping(BaseModel):
@@ -179,6 +212,10 @@ class ExternalUserMapping(BaseModel):
     external_email: str = Field(..., description="User email from external system")
     external_name: Optional[str] = Field(None, description="User display name")
     orcastra_identity_id: Optional[str] = Field(None, description="Mapped Orcastra identity ID")
+    # Lenient like the rest of this model: `get_user_mappings_from_vault` builds it with
+    # `ExternalUserMapping(**data)` straight from stored JSON, and that call sits inside the same
+    # comprehension that builds the API-key list, so a rule applied here would 500 that list for
+    # a legacy mapping. `UserMappingRequest` is the boundary.
     permissions: List[ClusterPermission] = Field(
         default_factory=list,
         description="Per-cluster permissions for this user"
@@ -239,7 +276,7 @@ class APIKeyCreateRequest(BaseModel):
             "Endpoint families this key may use. Omit to take the application type's defaults."
         ),
     )
-    cluster_permissions: List[ClusterPermission] = Field(
+    cluster_permissions: List[ClusterPermissionRequest] = Field(
         default_factory=list,
         description="Initial cluster permissions"
     )
@@ -352,7 +389,7 @@ class UserMappingRequest(BaseModel):
     )
     external_email: str = Field(..., description="External user email")
     external_name: Optional[str] = Field(None, description="External user name")
-    cluster_permissions: List[ClusterPermission] = Field(
+    cluster_permissions: List[ClusterPermissionRequest] = Field(
         default_factory=list,
         description="Per-cluster permissions"
     )
@@ -1027,6 +1064,69 @@ async def _gather_per_cluster(
     return ClusterFanout([item for batch in batches for item in batch], misses)
 
 
+async def _assert_granted_projects_exist(
+    lxd_service: LXDService, permissions: List[ClusterPermissionRequest]
+) -> None:
+    """Refuse a grant that names a project no selected cluster has, when we can tell.
+
+    The charset rule upstream catches a malformed name. It cannot catch a well-formed one that
+    names nothing, which is the failure this whole feature exists to remove: the key
+    authenticates, reads as scoped on every screen, and is refused by every project-bounded call
+    for the rest of its life.
+
+    important: strict only where it can prove the negative. A name is refused when every cluster
+    this request names answered and none of them reports it. If even one stayed silent the check
+    is skipped, because the name might live only there, and because narrowing an over-broad key
+    is exactly what an operator does during an outage. Blocking that would be backwards.
+
+    important: the union across all selected clusters, not per cluster. The console fans one
+    projects list out to every selected cluster, so a project that lives on only some of them is
+    a deliberate, warned-about choice rather than an error. The console says so before submit.
+
+    The error names only what the caller sent. Echoing the cluster's real project list back would
+    let a partner enumerate another tenant's project names through a rejected write.
+    """
+    wanted: Dict[str, set] = {}
+    for grant in permissions:
+        if project_grant_is_unrestricted(grant.projects):
+            continue
+        named = {name for name in grant.projects if name != "*"}
+        if named:
+            wanted.setdefault(grant.cluster_id, set()).update(named)
+
+    if not wanted:
+        return
+
+    cluster_ids = sorted(wanted)
+    fanout = await _gather_per_cluster(
+        _fetch_cluster_projects, lxd_service, cluster_ids, "projects"
+    )
+    silent = {miss.get("cluster_id") for miss in fanout.unreachable} & set(cluster_ids)
+    if silent:
+        # Inconclusive is not guilty. A name this request wants might live only on the cluster
+        # that did not answer, and the console offers manual entry for exactly that case, so
+        # refusing here would turn an outage into an operator error on the one path built to
+        # survive it.
+        logger.info(
+            "Not checking project names for %s: %s did not answer",
+            cluster_ids,
+            sorted(silent),
+        )
+        return
+
+    known = {item.get("name") for item in fanout.items}
+    requested = set().union(*wanted.values())
+    unknown = sorted(requested - known)
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No selected cluster has these projects: {', '.join(unknown)}. "
+                "Check the spelling, or select a cluster that has them."
+            ),
+        )
+
+
 def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     """Every Vault round trip needed to validate a key. Only ever runs on auth_executor.
 
@@ -1579,6 +1679,7 @@ async def create_api_key(
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
+    lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Create a new API key for external integration."""
     vault_client = get_vault_integrations_client()
@@ -1597,6 +1698,10 @@ async def create_api_key(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
+
+    # After the scope guard on purpose: this reaches the clusters, so it must never run for a
+    # cluster the caller was just told they may not touch.
+    await _assert_granted_projects_exist(lxd_service, request.cluster_permissions)
 
     try:
         # Generate key pair
@@ -1795,9 +1900,10 @@ async def get_api_key(key_id: str):
 )
 async def update_api_key_permissions(
     key_id: str,
-    permissions: List[ClusterPermission],
+    permissions: List[ClusterPermissionRequest],
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Update API key cluster permissions."""
     _authorize_api_key(get_vault_integrations_client(), key_id)
@@ -1814,6 +1920,8 @@ async def update_api_key_permissions(
                 status_code=403,
                 detail=f"Not permitted to grant access to clusters: {sorted(invalid)}",
             )
+
+    await _assert_granted_projects_exist(lxd_service, permissions)
 
     vault_client = get_vault_integrations_client()
     

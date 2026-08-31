@@ -20,6 +20,7 @@ an empty one.
 """
 
 import logging
+import re
 from typing import Any, Dict, List, Optional, Set
 from urllib.parse import unquote
 
@@ -314,6 +315,93 @@ def assert_guest_access_allowed(path: str, api_key: Dict[str, Any]) -> None:
 def project_grant_is_unrestricted(allowed_projects: Optional[List[str]]) -> bool:
     """True when the grant is the `*` wildcard, which is the only project-unlimited shape."""
     return "*" in (allowed_projects or [])
+
+
+# LXD/Incus project names, same shape and same 63-character ceiling this repo already applies to
+# the other LXD object names it puts in a URL (`_VOLUME_NAME_RE`/`_POOL_NAME_RE` in
+# routers/iso_uploads.py, `ProjectCreateRequest.name` max_length in models/schemas.py). Leading
+# alphanumeric rather than leading alpha: LXD's letter-first rule is specific to networks, and a
+# project named `2024-archive` is legal.
+#
+# important: `\A...\Z`, not `^...$`, so a trailing newline cannot slip through. This value is
+# compared literally against the project LXD reports and is interpolated into `?project=`, so it
+# is an authorization gate, not a tidiness rule.
+PROJECT_NAME_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,62}\Z")
+
+# A grant naming more projects than a cluster can plausibly hold is a paste accident, not a scope.
+MAX_PROJECTS_PER_GRANT = 64
+
+PROJECT_NAME_MAX_LENGTH = 63
+
+
+def is_valid_project_name(name: str) -> bool:
+    """True when `name` is a project name this platform is willing to put in a grant or a URL."""
+    return isinstance(name, str) and bool(PROJECT_NAME_RE.match(name))
+
+
+def normalise_project_grant(value: List[str]) -> List[str]:
+    """Clean a requested project allow-list, or refuse it. Request path only, never stored data.
+
+    important: no case folding and no unicode normalisation, both deliberate.
+
+    Every enforcement site compares the grant to the project name LXD reports with an exact `in`
+    (routers/integrations.py `_granted_projects` and the proxy checks), so folding `Tenant-A` to
+    `tenant-a` would produce a grant that matches nothing. That silent dead grant is the defect
+    this validation exists to prevent, so manufacturing it here would be self-defeating.
+
+    NFKC is worse than useless: it maps `\uff0a` FULLWIDTH ASTERISK onto `*`, which would turn a
+    harmless dead grant into a real cluster-wide wildcard. The ASCII charset refuses it instead.
+    """
+    if not isinstance(value, list):
+        raise ValueError("projects must be a list of project names.")
+
+    cleaned: List[str] = []
+    for raw in value:
+        if not isinstance(raw, str):
+            raise ValueError("projects must contain only project names.")
+        # Measured before the trim so a long name cannot launder its length through whitespace.
+        if len(raw) > PROJECT_NAME_MAX_LENGTH:
+            raise ValueError(
+                f"project name is longer than {PROJECT_NAME_MAX_LENGTH} characters: {raw[:80]!r}"
+            )
+        trimmed = raw.strip()
+        if not trimmed:
+            continue
+        if trimmed == "*":
+            cleaned.append(trimmed)
+            continue
+        if not PROJECT_NAME_RE.match(trimmed):
+            raise ValueError(
+                f"{trimmed!r} is not a valid project name. Use letters, digits, dot, hyphen or "
+                "underscore, starting with a letter or digit."
+            )
+        cleaned.append(trimmed)
+
+    deduped = list(dict.fromkeys(cleaned))
+
+    if "*" in deduped and len(deduped) > 1:
+        # `_granted_projects` returns the unrestricted wildcard the moment `*` appears, so a
+        # stored ["tenant-a", "*"] reads on every screen as scoped to one project while granting
+        # the whole cluster. Refuse the mix rather than silently picking one of its two meanings.
+        raise ValueError(
+            "a projects list may name '*' or specific projects, not both. '*' already covers "
+            "every project on the cluster."
+        )
+
+    if not deduped:
+        # Never fall back to ["default"]. An empty list denies every project at runtime, and
+        # quietly widening it to the default project would grant more than the caller asked for.
+        raise ValueError(
+            "projects names no project, which grants nothing. Name at least one project, or '*' "
+            "for every project on the cluster."
+        )
+
+    if len(deduped) > MAX_PROJECTS_PER_GRANT:
+        raise ValueError(
+            f"a grant may name at most {MAX_PROJECTS_PER_GRANT} projects, got {len(deduped)}."
+        )
+
+    return deduped
 
 
 def assert_project_scope_allows_path(
