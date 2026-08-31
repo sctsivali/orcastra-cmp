@@ -107,6 +107,11 @@ jobs:
         run: node scripts/checks/check-table-typography.mjs .
       - name: Unreachable-cluster banners
         run: node scripts/checks/check-unreachable-banner.mjs .
+      # A control that asks an operator to choose a cluster must say whether that cluster is
+      # answering. The vocabulary existed; four pickers were simply never wired to it, and two
+      # of them hid the unreachable clusters instead of marking them.
+      - name: Node picker status coverage
+        run: node scripts/checks/check-node-picker-status.mjs .
       # The nav hides a route by role; the route itself must also refuse it. Two of the seven
       # partner destinations shipped with no page-level gate at all.
       - name: Role gates
