@@ -586,7 +586,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   return (
     <Dialog open={open} onOpenChange={handleDialogChange}>
       <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col overflow-hidden">
-        <DialogHeader className="flex-shrink-0">
+        <DialogHeader className="flex-shrink-0 pb-4">
           <DialogTitle>
             Edit Group: {currentGroup.name}
           </DialogTitle>

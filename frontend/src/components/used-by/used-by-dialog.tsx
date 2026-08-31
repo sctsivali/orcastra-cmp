@@ -56,7 +56,7 @@ export function UsedByDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-5xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
-        <DialogHeader className="pr-8">
+        <DialogHeader className="pr-8 pb-4">
           <DialogTitle>{titleFor(subject)}</DialogTitle>
           <DialogDescription>
             {`${subject.usedBy.length} reference${subject.usedBy.length === 1 ? "" : "s"} across ` +
