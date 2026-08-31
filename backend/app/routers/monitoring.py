@@ -30,6 +30,8 @@ from app.services.lxd_service import (
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.core.type_utils import get_cli_command_prefix, get_trust_add_subcommand
+from app.core.node_metadata import get_node_metadata_store
+from app.models.cluster_status import ClusterStatus, derive_status
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 from app.core.tenant_visibility import tenant_acl_active
@@ -70,74 +72,12 @@ import threading
 _cpu_samples_lock = threading.Lock()
 
 
-def _check_single_node_status(lxd_service: "LXDService", node_name: str) -> Optional[Any]:
-    """Check status for a single node - runs in thread pool. Includes auto-reconnection."""
-    from app.core.config import get_settings
-    settings = get_settings()
-    try:
-        # Get endpoint from Vault metadata
-        endpoint = "unknown"
-        try:
-            metadata = lxd_service.cert_manager.vault.vault_read(
-                f"{settings.vault_clusters_path}/{node_name}/metadata"
-            )
-            endpoint = metadata.get("endpoint", "unknown")
-        except Exception:
-            pass
-        
-        # Use get_client_with_reconnect for automatic reconnection
-        client = lxd_service.get_client_with_reconnect(node_name)
-        if client:
-            return lxd_service.resource_manager.check_node_status(client, node_name, endpoint)
-        else:
-            from app.services.lxd.resources import NodeStatus
-            return NodeStatus(
-                name=node_name,
-                endpoint=endpoint,
-                connected=False,
-                error="Client not connected"
-            )
-    except Exception as e:
-        from app.services.lxd.resources import NodeStatus
-        logger.warning(f"Node {node_name} health check failed: {e}")
-        return NodeStatus(
-            name=node_name,
-            endpoint="unknown",
-            connected=False,
-            error=str(e)
-        )
-
-
-async def _get_all_node_statuses_parallel(lxd_service: "LXDService") -> List[Any]:
-    """Get all node statuses in parallel using thread pool.
-    Uses Vault as source of truth for node list (not just cached connections).
-    """
-    # Use lxd_service.get_node_names() which gets nodes from Vault
-    # This ensures we always check all registered nodes, not just cached ones
-    node_names = lxd_service.get_node_names()
-    if not node_names:
-        logger.warning("No nodes found in Vault")
-        return []
-    
-    logger.debug(f"Checking status for {len(node_names)} nodes from Vault: {node_names}")
-    
-    loop = asyncio.get_event_loop()
-    tasks = [
-        loop.run_in_executor(_executor, _check_single_node_status, lxd_service, node_name)
-        for node_name in node_names
-    ]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Filter out exceptions
-    statuses = []
-    for result in results:
-        if isinstance(result, Exception):
-            logger.warning(f"Node status check failed with exception: {result}")
-        elif result is not None:
-            statuses.append(result)
-    
-    return statuses
-
+# note: node status is NOT collected here. This module used to carry its own copy of the
+# per-node check and its own fan-out, and the copy did not consult the circuit breaker, so it
+# never set `reachable` and could not tell a host that refused our certificate from one that
+# never answered. That is what forced the status ladder below to guess from the error text.
+# LXDService.check_nodes_status_async is the same fan-out /nodes uses, so the dashboard and the
+# node pickers now answer from one implementation.
 
 def format_bytes(bytes_val: int) -> str:
     """Format bytes to human readable string."""
@@ -472,7 +412,7 @@ async def get_monitoring_dashboard(
         
         # Get all VMs/instances and node statuses IN PARALLEL
         all_vms_task = lxd_service.list_all_vms()
-        node_statuses_task = _get_all_node_statuses_parallel(lxd_service)
+        node_statuses_task = lxd_service.check_nodes_status_async()
         
         # Wait for both to complete
         (all_vms, connected_nodes), node_statuses_list = await asyncio.gather(
@@ -515,7 +455,17 @@ async def get_monitoring_dashboard(
         
         online_nodes = 0
         inactive_nodes = 0
-        
+
+        # important: resources.py sets node_type only for a cluster that answered AND trusted us,
+        # so on the one path that shows a trust hint it is always None, and get_cli_command_prefix
+        # then defaults to lxc. An Incus cluster was told to run 'lxc config trust add' instead of
+        # 'incus config trust add-certificate'. Registration recorded the real type, so read it
+        # from there. Once, not per node: this is a file read behind the store.
+        registered_types = {
+            name: meta.get("type")
+            for name, meta in get_node_metadata_store().get_all_node_metadata().items()
+        }
+
         for node in node_statuses_list:
             if node.connected:
                 online_nodes += 1
@@ -550,7 +500,7 @@ async def get_monitoring_dashboard(
                         node_name=node.name,
                         node_type=node.node_type or "lxd",
                         is_online=True,
-                        cluster_status="online",
+                        cluster_status=ClusterStatus.ONLINE.value,
                         status_message="Connected and authenticated",
                         cpu_total=resources.cpu_total,
                         cpu_used=resources.cpu_used,
@@ -579,23 +529,34 @@ async def get_monitoring_dashboard(
                     ))
             else:
                 inactive_nodes += 1
-                # Determine cluster status based on error message
-                error_msg = node.error or ""
-                cli_prefix = get_cli_command_prefix(node.node_type)
-                trust_subcmd = get_trust_add_subcommand(node.node_type)
-                if "not authorized" in error_msg.lower() or "untrusted" in error_msg.lower() or "certificate" in error_msg.lower():
-                    cluster_status = "pending_trust"
-                    status_message = f"Certificate not yet trusted. Run '{cli_prefix} config trust {trust_subcmd}' on the cluster."
-                elif not error_msg:
-                    # No error but not connected - likely pending trust
-                    cluster_status = "pending_trust"
-                    status_message = "Waiting for certificate trust. Check cluster registration."
-                elif "connection refused" in error_msg.lower() or "timeout" in error_msg.lower():
-                    cluster_status = "offline"
-                    status_message = f"Node unreachable: {error_msg}"
+                # important: `reachable` is the discriminator, never the wording of `error`.
+                # This block used to substring-match the error text and emitted "pending_trust",
+                # a value that is in no enum, so a host that was simply powered off read as a
+                # certificate problem and sent an operator to rotate a cert on a dead machine.
+                # derive_status is the one mapping; see models/cluster_status.py.
+                status, _reason_code, message = derive_status(
+                    connected=node.connected,
+                    reachable=node.reachable,
+                    auth=node.auth,
+                    error=node.error,
+                )
+                cluster_status = status.value
+                if status is ClusterStatus.NOT_AUTHORIZED:
+                    # The CLI hint belongs to this state alone. It was previously attached to
+                    # unreachable hosts too, which is the half that wasted the operator's time.
+                    node_type = node.node_type or registered_types.get(node.name)
+                    cli_prefix = get_cli_command_prefix(node_type)
+                    trust_subcmd = get_trust_add_subcommand(node_type)
+                    # note: written out rather than appended to `message`, whose last sentence is
+                    # already a generic "Add trust on the cluster." Appending produced that
+                    # instruction twice in one line.
+                    auth_detail = f" (auth={node.auth})" if node.auth else ""
+                    status_message = (
+                        f"Cluster answered but rejected our certificate.{auth_detail} "
+                        f"Run '{cli_prefix} config trust {trust_subcmd}' on the cluster."
+                    )
                 else:
-                    cluster_status = "error"
-                    status_message = error_msg or "Unknown error"
+                    status_message = message or node.error or "Unknown error"
                 
                 nodes_metrics.append(ClusterMonitoringMetrics(
                     node_name=node.name,
@@ -890,7 +851,7 @@ async def get_node_metrics(
 
     try:
         # run node status + VM list in parallel to eliminate waterfall
-        node_statuses_task = _get_all_node_statuses_parallel(lxd_service)
+        node_statuses_task = lxd_service.check_nodes_status_async()
         vms_task = lxd_service.list_all_vms()
         node_statuses_list, (all_vms, _) = await asyncio.gather(node_statuses_task, vms_task)
 
@@ -899,10 +860,21 @@ async def get_node_metrics(
             raise HTTPException(status_code=404, detail=f"Node '{node_name}' not found")
         
         if not node.connected:
+            # note: this endpoint used to omit the status entirely and answer null, so a caller
+            # asking about one node learned less than the dashboard already knew about it. Same
+            # derivation, so the two cannot disagree.
+            node_status, _reason, node_message = derive_status(
+                connected=node.connected,
+                reachable=node.reachable,
+                auth=node.auth,
+                error=node.error,
+            )
             return ClusterMonitoringMetrics(
                 node_name=node_name,
                 node_type=node.node_type or "lxd",
                 is_online=False,
+                cluster_status=node_status.value,
+                status_message=node_message or node.error or "Unknown error",
                 cpu_total=0,
                 cpu_used=0,
                 cpu_usage_percent=0,

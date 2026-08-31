@@ -1131,7 +1131,7 @@ class ClusterMonitoringMetrics(BaseModel):
     node_name: str = Field(..., description="Node name")
     node_type: str = Field("lxd", description="Node type (lxd, microcloud)")
     is_online: bool = Field(..., description="Whether node is online")
-    cluster_status: Optional[str] = Field(None, description="Cluster status: online, pending_trust, offline, error")
+    cluster_status: Optional[str] = Field(None, description="Cluster status, a ClusterStatus value. This endpoint derives it from a reachability probe, so it emits online, not_authorized or offline; pending and error are reserved for the registration flow")
     status_message: Optional[str] = Field(None, description="Status message for troubleshooting")
     
     # CPU Metrics
