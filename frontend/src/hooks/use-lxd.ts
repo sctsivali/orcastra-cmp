@@ -392,10 +392,14 @@ export function useNodeGpus(nodeName: string) {
 }
 
 // Projects Hooks
-export function useAllProjects() {
-  return useQuery({
+export function useAllProjects(options: { enabled?: boolean } = {}) {
+  return useRefreshableQuery({
     queryKey: queryKeys.allProjects,
-    queryFn: () => projectAPI.listAll(),
+    // note: opts carries {fresh} through to fetchRead, which appends the cache-bypass
+    // parameter. Without it a Retry inside the API-key project picker would re-read the same
+    // 30s server cache and report success on the identical unreachable cluster.
+    queryFn: (opts) => projectAPI.listAll(opts),
+    enabled: options.enabled ?? true,
     refetchInterval: 300000, // refresh every 5 minutes (300 seconds)
     staleTime: 30000, // Consider data stale after 30 seconds
     retry: (failureCount: number, error: unknown) => {

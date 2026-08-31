@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/select";
 import { ClusterAccessSelector } from "@/components/cluster-access-selector";
 import { ApiKeyCapabilitySelector } from "@/components/integrations/api-key-capability-selector";
+import { ProjectScopePicker } from "@/components/integrations/project-scope-picker";
+import { useProjectScopeOptions } from "@/hooks/use-project-scope-options";
 import { formatApplicationType } from "@/lib/integration-display";
 import type {
   APIKeyCreateRequest,
@@ -37,16 +39,6 @@ import type {
 const DEFAULT_APP_TYPE = "orcahub";
 
 type ProjectScope = "default" | "all" | "specific";
-
-function parseProjectList(raw: string): string[] {
-  const names = raw
-    .split(",")
-    .map((name) => name.trim())
-    .filter(Boolean);
-  // An empty custom list would grant nothing and read as a bug rather than a choice. The
-  // backend's own default for an unspecified project list is the narrow one, so match it.
-  return names.length > 0 ? names : ["default"];
-}
 
 interface CreateAPIKeyDialogProps {
   clusters: AvailableCluster[];
@@ -76,7 +68,19 @@ export function CreateAPIKeyDialog({
     [],
   );
   const [projectScope, setProjectScope] = useState<ProjectScope>("default");
-  const [projectList, setProjectList] = useState("");
+  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+
+  // Two clicks inside one tick both pass the disabled check and both fire, which is two real
+  // credentials. The ref is claimed synchronously, before any await, so the second click has
+  // something to lose against. Same guard as network-create-form.tsx.
+  const submitInFlightRef = useRef(false);
+
+  const projectScopeOptions = useProjectScopeOptions({
+    selectedClusterIds,
+    clusters,
+    selectedProjects,
+    enabled: projectScope === "specific",
+  });
 
   const defaultsByType = useMemo(() => {
     const map = new Map<string, string[]>();
@@ -114,18 +118,24 @@ export function CreateAPIKeyDialog({
     setPermissionLevel("read");
     setSelectedCapabilities([...(defaultsByType.get(DEFAULT_APP_TYPE) ?? [])]);
     setProjectScope("default");
-    setProjectList("");
+    setSelectedProjects([]);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitInFlightRef.current) return;
 
     const projects =
       projectScope === "all"
         ? ["*"]
         : projectScope === "specific"
-          ? parseProjectList(projectList)
+          ? selectedProjects
           : ["default"];
+
+    // important: re-asserted rather than trusted to the button's disabled attribute, which is
+    // driven by React state and lands one render late. An empty array is not a narrower key,
+    // it is a key that answers 403 to every project-bounded call for its whole life.
+    if (projects.length === 0) return;
 
     const permissions: ClusterPermission[] = selectedClusterIds.map(
       (clusterId) => ({
@@ -135,6 +145,7 @@ export function CreateAPIKeyDialog({
       }),
     );
 
+    submitInFlightRef.current = true;
     try {
       await onSubmit({
         name,
@@ -148,6 +159,8 @@ export function CreateAPIKeyDialog({
       // The parent surfaces the error. Keep the dialog open with everything the operator typed:
       // clearing it on failure meant a rejected create silently discarded the whole form.
       return;
+    } finally {
+      submitInFlightRef.current = false;
     }
 
     resetForm();
@@ -169,6 +182,15 @@ export function CreateAPIKeyDialog({
         : [...prev, capability],
     );
   };
+
+  // "Specific projects" with nothing picked is a blocked state, not a fallback. The box it
+  // replaced silently substituted ["default"], so an operator who chose to narrow the grant
+  // received a different one and nothing said so. An orphan blocks too: a name no selected
+  // cluster has produces a grant that matches nothing.
+  const specificScopeIncomplete =
+    projectScope === "specific" &&
+    (selectedProjects.length === 0 ||
+      projectScopeOptions.orphanedProjects.length > 0);
 
   const typeOptions = applicationTypes?.length
     ? applicationTypes
@@ -255,6 +277,12 @@ export function CreateAPIKeyDialog({
                 onToggle={toggleCapability}
               />
 
+              <ClusterAccessSelector
+                clusters={clusters}
+                selectedClusterIds={selectedClusterIds}
+                onToggle={toggleCluster}
+              />
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="permission_level">Permission Level</Label>
@@ -297,26 +325,26 @@ export function CreateAPIKeyDialog({
               </div>
 
               {projectScope === "specific" && (
-                <div className="space-y-2">
-                  <Label htmlFor="project_list">Project Names</Label>
-                  <Input
-                    id="project_list"
-                    placeholder="e.g., default, staging, tenant-a"
-                    value={projectList}
-                    onChange={(e) => setProjectList(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Comma separated. Applies to every selected cluster. Leave
-                    empty to fall back to the default project.
-                  </p>
-                </div>
+                <ProjectScopePicker
+                  id="project_list"
+                  value={selectedProjects}
+                  onChange={setSelectedProjects}
+                  selectedClusterIds={selectedClusterIds}
+                  options={projectScopeOptions.options}
+                  answeredCount={projectScopeOptions.answeredCount}
+                  unansweredClusterLabels={
+                    projectScopeOptions.unansweredClusterLabels
+                  }
+                  orphanedProjects={projectScopeOptions.orphanedProjects}
+                  partiallyCoveredProjects={
+                    projectScopeOptions.partiallyCoveredProjects
+                  }
+                  isLoading={projectScopeOptions.isLoading}
+                  isError={projectScopeOptions.isError}
+                  onRetry={projectScopeOptions.refreshNow}
+                  disabled={isSubmitting}
+                />
               )}
-
-              <ClusterAccessSelector
-                clusters={clusters}
-                selectedClusterIds={selectedClusterIds}
-                onToggle={toggleCluster}
-              />
             </div>
           </DialogBody>
           <DialogFooter className="shrink-0 border-t pt-3">
@@ -334,7 +362,8 @@ export function CreateAPIKeyDialog({
                 !name ||
                 !appName ||
                 selectedClusterIds.length === 0 ||
-                selectedCapabilities.length === 0
+                selectedCapabilities.length === 0 ||
+                specificScopeIncomplete
               }
             >
               {isSubmitting ? "Creating..." : "Create API Key"}
