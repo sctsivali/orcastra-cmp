@@ -75,6 +75,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { NodeFilterSelect } from "@/components/monitoring/node-filter-select";
 import { TableLink } from "@/components/ui/table-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -1587,18 +1588,11 @@ export default function MonitoringContent() {
             onRefresh={refreshDashboard}
           />
           {/* Node Selection - at the end (rightmost) */}
-          <Select value={selectedNode} onValueChange={setSelectedNode}>
-            <SelectTrigger className="w-auto min-w-[160px] max-w-[300px] h-9">
-              <Server className="h-4 w-4 mr-2 shrink-0" />
-              <SelectValue placeholder="All Nodes" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Nodes</SelectItem>
-              {nodeNames.map(name => (
-                <SelectItem key={name} value={name}>{name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <NodeFilterSelect
+            nodes={dashboardData?.nodes ?? []}
+            value={selectedNode}
+            onValueChange={setSelectedNode}
+          />
         </div>
       </div>
 

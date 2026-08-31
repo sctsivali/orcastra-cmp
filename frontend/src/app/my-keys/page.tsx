@@ -52,8 +52,11 @@ import {
   ChevronLeft } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useAllProjects, useNodesStatus } from "@/hooks/use-lxd";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAllProjects } from "@/hooks/use-lxd";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { api } from "@/lib/api";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { KeyInfo, KeyCreateRequest } from "@/types/api";
@@ -153,14 +156,11 @@ function MyKeysContent() {
     [filters.filteredRows, sortItems],
   );
 
-  // Fetch nodes for dropdown.
-  // note: through the owning hooks. These were bare useQuery calls on ["nodes"] and
-  // ["projects"] with no options, so their freshness depended on another component being
-  // mounted, and ["projects"] was a fourth alias for queryKeys.allProjects besides.
-  const { data: nodesData } = useNodesStatus();
-
-  const nodes = nodesData?.nodes ?? [];
-  const nodeNames = nodes.filter((n) => n.connected).map((n) => n.name);
+  // note: the node list is built inside CreateKeyDialog by useNodePickerOptions, the one place
+  // node-picker options are assembled. This page used to pass down
+  // nodes.filter(n => n.connected).map(n => n.name), which silently dropped every node that was
+  // not answering, so an operator whose node had gone offline saw it disappear from the picker
+  // with nothing said. It is now listed and marked instead.
 
   // Fetch projects for dropdown
   const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
@@ -285,12 +285,14 @@ function MyKeysContent() {
                 title={isReadOnly ? "Disabled in read-only mode" : undefined}
               >
                 <Plus className="h-4 w-4" />
-                <span className="hidden xs:inline">Generate</span>
-                <span className="hidden sm:inline"> Key</span>
+                {/* note: this was two spans, "Generate" gated on xs: and " Key" on sm:. There is
+                    no xs breakpoint in tailwind.config.ts and this was its only use in the
+                    codebase, so the class compiled to nothing and "hidden" won at every width:
+                    the button read " Key" everywhere and the verb was never shown. */}
+                <span className="hidden sm:inline">Generate Key</span>
               </Button>
             </DialogTrigger>
             <CreateKeyDialog
-              nodes={nodeNames}
               projects={projects}
               projectsLoading={projectsLoading}
               onSubmit={(data) => createMutation.mutate(data)}
@@ -478,17 +480,18 @@ function MyKeysContent() {
 
 // Generate Key Dialog Component
 function CreateKeyDialog({
-  nodes,
   projects,
   projectsLoading,
   onSubmit,
   isSubmitting }: {
-  nodes: string[];
   projects: any[];
   projectsLoading: boolean;
   onSubmit: (data: KeyCreateRequest) => void;
   isSubmitting: boolean;
 }) {
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
+
   const [formData, setFormData] = useState<KeyCreateRequest>({
     name: "",
     node: "",  // Don't auto-select - let user choose
@@ -550,27 +553,29 @@ function CreateKeyDialog({
           </div>
           <div className="grid gap-2">
             <Label htmlFor="node">Node</Label>
-            <Select
+            <SearchableSelect
+              id="node"
               value={formData.node}
               onValueChange={handleNodeChange}
-            >
-              <SelectTrigger id="node">
-                <SelectValue placeholder="Select a node" />
-              </SelectTrigger>
-              <SelectContent>
-                {nodes.length === 0 ? (
-                  <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                    No nodes available
-                  </div>
-                ) : (
-                  nodes.map((node) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))
-                )}
-              </SelectContent>
-            </Select>
+              options={nodeOptions}
+              placeholder={loadingNodes ? "Loading..." : "Select a node"}
+              searchPlaceholder="Search nodes..."
+              emptyText="No nodes available."
+              disabled={loadingNodes}
+            />
+            <NodeStatusNotice
+              meta={formData.node ? nodePicker.statusOf(formData.node) : undefined}
+              reason={
+                formData.node
+                  ? nodePicker.availabilityOf(formData.node)?.reason ?? undefined
+                  : undefined
+              }
+              nodeLabel={formData.node ? nodePicker.labelOf(formData.node) : undefined}
+              unavailable={nodePicker.statusUnavailable}
+              noSelectableNodes={nodePicker.selectableCount === 0}
+              updatedAt={nodePicker.statusUpdatedAt}
+              onRecheck={nodePicker.refreshNow}
+            />
           </div>
           {formData.auth_level === "standard" && (
             <div className="grid gap-2">

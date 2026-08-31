@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, type LucideIcon } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -59,6 +59,16 @@ interface SearchableSelectProps {
   // forwarded to the trigger so callers can keep their existing styling (ex; error border)
   className?: string;
   contentClassName?: string;
+  // Optional leading glyph on the trigger, for a control that sits in a toolbar rather than
+  // under a label and needs its own anchor. Decorative: the label still carries the meaning.
+  icon?: LucideIcon;
+  // Accessible name for a trigger with no visible <Label> beside it, ex; a toolbar filter.
+  // Without one a screen reader announces the current value and nothing about what it selects.
+  ariaLabel?: string;
+  // Lands on the trigger, so a sibling <Label htmlFor> actually points at something. shadcn's
+  // SelectTrigger took an id and several call sites still pass one to a label that would
+  // otherwise dangle.
+  id?: string;
 }
 
 // Single-select combobox with optional in-list search. Drop-in replacement for a shadcn Select
@@ -74,9 +84,13 @@ export function SearchableSelect({
   searchThreshold = 6,
   className,
   contentClassName,
+  icon: Icon,
+  ariaLabel,
+  id,
 }: SearchableSelectProps) {
   const [open, setOpen] = React.useState(false);
   const selected = options.find((o) => o.value === value);
+  const commandRef = React.useRef<HTMLDivElement>(null);
 
   // important: freeze the rendered order while the popover is open. Status arrives on a poll,
   // and re-sorting a live list moves a row out from under the cursor between the eye and the
@@ -103,16 +117,24 @@ export function SearchableSelect({
       <PopoverTrigger asChild>
         <button
           type="button"
+          id={id}
           role="combobox"
+          aria-label={ariaLabel}
           aria-expanded={open}
           aria-controls={listboxId}
           disabled={disabled}
           className={cn(
-            "flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
+            // gap-2, not only justify-between: on a w-auto trigger the two groups fill the
+            // width and justify-between then leaves no space at all, so the value and its
+            // status label rendered as one word ("central2Online").
+            "flex h-10 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
             className
           )}
         >
           <span className="flex min-w-0 items-center gap-2">
+            {Icon && (
+              <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            )}
             {selected?.status && (
               <span
                 aria-hidden
@@ -149,12 +171,22 @@ export function SearchableSelect({
           resolved to nothing. A combobox is required to reference its popup. */}
       <PopoverContent id={listboxId}
         align="start"
+        // important: with no search row there is nothing inside cmdk holding focus, so Radix
+        // parks it on this panel instead. Arrow keys still moved the highlight, but Enter never
+        // reached cmdk's handler and a keyboard user could highlight a cluster and not choose
+        // it. That is every list at or under searchThreshold, which is the monitoring filter and
+        // most of what a partner or tenant sees.
+        onOpenAutoFocus={(event) => {
+          if (showSearch) return;
+          event.preventDefault();
+          commandRef.current?.focus();
+        }}
         className={cn(
           "w-[var(--radix-popover-trigger-width)] p-0",
           contentClassName
         )}
       >
-        <Command>
+        <Command ref={commandRef} tabIndex={-1} className="outline-none">
           {showSearch && <CommandInput placeholder={searchPlaceholder} />}
           <CommandList>
             <CommandEmpty>{emptyText}</CommandEmpty>

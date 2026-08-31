@@ -24,12 +24,10 @@ import {
   GroupDetailDialog,
   type GroupDetailTab,
 } from "./components/group-detail-dialog";
-import { getEntitlementLabel } from "@/lib/lxd-entitlements";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { TableEmptyValue } from "@/components/ui/table-text";
-import { formatLabel } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -100,7 +98,6 @@ const GROUPS = defineTable<any>()({
 function GroupsContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useGroups();
   const groups = (data as any)?.groups || [];
-  const nodes = (data as any)?.nodes || [];
   const { toast } = useToast();
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
@@ -365,7 +362,6 @@ function GroupsContent() {
       <CreateGroupDialog
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
-        nodes={nodes}
       />
 
       {/* Edit Group Dialog */}
