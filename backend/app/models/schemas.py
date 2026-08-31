@@ -736,6 +736,53 @@ class ClusterAvailabilityResponse(BaseModel):
     generated_at: datetime
 
 
+class AvailableCluster(BaseModel):
+    """One row in the cluster picker that scopes an API key.
+
+    Field names predate this model and are kept: `id` is the cluster id a grant stores, `name`
+    is what an operator sees, `server_type` is the hypervisor family. What is new is the state,
+    which the picker had no way to show.
+
+    important: `status` is Optional and null means "we could not establish reachability", which
+    is not the same claim as offline. A client renders a null as no marking at all. Painting a
+    healthy fleet dead because one probe was slow is the worse failure, so the type has to be
+    able to say "unknown" without borrowing a real status to do it.
+    """
+    id: str = Field(..., description="Cluster id. The exact value a grant stores as cluster_id")
+    name: str = Field(..., description="Display name; falls back to the id")
+    endpoint: Optional[str] = Field(None, description="Hypervisor API endpoint")
+    server_type: Optional[str] = Field(None, description="Hypervisor family, when known")
+    status: Optional[ClusterStatus] = Field(
+        None, description="Connection status, or null when reachability is unavailable"
+    )
+    reason_code: Optional[AvailabilityReason] = Field(
+        None,
+        description="Machine-readable reason. Clients key their copy off this, never off `reason`.",
+    )
+    reason: Optional[str] = Field(
+        None, max_length=200, description="One short sentence for the operator. Never a stack trace."
+    )
+    checked_at: Optional[datetime] = Field(None, description="When the status was established")
+
+    @computed_field
+    @property
+    def available(self) -> Optional[bool]:
+        """Tri-state on purpose: True, False, or null when there is no status to judge."""
+        if self.status is None:
+            return None
+        return self.status == ClusterStatus.ONLINE
+
+
+class AvailableClustersResponse(BaseModel):
+    """Clusters an API key may be scoped to.
+
+    important: every cluster in the caller's org scope is listed, whatever its state. Dropping
+    the ones that are not answering is how a grant becomes invisible on the edit form, and an
+    invisible grant is one nobody can revoke.
+    """
+    clusters: List[AvailableCluster]
+
+
 class NodeUpdateRequest(BaseModel):
     """Request body for updating node metadata."""
     display_name: str = Field(..., min_length=1, description="Display name for the node")

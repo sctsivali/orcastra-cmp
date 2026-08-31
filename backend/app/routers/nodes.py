@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
     ClusterAvailabilityResponse,
-    ClusterStatus,
     NodesStatusResponse,
     NodeResources,
     NodeUpdateRequest,
@@ -19,7 +18,7 @@ from app.models.schemas import (
     GpuCardListResponse,
 )
 from app.services.lxd import status as lxd_status
-from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -35,7 +34,6 @@ from app.core.cache import (
     MEMBER_RESOURCES_CACHE_PREFIX,
     MICROCLOUD_RESOURCES_CACHE_PREFIX,
     NODES_AVAILABILITY_CACHE_KEY,
-    NODES_AVAILABILITY_CACHE_TTL,
     NODES_STATUS_CACHE_KEY,
     REGIONS_OVERVIEW_CACHE_KEY,
 )
@@ -51,14 +49,6 @@ router = APIRouter(
 # Thread pool for parallel node status fetching
 _node_executor = ThreadPoolExecutor(max_workers=10)
 
-# Availability probes get their own pool so a slow reachability sweep cannot starve the
-# node-status fan-out, and vice versa.
-_availability_executor = ThreadPoolExecutor(
-    max_workers=4, thread_name_prefix="nodes_availability"
-)
-# One connect budget (3s) plus one read budget (8s) plus margin. The probes run in parallel,
-# so this bounds the whole sweep, not one cluster.
-NODES_AVAILABILITY_PROBE_TIMEOUT = 20.0
 
 
 @router.get(
@@ -143,7 +133,6 @@ async def get_node_names(
         "the resource fan-out."
     ),
 )
-@single_flight("nodes:availability")
 async def get_nodes_availability(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
@@ -153,45 +142,8 @@ async def get_nodes_availability(
     important: never raises for a cluster that is down. "That cluster is offline" is this
     endpoint's payload, not its failure, and a picker that 503s tells an operator nothing.
     """
-    cache = get_cache_manager()
-    availability_key = get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY)
-
-    if not fresh:
-        cached = cache.get("api_responses", availability_key)
-        if cached is not None:
-            # note: overwrite `source`. The stored body records how it was first produced, so
-            # returning it verbatim reports "probe" on every cache hit and makes the field
-            # useless for the one question it exists to answer.
-            return ClusterAvailabilityResponse(**{**cached, "source": "availability_cache"})
-
-        # The node-status page and the metrics prewarm both fill this key. Riding it costs one
-        # Redis read and keeps six pickers from generating their own fan-out.
-        nodes_body = cache.get("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
-        if nodes_body is not None:
-            return _availability_response(
-                cache, availability_key, lxd_status.project_from_nodes_body(nodes_body), "nodes_cache"
-            )
-
-    cluster_ids = lxd_service.get_node_names()
     try:
-        rows = await run_blocking(
-            lxd_status.probe_clusters,
-            cluster_ids,
-            cert_manager=lxd_service.cert_manager,
-            connection_manager=lxd_service.connection_manager,
-            settings=get_settings(),
-            # Only an operator-initiated recheck may re-probe past the breaker. An ordinary
-            # picker open must not walk a fleet of dead clusters paying connect timeouts.
-            force=fresh,
-            timeout=NODES_AVAILABILITY_PROBE_TIMEOUT,
-            label="nodes.availability",
-            executor=_availability_executor,
-            # important: without a cap, _acquire never raises and the BlockingPoolFull handler
-            # below is dead code. single_flight now collapses same-scope arrivals, but this
-            # bounds what it cannot: sweeps for *different* scopes queueing up on a degraded
-            # fleet, where each one pays a connect timeout per dead cluster.
-            max_in_flight=4,
-        )
+        return await lxd_status.resolve_availability(lxd_service, fresh=fresh)
     except (BlockingTimeout, BlockingPoolFull) as exc:
         # Degrade to "we could not tell", never to "everything is offline". A picker that
         # marks a healthy fleet dead because a probe was slow is worse than one with no marks.
@@ -199,32 +151,6 @@ async def get_nodes_availability(
         raise HTTPException(
             status_code=503, detail="Cluster reachability is temporarily unavailable"
         )
-
-    return _availability_response(cache, availability_key, rows, "probe")
-
-
-def _availability_response(cache, cache_key: str, rows, source: str) -> ClusterAvailabilityResponse:
-    """Build the response and cache it.
-
-    note: an all-offline result IS the answer here and is cached like any other. That differs
-    from the list fan-outs elsewhere, which refuse to cache an empty result because an empty
-    list cannot be told apart from "nobody answered". Here the difference is the payload.
-    """
-    response = ClusterAvailabilityResponse(
-        clusters=rows,
-        online_count=sum(1 for row in rows if row.status == ClusterStatus.ONLINE),
-        total_count=len(rows),
-        source=source,
-        generated_at=datetime.now(timezone.utc),
-    )
-    if cache:
-        cache.set(
-            "api_responses",
-            cache_key,
-            response.model_dump(mode="json"),
-            ttl=NODES_AVAILABILITY_CACHE_TTL,
-        )
-    return response
 
 
 @router.get(

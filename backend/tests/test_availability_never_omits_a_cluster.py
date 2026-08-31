@@ -76,12 +76,15 @@ class _Cache:
 @pytest.fixture
 def client(monkeypatch):
     from app.routers import nodes as nodes_module
+    from app.services.lxd import status as lxd_status
     from app.services.lxd_service import get_lxd_service
     from app.core.rbac import get_current_user
     from app.core.org_scope import org_scope_dependency
 
     cache = _Cache()
-    monkeypatch.setattr(nodes_module, "get_cache_manager", lambda: cache)
+    # note: patched on the service, not the router. resolve_availability owns the cache read
+    # for both /nodes/availability and /integrations/available-clusters.
+    monkeypatch.setattr(lxd_status, "get_cache_manager", lambda: cache)
     for name in DEAD:
         health.record_failure(name, "connection refused")
     for name in ALIVE:

@@ -16,9 +16,19 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from app.core.blocking import run_blocking
+from app.core.cache import (
+    NODES_AVAILABILITY_CACHE_KEY,
+    NODES_AVAILABILITY_CACHE_TTL,
+    NODES_STATUS_CACHE_KEY,
+    get_cache_manager,
+)
+from app.core.config import get_settings
 from app.core.node_metadata import get_node_metadata_store
+from app.core.org_scope import get_scope_cache_key
+from app.core.single_flight import single_flight
 from app.models.cluster_status import AvailabilityReason, ClusterStatus, derive_status
-from app.models.schemas import ClusterAvailability
+from app.models.schemas import ClusterAvailability, ClusterAvailabilityResponse
 
 from . import health
 from .exceptions import LXDAuthorizationError, LXDConnectionError
@@ -28,6 +38,15 @@ logger = logging.getLogger(__name__)
 # Bounded so a large fleet cannot outgrow the pool. Every probe carries its own socket
 # timeouts, so the worst case is one read timeout of wall clock, not one per cluster.
 _probe_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_probe")
+
+# Availability probes get their own pool so a slow reachability sweep cannot starve the
+# node-status fan-out, and vice versa.
+_availability_executor = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="nodes_availability"
+)
+# One connect budget (3s) plus one read budget (8s) plus margin. The probes run in parallel,
+# so this bounds the whole sweep, not one cluster.
+AVAILABILITY_PROBE_TIMEOUT = 20.0
 
 # The reason string reaches an operator, so it must stay short and must never carry a stack
 # trace or a certificate path.
@@ -57,7 +76,7 @@ def _short(message: Optional[str]) -> Optional[str]:
     return text if len(text) <= MAX_REASON_LENGTH else f"{text[: MAX_REASON_LENGTH - 3]}..."
 
 
-def _resolve_display_name(cluster_id: str, vault_display_name: Optional[str]) -> str:
+def resolve_display_name(cluster_id: str, vault_display_name: Optional[str]) -> str:
     """Vault metadata first, the local override store second, the id last.
 
     important: the two stores can disagree. A rename through PATCH /nodes/{name} writes the
@@ -95,7 +114,7 @@ def _availability(
     )
     return ClusterAvailability(
         name=cluster_id,
-        display_name=_resolve_display_name(cluster_id, display_name),
+        display_name=resolve_display_name(cluster_id, display_name),
         endpoint=endpoint or "unknown",
         status=status,
         reason_code=reason_code,
@@ -168,7 +187,7 @@ def probe_cluster(
         logger.warning("Could not read Vault metadata for %s: %s", cluster_id, exc)
         return ClusterAvailability(
             name=cluster_id,
-            display_name=_resolve_display_name(cluster_id, None),
+            display_name=resolve_display_name(cluster_id, None),
             endpoint="unknown",
             status=ClusterStatus.ERROR,
             reason_code=AvailabilityReason.UNKNOWN,
@@ -299,7 +318,7 @@ def probe_clusters(
             rows.append(
                 ClusterAvailability(
                     name=cid,
-                    display_name=_resolve_display_name(cid, None),
+                    display_name=resolve_display_name(cid, None),
                     endpoint="unknown",
                     status=ClusterStatus.ERROR,
                     reason_code=AvailabilityReason.UNKNOWN,
@@ -309,3 +328,95 @@ def probe_clusters(
                 )
             )
     return rows
+
+
+def _build_response(cache, cache_key: str, rows, source: str) -> ClusterAvailabilityResponse:
+    """Build the availability body and cache it.
+
+    note: an all-offline result IS the answer here and is cached like any other. That differs
+    from the list fan-outs elsewhere, which refuse to cache an empty result because an empty
+    list cannot be told apart from "nobody answered". Here the difference is the payload.
+    """
+    response = ClusterAvailabilityResponse(
+        clusters=rows,
+        online_count=sum(1 for row in rows if row.status == ClusterStatus.ONLINE),
+        total_count=len(rows),
+        source=source,
+        generated_at=_now(),
+    )
+    if cache:
+        cache.set(
+            "api_responses",
+            cache_key,
+            response.model_dump(mode="json"),
+            ttl=NODES_AVAILABILITY_CACHE_TTL,
+        )
+    return response
+
+
+@single_flight("nodes:availability")
+async def resolve_availability(
+    lxd_service, *, fresh: bool = False
+) -> ClusterAvailabilityResponse:
+    """Reachability for every cluster in the caller's org scope, cheapest path first.
+
+    The one resolver behind both `/nodes/availability` and `/integrations/available-clusters`.
+    Two endpoints deriving reachability separately is how the API key surface would come to
+    disagree with the Clusters page about which cluster is answering, and on a surface whose
+    only job is to say what a credential can reach that is the wrong kind of ambiguity.
+
+    Three tiers, in cost order: the scoped availability cache, then projecting a warm `/nodes`
+    body, then a reachability-only probe. Sharing the cache key is what keeps a second caller
+    free: it is one Redis read, never a second fan-out.
+
+    important: the cluster ids come from `lxd_service.get_node_names()`, which applies the
+    org-scope filter. `probe_clusters` documents why that filter cannot be left to the layer
+    below: contextvars do not cross into the worker threads.
+
+    important: the single-flight collapse sits here rather than on `/nodes/availability`, where
+    it used to. On the route it only collapsed arrivals at that one endpoint, so a picker open
+    reaching this through `/integrations/available-clusters` started a fan-out of its own beside
+    the one already running for the same scope. The rebuild is what needs collapsing, and this is
+    the rebuild.
+
+    Raises BlockingTimeout or BlockingPoolFull when the probe cannot run. Callers decide what
+    that means for them; it is never "every cluster is offline".
+    """
+    cache = get_cache_manager()
+    availability_key = get_scope_cache_key(NODES_AVAILABILITY_CACHE_KEY)
+
+    if not fresh:
+        cached = cache.get("api_responses", availability_key)
+        if cached is not None:
+            # note: overwrite `source`, and only `source`. The stored body records how it was
+            # first produced, so returning it verbatim reports "probe" on every cache hit and
+            # makes the field useless for the one question it exists to answer. `generated_at`
+            # is deliberately left as stored: restamping it would claim data was built now.
+            return ClusterAvailabilityResponse(**{**cached, "source": "availability_cache"})
+
+        # The node-status page and the metrics prewarm both fill this key. Riding it costs one
+        # Redis read and keeps every picker from generating its own fan-out.
+        nodes_body = cache.get("api_responses", get_scope_cache_key(NODES_STATUS_CACHE_KEY))
+        if nodes_body is not None:
+            return _build_response(
+                cache, availability_key, project_from_nodes_body(nodes_body), "nodes_cache"
+            )
+
+    rows = await run_blocking(
+        probe_clusters,
+        lxd_service.get_node_names(),
+        cert_manager=lxd_service.cert_manager,
+        connection_manager=lxd_service.connection_manager,
+        settings=get_settings(),
+        # Only an operator-initiated recheck may re-probe past the breaker. An ordinary
+        # picker open must not walk a fleet of dead clusters paying connect timeouts.
+        force=fresh,
+        timeout=AVAILABILITY_PROBE_TIMEOUT,
+        label="nodes.availability",
+        executor=_availability_executor,
+        # important: without a cap, _acquire never raises and the pool-full path is dead code.
+        # single_flight collapses same-scope arrivals; this bounds what it cannot, sweeps for
+        # *different* scopes queueing up on a degraded fleet.
+        max_in_flight=4,
+    )
+    return _build_response(cache, availability_key, rows, "probe")

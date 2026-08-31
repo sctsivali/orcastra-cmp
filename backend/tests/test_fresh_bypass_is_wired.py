@@ -1258,7 +1258,7 @@ class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):
         # (cache-key prefix -> the ttl its handler uses). Sources, all cache.set calls:
         # routers/instances.py list_instances, routers/vms.py list_vms,
         # routers/regions.py get_regions_overview, routers/storage_pools.py resources-all,
-        # routers/nodes.py _availability_response.
+        # services/lxd/status.py _build_response.
         expected = {
             "instances:list": 30,
             "vms:list": 180,

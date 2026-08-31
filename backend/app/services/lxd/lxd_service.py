@@ -24,6 +24,7 @@ from .resources import ResourceManager
 from .instance import InstanceManager
 from .projects import ProjectManager
 from .images import ImageManager
+from app.core.type_utils import normalize_node_type
 from .exceptions import LXDConnectionError, LXDLocalStorageError
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import VaultClient
@@ -173,25 +174,41 @@ class LXDService:
         """
         return self._check_single_node_status(node_name, get_settings())
 
-    def _read_endpoint(self, node_name: str, settings) -> str:
-        """The cluster's registered endpoint, which does not depend on whether it answers."""
+    def _read_registry(self, node_name: str, settings) -> Dict[str, Any]:
+        """What registration recorded about a cluster, none of which depends on it answering.
+
+        The endpoint was pulled onto every path first, for the reason in the caller. The display
+        name and the type are the same kind of value and had the same defect: a cluster that did
+        not answer came back with no name and no type, so every picker and every card printed its
+        raw id and called it a bare hypervisor. Vault has held both the whole time.
+
+        note: `type` is normalised only when one was recorded. normalize_node_type(None) answers
+        "lxd", which would put back the everything-is-LXD default this removes.
+        """
         try:
             metadata = self.cert_manager.vault.vault_read(
                 f"{settings.vault_clusters_path}/{node_name}/metadata"
             )
-            return metadata.get("endpoint", "unknown")
         except Exception:
-            return "unknown"
+            return {"endpoint": "unknown", "display_name": None, "node_type": None}
+        registered_type = metadata.get("type")
+        return {
+            "endpoint": metadata.get("endpoint", "unknown"),
+            "display_name": metadata.get("display_name") or None,
+            "node_type": normalize_node_type(registered_type) if registered_type else None,
+        }
 
     def _check_single_node_status(self, node_name: str, settings) -> NodeStatus:
         """Check status for a single node (internal helper)."""
         from app.services.lxd import health
 
-        # important: read the endpoint BEFORE the breaker check. It is registry metadata and has
-        # nothing to do with reachability, but returning it only on the healthy path meant every
-        # dead cluster reported endpoint="unknown", and a node picker printed the word "unknown"
-        # under its name. The breaker exists to skip an 8s connect, not a local Vault read.
-        endpoint = self._read_endpoint(node_name, settings)
+        # important: read the registration BEFORE the breaker check. Endpoint, display name and
+        # type are registry metadata and have nothing to do with reachability, but returning them
+        # only on the healthy path meant every dead cluster reported endpoint="unknown", no name
+        # and no type, so a picker printed the word "unknown" and the cluster's raw id. The
+        # breaker exists to skip an 8s connect, not a local Vault read.
+        registry = self._read_registry(node_name, settings)
+        endpoint = registry["endpoint"]
 
         # Skip clusters the shared breaker marked as recently failed.
         if health.is_tripped(node_name):
@@ -202,6 +219,8 @@ class LXDService:
             return NodeStatus(
                 name=node_name,
                 endpoint=endpoint,
+                display_name=registry["display_name"],
+                node_type=registry["node_type"],
                 connected=False,
                 reachable=health.get_kind(node_name) == health.KIND_UNAUTHORIZED,
                 error=health.get_reason(node_name) or "Node recently failed - retry later"
@@ -227,6 +246,8 @@ class LXDService:
                 return NodeStatus(
                     name=node_name,
                     endpoint=endpoint,
+                    display_name=registry["display_name"],
+                    node_type=registry["node_type"],
                     connected=False,
                     reachable=kind == health.KIND_UNAUTHORIZED,
                     error=health.get_reason(node_name) or "Client not connected"
@@ -244,6 +265,8 @@ class LXDService:
             return NodeStatus(
                 name=node_name,
                 endpoint=endpoint,
+                display_name=registry["display_name"],
+                node_type=registry["node_type"],
                 connected=False,
                 reachable=kind == health.KIND_UNAUTHORIZED,
                 error=str(e)

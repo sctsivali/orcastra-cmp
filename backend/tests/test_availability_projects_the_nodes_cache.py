@@ -76,7 +76,9 @@ def client(monkeypatch):
     from app.core.org_scope import org_scope_dependency
 
     cache = _Cache()
-    monkeypatch.setattr(nodes_module, "get_cache_manager", lambda: cache)
+    # note: patched on the service, not the router. resolve_availability owns the cache read
+    # for both /nodes/availability and /integrations/available-clusters.
+    monkeypatch.setattr(lxd_status, "get_cache_manager", lambda: cache)
 
     def _explode(*args, **kwargs):
         raise AssertionError("a warm /nodes cache must not trigger a probe sweep")

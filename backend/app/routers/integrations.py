@@ -20,6 +20,8 @@ import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd import health
+from app.services.lxd import status as lxd_status
+from app.models.schemas import AvailableCluster, AvailableClustersResponse
 from app.services.lxd.proxy import (
     ALLOWED_METHODS,
     API_KEY_CACHE_TTL,
@@ -3662,55 +3664,103 @@ async def list_capabilities():
 # Available Clusters Endpoint
 # ============================================
 
+def _clusters_from_vault(lxd_service: LXDService, cluster_ids: List[str]) -> List[AvailableCluster]:
+    """Name and type every cluster straight from its registration, with no state.
+
+    The fallback for when reachability could not be established. Costs one Vault read per
+    cluster, which is why it is not the ordinary path: an availability row already carries the
+    display name, the endpoint and the type, resolved by the same code the Clusters page uses.
+
+    important: the keys are `display_name` and `type`. This handler used to ask for `name` and
+    `server_type`, which `save_cluster_metadata` has never written, so every cluster rendered
+    as its raw id and claimed to be LXD. It also filtered on a `status` key that is not stored
+    either, making that filter unreachable while the endpoint's description promised it.
+    """
+    rows: List[AvailableCluster] = []
+    for cluster_id in cluster_ids:
+        metadata = {}
+        try:
+            metadata = lxd_service.cert_manager.get_cluster_info(cluster_id).get("metadata", {})
+        except Exception as exc:
+            # A cluster is never dropped for a failed metadata read. An operator who cannot see
+            # a cluster concludes it was deregistered, and a grant on a cluster that is not
+            # listed cannot be revoked from the form.
+            logger.warning(f"Could not get cluster info for {cluster_id}: {exc}")
+        rows.append(
+            AvailableCluster(
+                id=cluster_id,
+                name=lxd_status.resolve_display_name(cluster_id, metadata.get("display_name")),
+                endpoint=metadata.get("endpoint"),
+                server_type=metadata.get("type"),
+            )
+        )
+    return rows
+
+
 @router.get(
     "/available-clusters",
+    response_model=AvailableClustersResponse,
     summary="List available clusters for current user",
-    description="Get list of clusters the current user can assign to API keys. "
-                "Filtered by the user's organization scope and excludes pending/unauthorized clusters.",
+    description="Clusters the current user can scope an API key to, each carrying its current "
+                "connection status. Filtered by the user's organization scope. A cluster that "
+                "is not answering is listed and labelled, never omitted.",
     dependencies=[Depends(require_partner())],
 )
-async def list_available_clusters():
-    """List clusters available to the current user for API key assignment."""
+async def list_available_clusters(
+    lxd_service: LXDService = Depends(get_lxd_service),
+):
+    """List clusters available to the current user for API key assignment.
+
+    important: status is an enrichment, not the payload. If reachability cannot be established
+    the clusters are still returned, with a null status, because this endpoint's job is to say
+    what a credential may be scoped to. Failing the whole read would empty the picker and make
+    an existing grant unrevocable, which is a worse answer than "we could not tell".
+    """
     try:
-        settings = get_settings()
-        clusters = []
-        
-        if settings.vault_enabled and settings.vault_token:
-            from app.services.lxd_cert_manager import LXDCertificateManager
-            vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
-            cert_manager = LXDCertificateManager(
-                vault_client=vault_client,
-                clusters_path=settings.vault_clusters_path
+        cluster_ids = lxd_service.get_node_names()
+        if not cluster_ids:
+            return AvailableClustersResponse(clusters=[])
+
+        try:
+            availability = await lxd_status.resolve_availability(lxd_service)
+            by_id = {row.name: row for row in availability.clusters}
+        except Exception as exc:
+            logger.warning(f"Cluster reachability unavailable for available-clusters: {exc}")
+            by_id = {}
+
+        if not by_id:
+            # note: off the loop. This is one Vault round trip per cluster, and it only runs when
+            # reachability is unavailable, which is exactly when the box is already unwell.
+            return AvailableClustersResponse(
+                clusters=await asyncio.to_thread(_clusters_from_vault, lxd_service, cluster_ids)
             )
-            
-            cluster_ids = cert_manager.list_clusters()
-            
-            # filter by org scope (partner sees only their clusters)
-            allowed = get_current_allowed_clusters()
-            if allowed is not None:
-                cluster_ids = [cid for cid in cluster_ids if cid in allowed]
-            
-            for cluster_id in cluster_ids:
-                try:
-                    cluster_info = cert_manager.get_cluster_info(cluster_id)
-                    metadata = cluster_info.get("metadata", {})
-                    
-                    # skip pending/unauthorized clusters (no trust established)
-                    status = metadata.get("status", "").lower()
-                    if status in ("pending", "not_authorized", "error"):
-                        continue
-                    
-                    clusters.append({
-                        "id": cluster_id,
-                        "name": metadata.get("name", cluster_id),
-                        "endpoint": metadata.get("endpoint"),
-                        "server_type": metadata.get("server_type", "lxd"),
-                    })
-                except Exception as e:
-                    logger.warning(f"Could not get cluster info for {cluster_id}: {e}")
-        
-        return {"clusters": clusters}
-        
+
+        clusters: List[AvailableCluster] = []
+        for cluster_id in cluster_ids:
+            row = by_id.get(cluster_id)
+            if row is None:
+                # Registered but absent from the sweep. Listed with no state rather than hidden.
+                clusters.extend(
+                    await asyncio.to_thread(_clusters_from_vault, lxd_service, [cluster_id])
+                )
+                continue
+            clusters.append(
+                AvailableCluster(
+                    id=cluster_id,
+                    name=row.display_name,
+                    # note: the availability layer uses the literal "unknown" when it has no
+                    # endpoint. Passing that through prints a word that reads as a fact about
+                    # the cluster rather than a gap in what we know.
+                    endpoint=None if row.endpoint == "unknown" else row.endpoint,
+                    server_type=row.node_type,
+                    status=row.status,
+                    reason_code=row.reason_code,
+                    reason=row.reason,
+                    checked_at=row.checked_at,
+                )
+            )
+        return AvailableClustersResponse(clusters=clusters)
+
     except Exception as e:
         logger.error(f"Error listing available clusters: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
