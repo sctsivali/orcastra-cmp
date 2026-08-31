@@ -54,6 +54,7 @@ import {
   summarizeClusterAccessLevel,
 } from "@/lib/integration-display";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { EditAPIKeyPermissionsDialog } from "@/components/integrations/edit-api-key-permissions-dialog";
 import { CreateAPIKeyDialog } from "@/components/integrations/create-api-key-dialog";
 import { ApiKeyConnectionGuide } from "@/components/integrations/api-key-connection-guide";
 import type {
@@ -61,6 +62,7 @@ import type {
   APIKeyCreateRequest,
   APIKeyCreateResponse,
   AvailableCluster,
+  ClusterPermission,
 } from "@/types";
 import { copyText } from "@/lib/clipboard";
 
@@ -242,6 +244,24 @@ export function IntegrationsSettings() {
         description: is503
           ? "Vault is not configured. Enable Vault in backend settings for API key management."
           : error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Permissions update. Narrowing an over-broad grant used to mean revoking the credential and
+  // asking the integrator for a new one, because this endpoint had no caller.
+  const updatePermissionsMutation = useMutation({
+    mutationFn: ({ keyId, permissions }: { keyId: string; permissions: ClusterPermission[] }) =>
+      api.integrations.updateAPIKeyPermissions(keyId, permissions),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["integrations", "api-keys"] });
+      toast({ title: "Cluster Access Updated" });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update access",
+        description: error.message,
         variant: "destructive",
       });
     },
@@ -540,6 +560,16 @@ export function IntegrationsSettings() {
                   />
                   
                   <div className="flex items-center justify-end gap-2 border-t pt-3">
+                    {!apiKey.is_revoked && (
+                      <EditAPIKeyPermissionsDialog
+                        apiKey={apiKey}
+                        clusters={clusters}
+                        onSubmit={(keyId, permissions) =>
+                          updatePermissionsMutation.mutateAsync({ keyId, permissions })
+                        }
+                        isSubmitting={updatePermissionsMutation.isPending}
+                      />
+                    )}
                     {!apiKey.is_revoked && (
                       <AlertDialog>
                         <AlertDialogTrigger asChild>
