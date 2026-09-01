@@ -20,6 +20,7 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { SortSelect } from "@/components/ui/sort-select";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -72,6 +73,8 @@ import { OverflowText } from "@/components/ui/overflow-text";
 interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
   projectsLoading: boolean;
+  /** The query's own failure, distinct from a fleet that genuinely holds no projects. */
+  projectsError: unknown;
   vmsData: VMInfo[];
   refetch: () => void;
   lastUpdatedAt: number | null;
@@ -1196,7 +1199,7 @@ const PROJECT_SORT_OPTIONS: readonly { value: ProjectSortField; label: string }[
   { value: "instances", label: PROJECTS.byField.instances.label },
 ];
 
-function ProjectsSection({ projectsData, projectsLoading, vmsData, refetch, lastUpdatedAt }: ProjectsSectionProps) {
+function ProjectsSection({ projectsData, projectsLoading, projectsError, vmsData, refetch, lastUpdatedAt }: ProjectsSectionProps) {
   const lastUpdated = useRelativeTime(lastUpdatedAt);
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
   // important: the page inside each expanded card lives here, beside expandedProjects, rather
@@ -1358,6 +1361,23 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, refetch, last
   // and the toolbar counted filteredRows while the grid showed more. The search now reaches the
   // index through the hook's extraSearch, so one set feeds both.
   //
+  // note: `reachable` is optional on the wire, so only an explicit false counts as unreachable.
+  // Treating undefined as unreachable would light the banner for every older payload.
+  const unreachableNodes = React.useMemo(
+    () => (projectsData ?? []).filter((n) => n?.reachable === false).map((n) => n.host),
+    [projectsData],
+  );
+  const unreachableReasons = React.useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const n of projectsData ?? []) {
+      if (n?.reachable === false && n.error) out[n.host] = n.error;
+    }
+    return out;
+  }, [projectsData]);
+  // Every host answered and every one of them failed: the fleet is not empty, it is unreadable.
+  const allNodesUnreachable =
+    (projectsData?.length ?? 0) > 0 && unreachableNodes.length === projectsData!.length;
+
   // Filter, then sort, then slice, in that order, which is the contract use-table-filters.ts
   // states: the sort covers the whole filtered set rather than the page an operator happens to be
   // looking at. Before this the grid rendered filteredRows unsorted, so the order was whatever the
@@ -1419,6 +1439,16 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, refetch, last
         />
       )}
       
+      {/* A host that did not answer is not a host with no projects. The payload has carried
+          `reachable` and a per-host `error` all along; this section was the one place that
+          dropped both and drew an empty grid instead. Same component the other fan-out lists
+          use, so the wording and the role gate on the reason text stay in one place. */}
+      <UnreachableNodesBanner
+        noun="projects"
+        nodes={unreachableNodes}
+        reasons={unreachableReasons}
+      />
+
       {/* important: two-up starts at lg and three-up at xl, not md and lg. Measured live, the
           old thresholds gave a 224px card at both 768 and 1024, which leaves the header's title
           column about 52px once the host badge and the kebab have taken their fixed width, so a
@@ -1466,15 +1496,30 @@ function ProjectsSection({ projectsData, projectsLoading, vmsData, refetch, last
                   />
                 </div>
               ) : (
-                // important: this branch never rendered. The block was gated on activeFilterCount
-                // alone, so a fleet with no projects at all, or one whose nodes all failed to
-                // answer, drew an empty grid and no explanation of any kind.
+                // important: three different situations used to share one sentence. "No projects
+                // yet" is a claim about the fleet, and it was printed just as readily when the
+                // read had failed or when every node was unreachable, which tells the operator
+                // the opposite of what happened. The payload already distinguishes them.
                 <div className="col-span-full">
-                  <EmptyState
-                    icon={FolderKanban}
-                    title="No projects yet"
-                    description="Projects appear here once a node reports one."
-                  />
+                  {projectsError ? (
+                    <EmptyState
+                      icon={AlertTriangle}
+                      title="Could not load projects"
+                      description="The request for the project list did not complete. Refresh to try again."
+                    />
+                  ) : allNodesUnreachable ? (
+                    <EmptyState
+                      icon={AlertTriangle}
+                      title="No node answered"
+                      description="Every node in scope failed to report its projects, so this list is unknown rather than empty."
+                    />
+                  ) : (
+                    <EmptyState
+                      icon={FolderKanban}
+                      title="No projects yet"
+                      description="Projects appear here once a node reports one."
+                    />
+                  )}
                 </div>
               ))}
           </>
@@ -1670,7 +1715,7 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
 
 export function Dashboard() {
   const { data: vmsData, isLoading: vmsLoading, refetch, dataUpdatedAt } = useInstances();
-  const { data: projectsData, isLoading: projectsLoading } = useAllProjects();
+  const { data: projectsData, isLoading: projectsLoading, error: projectsError } = useAllProjects();
   const { data: clustersData, isLoading: clustersLoading } = useClusters();
   const queryClient = useQueryClient();
 
@@ -1749,6 +1794,7 @@ export function Dashboard() {
         <ProjectsSection 
         projectsData={projectsData} 
         projectsLoading={projectsLoading}
+        projectsError={projectsError}
         vmsData={vmsData?.vms || []}
         refetch={refetch}
         lastUpdatedAt={dataUpdatedAt}

@@ -131,9 +131,10 @@ const KNOWN_CONTRAST_FAILURES = new Map([
   ['button#success#light', 3.33],
   ['button#warning#light', 2.13],
   ['button#warning#dark', 3.29],
-  // --muted-foreground clears its floor against --card, but the muted badge puts it on --muted,
-  // which is a step closer. Changing it is an app-wide typography decision, not a badge one.
-  ['badge#muted#light', 3.79],
+  // The muted badge used to sit here at 3.79. It was recorded as an app-wide typography
+  // decision rather than a badge one, and that decision was taken: --muted-foreground moved
+  // from 47% to 42% so it clears AA on --card, --background and --muted alike. Retired rather
+  // than relaxed, which is why the entry is gone instead of renumbered.
   // --primary is the user-configurable personalization accent and the picker has no contrast
   // clamp, so this is a product decision before it is a CSS one.
   ['button#link#dark', 3.51],

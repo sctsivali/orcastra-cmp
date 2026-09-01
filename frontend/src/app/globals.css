@@ -24,7 +24,14 @@
     --secondary: 220 13% 91%;
     --secondary-foreground: 222 47% 11%;
     --muted: 220 13% 91%;
-    --muted-foreground: 215 16% 47%;
+    /* important: 42%, not 47%. Muted text is the most reused colour in the console (777 call
+       sites) and at 47% it failed WCAG AA on every light surface except a Card:
+       4.52:1 on --card, 4.30:1 on --background, and 3.81:1 on --muted itself, which is where
+       a dozen components put muted text on a muted chip. 42% is the lightest value that
+       clears 4.5:1 on all three (5.41, 5.15, 4.57) while staying 3.17:1 apart from body
+       --foreground, so it still reads as secondary rather than flattening the hierarchy that
+       "muted" exists to create. Dark mode already passes (7.77 and 5.81) and is unchanged. */
+    --muted-foreground: 215 16% 42%;
     --accent: 220 13% 91%;
     --accent-foreground: 222 47% 11%;
     --destructive: 0 84.2% 60.2%;
