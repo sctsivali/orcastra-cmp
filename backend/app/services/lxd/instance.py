@@ -8,6 +8,7 @@ import asyncio
 from typing import List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
+from requests import exceptions as requests_exc
 
 from app.models.schemas import VMInfo
 from app.core.config import get_settings
@@ -39,6 +40,9 @@ logger = logging.getLogger(__name__)
 # instead of a clean result. Stop/restart therefore use a client whose read
 # timeout outlives the requested wait by this margin.
 _GRACEFUL_READ_MARGIN_SECONDS = 30
+# How long a start may hold the HTTP response open. The LXD operation itself is usually
+# quick, but a loaded cluster is not, and the pooled client only allows an 8s read.
+_START_WAIT_SECONDS = 30
 
 # Hard ceiling on the wait a caller can request, mirroring VMActionRequest's
 # `le=600` bound. Clamped again here so any internal caller that bypasses the
@@ -611,10 +615,11 @@ class InstanceManager:
                     f"Please reactivate the subscription through the billing portal."
                 )
             else:
-                instance.start(wait=True)
-                instance.sync()
+                started = await asyncio.to_thread(
+                    self._start_and_wait, instance, host, project_name
+                )
                 logger.info(f"Started VM {name} on {host} (project: {project_name})")
-                vm_info = self._instance_to_vm_info(instance, host, endpoint)
+                vm_info = self._instance_to_vm_info(started, host, endpoint)
             
             if vm_info.config is None:
                 vm_info.config = {}
@@ -624,6 +629,16 @@ class InstanceManager:
             
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to start VM: {str(e)}")
+        except (requests_exc.ConnectionError, requests_exc.Timeout) as e:
+            # important: the cluster stopped answering part-way through the start. That is an
+            # upstream availability problem the caller can retry, not an internal fault, and
+            # without this it reached the router's `except Exception` and became a 500 with a
+            # reference id. Observed live: a read timeout at 8.9s while the instance went on
+            # to reach Running, so the operator was told the server broke about an action
+            # that had in fact succeeded.
+            raise LXDConnectionError(
+                f"Lost the connection to {host} while starting {name}: {e}"
+            )
     
     def _rebind_for_wait(self, instance, host: str, project_name: str, timeout: int):
         """Re-fetch `instance` on a client whose read timeout outlives `timeout`.
@@ -643,6 +658,23 @@ class InstanceManager:
                 "Could not build a long-timeout client for %s on %s: %s", instance.name, host, e
             )
         return instance
+
+    def _start_and_wait(self, instance, host: str, project_name: str):
+        """Start `instance` on a client whose read timeout outlives the start.
+
+        important: the pooled client allows an 8s read (DEFAULT_LXD_TIMEOUT) and
+        `start(wait=True)` holds the HTTP response open for the whole LXD operation. A loaded
+        cluster takes longer than that, so the READ timed out while the instance went on
+        starting, and the caller reported a 500 for an action that had succeeded. Observed
+        live at 8.9s against a busy cluster, with the VM reaching Running anyway.
+        `stop`/`restart` already avoid this through `_rebind_for_wait`; start did not, which
+        is the asymmetry this closes. Falls back to the pooled client when no long-timeout
+        client can be built, so the worst case is the old behaviour.
+        """
+        target = self._rebind_for_wait(instance, host, project_name, _START_WAIT_SECONDS)
+        target.start(wait=True)
+        target.sync()
+        return target
 
     @staticmethod
     def _graceful_timeout(name: str, action: str, timeout: int) -> LXDGracefulTimeoutError:
@@ -1009,8 +1041,9 @@ class InstanceManager:
             
             # Start if requested
             if start_on_create:
-                instance.start(wait=True)
-                instance.sync()
+                # create_vm is the blocking POST /vms contract and takes no project, so
+                # its client is the pooled default-project one.
+                instance = self._start_and_wait(instance, host, "default")
                 logger.info(f"Started {name} on {host}")
             
             return self._instance_to_vm_info(instance, host, endpoint)
@@ -1260,7 +1293,7 @@ class InstanceManager:
         # Phase 2: it exists. A failure from here is genuinely about starting it.
         try:
             instance = await asyncio.to_thread(client.instances.get, name)
-            await asyncio.to_thread(lambda: instance.start(wait=True))
+            await asyncio.to_thread(self._start_and_wait, instance, host, project)
             logger.info(f"Auto-started {name} on {host} (project={project})")
         except Exception as e:
             logger.error(

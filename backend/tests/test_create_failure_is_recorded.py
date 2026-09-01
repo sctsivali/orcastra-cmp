@@ -46,14 +46,22 @@ class _Operations:
 
 
 class _Instance:
-    def __init__(self, start_error: Exception | None = None):
+    # note: `name` and `sync` are not decoration. The start path rebinds the instance onto a
+    # client whose read timeout outlives the start, which reads `.name`, and syncs afterwards.
+    # A double without them made the happy path fail inside the rebind's own error handler.
+    def __init__(self, start_error: Exception | None = None, name: str = "web-01"):
         self._start_error = start_error
         self.started = False
+        self.synced = False
+        self.name = name
 
     def start(self, wait=False):
         if self._start_error:
             raise self._start_error
         self.started = True
+
+    def sync(self):
+        self.synced = True
 
 
 class _Instances:

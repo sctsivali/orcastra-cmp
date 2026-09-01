@@ -61,10 +61,19 @@ def _tries_swallowing_a_connection_error(source: str):
         )
         if not raises_conn:
             continue
-        names = [
-            getattr(h.type, "id", getattr(h.type, "attr", "bare")) if h.type else "bare"
-            for h in node.handlers
-        ]
+        # note: a handler's type is a Name, an Attribute, or a Tuple of those. Flatten the
+        # tuple rather than letting it fall through to "bare": `except (ConnectionError,
+        # Timeout)` catches two specific types and is not broad, but reading no .id and no
+        # .attr off the Tuple node scored it as a bare except and failed correct code.
+        def _handler_names(handler):
+            if handler.type is None:
+                return ["bare"]
+            parts = (
+                handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+            )
+            return [getattr(p, "id", getattr(p, "attr", "bare")) for p in parts]
+
+        names = [n for h in node.handlers for n in _handler_names(h)]
         if "Exception" not in names and "bare" not in names:
             continue
         passthrough = any(
