@@ -21,6 +21,7 @@ import urllib3
 # This is expected behavior when connecting to LXD with self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+from app.core import vault_status
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
 from app.middleware import (
@@ -131,11 +132,28 @@ async def lifespan(app: FastAPI):
                 
                 # List clusters from Vault
                 cluster_ids = cert_manager.list_clusters()
-                logger.info(f"Found {len(cluster_ids)} registered clusters in Vault")
-                
-                # Sync registered cluster whitelist into connection_manager
-                # to ensure get_node_names() only returns registered nodes
-                lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
+
+                # important: an empty list from a Vault that never answered is not the same fact
+                # as an empty registry, and list_clusters cannot raise because thirteen callers
+                # depend on it returning a list. A sealed Vault answers 503 to LIST, so without
+                # this check startup logged "Found 0 registered clusters", "Connected 0/0" and
+                # "started successfully", then handed the empty list to sync_registered_clusters
+                # which set the whitelist to the empty set. get_node_names() intersects against
+                # that, so every cluster vanished from the API even once the metrics collector
+                # reconnected one. Observed in the field, that state persisted for weeks.
+                if vault_status.registry_readable() is False:
+                    logger.error(
+                        "Vault did not answer the cluster registry read. Not syncing the "
+                        "registered-cluster whitelist, because an empty list here would hide "
+                        "every cluster rather than report the fault. Check whether Vault is "
+                        "sealed."
+                    )
+                    cluster_ids = []
+                else:
+                    logger.info(f"Found {len(cluster_ids)} registered clusters in Vault")
+                    # Sync registered cluster whitelist into connection_manager
+                    # to ensure get_node_names() only returns registered nodes
+                    lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
                 
                 # Connect to ALL registered clusters in parallel for faster startup
                 # This ensures clusters stay connected even after Docker restart
@@ -585,10 +603,24 @@ Ensure your client certificates are properly configured.
         public_storage = {
             key: value for key, value in (temp_storage or {}).items() if key != "path"
         }
+
+        # important: reported as a field, never as a status code, for the same reason as
+        # temp_storage above. A sealed Vault makes the cluster registry unreadable, and the
+        # empty list that comes back is indistinguishable from an empty deployment unless
+        # something says so. This is the only signal that tells them apart from outside the
+        # process. `error` carries a class name and a short reason, never a Vault address.
+        vault = vault_status.snapshot()
+        if vault.get("registry_readable") is False:
+            logger.error(
+                "Vault cluster registry is unreadable (%s). Every cluster will appear absent "
+                "until this clears; check whether Vault is sealed.",
+                vault.get("error"),
+            )
         return {
             "status": "healthy",
             "service": "orcastra-dashboard-api",
             "temp_storage": public_storage,
+            "vault": vault,
         }
     
     # Root endpoint
