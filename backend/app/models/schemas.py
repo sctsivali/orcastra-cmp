@@ -261,7 +261,16 @@ class ImageInfo(BaseModel):
     size: int = Field(..., description="Image size in bytes")
     upload_date: Optional[datetime] = Field(None, description="Upload timestamp")
     public: bool = Field(default=False, description="Whether image is public")
-    type: str = Field(default="virtual-machine", description="Image type")
+    # important: a fallback, not a claim about the image. `services/lxd/images.py` always
+    # passes the daemon's own value, so this fires only if LXD reports an image without a
+    # type. It stays optional-with-a-default rather than required on purpose: a required
+    # field here would turn one malformed image into a 500 for the entire list, which this
+    # codebase has already been bitten by on a shared response model.
+    # The value must match SEED_TYPE_FALLBACK in
+    # frontend/src/components/instance-create/prefill.ts, which decides the type a row action
+    # seeds into the create form. It used to say "virtual-machine" while that side said
+    # "container", so the same unknown had two opposite answers.
+    type: str = Field(default="container", description="Image type")
     # important: cached and auto_update are the two questions an operator asks of an image
     # list, and the frontend has been reading both since the Flags column was written. They
     # were never on this model, and response_model strips anything not declared, so the facet

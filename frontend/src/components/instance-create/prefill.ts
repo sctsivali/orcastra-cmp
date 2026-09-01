@@ -32,9 +32,27 @@ export interface CreateInstanceSeed {
 
 const FINGERPRINT = /^[0-9a-f]{64}$/;
 
-/** LXD image type as the API reports it, mapped onto the form's own two-value enum. */
+/**
+ * LXD image type as the API reports it, mapped onto the form's own two-value enum.
+ *
+ * important: the fallback here must match `ImageInfo.type`'s default in
+ * `backend/app/models/schemas.py`, and `test_the_image_type_fallback_agrees_across_layers`
+ * fails if it stops matching. The two used to disagree, this side answering "container" and
+ * the schema answering "virtual-machine" for the same unknown. Neither branch can fire today,
+ * because `services/lxd/images.py` always passes the value through and `ImageInfo.type` is a
+ * required string on this side, so the contradiction was invisible and would have been
+ * inherited by whoever edited one of them.
+ *
+ * Container is the right fallback for both: it is what the overwhelming majority of images in
+ * an LXD store are. A wrong guess costs a create the daemon refuses, not a silent success,
+ * and the seeded type stays editable in the form either way.
+ */
+export const SEED_TYPE_FALLBACK: SeedInstanceType = "container";
+
 export function seedTypeForImage(imageType: string | undefined): SeedInstanceType {
-  return imageType === "virtual-machine" ? "vm" : "container";
+  if (imageType === "virtual-machine") return "vm";
+  if (imageType === "container") return "container";
+  return SEED_TYPE_FALLBACK;
 }
 
 export function buildCreateInstanceHref(seed: CreateInstanceSeed): string {
