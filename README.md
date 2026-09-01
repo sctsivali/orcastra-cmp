@@ -159,48 +159,48 @@ the detailed logging pipeline.
 Most endpoints are prefixed with `/api/v1`; the health check is served at the root:
 
 ### Core Operations
-- `/instances`, `/vms` – Container and VM lifecycle management
-- `/images` – Image import, list, delete
-- `/projects` – Project isolation and management
-- `/profiles` – Instance configuration templates
-- `/networks` – Virtual network management
-- `/network-acls` – Network access control rules
-- `/storage/pools` – Storage pool provisioning
-- `/storage/volumes` – Volume operations and snapshots
-- `/nodes` – Node health and resources
-- `/clusters` – Cluster registration and discovery
-- `/cluster-members` – MicroCloud cluster members
-- `/certificates` – Cluster certificate lifecycle
+- `/instances`, `/vms` - Container and VM lifecycle management
+- `/images` - Image import, list, delete
+- `/projects` - Project isolation and management
+- `/profiles` - Instance configuration templates
+- `/networks` - Virtual network management
+- `/network-acls` - Network access control rules
+- `/storage/pools` - Storage pool provisioning
+- `/storage/volumes` - Volume operations and snapshots
+- `/nodes` - Node health and resources
+- `/clusters` - Cluster registration and discovery
+- `/cluster-members` - MicroCloud cluster members
+- `/certificates` - Cluster certificate lifecycle
 
 ### Interactive Access
-- `/terminal` – WebSocket terminal sessions (create, list, close, history)
-- `/console` – SPICE graphics console (create, capabilities, audit logs)
-- `/file-transfer` – Upload files to instances
+- `/terminal` - WebSocket terminal sessions (create, list, close, history)
+- `/console` - SPICE graphics console (create, capabilities, audit logs)
+- `/file-transfer` - Upload files to instances
 
 ### Monitoring & Observability
-- `/monitoring` – Real-time metrics, history, WebSocket live feed
-- `/regions` – Geographic region and cluster grouping
-- `/warnings` – Cluster warnings and alerts
-- `/operations` – Async LXD operation polling
-- `/server` – Server metadata and resources
-- `/archive` – OpenSearch log archive management
-- `/tags` – Instance tagging
+- `/monitoring` - Real-time metrics, history, WebSocket live feed
+- `/regions` - Geographic region and cluster grouping
+- `/warnings` - Cluster warnings and alerts
+- `/operations` - Async LXD operation polling
+- `/server` - Server metadata and resources
+- `/archive` - OpenSearch log archive management
+- `/tags` - Instance tagging
 
 ### User & Access Management
-- `/identities`, `/groups` – LXD identity and group management
-- `/my-keys` – Personal TLS key generation
-- `/user-preferences` – Theme, branding, personalization
-- `/organizations` – Multi-tenant organization management
-- `/user-groups` – Admin user group assignment
-- `/tenant-access` – ACL policies and rules
+- `/identities`, `/groups` - LXD identity and group management
+- `/my-keys` - Personal TLS key generation
+- `/user-preferences` - Theme, branding, personalization
+- `/organizations` - Multi-tenant organization management
+- `/user-groups` - Admin user group assignment
+- `/tenant-access` - ACL policies and rules
 
 ### Integration
-- `/integrations` – API key management, OrcaHub sync, and raw LXD proxy for external apps
+- `/integrations` - API key management, OrcaHub sync, and raw LXD proxy for external apps
 
 ### System
-- `/system` – System info and cache control
-- `/ipam` – IP address management
-- `/health` – Health check (served at root, not under `/api/v1`)
+- `/system` - System info and cache control
+- `/ipam` - IP address management
+- `/health` - Health check (served at root, not under `/api/v1`)
 
 See `/docs` for interactive Swagger API documentation.
 
@@ -388,10 +388,10 @@ broken tiles.
 
 Project follows [Semantic Versioning](https://semver.org/):
 
-- **MAJOR** (x.0.0) – Breaking changes incompatible with previous versions
-- **MINOR** (0.x.0) – New features with backward compatibility
-- **PATCH** (0.0.x) – Bug fixes without new features
-- **RC** (x.x.x-RCn) – Release candidate for testing before stable release
+- **MAJOR** (x.0.0) - Breaking changes incompatible with previous versions
+- **MINOR** (0.x.0) - New features with backward compatibility
+- **PATCH** (0.0.x) - Bug fixes without new features
+- **RC** (x.x.x-RCn) - Release candidate for testing before stable release
 
 Version is centralized in `.env` (`APP_VERSION`) and propagated to all components via `make version-sync`.
 
