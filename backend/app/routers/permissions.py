@@ -225,7 +225,7 @@ async def get_identity(
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        response = client.api.get(f'/1.0/auth/identities/{identity_id}')
+        response = client.api["auth"]["identities"][identity_id].get()
         
         if response.status_code == 200:
             identity_data = response.json().get('metadata', {})

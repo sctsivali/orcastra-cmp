@@ -9,6 +9,9 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from pylxd.exceptions import LXDAPIException
+
+from app.core.lxd_errors import lxd_http_error
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd_service import (
     LXDService,
@@ -79,7 +82,7 @@ def _fetch_acls_for_node(lxd_service: LXDService, node_name: str) -> List[Networ
             # turns into a partial result and the node is never named.
             raise LXDConnectionError(f"Could not connect to {node_name}")
         # Get ACLs via API with recursion=1 to get full details in one call
-        response = client.api.get('/1.0/network-acls?recursion=1')
+        response = client.api["network-acls"].get(params={"recursion": 1})
         if response.status_code == 200:
             acls_data = response.json().get('metadata', [])
             for acl_data in acls_data:
@@ -190,7 +193,7 @@ async def get_network_acl(
     try:
         verify_cluster_access(host)
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        response = client.api.get(f'/1.0/network-acls/{acl_name}')
+        response = client.api["network-acls"][acl_name].get()
         
         if response.status_code == 200:
             acl_data = response.json().get('metadata', {})
@@ -241,7 +244,7 @@ async def create_network_acl(
             "config": request.config
         }
         
-        response = client.api.post('/1.0/network-acls', json=acl_data)
+        response = client.api["network-acls"].post(json=acl_data)
         
         if response.status_code in [200, 201, 202]:
             # Log activity for audit trail
@@ -285,7 +288,7 @@ async def create_network_acl(
             error_code=type(e).__name__,
             error_message=str(e),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, "Network ACL", request.name)
 
 
 @router.put(
@@ -311,7 +314,7 @@ async def update_network_acl(
         client = require_client(lxd_service.connection_manager.get_client(host), host)
         
         # Get current ACL
-        get_response = client.api.get(f'/1.0/network-acls/{acl_name}')
+        get_response = client.api["network-acls"][acl_name].get()
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
         
@@ -328,7 +331,7 @@ async def update_network_acl(
             acl_data['config'] = config
         
         # Put updated ACL
-        put_response = client.api.put(f'/1.0/network-acls/{acl_name}', json=acl_data)
+        put_response = client.api["network-acls"][acl_name].put(json=acl_data)
         
         if put_response.status_code in [200, 202]:
             return {
@@ -339,6 +342,9 @@ async def update_network_acl(
             raise HTTPException(status_code=500, detail="Failed to update network ACL")
     except HTTPException:
         raise
+    except LXDAPIException as e:
+        logger.error(f"Error updating network ACL {acl_name}: {e}")
+        raise lxd_http_error(e, "Network ACL", acl_name)
     except Exception as e:
         logger.error(f"Error updating network ACL {acl_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -361,7 +367,7 @@ async def delete_network_acl(
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        response = client.api.delete(f'/1.0/network-acls/{acl_name}')
+        response = client.api["network-acls"][acl_name].delete()
         
         if response.status_code in [200, 202]:
             # Log activity for audit trail
@@ -400,4 +406,4 @@ async def delete_network_acl(
             error_code=type(e).__name__,
             error_message=str(e),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise lxd_http_error(e, "Network ACL", acl_name)
