@@ -266,7 +266,7 @@ class CacheManager:
         if self.redis_client:
             try:
                 value = self.redis_client.get(cache_key)
-                redis_answered = True  # Redis responded — hit OR miss.
+                redis_answered = True  # Redis responded, hit OR miss.
                 if value is not None:
                     logger.debug(f"Redis cache HIT: {cache_key}")
                     data = json.loads(value)

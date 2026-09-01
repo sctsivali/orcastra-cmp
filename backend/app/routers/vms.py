@@ -644,7 +644,7 @@ async def delete_vm(
         get_cache_manager().invalidate_instance_cache()
 
         # Clean up the instance's tag rows so the tag store doesn't drift from the
-        # deleted instance (best-effort — the instance is already gone).
+        # deleted instance. Best-effort, because the instance is already gone.
         try:
             await tag_service.remove_resource_assignments(
                 "instance", vm_name,

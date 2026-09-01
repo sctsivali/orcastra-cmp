@@ -7,7 +7,7 @@ shared-per-node model: the first subscriber for a node starts the upstream
 listener; when the last subscriber leaves, the listener is torn down. The
 upstream connection auto-reconnects (with backoff) as long as subscribers remain.
 
-It powers realtime instance-creation progress on the dashboard — LXD reports
+It powers realtime instance-creation progress on the dashboard. LXD reports
 image-pull progress via the operation's ``metadata.download_progress`` field, so
 the frontend can show "Pulling image… 48%" without polling. See
 ``app/routers/events.py`` for the browser-facing WebSocket endpoint.

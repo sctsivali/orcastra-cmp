@@ -342,7 +342,7 @@ async def get_network(
             node=host
         )
     except HTTPException:
-        # 503 (unreachable) / 403 (tenant denied) must survive — previously the
+        # 503 (unreachable) / 403 (tenant denied) must survive. Previously the
         # generic handler collapsed everything into a 404 "not found", so a real
         # but unreachable network read as deleted.
         raise

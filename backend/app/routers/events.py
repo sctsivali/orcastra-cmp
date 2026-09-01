@@ -3,7 +3,7 @@ WebSocket router streaming LXD operation events to the browser.
 
 Backs realtime instance-creation progress on the dashboard: one browser
 connection subscribes to one node's shared event stream (see
-``app/services/lxd/events_hub.py``). Mirrors the terminal router's auth pattern —
+``app/services/lxd/events_hub.py``). Mirrors the terminal router's auth pattern:
 the bearer token is passed as the ``token`` query parameter.
 """
 import asyncio

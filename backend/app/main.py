@@ -482,15 +482,15 @@ Ensure your client certificates are properly configured.
     from app.routers.iso_uploads import router as iso_uploads_router
     app.include_router(iso_uploads_router, prefix=settings.api_prefix)
 
-    # Dashboard (JWT) ISO upload — same machinery, user-session auth
+    # Dashboard (JWT) ISO upload, same machinery with user-session auth
     from app.routers.iso_uploads_dashboard import router as iso_uploads_dashboard_router
     app.include_router(iso_uploads_dashboard_router, prefix=settings.api_prefix)
 
-    # Dashboard (JWT) custom-image upload — same machinery, user-session auth
+    # Dashboard (JWT) custom-image upload, same machinery with user-session auth
     from app.routers.image_uploads_dashboard import router as image_uploads_dashboard_router
     app.include_router(image_uploads_dashboard_router, prefix=settings.api_prefix)
 
-    # Instance rebuild (JWT) — reinstall root disk, preserve identity/config/volumes
+    # Instance rebuild (JWT): reinstall root disk, preserve identity/config/volumes
     from app.routers.instance_rebuild import router as instance_rebuild_router
     app.include_router(instance_rebuild_router, prefix=settings.api_prefix)
 

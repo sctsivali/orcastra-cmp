@@ -54,7 +54,7 @@ async def _get_orcahub_credentials(org: Organization) -> Optional[Dict[str, Any]
             return None
 
         if not raw_secret:
-            logger.warning(f"No raw secret stored for API key {org.api_key_id} — cannot call back OrcaHub")
+            logger.warning(f"No raw secret stored for API key {org.api_key_id}, cannot call back OrcaHub")
             return None
 
         return {

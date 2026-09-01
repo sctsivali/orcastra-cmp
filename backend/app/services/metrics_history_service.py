@@ -73,7 +73,7 @@ async def persist_metrics_snapshot(
                 await asyncio.sleep(wait)
             else:
                 logger.error(
-                    "Metrics snapshot write FAILED after %d attempts — point lost",
+                    "Metrics snapshot write FAILED after %d attempts, point lost",
                     _MAX_RETRIES, exc_info=True,
                 )
 

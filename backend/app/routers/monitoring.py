@@ -44,7 +44,7 @@ router = APIRouter(
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
 
-# Separate router for WebSocket endpoints — router-level HTTP auth
+# Separate router for WebSocket endpoints, because router-level HTTP auth
 # dependencies (HTTPBearer) break WebSocket upgrade requests because
 # browsers cannot send Authorization headers during the WS handshake.
 # Auth is handled inside the handler via get_ws_user() (query param token).

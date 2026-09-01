@@ -42,7 +42,7 @@ class AuthentikSyncService:
         self.enabled = bool(self.api_url and self.token)
 
         if not self.enabled:
-            logger.info("Authentik sync disabled — AUTHENTIK_API_URL or AUTHENTIK_API_TOKEN not set")
+            logger.info("Authentik sync disabled: AUTHENTIK_API_URL or AUTHENTIK_API_TOKEN not set")
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -143,7 +143,7 @@ class AuthentikSyncService:
         target_role: "admin" | "partner" | "tenant"
         """
         if not self.enabled:
-            logger.warning("Authentik sync skipped — not configured")
+            logger.warning("Authentik sync skipped: not configured")
             return False
 
         target_group = f"role_{target_role}"
@@ -161,7 +161,7 @@ class AuthentikSyncService:
             # find user
             user_pk = await self._find_user_pk(client, user_email)
             if not user_pk:
-                logger.warning(f"User {user_email} not found in Authentik — skipping sync")
+                logger.warning(f"User {user_email} not found in Authentik, skipping sync")
                 return False
 
             # remove from other role groups

@@ -183,7 +183,7 @@ async def get_instance(
         verify_tenant_permission(host, vm.project or "default", vm.name, "view")
         return vm
     except HTTPException:
-        # 404 (not found) / 403 (ACL) — don't let the generic handler mask these.
+        # 404 (not found) / 403 (ACL). Don't let the generic handler mask these.
         raise
     except LXDConnectionError as e:
         logger.warning(f"LXD connection error: {e}")
@@ -285,7 +285,7 @@ async def create_instance(
         raise HTTPException(status_code=status, detail=str(e))
     except LXDConnectionError as e:
         # Cluster unreachable (e.g. during the duplicate-name exists() check or
-        # the create POST) — 503, matching the other instance endpoints.
+        # the create POST). 503, matching the other instance endpoints.
         logger.warning(f"LXD connection error creating instance: {e}")
         activity_logger.log_activity(
             action="instance.create",
@@ -558,7 +558,7 @@ async def delete_instance(
         get_cache_manager().invalidate_instance_cache()
 
         # Clean up the instance's tag rows so the tag store doesn't drift from the
-        # deleted container (best-effort — the instance is already gone).
+        # deleted container. Best-effort, because the instance is already gone.
         try:
             await tag_service.remove_resource_assignments(
                 "instance", instance_name,

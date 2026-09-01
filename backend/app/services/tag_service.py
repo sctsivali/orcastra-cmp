@@ -1237,8 +1237,8 @@ class TagService:
 
     def _invalidate_tag_cache(self):
         """Invalidate all tag-related caches."""
-        # Use delete_pattern (glob/prefix match), not delete (single literal key)
-        # — otherwise the trailing "*" never matches the real keys.
+        # Use delete_pattern (glob/prefix match), not delete (single literal key),
+        # otherwise the trailing "*" never matches the real keys.
         self.cache.delete_pattern("tags", "tags:list:*")
         self.cache.delete_pattern("tags", "categories:all:*")
         self.cache.delete_pattern("tags", "stats:*")

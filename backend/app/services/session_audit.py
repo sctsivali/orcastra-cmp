@@ -38,7 +38,7 @@ async def _write_audit_with_retry(entry_kwargs: dict) -> None:
                 await asyncio.sleep(wait)
             else:
                 logger.error(
-                    "Audit log write FAILED after %d attempts — event lost",
+                    "Audit log write FAILED after %d attempts, event lost",
                     _MAX_RETRIES, exc_info=True,
                 )
 
@@ -126,7 +126,7 @@ def _schedule(coro, event: str) -> None:
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        logger.debug("No event loop for audit log — skipping %s event", event)
+        logger.debug("No event loop for audit log, skipping %s event", event)
         coro.close()
         return
     task = loop.create_task(coro)

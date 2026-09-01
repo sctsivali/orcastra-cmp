@@ -340,9 +340,9 @@ async def get_sync_status(
     connected = result.get("connected", False)
 
     if not enabled:
-        details = "Not configured — set AUTHENTIK_API_URL & AUTHENTIK_API_TOKEN to enable sync"
+        details = "Not configured. Set AUTHENTIK_API_URL and AUTHENTIK_API_TOKEN to enable sync"
     elif not connected:
-        details = f"Configured but unreachable — {error}" if error else "Configured but unreachable"
+        details = f"Configured but unreachable: {error}" if error else "Configured but unreachable"
     else:
         details = f"{len(groups)} role group(s) ready"
 

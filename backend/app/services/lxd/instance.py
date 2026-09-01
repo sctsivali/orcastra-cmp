@@ -984,7 +984,7 @@ class InstanceManager:
         """Start creating a new instance (non-blocking).
 
         The create is issued as a background LXD operation and this returns the
-        operation id immediately — the (potentially slow) image pull happens
+        operation id immediately. The (potentially slow) image pull happens
         server-side, so the HTTP request never waits on it. The instance appears
         via the polling instance list. If image_server is set, the image is
         pulled from that remote simplestreams server by alias; otherwise it is
@@ -1084,7 +1084,7 @@ class InstanceManager:
             )
 
             # "Create & Start": wait for the create operation in the background,
-            # then start the instance — without blocking this request.
+            # then start the instance, without blocking this request.
             if start_on_create:
                 task = asyncio.create_task(
                     self._finalize_and_start(create_client, name, operation_id, host, project)
@@ -1106,7 +1106,7 @@ class InstanceManager:
             return operation_id
 
         except ClientConnectionFailed as e:
-            # Cluster unreachable during exists()/POST — surface as a connection
+            # Cluster unreachable during exists()/POST. Surface as a connection
             # error so the router maps it to 503, not a blanket 500.
             raise LXDConnectionError(f"Failed to reach {host}: {e}")
         except LXDAPIException as e:
