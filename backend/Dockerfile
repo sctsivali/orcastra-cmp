@@ -34,11 +34,23 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 FROM base as runtime
 WORKDIR /app
 
-# Create non-root user first
-RUN useradd --create-home --shell /bin/bash appuser
+# Create non-root user first.
+#
+# important: the uid is pinned. It was implicit before, and happened to be 1000, but the
+# uploads directory is a host bind mount (/var/orcastra/uploads in docker-compose.prod.yml) and
+# Docker creates a missing bind-mount source root-owned. The operator therefore has to chown it
+# to this exact uid, and "whatever the base image assigned this build" is not something they can
+# be asked to look up. Pinning it makes the go-live step writable down as a number.
+RUN useradd --create-home --shell /bin/bash --uid 1000 appuser
 
-# Create config directory and set ownership (for node_metadata.json etc.)
-RUN mkdir -p /app/config && chown appuser:appuser /app/config
+# Create the directories the app writes to and hand them to appuser.
+#
+# important: /app/uploads is included even though a bind mount usually covers it. When the mount
+# is present this is harmless; when it is absent, or when the host source did not exist and
+# Docker created it root-owned, the difference is between an upload that works and a bare 500 on
+# the first PATCH that also strands a session row holding one of only two slots.
+RUN mkdir -p /app/config /app/uploads \
+    && chown appuser:appuser /app/config /app/uploads
 
 # Copy installed dependencies from builder and set ownership
 COPY --from=builder --chown=appuser:appuser /root/.local /home/appuser/.local

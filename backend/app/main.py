@@ -272,7 +272,22 @@ async def lifespan(app: FastAPI):
         logger.info("Custom-ISO import recovery loop started")
     except Exception as iso_recovery_err:
         logger.warning(f"Could not start ISO import recovery loop: {iso_recovery_err}")
-    
+
+    # Reclaim expired upload sessions on a timer.
+    #
+    # important: this sweep used to run only from inside create_upload, which made it
+    # unreachable exactly when it mattered. The active-session cap is per API key, so a key
+    # whose two slots are held by dead rows has every create refused before it can trigger the
+    # sweep that would free them. Two failed PATCHes locked an integration out for six hours.
+    try:
+        from app.routers.image_uploads import start_expiry_sweep
+        from app.routers.iso_uploads import start_expiry_sweep as start_iso_expiry_sweep
+        start_expiry_sweep()
+        start_iso_expiry_sweep()
+        logger.info("Upload expiry sweeps started")
+    except Exception as sweep_err:
+        logger.warning(f"Could not start upload expiry sweeps: {sweep_err}")
+
     # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
     try:
         from app.services.metrics_history_service import load_metrics_history

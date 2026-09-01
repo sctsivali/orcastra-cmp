@@ -20,6 +20,7 @@ row stay consistent and the session remains resumable at the recorded offset.
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
@@ -61,6 +62,21 @@ write_executor = ThreadPoolExecutor(
 )
 
 
+class UploadStagingUnavailable(HTTPException):
+    """The backend's own staging storage refused the write.
+
+    A distinct type rather than a 503 the caller has to recognise by its status code or its
+    detail string. Callers need to tell this apart from every other 503 on this path, because
+    this is the one that will recur on every retry until an operator intervenes: the session
+    row can never make progress, so holding its slot for the full resumable window locks the
+    key out for six hours. Matching on a message would be the substring-assertion trap the
+    house rules warn about; a type cannot drift.
+    """
+
+    def __init__(self, detail: str):
+        super().__init__(status_code=503, detail=detail)
+
+
 def _write_at(path: str, pos: int, data: bytes) -> None:
     """Write ``data`` at ``pos``, discarding anything already past it.
 
@@ -77,6 +93,29 @@ def _write_at(path: str, pos: int, data: bytes) -> None:
         f.seek(pos)
         f.truncate()
         f.write(data)
+
+
+# errnos that mean the filesystem itself refused the write, as opposed to a socket error that
+# happens to surface as an OSError. Only these retire a session: the rest stay resumable.
+_STORAGE_REFUSAL_ERRNOS = frozenset(
+    e for e in (
+        getattr(errno, name, None)
+        for name in ("EACCES", "EPERM", "EROFS", "ENOSPC", "EDQUOT", "ENOTDIR", "EISDIR")
+    )
+    if e is not None
+)
+
+
+def _is_storage_refusal(exc: OSError) -> bool:
+    """True when the staging volume refused the write and a retry cannot help.
+
+    Deliberately errno-based rather than isinstance-based. PermissionError covers EACCES and
+    EPERM, but a read-only mount raises OSError(EROFS) and a full quota raises EDQUOT, and both
+    are the same operator fault with the same remedy. ConnectionResetError is also an OSError
+    and must NOT match, because a client that dropped mid-upload is exactly what the resumable
+    protocol is for.
+    """
+    return exc.errno in _STORAGE_REFUSAL_ERRNOS
 
 
 def _truncate(path: str, size: int) -> None:
@@ -149,6 +188,35 @@ async def append_request_body(
         await _rollback(path, start_offset, label)
         logger.error("staging write %s exceeded %.0fs; is the upload volume wedged?", label, WRITE_TIMEOUT)
         raise HTTPException(status_code=503, detail="Upload staging unavailable") from None
+    except OSError as exc:
+        if not _is_storage_refusal(exc):
+            # Not the filesystem refusing us. A socket error mid-stream is a client disconnect,
+            # and retiring the session for that would destroy a resumable upload over a dropped
+            # connection, which is the exact thing tus exists to survive.
+            await _rollback(path, start_offset, label)
+            raise
+        # important: the staging directory is a host bind mount, and Docker creates a missing
+        # bind-mount source root-owned. Every guard on the create path still passes, because
+        # _ensure_dir's makedirs succeeds on an existing directory and the disk-usage check only
+        # stats it. The first failure is therefore this open(O_CREAT), and it used to escape as
+        # a bare PermissionError. There is no catch-all exception handler registered, so the
+        # caller got a 500 with no reference id and no hint, while the session row stayed active
+        # and held one of only two slots for the full six-hour TTL.
+        #
+        # 503 rather than 500 for the same reason LXDLocalStorageError is a 503 in main.py: the
+        # backend's own storage failed, the request is retryable once an operator fixes it, and
+        # it is emphatically not a cluster fault.
+        await _rollback(path, start_offset, label)
+        logger.error(
+            "staging write %s failed on the upload volume (%s: %s). If this is EACCES the "
+            "bind-mount source is not writable by the app user; it must be owned by uid 1000.",
+            label, type(exc).__name__, exc,
+        )
+        raise UploadStagingUnavailable(
+            "Upload staging is not writable on the server. This is a backend storage "
+            "fault, not a cluster problem. The session is retired so its slot is freed; "
+            "start a new upload once the server's staging volume is writable."
+        ) from None
     except Exception:
         await _rollback(path, start_offset, label)
         raise

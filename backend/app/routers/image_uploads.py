@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.database import get_db, async_session_maker
-from app.core.upload_stream import append_request_body
+from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.models.db_models import ImageUploadSession
 from app.routers.integrations import require_capability
 from app.services.lxd_service import get_lxd_service
@@ -310,13 +310,25 @@ async def patch_upload(
         # tus: offset mismatch -> 409 so the client re-HEADs and resumes from the true offset.
         raise HTTPException(status_code=409, detail="Upload-Offset does not match", headers={"Upload-Offset": str(row.upload_offset)})
 
-    new_offset = await append_request_body(
-        request,
-        row.staging_path,
-        start_offset=row.upload_offset,
-        limit=min(row.total_bytes, row.max_bytes),
-        label=f"image_upload[{session_id}]",
-    )
+    try:
+        new_offset = await append_request_body(
+            request,
+            row.staging_path,
+            start_offset=row.upload_offset,
+            limit=min(row.total_bytes, row.max_bytes),
+            label=f"image_upload[{session_id}]",
+        )
+    except UploadStagingUnavailable:
+        # important: retire the row rather than leaving it resumable. The staging volume is
+        # refusing writes, so this session can never make progress however long the client
+        # retries, and every attempt keeps holding one of only MAX_ACTIVE_SESSIONS slots. Two
+        # of these used to lock the key out for the full six-hour TTL. Failing it frees the
+        # slot now, and the client can start a fresh upload once an operator fixes the volume.
+        row.status = "failed"
+        row.error = "upload staging not writable on the server"
+        await db.commit()
+        raise
+
 
     row.upload_offset = new_offset
     row.status = "uploaded" if new_offset >= row.total_bytes else "uploading"
@@ -726,6 +738,51 @@ async def import_recovery_loop() -> None:
         except Exception as e:  # noqa: BLE001
             logger.warning("Import recovery sweep error: %s", e)
         await asyncio.sleep(_RECOVERY_INTERVAL_SECONDS)
+
+
+# How often the expiry sweep runs. The sweep itself is cheap: one indexed query on
+# expires_at, and nothing to do when it matches no rows.
+_GC_INTERVAL_SECONDS = int(os.getenv("IMAGE_UPLOAD_GC_INTERVAL", "300"))
+
+
+async def _gc_expired_standalone() -> None:
+    """Run the expiry sweep on its own session, outside any request."""
+    from app.core.database import async_session_maker
+
+    async with async_session_maker() as db:
+        await _gc_expired(db)
+
+
+async def expiry_sweep_loop() -> None:
+    """Reclaim expired image upload sessions on a timer.
+
+    important: _gc_expired used to run ONLY from inside create_upload, which made it
+    unreachable exactly when it was needed. MAX_ACTIVE_SESSIONS is per API key, so a key whose
+    two slots are held by dead rows has every create refused with 503 before it can trigger the
+    sweep that would free them, and the rows only age out after the six-hour TTL. Two failed
+    PATCHes were enough to lock an integration out for the rest of the day.
+
+    Runs in every worker. The sweep is idempotent: it only moves already-expired rows to
+    failed, so two workers doing it concurrently reach the same state.
+    """
+    while True:
+        try:
+            await _gc_expired_standalone()
+        except Exception as e:  # noqa: BLE001
+            # One bad iteration must not kill the loop, for the same reason the import
+            # heartbeat survives a transient DB error.
+            logger.warning("image upload expiry sweep error: %s", e)
+        await asyncio.sleep(_GC_INTERVAL_SECONDS)
+
+
+_gc_task = None
+
+
+def start_expiry_sweep() -> None:
+    """Idempotent: safe to call more than once per worker."""
+    global _gc_task
+    if _gc_task is None or _gc_task.done():
+        _gc_task = asyncio.create_task(expiry_sweep_loop())
 
 
 _recovery_task = None

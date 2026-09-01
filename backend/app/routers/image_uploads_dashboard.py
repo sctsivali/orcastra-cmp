@@ -32,7 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_cache_manager
 from app.core.database import get_db
-from app.core.upload_stream import append_request_body
+from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.routers.image_uploads import (
@@ -241,13 +241,25 @@ async def patch_upload(
     if client_offset != row.upload_offset:
         raise HTTPException(status_code=409, detail="Upload-Offset does not match", headers={"Upload-Offset": str(row.upload_offset)})
 
-    new_offset = await append_request_body(
-        request,
-        row.staging_path,
-        start_offset=row.upload_offset,
-        limit=min(row.total_bytes, row.max_bytes),
-        label=f"image_upload_dashboard[{session_id}]",
-    )
+    try:
+        new_offset = await append_request_body(
+            request,
+            row.staging_path,
+            start_offset=row.upload_offset,
+            limit=min(row.total_bytes, row.max_bytes),
+            label=f"image_upload_dashboard[{session_id}]",
+        )
+    except UploadStagingUnavailable:
+        # important: retire the row rather than leaving it resumable. The staging volume is
+        # refusing writes, so this session can never make progress however long the client
+        # retries, and every attempt keeps holding one of only MAX_ACTIVE_SESSIONS slots. Two
+        # of these used to lock the key out for the full six-hour TTL. Failing it frees the
+        # slot now, and the client can start a fresh upload once an operator fixes the volume.
+        row.status = "failed"
+        row.error = "upload staging not writable on the server"
+        await db.commit()
+        raise
+
 
     row.upload_offset = new_offset
     row.status = "uploaded" if new_offset >= row.total_bytes else "uploading"
