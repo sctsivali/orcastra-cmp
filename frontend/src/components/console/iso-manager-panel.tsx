@@ -14,6 +14,7 @@ import {
   Download,
   RefreshCw,
   AlertCircle,
+  AlertTriangle,
   HardDrive,
   Check,
   ChevronDown,
@@ -58,13 +59,13 @@ interface ISOInfo {
 
 // LXD boot.priority: "A higher value indicates a higher boot precedence for the
 // disk device." So to boot an install ISO ahead of the (empty) root disk, the
-// cdrom needs a HIGHER value than the disk — a disk with no boot.priority set
+// cdrom needs a HIGHER value than the disk. A disk with no boot.priority set
 // effectively has none, so any value above 0 wins.
 const BOOT_PRIORITY_OPTIONS = [
-  { value: 10, label: "10 — Boot first (install from ISO)" },
-  { value: 5, label: "5 — High" },
-  { value: 1, label: "1 — Above an unset disk" },
-  { value: 0, label: "0 — Lowest (boot from disk first)" },
+  { value: 10, label: "10 - Boot first (install from ISO)" },
+  { value: 5, label: "5 - High" },
+  { value: 1, label: "1 - Above an unset disk" },
+  { value: 0, label: "0 - Lowest (boot from disk first)" },
 ];
 // Default for a fresh attach: the point of attaching an install ISO is to boot it.
 const DEFAULT_BOOT_PRIORITY = 10;
@@ -178,7 +179,7 @@ export function ISOManagerPanel({
 
   // Change the boot priority of the already-attached ISO. Re-attaching the same
   // volume patches the existing device in place (attach_iso does an add/update),
-  // which is how boot.priority is changed — there is no separate device-update
+  // which is how boot.priority is changed. There is no separate device-update
   // endpoint.
   const handleChangeBootPriority = async (priority: number) => {
     if (!attachedISO || !attachedISO.pool) return;
@@ -211,7 +212,7 @@ export function ISOManagerPanel({
         description:
           priority > 0
             ? `"${attachedISO.source}" is set to boot priority ${priority}. Restart the VM to boot from it.`
-            : `"${attachedISO.source}" is set to ${priority} — the VM will boot from its disk first.`,
+            : `"${attachedISO.source}" is set to ${priority}. The VM will boot from its disk first.`,
       });
       await fetchAttachedISO();
     } catch (err) {
@@ -499,8 +500,9 @@ export function ISOManagerPanel({
             Attach {selectedISO.name}
           </Button>
           
-          <p className="text-xs text-muted-foreground mt-2 text-center">
-            ⚠️ VM may need restart for changes to take effect
+          <p className="mt-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+            <span>VM may need restart for changes to take effect</span>
           </p>
         </div>
       )}

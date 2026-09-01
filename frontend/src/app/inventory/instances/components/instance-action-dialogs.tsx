@@ -11,6 +11,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  FORCE_OFF_HINT,
+  FORCE_ON_HINT,
+  FORCE_OPTION_LABEL,
+} from "@/lib/instance-action-copy";
 import { VMInfo } from "@/types/api";
 
 export interface ConfirmActionState {
@@ -114,8 +119,10 @@ export function InstanceActionDialogs({
             </AlertDialogDescription>
           </AlertDialogHeader>
           {/* A graceful stop asks the guest OS to shut down over ACPI. A VM with
-              no OS installed, or one at a boot menu/UEFI shell, has nothing
-              listening and will time out — force power-cycles those. */}
+              no OS installed, or one sitting at a boot menu/UEFI shell, has
+              nothing listening and will just time out. Force is the only way to
+              power-cycle those. Copy lives in lib/instance-action-copy.ts, which
+              two other dialogs share. */}
           <label className="flex items-start gap-2 rounded-md border p-3 cursor-pointer">
             <input
               type="checkbox"
@@ -126,13 +133,9 @@ export function InstanceActionDialogs({
               }
             />
             <span className="text-sm">
-              <span className="font-medium">
-                Force (power-cycle, don&apos;t wait for the guest)
-              </span>
+              <span className="font-medium">{FORCE_OPTION_LABEL}</span>
               <span className="block text-xs text-muted-foreground mt-0.5">
-                {confirmAction.force
-                  ? "Cuts power immediately — like pulling the plug. Unsaved data in the guest may be lost."
-                  : "Use this if nothing in the guest will answer a graceful shutdown: no OS installed yet, sitting at a boot menu, still booting, or a live/installer image that ignores ACPI."}
+                {confirmAction.force ? FORCE_ON_HINT : FORCE_OFF_HINT}
               </span>
             </span>
           </label>

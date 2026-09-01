@@ -122,7 +122,7 @@ export interface GpuCardListResponse {
   compute_total?: number;
 }
 
-// A browsable image from a remote (simplestreams) catalog — one row per
+// A browsable image from a remote (simplestreams) catalog. One row per
 // distribution/release/variant/architecture/type.
 export interface RemoteImageInfo {
   distribution: string;

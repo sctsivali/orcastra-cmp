@@ -176,7 +176,7 @@ function RuleEditor({
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           Rule {index + 1}
           <span className="text-muted-foreground font-normal">
-            — {rule.cluster_id === "*" ? "All Clusters" : clusters.find(c => c.cluster_id === rule.cluster_id)?.display_name || rule.cluster_id}
+            - {rule.cluster_id === "*" ? "All Clusters" : clusters.find(c => c.cluster_id === rule.cluster_id)?.display_name || rule.cluster_id}
             {rule.project_name !== "*" && ` / ${rule.project_name}`}
             {rule.instance_name !== "*" && ` / ${rule.instance_name}`}
           </span>

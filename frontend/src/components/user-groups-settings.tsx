@@ -242,15 +242,15 @@ export function UserGroupsSettings() {
                   <Wifi className="h-4 w-4 text-green-500" />
                   <span className="text-sm text-green-600 dark:text-green-400">
                     {syncStatus.groups_exist
-                      ? "Connected — role changes and groups sync automatically"
-                      : "Connected — role changes sync automatically"}
+                      ? "Connected. Role changes and groups sync automatically."
+                      : "Connected. Role changes sync automatically."}
                   </span>
                 </>
               ) : (
                 <>
                   <WifiOff className="h-4 w-4 text-yellow-500" />
                   <span className="text-sm text-yellow-600 dark:text-yellow-400">
-                    Configured but unreachable — changes saved locally only
+                    Configured but unreachable. Changes are saved locally only.
                   </span>
                 </>
               )
@@ -258,7 +258,7 @@ export function UserGroupsSettings() {
               <>
                 <WifiOff className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">
-                  Not configured — set identity provider credentials to enable sync
+                  Not configured. Set identity provider credentials to enable sync.
                 </span>
               </>
             )}
@@ -363,7 +363,7 @@ export function UserGroupsSettings() {
                           ))}
                           {(!orgs || orgs.length === 0) && orgRequired && (
                             <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                              No organizations synced — connect OrcaHub via Integrations first
+                              No organizations synced. Connect OrcaHub via Integrations first.
                             </div>
                           )}
                         </SelectContent>

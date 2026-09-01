@@ -95,7 +95,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
 
     // Fetch one instance and upsert it. A just-started instance is "Running"
     // before its DHCP lease lands, so its IPs are briefly empty; in that case we
-    // re-fetch a few times (bounded, event-triggered — not a return to polling)
+    // re-fetch a few times (bounded and event-triggered, not a return to polling)
     // until the address appears or we give up.
     const fetchAndUpsert = async (
       host: string,
@@ -115,7 +115,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
           }, 4000);
         }
       } catch {
-        // Instance gone or a transient race — ignore.
+        // Instance gone or a transient race, so ignore.
       }
     };
 
@@ -173,7 +173,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
         return;
       }
       if (action === "instance-renamed") {
-        // Name changed — cheapest correct move is a single refetch.
+        // Name changed. The cheapest correct move is a single refetch.
         queryClient.invalidateQueries({ queryKey: ["instances"] });
         return;
       }

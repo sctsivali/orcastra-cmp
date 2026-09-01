@@ -1,5 +1,5 @@
 /**
- * Health check proxy — forwards /health to the backend.
+ * Health check proxy. Forwards /health to the backend.
  */
 import { NextResponse } from "next/server";
 

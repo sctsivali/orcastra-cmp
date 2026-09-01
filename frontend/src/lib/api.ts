@@ -56,11 +56,11 @@ import {
 
 const API_PREFIX = "/api/v1";
 
-// All HTTP API calls use relative URLs — Next.js rewrites proxy them to the backend.
+// All HTTP API calls use relative URLs, and Next.js rewrites proxy them to the backend.
 // This avoids cross-origin (CORS) and mixed-content issues entirely.
 const API_BASE_URL = "";
 
-// Relative API URL — safe for browser HTTP fetch calls.
+// Relative API URL, safe for browser HTTP fetch calls.
 // WebSocket connections use ws-url.ts which derives URLs from NEXT_PUBLIC_API_URL.
 export const API_URL = API_PREFIX;
 
@@ -156,7 +156,7 @@ function handle401() {
 
   // a refresh has completed and requests are still refused
   _authFailureAnnounced = true;
-  console.warn("[Auth] a session refresh did not clear 401s — prompting re-auth in place");
+  console.warn("[Auth] a session refresh did not clear 401s, prompting re-auth in place");
   _onAuthFailure?.();
   return false;
 }
@@ -1323,7 +1323,7 @@ export const isoUploadAPI = {
   },
 };
 
-// Custom-image upload (resumable, tus-style) — the direct analogue of
+// Custom-image upload (resumable, tus-style), the direct analogue of
 // isoUploadAPI, hitting the JWT image-upload router. A unified LXD image file is
 // streamed in chunks and imported into the cluster's image store under a private
 // alias.

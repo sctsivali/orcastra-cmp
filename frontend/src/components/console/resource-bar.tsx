@@ -1,5 +1,5 @@
 /**
- * Console Resource Bar — Collapsible bottom status bar for console/terminal pages.
+ * Console Resource Bar: collapsible bottom status bar for console/terminal pages.
  *
  * Displays real-time session intelligence:
  * - Connection status & duration (live counter)

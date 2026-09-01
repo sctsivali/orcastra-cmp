@@ -14,6 +14,7 @@ import {
   Eye,
   EyeOff,
   ShieldAlert,
+  AlertTriangle,
   CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -154,7 +155,10 @@ function APIKeySecretDialog({
               </div>
             </div>
             <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-md p-3 text-sm">
-              <p className="font-medium text-yellow-600">⚠️ Important</p>
+              <p className="flex items-center gap-2 font-medium text-yellow-600">
+                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+                <span>Important</span>
+              </p>
               <p className="text-muted-foreground mt-1">
                 Copy and store these credentials securely. The secret cannot be retrieved later.
               </p>
@@ -197,13 +201,13 @@ export function IntegrationsSettings() {
     enabled: mounted,
     staleTime: 30000,
     retry: (failureCount, error) => {
-      // Don't retry on 503 (Vault not configured) — it won't resolve on its own
+      // Don't retry on 503 (Vault not configured). It won't resolve on its own.
       if (error instanceof Error && "status" in error && (error as Record<string, unknown>).status === 503) return false;
       return failureCount < 2;
     },
   });
 
-  // Detect Vault-not-configured state (duck-type check — instanceof breaks across chunks)
+  // Detect Vault-not-configured state. Duck-typed because instanceof breaks across chunks.
   const vaultUnavailable =
     keysError instanceof Error &&
     "status" in keysError &&
@@ -314,7 +318,7 @@ export function IntegrationsSettings() {
   const revokedKeys = typeof apiKeysData?.revoked === 'number' ? apiKeysData.revoked : 0;
   const expiredKeys = typeof apiKeysData?.expired === 'number' ? apiKeysData.expired : 0;
 
-  // Vault not configured — show informative banner instead of full UI
+  // Vault not configured, so show an informative banner instead of the full UI
   if (vaultUnavailable) {
     return (
       <div className="space-y-6">

@@ -256,7 +256,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
           </div>
         )}
 
-        {/* Snapshot block — LXD refuses to rebuild an instance with snapshots */}
+        {/* Snapshot block: LXD refuses to rebuild an instance with snapshots */}
         {phase === "form" && blocked && (
           <div className="space-y-3">
             <div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
@@ -337,7 +337,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
               </div>
             )}
 
-            {/* Reassurances — what survives the rebuild */}
+            {/* Reassurances: what survives the rebuild */}
             <div className="flex gap-2 rounded-md border bg-muted/30 p-3 text-sm">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
               <div className="space-y-1 text-muted-foreground">
@@ -352,7 +352,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
                     ))}
                   </p>
                 ) : (
-                  <p>Only the root disk is replaced — attached data volumes are preserved.</p>
+                  <p>Only the root disk is replaced. Attached data volumes are preserved.</p>
                 )}
               </div>
             </div>

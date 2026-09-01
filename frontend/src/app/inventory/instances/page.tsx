@@ -140,7 +140,7 @@ function InstancesContent() {
 
   // Hosts to stream from: those that currently have instances (pending-create
   // hosts are added inside the hook). One LXD events WS per host keeps the list
-  // live — creates show a "Creating… <progress>" placeholder, and lifecycle
+  // live. Creates show a "Creating… <progress>" placeholder, and lifecycle
   // events upsert/remove rows directly so status changes appear without a poll.
   const instanceHosts = Array.from(
     new Set(instances.map((i: any) => i.host as string)),
@@ -193,7 +193,7 @@ function InstancesContent() {
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
   // Confirmation for stop/restart, with a Force option (power-cycle) for guests
-  // that can't answer a graceful ACPI shutdown — e.g. a VM with no OS installed.
+  // that can't answer a graceful ACPI shutdown, e.g. a VM with no OS installed.
   const [confirmAction, setConfirmAction] = useState<{
     open: boolean;
     action: "stop" | "restart" | null;

@@ -18,6 +18,7 @@ import {
   Power,
   PowerOff,
   AlertCircle,
+  Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -332,9 +333,12 @@ export function BootPriorityPanel({
 
       {/* Footer info */}
       <div className="p-3 border-t bg-muted/20">
-        <p className="text-xs text-muted-foreground">
-          💡 Instances with autostart enabled will start automatically when the hypervisor boots.
-          Lower numbers start first. Delay adds wait time before starting.
+        <p className="flex items-start gap-2 text-xs text-muted-foreground">
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span>
+            Instances with autostart enabled will start automatically when the hypervisor boots.
+            Lower numbers start first. Delay adds wait time before starting.
+          </span>
         </p>
       </div>
     </div>

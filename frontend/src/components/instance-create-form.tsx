@@ -533,7 +533,7 @@ export function InstanceCreateForm() {
   const archOptions = uniq(imageRows.map((r) => r.architecture));
 
   const filteredImageRows = imageRows.filter((r) => {
-    // Always restrict to the instance type being created — picking a VM image for
+    // Always restrict to the instance type being created. Picking a VM image for
     // a container (or vice versa) only fails server-side, so never show the
     // mismatch. The Type control below is locked to this for the same reason.
     if (r.type !== wantedImageType) return false;
@@ -576,7 +576,7 @@ export function InstanceCreateForm() {
   const resourcesValid =
     cpuValid && memoryValid && storageValid && diskPriorityValid && maxProcessesValid;
   // LXD instance name rules (mirrors the name input's pattern/maxLength). The
-  // Create buttons are type=button, so native validation doesn't run — gate here
+  // Create buttons are type=button, so native validation doesn't run. Gate here
   // too, otherwise e.g. "bad name" reaches LXD and fails with an opaque error.
   const nameValid =
     /^[a-zA-Z][a-zA-Z0-9-]*$/.test(form.name) && form.name.length <= 63;
@@ -809,7 +809,7 @@ export function InstanceCreateForm() {
         // Set user.tags at creation so tags show immediately (the tag service's
         // LXD sync can't run while the instance is still provisioning). Both this
         // and the updateInstanceTags call below consume form.tags, which is
-        // already normalized (lowercased/trimmed/deduped) in addTag — single
+        // already normalized (lowercased/trimmed/deduped) in addTag, the single
         // source of truth, so the two write paths can't drift.
         ...(form.tags.length ? { "user.tags": form.tags.join(",") } : {}),
         ...advConfig,
@@ -1160,7 +1160,7 @@ export function InstanceCreateForm() {
               )}
 
               {/* Boot source body: pick a base image, or (VM only) pick the ISO
-                  the VM boots from — attached at create with a high boot priority. */}
+                  the VM boots from, attached at create with a high boot priority. */}
               {bootFromIso ? (
                 <div className="grid gap-2">
                   <Label className="flex items-center gap-2">
@@ -1311,7 +1311,7 @@ export function InstanceCreateForm() {
                 )}
               </div>
 
-              {/* Memory swap — containers only */}
+              {/* Memory swap, containers only */}
               {form.type === "container" && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -1336,7 +1336,7 @@ export function InstanceCreateForm() {
                 </div>
               )}
 
-              {/* Disk priority — 0 (lowest) to 10 (highest) */}
+              {/* Disk priority: 0 (lowest) to 10 (highest) */}
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Gauge className="h-4 w-4" />
@@ -1349,7 +1349,7 @@ export function InstanceCreateForm() {
                   step={1}
                   value={form.diskPriority}
                   onChange={(e) => updateField("diskPriority", e.target.value)}
-                  placeholder="Default (0–10)"
+                  placeholder="Default (0-10)"
                   aria-invalid={!diskPriorityValid}
                 />
                 {!diskPriorityValid && (
@@ -1359,7 +1359,7 @@ export function InstanceCreateForm() {
                 )}
               </div>
 
-              {/* Max number of processes — containers only */}
+              {/* Max number of processes, containers only */}
               {form.type === "container" && (
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -2009,7 +2009,7 @@ export function InstanceCreateForm() {
         }}
       />
 
-      {/* Select base image dialog — Local + Custom + Ubuntu catalogs */}
+      {/* Select base image dialog: Local + Custom + Ubuntu catalogs */}
       <Dialog open={imageDialogOpen} onOpenChange={setImageDialogOpen}>
         <DialogContent className="sm:max-w-[75rem] max-h-[85vh] overflow-hidden flex flex-col">
           <DialogHeader>
@@ -2048,7 +2048,7 @@ export function InstanceCreateForm() {
               ))}
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Type</Label>
-                {/* Locked to the instance type — see filteredImageRows. */}
+                {/* Locked to the instance type. See filteredImageRows. */}
                 <Select value={fType} onValueChange={setFType} disabled>
                   <SelectTrigger>
                     <SelectValue />

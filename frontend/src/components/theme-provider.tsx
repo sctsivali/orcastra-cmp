@@ -42,7 +42,7 @@ function setThemeCookie(theme: Theme) {
  * ThemeProvider - Reads theme preference from PersonalizationProvider (DB-backed).
  * 
  * Uses a cookie hint (`orcastra-theme`) for instant theme application on page load
- * to prevent FOUC (Flash of Unstyled Content). The cookie is NOT the source of truth —
+ * to prevent FOUC (Flash of Unstyled Content). The cookie is NOT the source of truth.
  * PostgreSQL via PersonalizationProvider remains the single source of truth.
  * The cookie is merely a performance optimization for initial render.
  */

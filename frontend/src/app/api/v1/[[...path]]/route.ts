@@ -1,5 +1,5 @@
 /**
- * API Proxy Route — reverse-proxies /api/v1/* to the backend server.
+ * API Proxy Route: reverse-proxies /api/v1/* to the backend server.
  *
  * Next.js rewrites redirect (not proxy) when the destination has a different
  * protocol/host. This route handler does a proper server-side fetch and streams

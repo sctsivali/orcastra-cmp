@@ -1155,7 +1155,7 @@ export function useInstances(host?: string, opts?: { realtime?: boolean }) {
     // Default: poll so newly-created instances and status transitions show
     // without a manual refresh. When `realtime` is set (instances page), polling
     // is disabled and the list is kept current via the LXD events stream
-    // (see useInstanceStream) — the query just provides the initial snapshot.
+    // (see useInstanceStream), and the query just provides the initial snapshot.
     // note: was 10000 against a 30s backend TTL, so two of every three polls returned the
     // identical cached body. false when the events WebSocket is driving this key instead.
     refetchInterval: opts?.realtime ? false : POLL_MS.active,
