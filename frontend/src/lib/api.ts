@@ -11,6 +11,7 @@ import {
   VMActionRequest,
   VMActionResponse,
   ImageListResponse,
+  ImageUsageResponse,
   RemoteImageListResponse,
   NodesStatusResponse,
   ClusterAvailabilityResponse,
@@ -509,6 +510,10 @@ export const vmAPI = {
 };
 
 // Image Operations
+
+/** Upper bound on the delete dialog's dependency preflight. See imageAPI.usage. */
+const IMAGE_USAGE_TIMEOUT_MS = 8000;
+
 export const imageAPI = {
   listAll: async (opts: ReadOptions = {}): Promise<ImageListResponse[]> => {
     return fetchRead<ImageListResponse[]>("/images", opts);
@@ -522,6 +527,35 @@ export const imageAPI = {
     // The aggregated catalog can take ~30s on a cold cache (Ubuntu remote is
     // ~17 MB); allow a longer timeout than the 45s default.
     return fetchRead<RemoteImageListResponse>("/images/remote", opts, 120000);
+  },
+
+  // The authoritative dependent list, read before a delete is offered. The page's own count
+  // comes from a tenant-filtered instance list and can undercount, so the confirm dialog must
+  // not be built from it alone.
+  //
+  // important: a short timeout, not the 45s default. The confirm button waits on this, so a
+  // slow or restarting backend would otherwise hold a destructive control disabled for the
+  // best part of a minute with nothing to explain it. Eight seconds is long enough for a
+  // fleet fan-out that is going to answer, and the caller falls back to what it can already
+  // see. The backend refuses on its own either way, so giving up early is safe.
+  usage: async (fingerprint: string, host: string): Promise<ImageUsageResponse> => {
+    return fetchAPI<ImageUsageResponse>(
+      `/images/${encodeURIComponent(fingerprint)}/usage?host=${encodeURIComponent(host)}`,
+      {},
+      IMAGE_USAGE_TIMEOUT_MS,
+    );
+  },
+
+  // important: (host, fingerprint) is the key, not the fingerprint alone. An image store is
+  // per cluster, so the same fingerprint can exist on several and each row names one.
+  // `force` overrides the backend's refusal when instances were built from the image; the
+  // backend, not this call, decides whether the refusal applies.
+  delete: async (fingerprint: string, host: string, force = false) => {
+    const params = new URLSearchParams({ host });
+    if (force) params.set("force", "true");
+    return fetchAPI(`/images/${encodeURIComponent(fingerprint)}?${params.toString()}`, {
+      method: "DELETE",
+    });
   },
 };
 

@@ -140,6 +140,7 @@ HIGH_SEVERITY_ACTIONS = {
     "project.delete",
     "storage.pool.delete",
     "storage.volume.delete",
+    "image.delete",
     "network.delete",
     "terminal.session.create",
     "console.session.create",

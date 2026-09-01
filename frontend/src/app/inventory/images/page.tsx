@@ -9,20 +9,26 @@ import {
   Table,
   TableBody,
   TableCell,
-  
+  TableHead,
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { formatInstanceType, formatLabel } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
-import { UploadCloud, Image as ImageIcon } from "lucide-react";
+import { UploadCloud, Image as ImageIcon, Rocket, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { useImages, useInstances } from "@/hooks/use-lxd";
+import { RowActions, type RowAction } from "@/components/ui/row-actions";
+import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { useToast } from "@/hooks/use-toast";
+import { buildCreateInstanceHref, seedTypeForImage } from "@/components/instance-create/prefill";
+import { useDeleteImage, useImages, useInstances } from "@/hooks/use-lxd";
 import { TableLink } from "@/components/ui/table-link";
 import { ImageDetailDialog } from "./components/image-detail-dialog";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { ImageInfo, ImageListResponse, VMInfo } from "@/types/api";
+import { imageAPI } from "@/lib/api";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -45,6 +51,9 @@ import { Role } from "@/types/rbac";
 function imageLabel(image: { aliases?: string[]; description?: string; fingerprint: string }): string {
   return image.aliases?.find(Boolean) || image.description || image.fingerprint;
 }
+
+/** A row of the table: an image plus the cluster it was read from. See allImages below. */
+type ImageRow = ImageInfo & { node: string };
 
 const IMAGES = defineTable<ImageInfo>()({
   searchPlaceholder: "Search images",
@@ -123,6 +132,23 @@ function ImagesContent() {
   const { hasRole } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
   const canUpload = hasRole(Role.PARTNER);
+  // The same gate as upload, and the same gate the DELETE endpoint applies. A tenant gets no
+  // actions column at all rather than a column of reasons it cannot act.
+  const canManage = canUpload;
+
+  const { navigate } = useNavigationProgress();
+  const { toast } = useToast();
+  const deleteImage = useDeleteImage();
+  const [deleteTarget, setDeleteTarget] = useState<ImageRow | null>(null);
+  // Held one render longer than deleteTarget so the dialog keeps its heading through Radix's
+  // exit fade instead of blanking to "Delete image ?".
+  const [deleteDisplay, setDeleteDisplay] = useState<ImageRow | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Dependents the backend knew about and this page could not see. The instances list is
+  // tenant-filtered server side, so a local count of zero is not proof of zero.
+  const [serverDependents, setServerDependents] = useState<string[] | null>(null);
+  // null while the preflight is in flight, so the confirm can block until it answers.
+  const preflightPending = deleteTarget !== null && serverDependents === null;
 
   const resetPage = () => setCurrentPage(1);
 
@@ -168,10 +194,104 @@ function ImagesContent() {
   );
 
   const totalPages = Math.ceil(sortedImages.length / pageSize);
+  // note: the cast restores what allImages already guarantees. Every row is built there with
+  // `node: host.host`, but the filter and sort pipeline is generic over ImageInfo, whose own
+  // `node` is optional, so the narrowing is lost in transit rather than being unproven.
   const paginatedImages = sortedImages.slice(
     (currentPage - 1) * pageSize,
     currentPage * pageSize
-  );
+  ) as ImageRow[];
+
+  // Header, cells and the empty row's span move together. Deriving all three from one number
+  // is what keeps zz-colspan-parity green when a column appears or disappears.
+  const columnCount = 6 + (nodes.length > 0 ? 1 : 0) + (canManage ? 1 : 0);
+
+  const openDelete = async (image: ImageRow) => {
+    setDeleteTarget(image);
+    setDeleteDisplay(image);
+    setDeleteError(null);
+    // Ask the cluster rather than trusting the page. instancesByImage is built from a
+    // tenant-filtered list, so zero locally is not zero on the cluster, and the operator
+    // should see that before committing rather than after being refused.
+    setServerDependents(null);
+    try {
+      const usage = await imageAPI.usage(image.fingerprint, image.node);
+      setServerDependents(usage.dependents);
+    } catch {
+      // A failed preflight must not block the delete: the backend refuses on its own if
+      // anything depends on the image. Fall back to what this page can see.
+      setServerDependents(
+        (instancesByImage.get(image.fingerprint) ?? []).map((vm) => vm.name),
+      );
+    }
+  };
+
+  const closeDelete = () => {
+    setDeleteTarget(null);
+    setDeleteError(null);
+    setServerDependents(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteError(null);
+    try {
+      await deleteImage.mutateAsync({
+        fingerprint: deleteTarget.fingerprint,
+        host: deleteTarget.node,
+        // Only ever forced when the operator was shown the dependents and ticked through.
+        force: (serverDependents?.length ?? 0) > 0,
+      });
+      toast({
+        title: "Image deleted",
+        description: `${imageLabel(deleteTarget)} removed from ${deleteTarget.node}.`,
+      });
+      closeDelete();
+      refetch();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not delete the image";
+      // Stay open and say why. Closing on failure loses both the message and the row it
+      // was about.
+      setDeleteError(message);
+    }
+  };
+
+  const actionsFor = (image: ImageRow): RowAction[] => {
+    const unreachable = unreachableNodes.includes(image.node);
+    const reason = isReadOnly
+      ? "Disabled in read-only mode"
+      : unreachable
+        ? `${image.node} is not reachable right now`
+        : undefined;
+    return [
+      {
+        id: "create-instance",
+        label: "Create Instance",
+        icon: Rocket,
+        unavailableReason: reason,
+        onSelect: () =>
+          navigate(
+            buildCreateInstanceHref({
+              node: image.node,
+              type: seedTypeForImage(image.type),
+              source: "image",
+              image: image.fingerprint,
+            }),
+          ),
+      },
+      {
+        id: "delete-image",
+        label: "Delete Image",
+        icon: Trash2,
+        destructive: true,
+        separatorBefore: true,
+        unavailableReason: reason,
+        onSelect: () => void openDelete(image),
+      },
+    ];
+  };
+
+  const deleteDependents = serverDependents ?? [];
 
   const formatSize = (bytes: number) => {
     if (bytes === 0) return "0 B";
@@ -234,6 +354,13 @@ function ImagesContent() {
                 <SortableTableHead label="Size" field="size" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />}
                 <SortableTableHead label="Flags" field="flags" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {/* Not sortable and not a value, so it carries its name for a screen reader
+                    rather than a visible label that would read as a sixth column of data. */}
+                {canManage && (
+                  <TableHead className="w-12 text-right">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -242,16 +369,16 @@ function ImagesContent() {
                 // already names which nodes are missing and why; saying it twice, in two
                 // treatments, reads as two separate problems.
                 <TableEmptyRow
-                  // Derived from the header's own array rather than hardcoded to the
-                  // with-Node count. note: unlike the sibling pages, `nodes` here excludes a
-                  // host flagged unreachable, so this column can vanish from a populated
-                  // table, not only from an empty scope.
-                  colSpan={nodes.length > 0 ? 7 : 6}
+                  // Derived from the header's own conditions rather than hardcoded. note:
+                  // unlike the sibling pages, `nodes` here excludes a host flagged
+                  // unreachable, so that column can vanish from a populated table, not only
+                  // from an empty scope. The actions column moves with the role.
+                  colSpan={columnCount}
                   icon={ImageIcon}
                   title="No images found"
                 />
               ) : (
-                paginatedImages.map((image: any, idx: number) => (
+                paginatedImages.map((image: ImageRow, idx: number) => (
                   <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
                     {/* important: the row names itself by whatever a human or a registry wrote,
                         and only falls back to the fingerprint when an image carries neither. It
@@ -304,6 +431,14 @@ function ImagesContent() {
                         image.auto_update && "Auto-update",
                       ].filter(Boolean).join(", ") || <TableEmptyValue label="No flags" />}
                     </TableCell>
+                    {canManage && (
+                      <TableCell className="text-right">
+                        <RowActions
+                          triggerLabel={`Actions for image ${imageLabel(image)}`}
+                          actions={actionsFor(image)}
+                        />
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))
               )}
@@ -341,6 +476,46 @@ function ImagesContent() {
         open={uploadOpen}
         onOpenChange={setUploadOpen}
         onUploaded={() => refetch()}
+      />
+
+      <DestructiveConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => {
+          if (!next) closeDelete();
+        }}
+        title={`Delete image ${deleteDisplay ? imageLabel(deleteDisplay) : ""}?`}
+        description={
+          <>
+            This removes the image from {deleteDisplay?.node}. Instances already built from it
+            keep running, but it can no longer be used to launch or refresh.
+            {deleteDisplay?.cached
+              ? " This one was pulled from a remote, so it can be fetched again."
+              : " This one was uploaded here, so it cannot be recovered from a remote."}
+            {deleteDisplay?.public
+              ? " It is a public image, so anything else using this cluster loses it too."
+              : ""}
+          </>
+        }
+        dependents={
+          deleteDependents.length > 0
+            ? {
+                summary: `${deleteDependents.length} instance(s) on ${deleteDisplay?.node} were created from this image`,
+                names: deleteDependents,
+              }
+            : undefined
+        }
+        acknowledgeLabel={
+          deleteDependents.length > 0
+            ? "I understand these instances were built from this image and will keep running without it."
+            : undefined
+        }
+        confirmLabel="Delete image"
+        pendingLabel="Deleting"
+        pending={deleteImage.isPending}
+        preparing={preflightPending}
+        preparingLabel="Checking what was built from this image."
+        error={deleteError}
+        onConfirm={confirmDelete}
       />
     </div>
   );

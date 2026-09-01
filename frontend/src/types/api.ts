@@ -199,6 +199,14 @@ export interface ImageListResponse {
   error?: string | null;
 }
 
+/** What is standing between an image and its deletion, straight from the cluster. */
+export interface ImageUsageResponse {
+  host: string;
+  fingerprint: string;
+  /** Instances on that cluster created from this image. */
+  dependents: string[];
+}
+
 // GPU DRM (Direct Rendering Manager) Info
 export interface GPUDRMInfo {
   id?: number;

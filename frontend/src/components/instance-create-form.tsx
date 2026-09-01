@@ -1,7 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { useSearchParams } from "next/navigation";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import { readCreateSeed } from "@/components/instance-create/prefill";
 import {
   ArrowLeft,
   Monitor,
@@ -199,7 +202,7 @@ const DEFAULT_FORM: FormState = {
   tags: [],
 };
 
-export function InstanceCreateForm() {
+function InstanceCreateFormContent() {
   // note: navigate() rather than a bare push, so the leaving transition raises the
   // global progress bar. These hops follow a mutation and are the slowest in the app.
   const { navigate } = useNavigationProgress();
@@ -211,7 +214,19 @@ export function InstanceCreateForm() {
   // disabled check and each fire a create, provisioning two instances. This ref is the
   // synchronous half of the guard; the disabled prop stays for the visible state.
   const submitInFlightRef = useRef(false);
-  const [form, setForm] = useState<FormState>(DEFAULT_FORM);
+  // A row action on the Images or ISO Images table lands here with the node and boot source
+  // already chosen. The contract lives in components/instance-create/prefill.ts so the two
+  // halves cannot drift.
+  //
+  // important: seeded through a lazy initialiser rather than an effect. selectNode, selectType
+  // and selectProject clear the boot source whenever one of them changes, and they are the
+  // pickers' own handlers, so seeding the initial state cannot trip them. An effect that wrote
+  // the same values after mount would.
+  const searchParams = useSearchParams();
+  const seedRef = useRef(readCreateSeed(searchParams));
+  const [form, setForm] = useState<FormState>(() => ({ ...DEFAULT_FORM, ...seedRef.current }));
+  const [seedDropped, setSeedDropped] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
 
@@ -514,6 +529,97 @@ export function InstanceCreateForm() {
       (img.variant && img.variant !== "default" ? ` (${img.variant})` : ""),
   }));
   const imageRows = [...localRows, ...remoteRows];
+
+  // --- Deep-link seed: verify it, then get out of the way ----------------------
+  //
+  // A row action can only encode what was true when the operator clicked. The node can go
+  // offline, the image can be deleted, the ISO can be detached and removed. Submitting a form
+  // that looks ready and is not is worse than not seeding at all, so the seed is checked
+  // against the loaded lists once and cleared with a stated reason if it no longer holds.
+  const seed = seedRef.current;
+  const seedCheckedRef = useRef(false);
+  useEffect(() => {
+    if (!seed || seedCheckedRef.current) return;
+    // Nothing to check against yet. Every list below is keyed on the seeded node.
+    if (loadingNodes || nodeOptions.length === 0) return;
+    if (seed.sourceType === "image" && loadingImages) return;
+    if (seed.sourceType === "none" && loadingVolumes) return;
+    seedCheckedRef.current = true;
+
+    const nodeExists = nodeOptions.some((option) => option.value === seed.selectedNode);
+    if (!nodeExists) {
+      setForm({ ...DEFAULT_FORM });
+      setSeedDropped(
+        `${seed.selectedNode} is not available to you right now, so nothing was pre-filled.`,
+      );
+      return;
+    }
+
+    if (seed.sourceType === "image" && seed.selectedImage) {
+      if (!localFingerprints.has(seed.selectedImage)) {
+        setForm((prev) => ({
+          ...prev,
+          sourceType: "image",
+          selectedImage: "",
+          imageServer: "",
+          imageLabel: "",
+        }));
+        setSeedDropped(
+          `That image is no longer on ${seed.selectedNode}, so pick another base image.`,
+        );
+        return;
+      }
+      // Show the name the operator knows rather than the fingerprint the URL carried. The
+      // label is resolved here, never read from the query string, which is display text a
+      // link could otherwise put words into.
+      const row = localRows.find((r) => r.value === seed.selectedImage);
+      if (row) setForm((prev) => ({ ...prev, imageLabel: row.label }));
+      return;
+    }
+
+    if (seed.sourceType === "none" && seed.selectedIso) {
+      const stillThere = isoVolumes.some(
+        (v) => v.name === seed.selectedIso && v.pool === seed.selectedIsoPool,
+      );
+      if (!stillThere) {
+        setForm((prev) => ({
+          ...prev,
+          selectedIso: "",
+          selectedIsoPool: "",
+          selectedIsoLabel: "",
+        }));
+        setSeedDropped(
+          `That ISO is no longer in ${seed.selectedIsoPool} on ${seed.selectedNode}, so pick another one.`,
+        );
+      }
+    }
+  }, [
+    seed,
+    loadingNodes,
+    nodeOptions,
+    loadingImages,
+    loadingVolumes,
+    localFingerprints,
+    localRows,
+    isoVolumes,
+  ]);
+
+  // Land on the one field the deep link could not fill. Only when a link actually seeded
+  // something: focusing on an ordinary visit would steal focus from the node picker, which is
+  // where an operator starting from scratch needs to be.
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!seed || focusedRef.current || !nameInputRef.current) return;
+    focusedRef.current = true;
+    nameInputRef.current.focus({ preventScroll: true });
+    const reduced =
+      typeof window !== "undefined" &&
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    nameInputRef.current.scrollIntoView({
+      block: "center",
+      behavior: reduced ? "auto" : "smooth",
+    });
+  }, [seed]);
 
   // Dialog + filter state
   const [imageDialogOpen, setImageDialogOpen] = useState(false);
@@ -947,6 +1053,18 @@ export function InstanceCreateForm() {
         }}
         className="space-y-6"
       >
+        {/* A deep link from the Images or ISO Images table could not be honoured in full. Said
+            here rather than silently: a form that looks pre-filled and is not is worse than
+            one that is plainly empty. */}
+        {seedDropped && (
+          <div
+            role="status"
+            className="rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm text-foreground"
+          >
+            {seedDropped}
+          </div>
+        )}
+
         {/* Main configuration */}
         <Card>
             <CardHeader>
@@ -1004,6 +1122,7 @@ export function InstanceCreateForm() {
                 <Label htmlFor="name">Instance Name *</Label>
                 <Input
                   id="name"
+                  ref={nameInputRef}
                   value={form.name}
                   onChange={(e) => updateField("name", e.target.value)}
                   placeholder="my-instance"
@@ -2143,5 +2262,17 @@ export function InstanceCreateForm() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+// important: the boundary lives with the reader, not with the route. useSearchParams below
+// opts this subtree out of prerendering, and without a <Suspense> above it `next build` fails
+// on whichever route mounts this component. Putting it here means a future call site cannot
+// forget it. Guarded by scripts/checks/check-searchparams-suspense.mjs.
+export function InstanceCreateForm() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <InstanceCreateFormContent />
+    </Suspense>
   );
 }

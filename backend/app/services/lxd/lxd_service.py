@@ -467,6 +467,17 @@ class LXDService:
     async def list_images(self, host: str) -> List[ImageInfo]:
         """List available images on a host."""
         return await self.image_manager.list_images(host)
+
+    # note: the two below are deliberately sync. pylxd blocks, and a delete waits on a real
+    # LXD operation, so the router hands them to run_blocking with an explicit timeout rather
+    # than this layer hiding the block behind an async signature.
+    def get_image(self, host: str, fingerprint: str) -> Optional[ImageInfo]:
+        """Read one image's metadata. None when that host has no such fingerprint."""
+        return self.image_manager.get_image(host, fingerprint)
+
+    def delete_image(self, host: str, fingerprint: str) -> bool:
+        """Delete an image from a host's image store. False when it was already gone."""
+        return self.image_manager.delete_image(host, fingerprint)
     
     # Project operations
     async def list_projects(self, host: str) -> List[Dict[str, Any]]:

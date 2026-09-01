@@ -258,6 +258,20 @@ export function useImagesByHost(host: string) {
   });
 }
 
+export function useDeleteImage() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ fingerprint, host, force }: { fingerprint: string; host: string; force?: boolean }) =>
+      imageAPI.delete(fingerprint, host, force),
+    onSuccess: () => {
+      // queryKeys.images is ["images"] and imagesByHost is ["images", host], so one
+      // invalidation covers the fleet list and every per-host list the create form holds.
+      queryClient.invalidateQueries({ queryKey: queryKeys.images });
+    },
+  });
+}
+
 export function useRemoteImages() {
   return useRefreshableQuery({
     queryKey: ["remoteImages", "all"],
@@ -977,7 +991,11 @@ export function useStorageVolumes(pool?: string, host?: string) {
 export function useStorageVolume(pool: string, type: string, name: string, host: string) {
   return useQuery({
     queryKey: ["storageVolume", pool, type, name, host],
-    queryFn: () => api.storageVolumes.get(pool, type, name, host),
+    // important: the API takes (volumeType, name, host, pool) and this used to forward
+    // (pool, type, name, host), so every argument landed one slot early and the request went
+    // to /storage/volumes/{pool}/{type}?host={name}&pool={host}. It never fired because
+    // nothing called this hook. Adding the first caller is what would have shipped it.
+    queryFn: () => api.storageVolumes.get(type, name, host, pool),
     enabled: !!pool && !!type && !!name && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -996,10 +1014,11 @@ export function useCreateStorageVolume() {
 
 export function useDeleteStorageVolume() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: ({ pool, type, name, host }: { pool: string; type: string; name: string; host: string }) => 
-      api.storageVolumes.delete(pool, type, name, host),
+    // important: same scrambled argument order as useStorageVolume above. See the note there.
+    mutationFn: ({ pool, type, name, host }: { pool: string; type: string; name: string; host: string }) =>
+      api.storageVolumes.delete(type, name, host, pool),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["storageVolumes"] });
     },

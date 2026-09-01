@@ -11,7 +11,7 @@ import {
   Table,
   TableBody,
   TableCell,
-  
+  TableHead,
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { TableEmptyRow } from "@/components/ui/table-text";
@@ -19,16 +19,21 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { IsoUploadDialog } from "@/components/iso-upload-dialog";
-import { useStorageVolumes } from "@/hooks/use-lxd";
+import { useDeleteStorageVolume, useStorageVolumes } from "@/hooks/use-lxd";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { Role } from "@/types/rbac";
-import { UploadCloud, Disc } from "lucide-react";
+import { UploadCloud, Disc, Rocket, Trash2 } from "lucide-react";
+import { RowActions, type RowAction } from "@/components/ui/row-actions";
+import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
+import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { useToast } from "@/hooks/use-toast";
+import { buildCreateInstanceHref } from "@/components/instance-create/prefill";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { projectsFromUsedBy } from "@/lib/used-by";
+import { projectsFromUsedBy, referencesFromUsedBy } from "@/lib/used-by";
 import {
   ProjectsCell,
   UsedByCell,
@@ -86,10 +91,22 @@ function IsoImagesContent() {
   const { hasRole } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
   const canUpload = hasRole(Role.PARTNER);
+  // The same gate as upload, and the same gate the DELETE endpoint applies. A tenant gets no
+  // actions column at all rather than a column of reasons it cannot act.
+  const canManage = canUpload;
+
+  const { navigate } = useNavigationProgress();
+  const { toast } = useToast();
+  const deleteVolume = useDeleteStorageVolume();
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<StorageVolumeInfo | null>(null);
+  // Held one render longer than deleteTarget so the dialog keeps its heading through Radix's
+  // exit fade instead of blanking mid-sentence.
+  const [deleteDisplay, setDeleteDisplay] = useState<StorageVolumeInfo | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const resetPage = () => setCurrentPage(1);
 
@@ -102,7 +119,7 @@ function IsoImagesContent() {
   );
 
   // Header, cell and the empty row's width move together; a mismatch renders a short row.
-  const columnCount = nodes.length > 0 ? 5 : 4;
+  const columnCount = 4 + (nodes.length > 0 ? 1 : 0) + (canManage ? 1 : 0);
 
   const availableFields = useMemo(
     () =>
@@ -133,6 +150,89 @@ function IsoImagesContent() {
     (currentPage - 1) * pageSize,
     currentPage * pageSize,
   );
+
+  const attachedTo = (volume: StorageVolumeInfo): string[] =>
+    referencesFromUsedBy(volume.used_by)
+      .map((reference) => reference.instance || reference.name || reference.raw)
+      .filter((name): name is string => !!name);
+
+  const closeDelete = () => {
+    setDeleteTarget(null);
+    setDeleteError(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget?.node) return;
+    setDeleteError(null);
+    try {
+      await deleteVolume.mutateAsync({
+        // An ISO is a custom volume with content_type "iso", so the endpoint is the generic one.
+        type: "custom",
+        name: deleteTarget.name,
+        pool: deleteTarget.pool,
+        host: deleteTarget.node,
+      });
+      toast({
+        title: "ISO deleted",
+        description: `${deleteTarget.name} removed from ${deleteTarget.pool} on ${deleteTarget.node}.`,
+      });
+      closeDelete();
+      refetch();
+    } catch (err) {
+      // Stay open and say why. Closing on failure loses both the message and the row it was
+      // about, and the message here is the actionable half: which instance to detach first.
+      setDeleteError(err instanceof Error ? err.message : "Could not delete the ISO");
+    }
+  };
+
+  const actionsFor = (volume: StorageVolumeInfo): RowAction[] => {
+    // note: every row the API returns carries its node, but the type says otherwise and both
+    // actions address a specific cluster. Offering them without one would build a create link
+    // to nowhere and a delete with no target, so a nodeless row gets no menu at all.
+    const node = volume.node;
+    if (!node) return [];
+
+    const attached = attachedTo(volume);
+    const readOnlyReason = isReadOnly ? "Disabled in read-only mode" : undefined;
+    return [
+      {
+        id: "create-vm",
+        label: "Create VM",
+        icon: Rocket,
+        unavailableReason: readOnlyReason,
+        onSelect: () =>
+          navigate(
+            buildCreateInstanceHref({
+              node,
+              // ISO boot needs an empty root disk to install onto, which only a VM has.
+              type: "vm",
+              source: "iso",
+              iso: volume.name,
+              pool: volume.pool,
+            }),
+          ),
+      },
+      {
+        id: "delete-iso",
+        label: "Delete ISO",
+        icon: Trash2,
+        destructive: true,
+        separatorBefore: true,
+        // Unlike an image, there is no force. LXD cannot remove an attached volume, so an
+        // enabled item here would only lead to a refusal one click later.
+        unavailableReason:
+          readOnlyReason ??
+          (attached.length > 0
+            ? `Attached to ${attached.length === 1 ? attached[0] : `${attached.length} instances`}`
+            : undefined),
+        onSelect: () => {
+          setDeleteTarget(volume);
+          setDeleteDisplay(volume);
+          setDeleteError(null);
+        },
+      },
+    ];
+  };
 
   if (isLoading) return <LoadingLottiePage />;
 
@@ -181,6 +281,13 @@ function IsoImagesContent() {
                 )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {/* Not sortable and not a value, so it carries its name for a screen reader
+                    rather than a visible label that would read as another column of data. */}
+                {canManage && (
+                  <TableHead className="w-12 text-right">
+                    <span className="sr-only">Actions</span>
+                  </TableHead>
+                )}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -219,6 +326,14 @@ function IsoImagesContent() {
                         onOpen={() => usedBy.openProjects(isoSubject(v))}
                       />
                     </TableCell>
+                    {canManage && (
+                      <TableCell className="text-right">
+                        <RowActions
+                          triggerLabel={`Actions for ISO ${v.name}`}
+                          actions={actionsFor(v)}
+                        />
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))
               )}
@@ -244,6 +359,25 @@ function IsoImagesContent() {
         open={uploadOpen}
         onOpenChange={setUploadOpen}
         onUploaded={() => refetch()}
+      />
+
+      <DestructiveConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(next) => {
+          if (!next) closeDelete();
+        }}
+        title={`Delete ISO ${deleteDisplay?.name ?? ""}?`}
+        description={
+          <>
+            This removes the volume from pool {deleteDisplay?.pool} on {deleteDisplay?.node}.
+            Upload the ISO again to get it back; nothing else on the cluster keeps a copy.
+          </>
+        }
+        confirmLabel="Delete ISO"
+        pendingLabel="Deleting"
+        pending={deleteVolume.isPending}
+        error={deleteError}
+        onConfirm={confirmDelete}
       />
     </div>
   );

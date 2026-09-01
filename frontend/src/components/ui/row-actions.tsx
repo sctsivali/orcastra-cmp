@@ -1,0 +1,127 @@
+"use client";
+
+import * as React from "react";
+import { MoreVertical } from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
+
+export interface RowAction {
+  /** Stable within one menu. Used as the React key and by specs to address an item. */
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  onSelect: () => void;
+  /** Paints the item with --destructive. Reserved for an action that removes something. */
+  destructive?: boolean;
+  /**
+   * Why this action is unavailable right now. Present means unavailable, and the string is
+   * shown under the label rather than only being a reason the code knows about.
+   */
+  unavailableReason?: string;
+  /** Renders a separator above this item. */
+  separatorBefore?: boolean;
+}
+
+interface RowActionsProps {
+  actions: RowAction[];
+  /**
+   * Names the trigger for a screen reader, ex; `Actions for image ubuntu/jammy`. Required:
+   * an icon-only button with no name announces as "button" and nothing else, which is the
+   * defect `scripts/checks/check-icon-button-names.mjs` exists to stop regrowing.
+   *
+   * note: named triggerLabel rather than label because an accessible name is sentence case
+   * while a menu item's `label` is Title Case. check-heading-case.mjs reads the key, so two
+   * different casing contracts must not share one name.
+   */
+  triggerLabel: string;
+  className?: string;
+}
+
+/**
+ * The kebab menu for a table row. One implementation, because three details here are easy to
+ * get wrong and each one has already been gotten wrong somewhere in this repo.
+ *
+ * important: the menu is controlled and closes itself before the handler runs, and every item
+ * calls preventDefault in onSelect. A row that is itself clickable (the images table opens a
+ * detail dialog from its fingerprint cell) otherwise sees the click fall through, and Radix's
+ * own close animation races a dialog opening in the same tick. Same recipe as
+ * components/node-status/node-status-card.tsx.
+ *
+ * important: an unavailable item is marked with aria-disabled, never with Radix's `disabled`
+ * prop. @radix-ui/react-menu passes `focusable: !disabled` to the roving-focus item and
+ * filters disabled items out of the collections that drive arrow keys and typeahead, and the
+ * house item class adds data-[disabled]:pointer-events-none on top. A `disabled` item is
+ * therefore unreachable by keyboard and emits no hover, so the reason it is unavailable could
+ * never be surfaced to anyone. Here the item stays focusable and explains itself instead.
+ * Same reasoning as components/create-menu/create-menu.tsx.
+ */
+export function RowActions({ actions, triggerLabel, className }: RowActionsProps) {
+  const [open, setOpen] = React.useState(false);
+
+  if (actions.length === 0) return null;
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={triggerLabel}
+          className={cn("h-8 w-8 p-0", className)}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreVertical className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      {/* note: the shared DropdownMenuContent animates in and out with no reduced-motion
+          guard. Fixing the primitive would touch every menu in the app, so the override is
+          scoped here, as create-menu.tsx already does. */}
+      <DropdownMenuContent align="end" className="w-60 motion-reduce:animate-none">
+        {actions.map((action) => {
+          const Icon = action.icon;
+          const unavailable = !!action.unavailableReason;
+          return (
+            <React.Fragment key={action.id}>
+              {action.separatorBefore && <DropdownMenuSeparator />}
+              <DropdownMenuItem
+                aria-disabled={unavailable || undefined}
+                data-action={action.id}
+                className={cn(
+                  "items-start gap-2",
+                  unavailable && "opacity-60",
+                  !unavailable && action.destructive && "text-destructive focus:text-destructive",
+                )}
+                onSelect={(e) => {
+                  // Radix closes on select by default, which would unmount this menu while
+                  // the handler is still opening a dialog.
+                  e.preventDefault();
+                  if (unavailable) return;
+                  setOpen(false);
+                  action.onSelect();
+                }}
+              >
+                <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block">{action.label}</span>
+                  {action.unavailableReason && (
+                    <span className="mt-0.5 block text-xs text-muted-foreground">
+                      {action.unavailableReason}
+                    </span>
+                  )}
+                </span>
+              </DropdownMenuItem>
+            </React.Fragment>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}

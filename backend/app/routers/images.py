@@ -3,7 +3,7 @@ API Router for LXD image operations.
 Provides endpoints for listing available images on each node.
 """
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Path, Query
 from typing import Dict, List, Optional, Set
 import logging
 import asyncio
@@ -12,6 +12,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
+    ImageInfo,
     ImageListResponse,
     RemoteImageInfo,
     RemoteImageListResponse,
@@ -23,13 +24,23 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.lxd_errors import lxd_http_error
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
-from app.core.dependencies import require_tenant
+from app.core.dependencies import (
+    AuthenticatedUser,
+    check_read_only_mode,
+    require_partner,
+    require_tenant,
+)
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
 from app.core.tenant_visibility import tenant_acl_active
+from app.services.activity_logger import get_activity_logger
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
 router = APIRouter(
     prefix="/images",
@@ -39,6 +50,14 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+
+# A delete waits on a real LXD operation that has to unlink the image's storage volume, so it
+# is slower than a read but nowhere near an instance create.
+IMAGE_DELETE_TIMEOUT = 60.0
+IMAGE_DELETE_MAX_IN_FLIGHT = 5
+# How many dependent instances a 409 names before it stops listing and starts counting. Long
+# enough to act on, short enough that the message stays readable in a toast.
+DEPENDENTS_NAMED_IN_ERROR = 5
 
 
 # Remote simplestreams catalogs to aggregate (LXD's `images:` and `ubuntu:`).
@@ -369,3 +388,239 @@ async def list_node_images(
     except Exception as e:
         logger.error(f"Error listing images from {host}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _image_fingerprint_of(vm) -> Optional[str]:
+    """The fingerprint an instance was built from, or None.
+
+    Same two keys, in the same order, as the tenant filter above. They must not drift: one
+    deciding an image is unused while the other decides it is visible is exactly the kind of
+    disagreement that makes a delete look safe when it is not.
+    """
+    config = getattr(vm, "config", None) or {}
+    return config.get("volatile.base_image") or config.get("image.fingerprint")
+
+
+async def _instances_using_image(
+    lxd_service: LXDService, host: str, fingerprint: str
+) -> List[str]:
+    """Names of instances on `host` that were created from `fingerprint`.
+
+    note: this pays a fleet-wide fan-out to answer a single-host question. It reuses the same
+    call the tenant image filter already makes on every scoped list, so it is a proven path
+    that respects org scope, and the connection breaker short-circuits clusters that are down.
+    A delete is rare and deliberate; a cheaper bespoke pylxd scan here would be a second way
+    of reading instance config, which is how the two keys above came to disagree elsewhere.
+    """
+    all_vms, _ = await lxd_service.list_all_vms()
+    names = []
+    for vm in all_vms:
+        if getattr(vm, "host", None) != host:
+            continue
+        used = _image_fingerprint_of(vm)
+        if not used:
+            continue
+        # LXD stores volatile.base_image as the full digest, but an instance created from a
+        # short fingerprint can carry the prefix. Compare both ways, as the tenant filter does.
+        if used == fingerprint or used.startswith(fingerprint) or fingerprint.startswith(used):
+            names.append(getattr(vm, "name", "") or "")
+    return sorted(n for n in names if n)
+
+
+def _dependents_detail(fingerprint: str, names: List[str]) -> str:
+    shown = ", ".join(names[:DEPENDENTS_NAMED_IN_ERROR])
+    rest = len(names) - DEPENDENTS_NAMED_IN_ERROR
+    if rest > 0:
+        shown = f"{shown} and {rest} more"
+    return (
+        f"Image {fingerprint[:12]} is the base image for {len(names)} instance(s): {shown}. "
+        "Those instances keep running if it is deleted, but the image can no longer be used "
+        "to launch or refresh. Repeat with force=true to delete it anyway."
+    )
+
+
+class ImageUsageResponse(BaseModel):
+    """What is standing between an image and its deletion."""
+    host: str = Field(..., description="Cluster the image lives on")
+    fingerprint: str = Field(..., description="Full image fingerprint")
+    dependents: List[str] = Field(
+        ..., description="Instances on that cluster created from this image"
+    )
+
+
+@router.get(
+    "/{fingerprint}/usage",
+    response_model=ImageUsageResponse,
+    summary="Instances built from an image",
+    description=(
+        "Names the instances on one cluster that were created from an image. Read this before "
+        "offering a delete: the answer is authoritative, where a count derived from a "
+        "tenant-filtered instance list can be an undercount."
+    ),
+    responses={
+        403: {"model": ErrorResponse, "description": "Cluster out of scope"},
+        503: {"model": ErrorResponse, "description": "Cluster unreachable"},
+    },
+)
+async def image_usage(
+    fingerprint: str = Path(..., pattern="^[0-9a-f]{64}$", description="Full image fingerprint"),
+    host: str = Query(..., description="Target cluster"),
+    lxd_service: LXDService = Depends(get_lxd_service),
+    # important: partner, not tenant. This names instances across the whole org scope without
+    # the tenant ACL narrowing, which is correct for the operator who may delete the image and
+    # would be a disclosure surface for anyone who may not.
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """List the instances on `host` that were created from `fingerprint`."""
+    verify_cluster_access(host)
+    try:
+        dependents = await _instances_using_image(lxd_service, host, fingerprint)
+        return ImageUsageResponse(host=host, fingerprint=fingerprint, dependents=dependents)
+    except HTTPException:
+        raise
+    except LXDConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error reading image usage for {fingerprint} on {host}: {e}")
+        raise HTTPException(status_code=500, detail="Could not determine image usage")
+
+
+@router.delete(
+    "/{fingerprint}",
+    response_model=dict,
+    summary="Delete an image",
+    description=(
+        "Delete an image from one cluster's image store. Refuses with 409 when instances on "
+        "that cluster were created from it, unless force is set. Deleting an image does not "
+        "affect instances already built from it. What is lost is the ability to launch or "
+        "refresh from that fingerprint."
+    ),
+    responses={
+        200: {"description": "Image deleted"},
+        403: {"model": ErrorResponse, "description": "Cluster out of scope"},
+        404: {"model": ErrorResponse, "description": "No such image on that cluster"},
+        409: {"model": ErrorResponse, "description": "Instances depend on this image"},
+        503: {"model": ErrorResponse, "description": "Cluster unreachable"},
+    },
+)
+async def delete_image(
+    # important: the full 64-character digest only. LXD resolves a prefix, so accepting one
+    # would let a short string delete whichever image happened to match it first.
+    fingerprint: str = Path(..., pattern="^[0-9a-f]{64}$", description="Full image fingerprint"),
+    host: str = Query(..., description="Target cluster"),
+    force: bool = Query(False, description="Delete even when instances depend on this image"),
+    lxd_service: LXDService = Depends(get_lxd_service),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """Delete an image from a cluster's image store."""
+    verify_cluster_access(host)
+
+    dependents: List[str] = []
+    image: Optional[ImageInfo] = None
+    try:
+        try:
+            image = await run_blocking(
+                lxd_service.get_image,
+                host,
+                fingerprint,
+                timeout=IMAGE_DELETE_TIMEOUT,
+                label=f"get_image[{host}/{fingerprint[:12]}]",
+                executor=_executor,
+                max_in_flight=IMAGE_DELETE_MAX_IN_FLIGHT,
+            )
+        except BlockingTimeout:
+            raise HTTPException(
+                status_code=504, detail=f"Reading the image on {host} timed out"
+            ) from None
+        except BlockingPoolFull:
+            raise HTTPException(
+                status_code=503, detail="Image operations saturated; please retry shortly"
+            ) from None
+
+        if image is None:
+            raise HTTPException(
+                status_code=404, detail=f"Image '{fingerprint[:12]}' not found on {host}"
+            )
+
+        # important: the refusal is here, not only in the UI. The dashboard's own dependent
+        # count is tenant-filtered, and an API key reaching this route has no UI at all.
+        dependents = await _instances_using_image(lxd_service, host, fingerprint)
+        if dependents and not force:
+            raise HTTPException(status_code=409, detail=_dependents_detail(fingerprint, dependents))
+
+        try:
+            deleted = await run_blocking(
+                lxd_service.delete_image,
+                host,
+                fingerprint,
+                timeout=IMAGE_DELETE_TIMEOUT,
+                label=f"delete_image[{host}/{fingerprint[:12]}]",
+                executor=_executor,
+                max_in_flight=IMAGE_DELETE_MAX_IN_FLIGHT,
+            )
+        except BlockingTimeout:
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"Deleting the image on {host} exceeded {IMAGE_DELETE_TIMEOUT:.0f}s and may "
+                    "still be in progress; re-check the image list before retrying"
+                ),
+            ) from None
+        except BlockingPoolFull:
+            raise HTTPException(
+                status_code=503, detail="Image operations saturated; please retry shortly"
+            ) from None
+
+        if not deleted:
+            # It existed a moment ago and does not now. Someone else removed it, which is the
+            # outcome the caller asked for, so this is not an error.
+            logger.info(f"Image {fingerprint[:12]} on {host} was already gone")
+
+        activity_logger.log_activity(
+            action="image.delete",
+            target_type="image",
+            target_id=fingerprint,
+            target_host=host,
+            result="success",
+            details={
+                "force": force,
+                "dependents": len(dependents),
+                "aliases": image.aliases or [],
+                "cached": image.cached,
+                "public": image.public,
+                "type": image.type,
+                "already_gone": not deleted,
+            },
+        )
+        # Readers hold a cached list for up to 180s, so without this the image is still on
+        # screen after a successful delete. The scope digest is a suffix of the key, so one
+        # pattern clears every scope's copy rather than only the caller's.
+        get_cache_manager().invalidate_resource_cache("images")
+        return {
+            "success": True,
+            "message": f"Image {fingerprint[:12]} deleted from {host}",
+            "forced": bool(force and dependents),
+        }
+    except HTTPException:
+        # important: let the 403, 404, 409 and the guards' 503 through. Without this the broad
+        # handler below turns every one of them into a 500.
+        raise
+    except LXDConnectionError as e:
+        activity_logger.log_activity(
+            action="image.delete", target_type="image", target_id=fingerprint,
+            target_host=host, result="failure", error_message=str(e),
+        )
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error deleting image {fingerprint} from {host}: {e}")
+        activity_logger.log_activity(
+            action="image.delete",
+            target_type="image",
+            target_id=fingerprint,
+            target_host=host,
+            result="failure",
+            error_message=str(e),
+            details={"force": force, "dependents": len(dependents)},
+        )
+        raise lxd_http_error(e, "Image", fingerprint[:12])
