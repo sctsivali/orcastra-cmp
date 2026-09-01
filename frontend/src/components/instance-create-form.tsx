@@ -438,15 +438,17 @@ function InstanceCreateFormContent() {
     secBaseHostId: "",
     secIdmapSize: "",
     secUniqueIdmap: "",
-    // important: inherit, like every other key here. This used to default to "false", which is
-    // the one value setIf does not drop, so every VM create shipped security.secureboot whether
-    // the operator touched the control or not. LXD 5.21 accepts it; LXD 6.9 answers
-    // `"security.secureboot" is not supported for "virtual-machine"` and refuses the create,
-    // and because the create is non-blocking that refusal reached nobody. Measured on a live
-    // 5.21.7 cluster: a VM created without the key comes back carrying
-    // image.requirements.secureboot=false, so the unsigned-image case the old default existed
-    // to serve is already handled by the image's own metadata.
-    secSecureboot: "",
+    // Default OFF, because most community VM images are not Secure Boot signed.
+    //
+    // important: this is the one advanced key deliberately NOT left to inherit, and the
+    // compatibility problem it causes is solved in the backend rather than here. Measured on a
+    // live LXD 5.21.7 cluster: Alpine and the daily Ubuntu builds create fine without this key
+    // and then refuse to start with "The image used by this instance is incompatible with
+    // secureboot", while LXD 6.9 refuses the key outright and fails the create. Neither
+    // always-send nor never-send is right, and which one applies is a property of the target
+    // cluster, so services/lxd/instance.py drops it for the versions that refuse it. Only
+    // signed release images carry image.requirements.secureboot=false and cope unaided.
+    secSecureboot: "false",
     secCsm: "",
     // Snapshots
     snapPattern: "",

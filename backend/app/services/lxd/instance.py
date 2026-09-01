@@ -110,6 +110,68 @@ _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="inst
 _cluster_member = normalize_cluster_member
 
 
+# Config keys some LXD versions refuse outright for a given instance type, mapped to the first
+# major version known to refuse them.
+#
+# `security.secureboot` is the one that matters and it is genuinely two-sided, which is why it
+# is filtered here rather than defaulted away in the form:
+#
+#   * LXD 5.x accepts it, and community VM images (Alpine, the daily Ubuntu builds) are not
+#     Secure Boot signed, so WITHOUT `security.secureboot=false` they create fine and then
+#     refuse to start: "The image used by this instance is incompatible with secureboot".
+#     Verified live on 5.21.7. Only signed release images carry
+#     `image.requirements.secureboot=false` and cope on their own.
+#   * LXD 6.9 answers `"security.secureboot" is not supported for "virtual-machine"` and
+#     refuses the create outright.
+#
+# So neither always-send nor never-send is correct, and the right answer depends on the target
+# cluster. That is knowledge about the cluster, so it lives here, next to the client that knows
+# which cluster it is, rather than in every caller that builds a config.
+_KEYS_REFUSED_FROM_MAJOR = {
+    "security.secureboot": 6,
+}
+
+
+def _server_major(client) -> Optional[int]:
+    """Major version of the LXD this client is talking to, or None when unknown.
+
+    pylxd caches the /1.0 body on the client as host_info, and _validate_connection refreshes
+    it on every pooled revalidation, so this is free.
+    """
+    try:
+        version = ((getattr(client, "host_info", None) or {})
+                   .get("environment", {})
+                   .get("server_version", ""))
+        return int(str(version).split(".", 1)[0])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+
+
+def _drop_unsupported_config(client, instance_type: str, config: dict) -> dict:
+    """Remove config keys the target LXD is known to refuse, leaving everything else alone.
+
+    important: fail-safe direction is to KEEP the key. An unknown or unparseable version
+    behaves like 5.x, which is the behaviour verified against a live cluster; dropping on
+    uncertainty would silently reintroduce the unbootable-community-image case.
+    """
+    if instance_type == "container" or not config:
+        return config
+    major = _server_major(client)
+    if major is None:
+        return config
+    kept = {}
+    for key, value in config.items():
+        refused_from = _KEYS_REFUSED_FROM_MAJOR.get(key)
+        if refused_from is not None and major >= refused_from:
+            logger.info(
+                "Dropping %s: LXD %s refuses it for a virtual-machine, and sending it fails "
+                "the create outright.", key, major,
+            )
+            continue
+        kept[key] = value
+    return kept
+
+
 class InstanceManager:
     """
     Manages LXD instance operations.
@@ -1057,7 +1119,9 @@ class InstanceManager:
                 "source": source,
                 "type": instance_type,
                 "profiles": profiles or ["default"],
-                "config": instance_config,
+                "config": _drop_unsupported_config(
+                    create_client, instance_type, instance_config
+                ),
             }
             if description:
                 instance_def["description"] = description
