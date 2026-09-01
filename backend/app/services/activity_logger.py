@@ -95,6 +95,18 @@ ACTION_CATEGORIES = {
     "integration.instance.exec": EventCategory.ADMIN,
     "integration.instance.files": EventCategory.ADMIN,
     "integration.proxy.request": EventCategory.ADMIN,
+    # A destructive proxy call removes the same resource the dashboard's own endpoint would, so
+    # it is named for the act rather than for the transport. Without these it landed under
+    # `integration.proxy.request`, which is not high severity, and an alert on `image.delete`
+    # could never see the API-key route.
+    "integration.image.delete": EventCategory.LXD_INFRA,
+    "integration.instance.delete": EventCategory.LXD_INFRA,
+    "integration.network.delete": EventCategory.LXD_INFRA,
+    "integration.project.delete": EventCategory.LXD_INFRA,
+    "integration.profile.delete": EventCategory.LXD_INFRA,
+    "integration.certificate.delete": EventCategory.LXD_INFRA,
+    "integration.storage.pool.delete": EventCategory.LXD_INFRA,
+    "integration.storage.volume.delete": EventCategory.LXD_INFRA,
     "admin.audit.view": EventCategory.ADMIN,
     
     # Settings
@@ -146,6 +158,14 @@ HIGH_SEVERITY_ACTIONS = {
     "console.session.create",
     "integration.instance.exec",
     "integration.instance.files",
+    "integration.image.delete",
+    "integration.instance.delete",
+    "integration.network.delete",
+    "integration.project.delete",
+    "integration.profile.delete",
+    "integration.certificate.delete",
+    "integration.storage.pool.delete",
+    "integration.storage.volume.delete",
     "break_glass.grant.create",
     "break_glass.grant.revoke",
     "user.ssh_key.create",

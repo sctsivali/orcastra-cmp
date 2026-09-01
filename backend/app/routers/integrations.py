@@ -71,6 +71,7 @@ from app.core.api_key_capabilities import (
     config_reaches_inside,
     guest_access_capability_for,
     normalise_project_grant,
+    proxy_destructive_action_for,
     project_grant_is_unrestricted,
     APP_TYPE_CAPABILITIES,
     APP_TYPES,
@@ -2503,6 +2504,21 @@ _PROXY_AUDIT_ACTIONS: Dict[Optional[str], str] = {
 }
 
 
+def _proxy_audit_action(method: str, path: str) -> str:
+    """What to call this raw-proxy call in the audit trail.
+
+    Guest-reaching calls are named first, because reaching inside a guest is the more serious
+    fact about a call that also happens to delete something. A destructive call comes next: a
+    DELETE through the proxy removes the same resource the dashboard's own endpoint would, and
+    naming it `integration.proxy.request` put it outside HIGH_SEVERITY_ACTIONS, so anything
+    alerting on `image.delete` never saw this route. Everything else is ordinary proxy traffic.
+    """
+    guest = _PROXY_AUDIT_ACTIONS.get(guest_access_capability_for(path))
+    if guest:
+        return guest
+    return proxy_destructive_action_for(method, path) or "integration.proxy.request"
+
+
 def _audit_key_action(
     api_key: Dict[str, Any],
     *,
@@ -2587,9 +2603,7 @@ def _audit_raw_proxy(
     """
     _audit_key_action(
         api_key,
-        action=_PROXY_AUDIT_ACTIONS.get(
-            guest_access_capability_for(request.path), "integration.proxy.request"
-        ),
+        action=_proxy_audit_action(method, request.path),
         target_id=request.path[:512],
         cluster_id=request.cluster_id,
         project=project,
@@ -3032,9 +3046,7 @@ async def raw_proxy(
             # signal, and it is invisible if only successes are written.
             _audit_key_action(
                 api_key,
-                action=_PROXY_AUDIT_ACTIONS.get(
-                    guest_access_capability_for(request.path), "integration.proxy.request"
-                ),
+                action=_proxy_audit_action(method, request.path),
                 target_id=request.path[:512],
                 cluster_id=request.cluster_id,
                 project=project,

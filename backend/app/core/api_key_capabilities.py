@@ -276,6 +276,63 @@ def config_reaches_inside(config: Any, devices: Any) -> Optional[str]:
     return None
 
 
+def proxy_path_segments(path: str) -> list:
+    """A raw-proxy path as lowercase segments, with the API version and query stripped.
+
+    important: double-unquoted, because the traversal guard beside this is, and a classifier
+    that decodes once while its neighbour decodes twice gives a percent-encoded spelling a
+    second answer. One parser, so the two cannot drift apart.
+    """
+    normalised = unquote(unquote(path or "")).split("?", 1)[0]
+    if normalised.startswith("/1.0"):
+        normalised = normalised[4:]
+    if not normalised.startswith("/"):
+        normalised = "/" + normalised
+    return [segment for segment in normalised.lower().split("/") if segment]
+
+
+# What a destructive raw-proxy call is called in the audit trail, keyed on the resource it
+# addresses. These mirror the dashboard's own names one namespace over, ex; image.delete becomes
+# integration.image.delete, so the two routes to the same destructive act are both alertable and
+# still tell you which principal did it.
+_PROXY_DESTRUCTIVE_RESOURCES: Dict[str, str] = {
+    "images": "image",
+    "instances": "instance",
+    "containers": "instance",
+    "virtual-machines": "instance",
+    "networks": "network",
+    "projects": "project",
+    "profiles": "profile",
+    "certificates": "certificate",
+    "storage-pools": "storage.pool",
+}
+
+
+def proxy_destructive_action_for(method: str, path: str) -> Optional[str]:
+    """The audit action name for a raw-proxy call that destroys something, else None.
+
+    A DELETE through the proxy removes the same resource the dashboard's own endpoint would,
+    but it used to be recorded as the generic `integration.proxy.request`, which is not a
+    high-severity action. Anything alerting on `image.delete` therefore never saw the API-key
+    route at all. This names it for what it is.
+
+    A bare collection path is not destructive: `DELETE /1.0/images` is not a thing LXD does, and
+    refusing to name it stops a malformed path inventing an event.
+    """
+    if (method or "").upper() != "DELETE":
+        return None
+    segments = proxy_path_segments(path)
+    if len(segments) < 2:
+        return None
+    resource = _PROXY_DESTRUCTIVE_RESOURCES.get(segments[0])
+    if resource is None:
+        return None
+    # storage-pools/<pool>/volumes/<type>/<name> is a volume, not the pool itself.
+    if segments[0] == "storage-pools" and "volumes" in segments:
+        return "integration.storage.volume.delete"
+    return f"integration.{resource}.delete"
+
+
 def guest_access_capability_for(path: str) -> Optional[str]:
     """The capability a raw-proxy path costs, or None when it stays outside the guest.
 
@@ -283,12 +340,7 @@ def guest_access_capability_for(path: str) -> Optional[str]:
     an instance whose NAME contains "exec" is not. Decodes first, the way the traversal guard
     beside it does, so a percent-encoded spelling is not a second answer.
     """
-    normalised = unquote(unquote(path or "")).split("?", 1)[0]
-    if normalised.startswith("/1.0"):
-        normalised = normalised[4:]
-    if not normalised.startswith("/"):
-        normalised = "/" + normalised
-    segments = [segment for segment in normalised.lower().split("/") if segment]
+    segments = proxy_path_segments(path)
     # instances/<name>/<action>...
     if len(segments) < 3 or segments[0] not in ("instances", "containers", "virtual-machines"):
         return None
