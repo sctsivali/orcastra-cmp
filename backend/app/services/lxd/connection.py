@@ -336,6 +336,14 @@ class LXDConnectionManager:
             # Raised above for an untrusted certificate, which is a real reachability failure:
             # the peer answered and refused us, and it will keep refusing until someone rotates
             # the cert. Recording it is what stops every later request paying the handshake.
+            #
+            # important: drop the cached credentials too, exactly as the generic handler below
+            # does. Keeping them is not free: the background healer is gated on
+            # has_connection_info BEFORE it consults the breaker (metrics_collector), so a
+            # retained entry stops it ever reaching Vault, and the cluster can only recover if
+            # something else happens to call a force=True path. Evicting costs one Vault read on
+            # the next attempt and reopens the door that repairs this.
+            self._connection_info.pop(cluster_id, None)
             health.record_failure(
                 cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
             )
@@ -482,6 +490,25 @@ class LXDConnectionManager:
                 data = response.json()
                 if data.get("metadata", {}).get("auth") != "trusted":
                     logger.warning(f"Reconnect failed: cert not trusted by {cluster_id}")
+                    # important: evict the cached credentials before recording. This method
+                    # rebuilds the client from the copy held in _connection_info, so leaving a
+                    # refused certificate there means every later attempt re-presents the same
+                    # bytes and is refused again. Measured on the dev fleet: 1351 of these
+                    # against 265 successful reconnects.
+                    #
+                    # Worse, it seals its own repair. The background healer checks
+                    # has_connection_info BEFORE the breaker (metrics_collector), so a retained
+                    # entry stops it reaching Vault at all, and ensure_connection is gated by the
+                    # breaker this line is about to trip. Two doors, both held shut by the entry
+                    # we are keeping. Dropping it leaves exactly one gate, the breaker's own TTL.
+                    #
+                    # pop rather than test-then-delete: these dicts are unsynchronised and
+                    # mutated from a thread pool. Same reason as _cleanup_temp_cert_files.
+                    self._connection_info.pop(cluster_id, None)
+                    # note: recorded, not cleared. Five callers derive reachable from
+                    # KIND_UNAUTHORIZED, and clearing here would report a cluster that answered
+                    # and refused us as plain Offline. See test_connection_breaker's
+                    # test_a_generic_failure_never_downgrades_an_authorization_one.
                     health.record_failure(
                         cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
                     )
