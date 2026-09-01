@@ -188,6 +188,14 @@ jobs:
       - name: Semantic colour and contrast
         run: node scripts/checks/check-semantic-colour.mjs .
 
+      # An em dash joined the two halves of the stop dialog's warning, and the same character
+      # was in 83 other places across the console, the API layer and the README. tsc and
+      # eslint do not read English, so nothing saw it. Advisory for now: it reports and exits
+      # 0, because the placeholder glyph in table-text.tsx is a legitimate use of the same
+      # character and the rule that separates them is worth watching before it becomes a gate.
+      - name: Prose typography
+        run: node scripts/checks/check-prose-typography.mjs .
+
   commit-format:
     name: Conventional commits
     runs-on: ubuntu-latest

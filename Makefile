@@ -279,6 +279,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-dialog-affordances.mjs
 	@echo "$(COLOR_GREEN)Checking semantic colour...$(COLOR_RESET)"
 	@node scripts/checks/check-semantic-colour.mjs
+	@echo "$(COLOR_GREEN)Checking prose typography...$(COLOR_RESET)"
+	@node scripts/checks/check-prose-typography.mjs
 	@echo "$(COLOR_GREEN)✓ Frontend checks passed$(COLOR_RESET)"
 
 setup-hooks: ## Point git at the repo's hooks (run once per clone)
