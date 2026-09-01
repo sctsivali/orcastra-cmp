@@ -461,7 +461,22 @@ function InstancesContent() {
                   <TableCell><TableEmptyValue /></TableCell>
                   <TableCell><TableEmptyValue /></TableCell>
                   <TableCell><TableEmptyValue /></TableCell>
-                  <TableCell />
+                  <TableCell className="text-right">
+                    {/* A failed create no longer disappears on a timer, because an operator who
+                        looked away used to lose the only account of why it never arrived. It
+                        needs a way out, so it gets an explicit one. A row still creating has
+                        nothing to dismiss. */}
+                    {p.status === "Error" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-label={`Dismiss the failed create for ${p.name}`}
+                        onClick={() => removePendingCreate(p.id)}
+                      >
+                        Dismiss
+                      </Button>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
               {paginatedInstances.length === 0 ? (

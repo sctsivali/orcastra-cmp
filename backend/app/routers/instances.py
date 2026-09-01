@@ -31,6 +31,7 @@ from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_
 from app.core.config import get_settings
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
+from app.core.lxd_errors import lxd_http_error
 from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
 from app.routers.tags import get_tag_service_dep
@@ -230,19 +231,25 @@ async def create_instance(
             source_type=request.source_type,
         )
 
-        # Log activity: instance creation success
+        # important: "accepted", not "success". LXD takes the create as a background operation
+        # and only synchronous validation has run by the time we get here, so the instance may
+        # still be refused seconds later. Recording success at this point produced two
+        # contradictory audit records for one create, the optimistic one here and the real
+        # verdict from the watcher, with nothing to say which was final. The terminal record is
+        # written by _watch_create_operation / _finalize_and_start once the operation settles.
         activity_logger.log_activity(
             action="instance.create",
             target_type="instance",
             target_id=request.name,
             target_host=request.host,
-            result="success",
+            result="accepted",
             details={
                 "image": request.image,
                 "instance_type": request.instance_type,
                 "profiles": request.profiles,
                 "project": request.project,
                 "start_on_create": request.start_on_create,
+                "operation_id": result,
             }
         )
         
@@ -361,6 +368,22 @@ async def start_instance(
         # `except Exception` below and answers 500, which pages an engineer for an
         # offline cluster.
         raise HTTPException(status_code=503, detail=str(e))
+    except LXDOperationError as e:
+        # important: map the daemon's answer instead of blanket-500ing it, the same way delete
+        # already does. The case that made this visible is a create/start race: LXD answers
+        # `Instance is busy running a "create" operation`, which is a conflict the caller can
+        # retry, and DELETE returned 409 for it while START returned 500 for the identical
+        # condition. An operator clicking Start a moment too early should not be told the
+        # server broke.
+        activity_logger.log_activity(
+            action="instance.start",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(e),
+        )
+        raise lxd_http_error(e, "Instance", instance_name)
     except Exception as e:
         logger.error(f"Error starting instance {instance_name}: {e}")
         

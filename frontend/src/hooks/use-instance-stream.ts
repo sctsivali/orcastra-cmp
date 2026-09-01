@@ -27,6 +27,7 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
 import { getEventsWsUrl } from "@/lib/ws-url";
+import { toast } from "@/hooks/use-toast";
 import {
   PendingCreate,
   getPendingSnapshot,
@@ -144,12 +145,33 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
               dropPending(host, p.name),
             );
           } else {
+            const reason = msg.err || "Creation failed";
+            // LXD can emit more than one frame for the same failed operation, so only the
+            // transition into Error raises a toast. Without this the operator gets the same
+            // destructive toast several times for one create.
+            const alreadyFailed = p.status === "Error";
             updatePendingCreate(p.id, {
               status: "Error",
               statusCode: code,
-              error: msg.err || "Creation failed",
+              error: reason,
             });
-            setTimeout(() => removePendingCreate(p.id), 8000);
+            // important: the failed row is NOT auto-removed. It used to disappear after 8s,
+            // which meant an operator who looked away for a moment saw a create that had
+            // reported success simply never arrive, with nothing left on screen to say why.
+            // The row stays until it is dismissed or the page is left; it is the only record
+            // of the failure the operator has, because the audit trail is not readable from
+            // the dashboard.
+            //
+            // The toast is what covers the operator who is no longer on this page. Toaster is
+            // mounted in the root layout, so it survives the navigate() the create form does
+            // straight after submitting.
+            if (!alreadyFailed) {
+              toast({
+                variant: "destructive",
+                title: `Could not create ${p.name}`,
+                description: reason,
+              });
+            }
           }
         } else {
           updatePendingCreate(p.id, {

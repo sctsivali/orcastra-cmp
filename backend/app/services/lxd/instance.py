@@ -1176,19 +1176,25 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
 
-    async def _watch_create_operation(self, client, name: str, operation_id: Optional[str],
-                                      host: str, project: str) -> None:
-        """Background: record whether the create operation LXD queued actually succeeded.
+    async def _judge_create_operation(self, client, name: str, operation_id: Optional[str],
+                                      host: str, project: str) -> bool:
+        """Wait for the queued create and write the terminal audit record. True if it landed.
 
-        important: the POST returns as soon as LXD accepts the request, and only synchronous
-        validation errors reach the caller. Anything that fails while the operation RUNS, an
-        image that is not on the host being the common one, left the API reporting success with
-        an operation id and the audit trail recording result=success for an instance that never
-        existed. The events stream shows it to whoever has the page open; this makes it visible
-        to everyone else, including the audit trail.
+        important: this is the single place a create is judged, and BOTH background branches go
+        through it. They used to disagree. `_watch_create_operation` recorded a rejected create
+        correctly but only ran when start_on_create was false, while the branch the form
+        actually defaults to logged the same failure as `instance.autostart` and dropped the
+        operation_id. So the guard written for this defect did not cover the path that hits it.
+
+        The router records the create as `accepted` when LXD takes the request; this writes the
+        verdict. One create, one final answer, either way.
         """
         if not operation_id:
-            return
+            # Nothing queued to wait on. The synchronous path already answered.
+            return True
+
+        from app.services.activity_logger import get_activity_logger
+
         try:
             await asyncio.to_thread(client.operations.wait_for_operation, operation_id)
         except Exception as e:
@@ -1196,7 +1202,6 @@ class InstanceManager:
                 f"Create operation failed for {name} on {host} (project={project}): {e}"
             )
             try:
-                from app.services.activity_logger import get_activity_logger
                 get_activity_logger().log_activity(
                     action="instance.create",
                     target_type="instance",
@@ -1209,17 +1214,51 @@ class InstanceManager:
                 )
             except Exception:  # noqa: BLE001 - never let bookkeeping break the sweep
                 pass
-            return
+            return False
+
         logger.info(f"Create operation completed for {name} on {host} (project={project})")
+        try:
+            get_activity_logger().log_activity(
+                action="instance.create",
+                target_type="instance",
+                target_id=name,
+                target_host=host,
+                result="success",
+                details={"project": project, "operation_id": operation_id},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
+    async def _watch_create_operation(self, client, name: str, operation_id: Optional[str],
+                                      host: str, project: str) -> None:
+        """Background: record whether the create operation LXD queued actually succeeded.
+
+        The no-autostart branch. Judging is shared with the autostart branch so the two cannot
+        drift again; see _judge_create_operation.
+        """
+        await self._judge_create_operation(client, name, operation_id, host, project)
 
     async def _finalize_and_start(self, client, name: str, operation_id: Optional[str],
                                   host: str, project: str) -> None:
-        """Background: wait for the create operation to finish, then start the
-        instance (the 'Create & Start' flow). Runs off the request path; failures
-        are logged rather than surfaced to the caller."""
+        """Background: wait for the create operation to finish, then start the instance.
+
+        important: the create is judged BEFORE the start is attempted, and the two failures are
+        recorded under different actions. This used to be one try block covering both, logging
+        everything as `instance.autostart`, which meant a create LXD rejected was filed as a
+        start problem on an instance that had never existed, without its operation_id. And
+        because the form defaults start_on_create to true, that was the path almost every
+        operator took: `_watch_create_operation`, written specifically to catch a rejected
+        create, only ran on the other branch.
+        """
+        # Phase 1: did the instance actually get created?
+        if not await self._judge_create_operation(client, name, operation_id, host, project):
+            # The instance does not exist, so there is nothing to start and no second failure
+            # to report. The create failure has already been recorded.
+            return
+
+        # Phase 2: it exists. A failure from here is genuinely about starting it.
         try:
-            if operation_id:
-                await asyncio.to_thread(client.operations.wait_for_operation, operation_id)
             instance = await asyncio.to_thread(client.instances.get, name)
             await asyncio.to_thread(lambda: instance.start(wait=True))
             logger.info(f"Auto-started {name} on {host} (project={project})")
@@ -1227,8 +1266,8 @@ class InstanceManager:
             logger.error(
                 f"Auto-start failed for {name} on {host} (project={project}): {e}"
             )
-            # The create already logged success; without this, a failed auto-start
-            # is invisible to the dashboard. Record it on the activity trail.
+            # The instance exists but did not start. Distinct from a create failure: the
+            # operator has something to look at and retry.
             try:
                 from app.services.activity_logger import get_activity_logger
                 get_activity_logger().log_activity(
@@ -1238,7 +1277,7 @@ class InstanceManager:
                     target_host=host,
                     result="failure",
                     error_message=str(e),
-                    details={"project": project},
+                    details={"project": project, "operation_id": operation_id},
                 )
             except Exception:
                 pass
