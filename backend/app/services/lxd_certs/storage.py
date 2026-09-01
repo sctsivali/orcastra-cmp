@@ -3,6 +3,7 @@
 import logging
 from typing import Any, Dict, Optional
 
+from app.core import vault_status
 from app.core.vault_client import VaultClientError
 
 from .types import LXDCertManagerError
@@ -211,9 +212,19 @@ class VaultStorageMixin:
             from app.core.org_scope import apply_cluster_filter
             cluster_ids = apply_cluster_filter(cluster_ids)
 
+            vault_status.mark_readable()
             return cluster_ids
         except Exception as e:
-            logger.warning(f"Failed to list clusters: {e}")
+            # important: this is the one method in the mixin that swallows instead of raising,
+            # and thirteen callers depend on that. It stays, but the swallow is now recorded.
+            # A sealed Vault answers 503 to LIST, so without this an empty list from a Vault
+            # that never answered is indistinguishable from a Vault holding no clusters, and
+            # the deployment presents as healthy and empty. Startup and /health read
+            # vault_status to tell the two apart.
+            vault_status.mark_unreadable(f"{type(e).__name__}: {e}")
+            # ERROR, not WARNING: the success line beside it is debug, so at production log
+            # level this was the only line about the registry and it did not stand out.
+            logger.error(f"Failed to list clusters, registry is unreadable: {e}")
             return []
     
     def delete_cluster_data(self, cluster_id: str) -> bool:
