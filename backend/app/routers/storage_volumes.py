@@ -18,7 +18,12 @@ from app.services.lxd_service import (
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
-from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
+from app.core.lxd_errors import lxd_http_error
+from app.core.tenant_visibility import (
+    filter_visible_lxd_references,
+    parse_lxd_reference,
+    tenant_acl_active,
+)
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
@@ -365,11 +370,46 @@ async def update_storage_volume(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# How many attachments the 409 names before it stops listing and starts counting.
+_ATTACHMENTS_NAMED_IN_ERROR = 5
+
+
+def _in_use_detail(volume_name: str, references: List[str]) -> str:
+    """Name what is holding a volume, from its raw LXD used_by references.
+
+    The references are API paths, ex; /1.0/instances/web-01?project=acme. Showing those to an
+    operator is showing them the wire, so they are resolved through the same parser the tenant
+    visibility filter uses rather than a second regex written here.
+    """
+    names = []
+    for reference in references:
+        _project, instance = parse_lxd_reference(reference)
+        names.append(instance or reference)
+    shown = ", ".join(names[:_ATTACHMENTS_NAMED_IN_ERROR])
+    rest = len(names) - _ATTACHMENTS_NAMED_IN_ERROR
+    if rest > 0:
+        shown = f"{shown} and {rest} more"
+    return (
+        f"Storage volume '{volume_name}' is attached to {len(names)} instance(s): {shown}. "
+        "Detach it from each before deleting."
+    )
+
+
 @router.delete(
     "/{volume_type}/{volume_name}",
     response_model=dict,
     summary="Delete storage volume",
-    description="Delete a storage volume.",
+    description=(
+        "Delete a storage volume. Refuses with 409 when the volume is still attached to an "
+        "instance; there is no force, because LXD cannot remove an attached volume."
+    ),
+    responses={
+        200: {"description": "Volume deleted"},
+        403: {"description": "Cluster out of scope"},
+        404: {"description": "No such volume on that cluster"},
+        409: {"description": "Volume still attached to an instance"},
+        503: {"description": "Cluster unreachable"},
+    },
 )
 async def delete_storage_volume(
     volume_type: str,
@@ -386,8 +426,17 @@ async def delete_storage_volume(
         client = require_client(lxd_service.connection_manager.get_client(host), host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
+
+        # important: refuse before asking the daemon. LXD rejects an attached volume anyway,
+        # but its message arrived here as a bare Exception and left as a 500, so an operator
+        # error read as a server fault and the fix it needs was never stated. Unlike an image,
+        # there is no force: an attached volume genuinely cannot be removed.
+        attached = list(getattr(volume, "used_by", None) or [])
+        if attached:
+            raise HTTPException(status_code=409, detail=_in_use_detail(volume_name, attached))
+
         volume.delete()
-        
+
         # Log activity: storage volume deletion success
         activity_logger.log_activity(
             action="storage.volume.delete",
@@ -407,7 +456,7 @@ async def delete_storage_volume(
         }
     except HTTPException:
         # broad handler below converts it into a 500
-        # important: let require_client's 503 through. Without this the
+        # important: let require_client's 503 and the 409 above through. Without this the
         # so an offline cluster does not read as a server fault.
         raise
     except Exception as e:
@@ -421,4 +470,6 @@ async def delete_storage_volume(
             result="failure",
             error_message=str(e)
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        # note: was a blanket 500. The pre-check above catches the common in-use case, but the
+        # daemon still owns the race, and a name it cannot resolve is a 404 rather than a fault.
+        raise lxd_http_error(e, "Storage volume", volume_name)

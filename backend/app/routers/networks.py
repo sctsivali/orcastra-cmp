@@ -89,12 +89,14 @@ def validate_network_config(config: Dict[str, str]) -> Dict[str, str]:
     return config
 
 
-# Strip URLs and filesystem paths out of daemon errors before they reach the client.
+# Maps a daemon error onto a status and strips URLs and filesystem paths out of the text
+# before it reaches the client.
 #
-# note: this used to be defined here, and this file was the only caller in the whole backend
-# while 169 other handlers passed `str(e)` through untouched. It now lives in app/core so the
-# global 5xx handler and this router share one definition rather than diverging.
-from app.core.error_sanitizer import sanitize_error as _sanitize_error  # noqa: E402
+# note: both used to be defined here, and this file was the only correct copy in the backend
+# while 169 other handlers passed `str(e)` through untouched. They now live in app/core so the
+# global 5xx handler and the image and storage-volume delete paths share one definition
+# rather than growing variants that drift.
+from app.core.lxd_errors import lxd_http_error  # noqa: E402
 
 
 def _is_clustered(client) -> bool:
@@ -127,18 +129,10 @@ def _cluster_member_names(client) -> List[str]:
 
 def _lxd_http_error(exc: Exception, network_name: str) -> HTTPException:
     """Map an LXD/daemon error onto a meaningful status instead of a blanket 500."""
-    msg = str(exc)
-    low = msg.lower()
-    if "not found" in low or "no such object" in low:
-        return HTTPException(status_code=404, detail=f"Network '{network_name}' not found")
-    if "already exists" in low:
-        return HTTPException(status_code=409, detail=f"Network '{network_name}' already exists")
-    if any(t in low for t in ("connect", "connection", "unreachable", "timed out", "timeout")):
-        return HTTPException(status_code=503, detail="Could not reach the LXD host")
-    if "in use" in low or "used by" in low:
-        return HTTPException(status_code=409, detail=_sanitize_error(msg))
-    # Remaining LXD errors are user-actionable validation failures.
-    return HTTPException(status_code=400, detail=_sanitize_error(msg))
+    # note: the mapping moved to app/core/lxd_errors so the image and storage-volume delete
+    # paths share it. This wrapper stays because five call sites below read better naming
+    # the network once rather than repeating the noun at each raise.
+    return lxd_http_error(exc, "Network", network_name)
 
 
 class NetworkCreateRequest(BaseModel):
