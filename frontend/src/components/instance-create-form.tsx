@@ -438,8 +438,15 @@ function InstanceCreateFormContent() {
     secBaseHostId: "",
     secIdmapSize: "",
     secUniqueIdmap: "",
-    // Default OFF: most community VM images aren't Secure Boot signed.
-    secSecureboot: "false",
+    // important: inherit, like every other key here. This used to default to "false", which is
+    // the one value setIf does not drop, so every VM create shipped security.secureboot whether
+    // the operator touched the control or not. LXD 5.21 accepts it; LXD 6.9 answers
+    // `"security.secureboot" is not supported for "virtual-machine"` and refuses the create,
+    // and because the create is non-blocking that refusal reached nobody. Measured on a live
+    // 5.21.7 cluster: a VM created without the key comes back carrying
+    // image.requirements.secureboot=false, so the unsigned-image case the old default existed
+    // to serve is already handled by the image's own metadata.
+    secSecureboot: "",
     secCsm: "",
     // Snapshots
     snapPattern: "",
