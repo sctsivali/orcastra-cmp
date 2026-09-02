@@ -21,7 +21,7 @@ import {
   gpuDenseRatio,
   summarizeGpus,
 } from "@/lib/gpu";
-import { cn, formatBytes, formatHypervisorType } from "@/lib/utils";
+import { cn, formatBytes, formatHypervisorType, formatMemory} from "@/lib/utils";
 import type { ClusterMonitoringMetrics } from "@/types/api";
 
 // Node Card Component
@@ -95,7 +95,7 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
             <div className="space-y-1.5">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Memory</span>
-                <span className="font-medium">{formatBytes(node.memory_used_bytes)} / {formatBytes(node.memory_total_bytes)}</span>
+                <span className="font-medium">{formatMemory(node.memory_used_bytes)} / {formatMemory(node.memory_total_bytes)}</span>
               </div>
               <Progress value={node.memory_usage_percent} className="h-2" />
               <p className="text-xs text-muted-foreground text-right">{node.memory_usage_percent.toFixed(1)}%</p>

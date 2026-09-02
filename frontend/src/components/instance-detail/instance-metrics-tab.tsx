@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingLottieMedium } from "@/components/loading-lottie";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatMemory} from "@/lib/utils";
 import type { InstanceMetrics, VMInfo } from "@/types/api";
 
 // The live-metrics half of the instance dialog, carried over from instance-monitoring-modal
@@ -85,7 +85,7 @@ export function InstanceMetricsTab({
         <div className="flex justify-between text-sm">
           <span className="text-muted-foreground">Used of total</span>
           <span className="font-medium">
-            {`${formatBytes(metrics.memory_used_bytes)} / ${formatBytes(metrics.memory_total_bytes)}`}
+            {`${formatMemory(metrics.memory_used_bytes)} / ${formatMemory(metrics.memory_total_bytes)}`}
           </span>
         </div>
         <Progress value={memoryPercent} />

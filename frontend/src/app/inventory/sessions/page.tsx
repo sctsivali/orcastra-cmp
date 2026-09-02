@@ -110,7 +110,7 @@ interface AuditLogEntry {
 
 function formatBytes(bytes: number, decimals = 1): string {
   if (!bytes || bytes === 0) return "0 B";
-  const k = 1024;
+  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
   const sizes = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
   return `${(bytes / Math.pow(k, i)).toFixed(decimals)} ${sizes[i]}`;
@@ -118,7 +118,7 @@ function formatBytes(bytes: number, decimals = 1): string {
 
 function formatRate(bytesPerSec: number): string {
   if (!bytesPerSec || bytesPerSec === 0) return "0 B/s";
-  const k = 1024;
+  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
   const sizes = ["B/s", "KB/s", "MB/s", "GB/s"];
   const i = Math.floor(Math.log(Math.abs(bytesPerSec)) / Math.log(k));
   return `${(bytesPerSec / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;

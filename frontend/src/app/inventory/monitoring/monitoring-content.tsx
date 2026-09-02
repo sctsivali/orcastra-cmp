@@ -1,72 +1,17 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 // note: the alarm cards point at /inventory/warnings with distinct query strings, which
 // are distinct router cache keys. They warm on intent rather than on sight.
 import { IntentLink as Link } from "@/components/navigation/route-intent";
-import { useRouter } from "next/navigation";
-import {
-  Activity,
-  Server,
-  Cpu,
-  HardDrive,
-  MemoryStick,
-  Network,
-  AlertTriangle,
-  AlertCircle,
-  Container,
-  Monitor,
-  RefreshCw,
-  TrendingUp,
-  TrendingDown,
-  Minus,
-  Box,
-  Play,
-  Square,
-  Circle,
-  Clock,
-  X,
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  ArrowUpDown,
-  ArrowUp,
-  ArrowDown,
-  Info,
-  ShieldAlert,
-  Flame,
-  Shield,
-  WifiOff,
-  ZoomIn,
-  ZoomOut,
-  ChevronLeft,
-  ChevronRight,
-  Maximize2,
-  RotateCcw,
-} from "lucide-react";
+
+import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, Container, Monitor, RefreshCw, TrendingUp, TrendingDown, Minus, Box, Play, Square, Clock, ArrowUp, ArrowDown, Info, ShieldAlert, Flame, Shield, WifiOff, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 
 // Dynamically import Lottie to avoid SSR issues
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
-import {
-  LineChart,
-  Line,
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  BarChart,
-  Bar,
-  Legend,
-  Brush,
-  ReferenceArea,
-} from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, Brush } from "recharts";
 import { format } from "date-fns";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -78,31 +23,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { NodeFilterSelect } from "@/components/monitoring/node-filter-select";
 import { TableLink } from "@/components/ui/table-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  Tooltip as UITooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
 import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { usePermissions } from "@/hooks/use-permissions";
-import { cn, formatHypervisorType } from "@/lib/utils";
-import { MonitoringDashboardResponse, MetricsHistoryPoint, ClusterMonitoringMetrics, InstanceMonitoringSummary, VMInfo } from "@/types";
+import { cn, formatMemory } from "@/lib/utils";
+import { InstanceMonitoringSummary, VMInfo } from "@/types";
 import { vmAPI } from "@/lib/api";
 
 // Format CPU time from nanoseconds to readable format
@@ -123,7 +52,7 @@ const formatCpuTime = (nanoseconds: number): string => {
 // Format bytes to human readable
 const formatBytes = (bytes: number, decimals = 2): string => {
   if (bytes === 0) return "0 B";
-  const k = 1024;
+  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
   const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
@@ -166,7 +95,7 @@ const formatNetworkSpeed = (mbps: number, decimals = 2): string => {
 // Smart format bytes - automatically chooses best unit
 const formatBytesAuto = (bytes: number): { value: string; unit: string; rawValue: number } => {
   if (bytes === 0) return { value: "0", unit: "B", rawValue: 0 };
-  const k = 1024;
+  const k = 1000; // decimal: the label says KB/MB/GB, not KiB
   const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   const value = bytes / Math.pow(k, i);
@@ -176,7 +105,8 @@ const formatBytesAuto = (bytes: number): { value: string; unit: string; rawValue
 // Convert bytes to specific unit
 const bytesToUnit = (bytes: number, unit: "B" | "KB" | "MB" | "GB" | "TB"): number => {
   const units = { B: 0, KB: 1, MB: 2, GB: 3, TB: 4 };
-  return bytes / Math.pow(1024, units[unit]);
+  // decimal, to match the axis labels this feeds and the rest of the page
+  return bytes / Math.pow(1000, units[unit]);
 };
 
 // Metric Card Component
@@ -252,7 +182,7 @@ const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type, on
       case "memory":
         return (
           <>
-            <p className="text-sm font-bold text-green-600">{formatBytes(instance.memory_usage_bytes)}</p>
+            <p className="text-sm font-bold text-green-600">{formatMemory(instance.memory_usage_bytes)}</p>
             <p className="text-xs text-muted-foreground">Memory</p>
           </>
         );
@@ -398,7 +328,7 @@ const MemoryChartTooltip = ({ active, payload, label }: { active?: boolean; payl
         </p>
         {data.memoryUsedBytes > 0 && (
           <p className="text-xs text-muted-foreground mt-1">
-            Used: {formatBytes(data.memoryUsedBytes)}
+            Used: {formatMemory(data.memoryUsedBytes)}
           </p>
         )}
       </div>
@@ -549,7 +479,7 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
       {getStatusBadge(nodeName, value, data)}
       {metricType === "memory" && data?.memoryUsedBytes > 0 && (
         <p className="text-xs text-muted-foreground mt-1">
-          Used: {formatBytes(data.memoryUsedBytes)}
+          Used: {formatMemory(data.memoryUsedBytes)}
         </p>
       )}
       {metricType === "storage" && data?.storageUsedBytes > 0 && (

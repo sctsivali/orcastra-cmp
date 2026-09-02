@@ -8,7 +8,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { EmptyState } from "@/components/ui/empty-state";
 import { GpuPanel } from "@/components/gpu";
-import { cn, formatBytes } from "@/lib/utils";
+import { cn, formatBytes, formatMemory} from "@/lib/utils";
 import type { NodeStatus } from "@/types/api";
 import { CpuSocketList, NetworkCardList, StorageDeviceList } from "./hardware-lists";
 
@@ -33,7 +33,7 @@ export function NodeHardwareCard({ node }: { node: NodeStatus }) {
 
   const summary = [
     resources?.cpu_total ? `${resources.cpu_total} logical CPUs` : null,
-    resources?.memory_total ? formatBytes(resources.memory_total) : null,
+    resources?.memory_total ? formatMemory(resources.memory_total) : null,
     resources?.storage_total ? formatBytes(resources.storage_total) : null,
   ].filter(Boolean) as string[];
 
@@ -157,12 +157,12 @@ function NodeHardwareDetail({
 
       <DetailSection title="Memory on This Node">
         <DetailGrid cols={4}>
-          <DetailField label="Total" value={memory.total ? formatBytes(memory.total) : undefined} />
-          <DetailField label="Used" value={memory.used ? formatBytes(memory.used) : undefined} />
-          <DetailField label="Free" value={memory.free ? formatBytes(memory.free) : undefined} />
+          <DetailField label="Total" value={memory.total ? formatMemory(memory.total) : undefined} />
+          <DetailField label="Used" value={memory.used ? formatMemory(memory.used) : undefined} />
+          <DetailField label="Free" value={memory.free ? formatMemory(memory.free) : undefined} />
           <DetailField
             label="Hugepages"
-            value={memory.hugepages_total ? formatBytes(memory.hugepages_total) : undefined}
+            value={memory.hugepages_total ? formatMemory(memory.hugepages_total) : undefined}
           />
         </DetailGrid>
       </DetailSection>

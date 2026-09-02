@@ -135,11 +135,14 @@ const STORAGE_UNITS = [
 
 const isPositiveInt = (v: string) => /^[1-9]\d*$/.test(v.trim());
 
+// note: decimal, and the label says so. An image size is a size on disk, and lib/utils
+// formatBytes is the one definition of that. Kept local only for the one-decimal shape and
+// the empty string on zero, which this form relies on to hide the hint entirely.
 function formatBytes(bytes: number): string {
   if (!bytes) return "";
-  const gb = bytes / 1024 ** 3;
+  const gb = bytes / 1000 ** 3;
   if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  return `${Math.round(bytes / 1024 ** 2)} MB`;
+  return `${Math.round(bytes / 1000 ** 2)} MB`;
 }
 
 type InstanceType = "container" | "vm";

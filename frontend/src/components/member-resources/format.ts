@@ -1,31 +1,40 @@
 /**
  * Byte formatting for the member resource dialog.
  *
- * note: deliberately not `formatBytes` from lib/utils. That one answers "0 Bytes" and "2 GB"
- * where this surface has always shown "0 B" and "2.00 GB", and the compact split into value
- * and unit has no twin there at all. Unifying them is a visible-string change on a screen the
- * browser suite asserts against, so it belongs with a copy pass rather than with this one.
+ * note: deliberately not `formatBytes` from lib/utils. That one answers "0 Bytes" where this
+ * surface has always shown "0 B", and the compact split into value and unit has no twin there
+ * at all. What it does share is the rule those two functions now encode: a size on disk is
+ * decimal because its label is decimal, and memory is binary because a DIMM is a power of two
+ * and every other tool an operator has open says GiB.
  */
 
-const UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
+const SI_UNITS = ["B", "KB", "MB", "GB", "TB"] as const;
+const IEC_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
 
-function scale(bytes: number): { value: number; unit: string } {
-  if (bytes === 0) return { value: 0, unit: "B" };
+function scale(
+  bytes: number,
+  base: number,
+  units: readonly string[],
+): { value: number; unit: string } {
+  if (!Number.isFinite(bytes) || bytes <= 0) return { value: 0, unit: units[0] };
   const index = Math.min(
-    Math.floor(Math.log(bytes) / Math.log(1024)),
-    UNITS.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(base)),
+    units.length - 1,
   );
-  return { value: bytes / Math.pow(1024, index), unit: UNITS[index] };
+  return { value: bytes / Math.pow(base, index), unit: units[index] };
 }
 
 export function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  const { value, unit } = scale(bytes);
-  return `${value.toFixed(2)} ${unit}`;
+  const { value, unit } = scale(bytes, 1000, SI_UNITS);
+  return bytes > 0 ? `${value.toFixed(2)} ${unit}` : "0 B";
 }
 
 export function formatBytesCompact(bytes: number): { value: string; unit: string } {
-  if (bytes === 0) return { value: "0", unit: "B" };
-  const { value, unit } = scale(bytes);
-  return { value: value.toFixed(2), unit };
+  const { value, unit } = scale(bytes, 1000, SI_UNITS);
+  return bytes > 0 ? { value: value.toFixed(2), unit } : { value: "0", unit: "B" };
+}
+
+export function formatMemoryCompact(bytes: number): { value: string; unit: string } {
+  const { value, unit } = scale(bytes, 1024, IEC_UNITS);
+  return bytes > 0 ? { value: value.toFixed(2), unit } : { value: "0", unit: "B" };
 }

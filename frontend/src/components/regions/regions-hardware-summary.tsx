@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Cpu, HardDrive, MemoryStick, Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatMemory} from "@/lib/utils";
 import { GPU_EMPTY_TITLE, GPU_NO_COMPUTE_TITLE } from "@/lib/gpu";
 import { ExtendedHardwareInfo } from "@/types/api";
 
@@ -25,7 +25,7 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
         </Badge>
         <Badge variant="outline" className="gap-1">
           <MemoryStick className="h-3 w-3 text-foreground" />
-          {formatBytes(hardware.memory_total)}
+          {formatMemory(hardware.memory_total)}
         </Badge>
         {hardware.gpu_total > 0 && (
           <Badge variant="outline" className="gap-1">
@@ -63,8 +63,8 @@ export function HardwareSummary({ hardware, compact = false }: { hardware: Exten
           Memory
         </div>
         <div className="pl-6 text-sm text-muted-foreground">
-          <p>{formatBytes(hardware.memory_total)}</p>
-          <p>{formatBytes(hardware.memory_used)} used</p>
+          <p>{formatMemory(hardware.memory_total)}</p>
+          <p>{formatMemory(hardware.memory_used)} used</p>
         </div>
       </div>
 

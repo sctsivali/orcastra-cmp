@@ -10,7 +10,7 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
-import { formatBytes } from "@/lib/utils";
+import { formatBytes, formatMemory} from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Collapsible,
@@ -154,7 +154,7 @@ function RegionCard({
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <span>{node.hardware.cpu_total} CPU</span>
                       <span>•</span>
-                      <span>{formatBytes(node.hardware.memory_total)}</span>
+                      <span>{formatMemory(node.hardware.memory_total)}</span>
                       {node.hardware.gpu_total > 0 && (
                         <>
                           <span>•</span>

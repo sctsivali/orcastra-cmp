@@ -38,18 +38,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { cn } from "@/lib/utils";
+import { cn, formatBytes, formatMemory } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
-
-// Helper function to format bytes
-function formatBytes(bytes: number, decimals: number = 2): string {
-  if (bytes === 0) return "0 Bytes";
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
-}
 
 // Helper function to format uptime
 function formatUptime(seconds: number): string {
@@ -191,7 +181,7 @@ function MemorySection({ memory }: { memory: MemoryInfo }) {
           Memory Usage
         </CardTitle>
         <CardDescription>
-          {formatBytes(memory.used)} of {formatBytes(memory.total)} used
+          {formatMemory(memory.used)} of {formatMemory(memory.total)} used
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -211,7 +201,7 @@ function MemorySection({ memory }: { memory: MemoryInfo }) {
             </div>
             <UsageProgress value={memory.swap_percent} />
             <p className="text-xs text-muted-foreground">
-              {formatBytes(memory.swap_used)} of {formatBytes(memory.swap_total)}
+              {formatMemory(memory.swap_used)} of {formatMemory(memory.swap_total)}
             </p>
           </div>
         )}
@@ -219,15 +209,15 @@ function MemorySection({ memory }: { memory: MemoryInfo }) {
         <div className="grid grid-cols-3 gap-4 pt-2">
           <div className="text-center p-2 bg-muted/50 rounded-lg">
             <p className="text-xs text-muted-foreground">Total</p>
-            <p className="text-sm font-medium">{formatBytes(memory.total)}</p>
+            <p className="text-sm font-medium">{formatMemory(memory.total)}</p>
           </div>
           <div className="text-center p-2 bg-muted/50 rounded-lg">
             <p className="text-xs text-muted-foreground">Used</p>
-            <p className="text-sm font-medium">{formatBytes(memory.used)}</p>
+            <p className="text-sm font-medium">{formatMemory(memory.used)}</p>
           </div>
           <div className="text-center p-2 bg-muted/50 rounded-lg">
             <p className="text-xs text-muted-foreground">Available</p>
-            <p className="text-sm font-medium">{formatBytes(memory.available)}</p>
+            <p className="text-sm font-medium">{formatMemory(memory.available)}</p>
           </div>
         </div>
       </CardContent>
@@ -388,7 +378,7 @@ function ProcessSection({ process }: { process: ProcessInfo }) {
           <div className="text-center p-3 bg-muted/50 rounded-lg">
             <MemoryStick className="h-4 w-4 mx-auto mb-1 text-muted-foreground" />
             <p className="text-xs text-muted-foreground">Memory</p>
-            <p className="text-lg font-medium">{formatBytes(process.memory_rss)}</p>
+            <p className="text-lg font-medium">{formatMemory(process.memory_rss)}</p>
             <p className="text-xs text-muted-foreground">({process.memory_percent.toFixed(1)}%)</p>
           </div>
           <div className="text-center p-3 bg-muted/50 rounded-lg">

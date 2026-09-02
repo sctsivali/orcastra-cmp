@@ -35,7 +35,7 @@ import { NodeStatus } from "@/types";
 import { useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { usePermissions } from "@/hooks/use-permissions";
-import { cn } from "@/lib/utils";
+import { cn, formatMemory} from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TagManager } from "@/components/tag-manager";
@@ -127,13 +127,6 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
         variant: "destructive",
       });
     }
-  };
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
   };
 
   const getUsagePercentage = (used: number, total: number) => {
@@ -268,7 +261,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               </div>
               <div className="text-xs">
                 <div className="font-semibold text-foreground">
-                  {formatBytes(node.resources.memory_used)} / {formatBytes(node.resources.memory_total)}
+                  {formatMemory(node.resources.memory_used)} / {formatMemory(node.resources.memory_total)}
                 </div>
                 <div className="text-muted-foreground">
                   {getUsagePercentage(node.resources.memory_used, node.resources.memory_total)}% used

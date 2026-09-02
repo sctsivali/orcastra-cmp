@@ -7,12 +7,12 @@ import { Progress } from "@/components/ui/progress";
 import { TableLink } from "@/components/ui/table-link";
 import { Cpu, HardDrive, Layers, MemoryStick, Sparkles } from "lucide-react";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
-import { formatLabel } from "@/lib/utils";
+import { formatLabel, formatMemory } from "@/lib/utils";
 import { usageTone } from "@/lib/usage-tone";
 import type { MemberResources } from "@/types/api";
 import { GpuPanel } from "../gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
-import { formatBytes, formatBytesCompact } from "./format";
+import { formatBytes, formatBytesCompact, formatMemoryCompact } from "./format";
 
 interface MemberResourcePanelsProps {
   resources: MemberResources;
@@ -93,11 +93,11 @@ export function MemberResourcePanels({
           <CardContent>
             <div className="space-y-2">
               <div className="text-center text-sm">
-                <span className="text-2xl font-bold">{formatBytesCompact(resources.memory_used).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_used).unit}</span>
+                <span className="text-2xl font-bold">{formatMemoryCompact(resources.memory_used).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatMemoryCompact(resources.memory_used).unit}</span>
                 <span className="text-xs text-muted-foreground"> / </span>
-                <span className="text-base font-semibold">{formatBytesCompact(resources.memory_total).value}</span>
-                <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.memory_total).unit}</span>
+                <span className="text-base font-semibold">{formatMemoryCompact(resources.memory_total).value}</span>
+                <span className="text-xs text-muted-foreground"> {formatMemoryCompact(resources.memory_total).unit}</span>
               </div>
               <Progress 
                 value={resources.memory_usage_percent} 
@@ -258,7 +258,7 @@ export function MemberResourcePanels({
             </div>
             <div>
               <p className="text-muted-foreground mb-1">Available Memory</p>
-              <p className="font-medium">{formatBytes(resources.memory_available)}</p>
+              <p className="font-medium">{formatMemory(resources.memory_available)}</p>
             </div>
             <div>
               <p className="text-muted-foreground mb-1">Available Storage</p>

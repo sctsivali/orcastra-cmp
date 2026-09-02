@@ -12,7 +12,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { GpuPanel } from "@/components/gpu";
 import { GPU_UTILIZATION_NOTE } from "@/lib/gpu";
 import { usePermissions } from "@/hooks/use-permissions";
-import { formatBytes, formatLabel } from "@/lib/utils";
+import { formatBytes, formatLabel, formatMemory} from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter, usagePercent } from "./usage-meter";
@@ -145,10 +145,10 @@ export function NodeMemoryPanel({ resources }: { resources: NodeResources | null
         {resources ? (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <Field label="Total Memory" value={formatBytes(resources.memory_total)} />
+              <Field label="Total Memory" value={formatMemory(resources.memory_total)} />
               <Field
                 label="Available Memory"
-                value={formatBytes(resources.memory_available)}
+                value={formatMemory(resources.memory_available)}
               />
             </div>
 
@@ -158,7 +158,7 @@ export function NodeMemoryPanel({ resources }: { resources: NodeResources | null
                 label="Used"
                 total={resources.memory_total}
                 used={resources.memory_used}
-                value={`${formatBytes(resources.memory_used)} / ${formatBytes(
+                value={`${formatMemory(resources.memory_used)} / ${formatMemory(
                   resources.memory_total,
                 )} (${usagePercent(resources.memory_used, resources.memory_total).toFixed(1)}%)`}
               />

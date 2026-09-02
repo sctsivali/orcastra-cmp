@@ -9,16 +9,35 @@ export function cn(...inputs: ClassValue[]) {
 // it from there would point lib/ at components/, which nothing else in lib/ does.
 const EMPTY_VALUE = "\u2014";
 
-export function formatBytes(bytes: number, decimals = 2): string {
-  if (bytes === 0) return "0 Bytes";
-
-  const k = 1024;
+function scaleBytes(bytes: number, base: number, units: string[], decimals: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return `0 ${units[0]}`;
   const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(base)), units.length - 1);
+  return `${parseFloat((bytes / Math.pow(base, i)).toFixed(dm))} ${units[i]}`;
+}
 
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+/**
+ * A size on disk, on the wire, or in a file.
+ *
+ * important: decimal, because the label says decimal. This divided by 1024 while printing
+ * "GB", so a 1050 GB pool read as 977.89 GB and no screen agreed with what LXD, the disk
+ * vendor or `lxc storage info` says the hardware holds. Memory is the exception and has its
+ * own formatter: see formatMemory.
+ */
+export function formatBytes(bytes: number, decimals = 2): string {
+  return scaleBytes(bytes, 1000, ["Bytes", "KB", "MB", "GB", "TB", "PB"], decimals);
+}
 
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+/**
+ * Installed or allocated memory.
+ *
+ * important: binary, and labelled binary. A DIMM is a power of two and every other tool an
+ * operator has open says so, so dividing 70866960384 by 1000 and printing "70.87 GB" for a
+ * host that the kernel, `free -h` and the hypervisor all call 66 GiB is a legibility
+ * regression, not a unit fix. Storage keeps the decimal formatter above.
+ */
+export function formatMemory(bytes: number, decimals = 2): string {
+  return scaleBytes(bytes, 1024, ["Bytes", "KiB", "MiB", "GiB", "TiB", "PiB"], decimals);
 }
 
 /**

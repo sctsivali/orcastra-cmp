@@ -119,12 +119,12 @@ export function buildHardwareCategories(nodes: NodeStatus[]): HardwareCategory[]
       items: [
         {
           label: "Total Memory",
-          value: `${(totalMemory / (1024 ** 3)).toFixed(2)} GB`,
+          value: `${(totalMemory / (1024 ** 3)).toFixed(2)} GiB`,
           detail: "Aggregate across all nodes",
         },
         {
           label: "Memory per Node",
-          value: connectedNodes.length > 0 ? `~${(totalMemory / connectedNodes.length / (1024 ** 3)).toFixed(2)} GB` : EMPTY_VALUE,
+          value: connectedNodes.length > 0 ? `~${(totalMemory / connectedNodes.length / (1024 ** 3)).toFixed(2)} GiB` : EMPTY_VALUE,
           detail: "Average memory allocation",
         },
       ],
