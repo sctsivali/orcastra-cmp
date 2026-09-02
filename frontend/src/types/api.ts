@@ -498,6 +498,8 @@ export interface NodeStatus {
   endpoint: string;
   connected: boolean;
   node_type: string | null;
+  /** Whether the host reports itself as part of a cluster. null means not determined yet. */
+  clustered?: boolean | null;
   server_version: string | null;
   api_version: string | null;
   auth: string | null;
@@ -927,7 +929,10 @@ export interface ClusterInfo {
   display_name: string;
   endpoint: string;
   zone?: string;
-  cluster_type: string;
+  /** Hypervisor family. null until the certificate is trusted and a real read is possible. */
+  cluster_type: string | null;
+  /** Whether the host reports itself as part of a cluster. null means not determined yet. */
+  clustered?: boolean | null;
   merchant_id?: string;
   status: ClusterStatus;
   has_certificate: boolean;
@@ -962,6 +967,7 @@ export interface ClusterAuthCheckResponse {
   message: string;
   server_info?: Record<string, any>;
   cluster_type?: string;  // Auto-detected: "LXD", "MicroCloud", or "Incus" - updated post-auth
+  clustered?: boolean | null;  // Read from the authenticated payload; null when not determined
 }
 
 export interface ClusterListResponse {

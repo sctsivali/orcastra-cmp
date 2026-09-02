@@ -141,7 +141,8 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
     return ((used / total) * 100).toFixed(0);
   };
 
-  const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
+  // Clustering, not the distribution name, is what the Cloud glyph is saying here.
+  const NodeIcon = node.clustered ? Cloud : Server;
   const statusMeta = clusterStatusMeta(node);
   const StatusIcon = statusMeta.icon;
 
@@ -192,6 +193,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               <StatusIcon className="h-3 w-3" />
               {statusMeta.label}
             </Badge>
+            {node.clustered && <Badge variant="muted">Clustered</Badge>}
             {/* the endpoint behind this is require_partner() (backend nodes.py), so offering it
                 to a tenant is a button that can only ever answer 403 */}
             {isPartner && (
@@ -327,8 +329,8 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
           />
         </div>
 
-        {/* View Members Button for MicroCloud */}
-        {node.node_type?.toLowerCase() === "microcloud" && node.connected && (
+        {/* Cluster members exist for any clustered host, not only a MicroCloud one */}
+        {node.clustered && node.connected && (
           <div className="mt-3 pt-3 border-t">
             <Button
               variant="outline"

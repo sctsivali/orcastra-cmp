@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 import requests
 from pylxd import Client
 
+from app.core.url_safety import normalize_endpoint
 from app.services.lxd import cert_files, health
 from app.services.lxd.connection import DEFAULT_LXD_TIMEOUT
 from app.services.lxd.exceptions import LXDLocalStorageError
@@ -48,7 +49,7 @@ class ConnectivityMixin:
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
             cert_data = self.get_cluster_certificate(cluster_id)
             
-            endpoint = metadata["endpoint"]
+            endpoint = normalize_endpoint(metadata["endpoint"])
             cert_content = cert_data["client.crt"]
             key_content = cert_data["client.key"]
             
@@ -146,7 +147,7 @@ class ConnectivityMixin:
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
             cert_data = self.get_cluster_certificate(cluster_id)
             
-            endpoint = metadata["endpoint"]
+            endpoint = normalize_endpoint(metadata["endpoint"])
             
             # important: the shared materializer, not a per-probe mkstemp. Two reasons. It is
             # the same bounded pair the connection manager uses, so probing a cluster no longer

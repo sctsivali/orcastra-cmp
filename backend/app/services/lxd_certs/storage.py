@@ -4,6 +4,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from app.core import vault_status
+from app.core.url_safety import normalize_endpoint
 from app.core.vault_client import VaultClientError
 
 from .types import LXDCertManagerError
@@ -40,7 +41,9 @@ class VaultStorageMixin:
         """
         metadata = {
             "display_name": display_name,
-            "endpoint": endpoint,
+            # Normalized here as well as at the request boundary, so the internal callers
+            # that re-save metadata (rename, location update) also clean the stored value.
+            "endpoint": normalize_endpoint(endpoint),
             "zone": zone,
             "type": cluster_type,
             "merchant_id": merchant_id,

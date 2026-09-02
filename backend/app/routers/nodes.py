@@ -286,7 +286,8 @@ async def update_node(
                             display_name=request.display_name,
                             endpoint=metadata.get("endpoint", ""),
                             zone=metadata.get("zone", ""),
-                            cluster_type=metadata.get("type", "LXD"),
+                            # Preserve, never invent: an absent type means not determined yet.
+                            cluster_type=metadata.get("type"),
                             merchant_id=metadata.get("merchant_id", ""),
                             location=metadata.get("location", {}),
                         )

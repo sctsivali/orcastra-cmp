@@ -63,12 +63,17 @@ def aggregate_microcloud_resources(
     base_resources: Dict[str, Any],
 ) -> Optional[NodeResources]:
     """
-    Aggregate resources from all MicroCloud cluster members.
+    Aggregate resources from all cluster members.
     Returns NodeResources with total resources from all members.
-    
+
     This method queries each cluster member and sums up their individual resources
-    to give a complete picture of the entire MicroCloud cluster capacity.
-    
+    to give a complete picture of the entire cluster's capacity.
+
+    note: the name says MicroCloud but the behaviour never did. The gate below is
+    `server_clustered`, so this serves any clustered LXD or Incus host, which is how the
+    caller now selects it. The name and the cache prefix are kept because renaming them
+    buys nothing and would invalidate every cached entry.
+
     Results are cached to minimize API calls to cluster members.
     """
     try:

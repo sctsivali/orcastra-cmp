@@ -13,6 +13,8 @@ import logging
 import httpx
 import urllib3
 
+from app.core.url_safety import normalize_endpoint
+
 # Disable SSL warnings for unauthenticated requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -46,14 +48,22 @@ def detect_cluster_type_from_metadata(metadata: Dict[str, Any]) -> str:
     Detect cluster type from hypervisor API metadata (from `/1.0` endpoint).
     
     Supports: LXD, MicroCloud, and Incus
-    
+
+    This answers "which hypervisor family", not "is it clustered". `server_clustered` is
+    deliberately NOT consulted: MicroCloud reports `server: "lxd"`, and a plain
+    `lxc cluster enable` deployment is clustered too, so the flag cannot tell the two apart.
+    Use detect_clustered_from_metadata for that fact.
+
     Priority order:
     1. Check api_extensions for Incus-specific patterns (dev_incus, etc.)
     2. Check 'server' field in environment for explicit type
-    3. Check 'server_clustered' field - if True, it's MicroCloud
-    4. Check 'server_name' for patterns
-    5. Check api_extensions for 'microcloud'
-    6. Default to LXD
+    3. Check 'server_name' for patterns
+    4. Check api_extensions for 'microcloud'
+    5. Default to LXD
+
+    important: only call this on an authenticated payload. An untrusted `/1.0` carries no
+    `environment` block at all, so every signal below reads empty and the LXD default is a
+    guess rather than a reading.
     """
     try:
         environment = metadata.get("environment", {})
@@ -74,13 +84,7 @@ def detect_cluster_type_from_metadata(metadata: Dict[str, Any]) -> str:
             logger.debug("Detected MicroCloud from 'server' field")
             return "MicroCloud"
         
-        # Priority 3: Check 'server_clustered' field (MicroCloud indicator)
-        server_clustered = environment.get("server_clustered", False)
-        if server_clustered is True:
-            logger.debug("Detected MicroCloud from 'server_clustered=true'")
-            return "MicroCloud"
-        
-        # Priority 4: Check server_name for patterns
+        # Priority 3: Check server_name for patterns
         server_name = environment.get("server_name", "").lower()
         if "incus" in server_name:
             logger.debug(f"Detected Incus from server_name: {server_name}")
@@ -89,17 +93,75 @@ def detect_cluster_type_from_metadata(metadata: Dict[str, Any]) -> str:
             logger.debug(f"Detected MicroCloud from server_name: {server_name}")
             return "MicroCloud"
         
-        # Priority 5: Check extensions for microcloud
+        # Priority 4: Check extensions for microcloud
         if "microcloud" in extensions:
             logger.debug("Detected MicroCloud from api_extensions")
             return "MicroCloud"
-        
+
         logger.debug("Detected LXD (no Incus or MicroCloud indicators found)")
         return "LXD"
-        
+
     except Exception as e:
         logger.warning(f"Error detecting cluster type: {e}")
         return "LXD"
+
+
+def detect_clustered_from_metadata(metadata: Dict[str, Any]) -> Optional[bool]:
+    """Whether the hypervisor reports itself as part of a cluster.
+
+    Returns None when the answer is not in the payload, which is the case for every
+    unauthenticated `/1.0` read: `server_clustered` lives in the `environment` block that LXD
+    only sends to a trusted client. None means "not known", not "standalone".
+    """
+    try:
+        environment = metadata.get("environment") or {}
+        if "server_clustered" not in environment:
+            return None
+        return bool(environment.get("server_clustered"))
+    except Exception as e:
+        logger.warning(f"Error reading clustering state: {e}")
+        return None
+
+
+def _trusted_host_info(client: Any) -> Optional[Dict[str, Any]]:
+    """The cached `/1.0` body of a connected client, but only when it was answered as trusted.
+
+    pylxd keeps this on the client and the pool refreshes it on every revalidation, so reading
+    it costs no round trip.
+    """
+    host_info = getattr(client, "host_info", None) if client is not None else None
+    if not isinstance(host_info, dict):
+        return None
+    if host_info.get("auth") != "trusted":
+        return None
+    return host_info
+
+
+def resolve_cluster_type(stored: Optional[str], client: Any = None) -> Optional[str]:
+    """The cluster's hypervisor family, preferring what the host says now over what was stored.
+
+    The stored value can be a registration-time guess taken before the certificate was trusted,
+    so a live authenticated payload always outranks it. Returns None when neither source knows,
+    which callers render as "not determined yet" rather than defaulting to LXD.
+    """
+    host_info = _trusted_host_info(client)
+    if host_info is not None:
+        return detect_cluster_type_from_metadata(host_info)
+    return normalize_cluster_type(stored) if stored else None
+
+
+def resolve_clustered(client: Any = None) -> Optional[bool]:
+    """Whether the cluster is clustered, read from the connected client.
+
+    Unlike the hypervisor family this takes no stored fallback, because there is nothing
+    stored to fall back to: clustering is derived on every request rather than persisted.
+    A snapshot of live state in a field nothing refreshes is what left a MicroCloud labelled
+    LXD, and adding a second one would repeat it. None means the client could not answer.
+    """
+    host_info = _trusted_host_info(client)
+    if host_info is None:
+        return None
+    return detect_clustered_from_metadata(host_info)
 
 
 def normalize_cluster_type(cluster_type: Optional[str]) -> str:
@@ -206,70 +268,59 @@ def build_trust_add_command(cluster_type: Optional[str], cert_content: str, iden
     return f'cat <<EOF | {cli_prefix} config trust {trust_subcommand} - --name="{identity_name}"\n{cert_content}\nEOF'
 
 
-async def detect_hypervisor_type_from_endpoint(endpoint: str, timeout: float = 5.0) -> Tuple[str, Optional[Dict[str, Any]]]:
+def _pre_auth_type_from_payload(metadata: Dict[str, Any]) -> Optional[str]:
+    """What an unauthenticated `/1.0` body can honestly say about the hypervisor family.
+
+    Incus stays identifiable because its `dev_incus` api_extensions are in the untrusted
+    payload. Everything that separates LXD from MicroCloud lives in `environment`, which LXD
+    withholds from an untrusted client, so that distinction has to wait for the trusted read.
+    """
+    if _has_incus_extensions(metadata.get("api_extensions", [])):
+        return "Incus"
+    if metadata.get("auth") == "untrusted" or not metadata.get("environment"):
+        return None
+    return detect_cluster_type_from_metadata(metadata)
+
+
+async def detect_hypervisor_type_from_endpoint(
+    endpoint: str, timeout: float = 5.0
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     """
     Detect hypervisor type by querying the /1.0 API endpoint without authentication.
-    
-    The LXD/Incus /1.0 endpoint returns basic metadata even without authentication,
-    including api_extensions which contain type-identifying patterns.
+
+    Returns None for the type whenever the probe could not actually establish it: a timeout, a
+    non-200, or the usual untrusted body that omits `environment`. It used to answer "LXD" in
+    all three cases, and registration persisted that guess as though it were a reading, which
+    is how a MicroCloud came to be labelled LXD for the rest of its life. None means unknown,
+    and the caller stores nothing rather than something wrong.
     """
+    api_url = normalize_endpoint(endpoint)
+    if not api_url.endswith("/1.0"):
+        api_url = f"{api_url}/1.0"
+
     try:
-        # Normalize endpoint - ensure it ends properly
-        api_url = endpoint.rstrip("/")
-        if not api_url.endswith("/1.0"):
-            api_url = f"{api_url}/1.0"
-        
         logger.info(f"Attempting pre-auth type detection from: {api_url}")
-        
+
         async with httpx.AsyncClient(verify=False, timeout=timeout) as client:
             response = await client.get(api_url)
-            
-            if response.status_code == 200:
-                data = response.json()
-                metadata = data.get("metadata", {})
-                
-                # Detect type from metadata
-                detected_type = detect_cluster_type_from_metadata(metadata)
-                
-                logger.info(f"Pre-auth type detection successful: {detected_type}")
-                return detected_type, metadata
-            else:
+
+            if response.status_code != 200:
                 logger.warning(f"Pre-auth detection failed with status {response.status_code}")
-                return "LXD", None
-                
+                return None, None
+
+            data = response.json()
+            metadata = data.get("metadata", {})
+            detected_type = _pre_auth_type_from_payload(metadata)
+
+            logger.info(
+                f"Pre-auth type detection for {api_url}: "
+                f"{detected_type or 'undetermined (deferred to first trusted read)'}"
+            )
+            return detected_type, metadata
+
     except httpx.TimeoutException:
-        logger.warning(f"Pre-auth detection timeout for {endpoint}")
-        return "LXD", None
+        logger.warning(f"Pre-auth detection timeout for {api_url}")
+        return None, None
     except Exception as e:
-        logger.warning(f"Pre-auth detection failed for {endpoint}: {e}")
-        return "LXD", None
-
-
-def detect_hypervisor_type_from_endpoint_sync(endpoint: str, timeout: float = 5.0) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """
-    Synchronous version of detect_hypervisor_type_from_endpoint.
-    Uses httpx sync client for blocking contexts.
-    """
-    try:
-        api_url = endpoint.rstrip("/")
-        if not api_url.endswith("/1.0"):
-            api_url = f"{api_url}/1.0"
-        
-        logger.info(f"Attempting pre-auth type detection (sync) from: {api_url}")
-        
-        with httpx.Client(verify=False, timeout=timeout) as client:
-            response = client.get(api_url)
-            
-            if response.status_code == 200:
-                data = response.json()
-                metadata = data.get("metadata", {})
-                detected_type = detect_cluster_type_from_metadata(metadata)
-                logger.info(f"Pre-auth type detection successful (sync): {detected_type}")
-                return detected_type, metadata
-            else:
-                logger.warning(f"Pre-auth detection failed with status {response.status_code}")
-                return "LXD", None
-                
-    except Exception as e:
-        logger.warning(f"Pre-auth detection (sync) failed for {endpoint}: {e}")
-        return "LXD", None
+        logger.warning(f"Pre-auth detection failed for {api_url}: {e}")
+        return None, None

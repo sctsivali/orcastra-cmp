@@ -90,11 +90,17 @@ function ClusterMembersContent() {
   const { data: clustersData } = useClusters();
   const clusters = React.useMemo(() => {
     // important: the status filter that used to sit beside the type filter is gone. An offline
-    // MicroCloud cluster simply vanished from this picker, so an operator whose cluster had
+    // clustered host simply vanished from this picker, so an operator whose cluster had
     // gone down was left with no row, no status and nothing to explain the absence. It is
     // listed and marked instead, which is the rule every other cluster picker follows.
+    //
+    // important: filtered on `clustered`, not on the MicroCloud label. Cluster members are a
+    // property of clustering, and the clusters page offers the Members button on the same
+    // rule - filtering by label here left a plain LXD cluster with a button leading to a
+    // picker that did not list it. A host whose clustering is not yet determined is kept,
+    // so a cluster pending trust is still selectable rather than silently absent.
     const rows = (clustersData?.clusters || []).filter(
-      (c: any) => c.cluster_type?.toLowerCase() === "microcloud"
+      (c: any) => c.clustered !== false
     );
     // Reachable clusters lead, so the list does not open on a row that cannot be read.
     return rows.sort(
@@ -178,14 +184,14 @@ function ClusterMembersContent() {
     <div className="container py-8">
       <div className="mb-6">
         <div className="flex items-center gap-4 mb-4">
-          <label className="text-sm font-medium">Select MicroCloud Node:</label>
+          <label className="text-sm font-medium">Select Clustered Node:</label>
           <SearchableSelect
             value={node}
             onValueChange={handleNodeChange}
             className="w-[300px]"
-            placeholder="Select a MicroCloud node"
+            placeholder="Select a clustered node"
             searchPlaceholder="Search clusters..."
-            emptyText="No MicroCloud clusters available"
+            emptyText="No clustered hosts available"
             options={clusters.map((cluster: any) => {
               const meta = clusterStatusMeta(cluster.status);
               return {
@@ -207,7 +213,7 @@ function ClusterMembersContent() {
             {node ? (
               <>View all members in the {nodeName || node} cluster</>
             ) : (
-              <>Please select a MicroCloud node to view its cluster members</>
+              <>Please select a clustered node to view its cluster members</>
             )}
           </p>
         </div>

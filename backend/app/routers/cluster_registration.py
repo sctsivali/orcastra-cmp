@@ -35,7 +35,14 @@ from app.core.cache import (
     REGIONS_OVERVIEW_CACHE_KEY,
 )
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, apply_cluster_filter
-from app.core.type_utils import detect_cluster_type_from_metadata, normalize_cluster_type, detect_hypervisor_type_from_endpoint
+from app.core.url_safety import normalize_endpoint
+from app.core.type_utils import (
+    detect_cluster_type_from_metadata,
+    detect_clustered_from_metadata,
+    detect_hypervisor_type_from_endpoint,
+    resolve_cluster_type,
+    resolve_clustered,
+)
 from app.services.activity_logger import get_activity_logger
 from app.core.database import get_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -132,10 +139,14 @@ async def register_cluster(
         cluster_id = request.cluster_id
         
         # Step 1: Pre-auth type detection from /1.0 API endpoint
-        # The /1.0 endpoint returns metadata (including api_extensions) even without auth
-        # This allows us to detect Incus vs LXD before trust is established
+        # The /1.0 endpoint returns api_extensions even without auth, which is enough to tell
+        # Incus from the LXD family. It withholds `environment`, so LXD vs MicroCloud stays
+        # undetermined (None) until the first trusted read, and nothing is stored for it.
         cluster_type, raw_metadata = await detect_hypervisor_type_from_endpoint(request.endpoint)
-        logger.info(f"Pre-auth type detection for {cluster_id}: {cluster_type}")
+        logger.info(
+            f"Pre-auth type detection for {cluster_id}: "
+            f"{cluster_type or 'undetermined, deferring to first trusted read'}"
+        )
         
         # Prepare location data for storage
         location_data = None
@@ -394,14 +405,17 @@ async def check_cluster_authentication(
                 
                 # Re-detect and update cluster type from authenticated live connection
                 final_cluster_type = None
+                final_clustered = None
                 try:
                     metadata_info = server_info.get("metadata", {})
                     environment = metadata_info.get("environment", {})
-                    
-                    # Use centralized detection logic (will use server_clustered=true for MicroCloud)
+
+                    # This is the first payload that carries `environment`, so it is the first
+                    # honest reading of both the hypervisor family and the clustering state.
                     detected_type = detect_cluster_type_from_metadata(metadata_info)
                     final_cluster_type = detected_type
-                    
+                    final_clustered = detect_clustered_from_metadata(metadata_info)
+
                     logger.info(
                         f"Authenticated detection for {cluster_id}: {detected_type}\n"
                         f"  - server_clustered: {environment.get('server_clustered', False)}\n"
@@ -414,16 +428,31 @@ async def check_cluster_authentication(
                     vault_metadata = cert_manager.vault.vault_read(
                         f"{settings.vault_clusters_path}/{cluster_id}/metadata"
                     )
-                    current_type = vault_metadata.get("type", "LXD")
-                    
-                    if current_type != detected_type:
-                        logger.info(f"Updating cluster type for {cluster_id}: {current_type} -> {detected_type}")
+                    current_type = vault_metadata.get("type")
+                    current_endpoint = vault_metadata.get("endpoint", "")
+                    clean_endpoint = normalize_endpoint(current_endpoint)
+
+                    # important: `clustered` is deliberately NOT persisted. It is read from the
+                    # connected client on every request, and storing a snapshot of live state
+                    # in a field nothing refreshes is the exact mistake that left a MicroCloud
+                    # labelled LXD. `type` is still stored because consumers without a client
+                    # (the regions fallback, the node counters) read it, and every consumer
+                    # that does hold one overrides it.
+                    if current_type != detected_type or current_endpoint != clean_endpoint:
+                        logger.info(
+                            f"Updating cluster metadata for {cluster_id}: "
+                            f"type {current_type} -> {detected_type}, "
+                            f"clustered now reads {final_clustered}"
+                        )
                         vault_metadata["type"] = detected_type
+                        # Heal a stored endpoint that carries a trailing slash while we are
+                        # already writing this record; the probe normalizes on read anyway.
+                        vault_metadata["endpoint"] = clean_endpoint
                         cert_manager.vault.vault_kv_put(
                             f"{settings.vault_clusters_path}/{cluster_id}/metadata",
                             vault_metadata
                         )
-                        
+
                         # Also update node_metadata store
                         from app.core.node_metadata import get_node_metadata_store
                         metadata_store = get_node_metadata_store()
@@ -487,7 +516,8 @@ async def check_cluster_authentication(
                     status=ClusterStatus.ONLINE,
                     message="Connection successful and authenticated",
                     server_info=server_info.get("metadata", {}),
-                    cluster_type=final_cluster_type
+                    cluster_type=final_cluster_type,
+                    clustered=final_clustered,
                 )
             except Exception as e:
                 logger.error(f"Failed to get server info for {cluster_id}: {e}")
@@ -568,6 +598,7 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
         reachable = None
         error_msg = None
         
+        live_client = existing_client
         if existing_client:
             # We have a valid connection
             connected = True
@@ -579,7 +610,9 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
                 cert_data = cert_manager.get_cluster_certificate(cluster_id)
                 info = cert_manager.get_cluster_info(cluster_id)
                 
-                lxd_service.connection_manager.connect_with_vault_cert(
+                # Keep the client this returns: reading its cached host_info below is how the
+                # type is resolved, and a second get_client would pay for another revalidation.
+                live_client = lxd_service.connection_manager.connect_with_vault_cert(
                     cluster_id=cluster_id,
                     endpoint=info["metadata"]["endpoint"],
                     cert_content=cert_data["client.crt"],
@@ -608,26 +641,35 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
             connected=connected, reachable=reachable, error=error_msg
         )
         
-        # Only show cluster type if connected/authenticated
+        # Only report type and clustering when authenticated, and prefer what the host says
+        # now over what registration guessed: the stored value may predate any trusted read.
+        # client.host_info is pylxd's cached /1.0 body, so this costs no extra round trip.
         cluster_type = None
+        clustered = None
         if connected:
-            cluster_type = info["metadata"].get("type")
-            if cluster_type:
-                cluster_type = normalize_cluster_type(cluster_type)
-        
+            cluster_type = resolve_cluster_type(info["metadata"].get("type"), live_client)
+            clustered = resolve_clustered(live_client)
+
         return ClusterInfo(
             cluster_id=cluster_id,
             display_name=info["metadata"].get("display_name", cluster_id),
             endpoint=info["metadata"]["endpoint"],
             zone=info["metadata"].get("zone"),
             cluster_type=cluster_type,
+            clustered=clustered,
             merchant_id=info["metadata"].get("merchant_id"),
             status=current_status,
             has_certificate=info["certificate"]["has_certificate"],
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=None if connected else (error_msg or derived_message or None),
-            location=info["metadata"].get("location")
+            # important: `or None`. A cluster registered without a location stores {} for it,
+            # and an empty dict is not a valid GeoLocation - all nine fields are required - so
+            # building ClusterInfo from it raised nine validation errors. That surfaced as a
+            # 500 on GET /clusters/{id} and, on the list, as a row degraded to
+            # endpoint="unknown" by the handler's own fallback. The UI always sends a region,
+            # so only API callers hit it, which is why it went unseen.
+            location=info["metadata"].get("location") or None
         )
         
     except LXDLocalStorageError:
@@ -784,20 +826,45 @@ async def get_cluster(
         current_status, _reason_code, _message = derive_status(
             connected=connected, reachable=probe.reachable, error=error_msg
         )
-        
+
+        # Same rule as the list endpoint: the live authenticated payload outranks the stored
+        # value, and an unauthenticated cluster reports no type rather than a guessed one.
+        cluster_type = None
+        clustered = None
+        if connected:
+            from app.services.lxd_service import get_lxd_service
+            # Off the loop: get_client revalidates the pooled connection with a live request.
+            # Passed by reference, not called here, for the same reason. A None result is fine -
+            # it only means the type stays unreported, and this endpoint must still answer for
+            # a cluster that is down.
+            loop = asyncio.get_event_loop()
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                live_client = await loop.run_in_executor(
+                    executor, get_lxd_service().connection_manager.get_client, cluster_id
+                )
+            cluster_type = resolve_cluster_type(info["metadata"].get("type"), live_client)
+            clustered = resolve_clustered(live_client)
+
         return ClusterInfo(
             cluster_id=cluster_id,
             display_name=info["metadata"].get("display_name", cluster_id),
             endpoint=info["metadata"]["endpoint"],
             zone=info["metadata"].get("zone"),
-            cluster_type=info["metadata"].get("type", "LXD"),
+            cluster_type=cluster_type,
+            clustered=clustered,
             merchant_id=info["metadata"].get("merchant_id"),
             status=current_status,
             has_certificate=info["certificate"]["has_certificate"],
             certificate_common_name=info["certificate"].get("common_name"),
             last_checked=datetime.utcnow(),
             error_message=error_msg if not connected else None,
-            location=info["metadata"].get("location")
+            # important: `or None`. A cluster registered without a location stores {} for it,
+            # and an empty dict is not a valid GeoLocation - all nine fields are required - so
+            # building ClusterInfo from it raised nine validation errors. That surfaced as a
+            # 500 on GET /clusters/{id} and, on the list, as a row degraded to
+            # endpoint="unknown" by the handler's own fallback. The UI always sends a region,
+            # so only API callers hit it, which is why it went unseen.
+            location=info["metadata"].get("location") or None
         )
         
     except LXDLocalStorageError:
@@ -1070,12 +1137,19 @@ async def regenerate_certificate(
         endpoint = info.get("metadata", {}).get("endpoint", "")
         stored_type = info.get("metadata", {}).get("type")
         
-        # Re-detect type from endpoint for accuracy (in case it changed or wasn't set)
+        # Re-detect type from endpoint for accuracy (in case it changed or wasn't set).
+        # important: only overwrite when the probe actually determined something. It is
+        # unauthenticated, so it returns None for the whole LXD family, and taking that
+        # unconditionally would blank a type an authenticated read had already established.
         cluster_type = stored_type
         if endpoint:
             detected_type, _ = await detect_hypervisor_type_from_endpoint(endpoint)
-            cluster_type = detected_type
-            logger.info(f"Regenerate cert: detected type for {cluster_id}: {detected_type}")
+            if detected_type:
+                cluster_type = detected_type
+            logger.info(
+                f"Regenerate cert: detected type for {cluster_id}: "
+                f"{detected_type or 'undetermined, keeping ' + str(stored_type)}"
+            )
         
         # Generate new certificate (let default FQDN logic apply: cluster_id.domain)
         cert_data = cert_manager.generate_and_store_certificate(
@@ -1174,7 +1248,9 @@ async def update_cluster_location(
             endpoint=existing_metadata.get("endpoint", ""),
             display_name=existing_metadata.get("display_name", cluster_id),
             zone=new_zone,  # Update zone to match location.city
-            cluster_type=existing_metadata.get("type", "LXD"),
+            # Preserve whatever is stored, including "not determined yet". Defaulting to
+            # "LXD" here would re-introduce the guess this change removes.
+            cluster_type=existing_metadata.get("type"),
             merchant_id=existing_metadata.get("merchant_id"),
             location=location_data
         )

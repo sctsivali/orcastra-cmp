@@ -468,6 +468,7 @@ EOF`}
                       </TableCell>
                       <TableCell>
                         <Badge variant="outline">{formatHypervisorType(cluster.cluster_type)}</Badge>
+                        {cluster.clustered && <TableSubText>Clustered</TableSubText>}
                       </TableCell>
                       <TableCell>
                         {cluster.zone || <TableEmptyValue label="No zone" />}
@@ -480,7 +481,7 @@ EOF`}
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
-                          {cluster.cluster_type === "MicroCloud" && cluster.status === "online" && (
+                          {cluster.clustered && cluster.status === "online" && (
                             <Button asChild variant="outline" size="sm" title="View Cluster Members">
                               <IntentLink href={`/inventory/clustering/members?node=${cluster.cluster_id}`}>
                                 <Users className="h-4 w-4" />

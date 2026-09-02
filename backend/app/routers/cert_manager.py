@@ -457,7 +457,8 @@ async def initiate_renewal(
         if requires_manual:
             # Provide CLI command for manual trust - dynamic based on cluster type
             certificate_for_manual = new_cert_data["cert"]
-            cluster_type = metadata.get("type", "LXD")
+            # An undetermined type is LXD-family, whose CLI is lxc; only Incus differs.
+            cluster_type = metadata.get("type") or "LXD"
             cli_command = build_trust_add_command(cluster_type, new_cert_data["cert"], identity_name)
         
         # Store pending certificate in Vault

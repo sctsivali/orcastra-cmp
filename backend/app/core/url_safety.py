@@ -119,3 +119,15 @@ def assert_url_is_fetchable(url: str, *, field: str, require_https: bool = False
 def split_scheme_host(url: str) -> Tuple[str, str]:
     parsed = urlparse(url)
     return parsed.scheme.lower(), (parsed.hostname or "")
+
+
+def normalize_endpoint(endpoint: Optional[str]) -> str:
+    """Strip whitespace and trailing slashes from a hypervisor endpoint.
+
+    important: LXD's router does not collapse a double slash. An endpoint stored as
+    "https://host:8443/" joined to "/1.0/instances" requests "//1.0/instances", which answers
+    404 rather than the 403 that means "certificate not trusted yet" - so a healthy cluster
+    reads as an unexpected protocol error. Every place that builds a path onto a stored
+    endpoint must go through here.
+    """
+    return (endpoint or "").strip().rstrip("/")

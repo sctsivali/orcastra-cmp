@@ -18,7 +18,7 @@ from app.services.lxd_service import (
 from app.core.dependencies import check_read_only_mode, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.lxd.resources import public_config, public_environment
-from app.core.type_utils import detect_cluster_type_from_metadata
+from app.core.type_utils import detect_cluster_type_from_metadata, resolve_cluster_type
 from app.core.node_metadata import get_node_metadata_store
 from pydantic import BaseModel, Field
 
@@ -81,21 +81,12 @@ def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Opti
             "api_extensions": server_data.get('api_extensions', []),
             "environment": server_data.get('environment', {})
         }
-        detected_type = detect_cluster_type_from_metadata(metadata)
-        
-        # Also try to get from stored metadata as fallback
-        try:
-            metadata_store = get_node_metadata_store()
-            stored_metadata = metadata_store.get_node(node_name)
-            if stored_metadata and stored_metadata.get("type"):
-                # Prefer stored type if it's more specific (ex;, explicitly set as Incus)
-                stored_type = stored_metadata.get("type", "").lower()
-                if stored_type == "incus":
-                    detected_type = "Incus"
-                elif stored_type == "microcloud":
-                    detected_type = "MicroCloud"
-        except Exception as e:
-            logger.debug(f"Could not get stored metadata for {node_name}: {e}")
+        # important: host_info comes from a trusted connection, so it outranks anything stored.
+        # This used to prefer the stored value through metadata_store.get_node(), a method
+        # NodeMetadataStore never defined - every call raised AttributeError into the debug
+        # log below, so the override silently never ran. The live payload is the one rule.
+        stored_type = get_node_metadata_store().get_all_node_metadata().get(node_name, {}).get("type")
+        detected_type = resolve_cluster_type(stored_type, client) or detect_cluster_type_from_metadata(metadata)
         
         return ServerInfo(
             node=node_name,
@@ -193,20 +184,9 @@ async def get_server_info(
             "api_extensions": server_data.get('api_extensions', []),
             "environment": server_data.get('environment', {})
         }
-        detected_type = detect_cluster_type_from_metadata(metadata)
-        
-        # Also try to get from stored metadata as fallback
-        try:
-            metadata_store = get_node_metadata_store()
-            stored_metadata = metadata_store.get_node(node_name)
-            if stored_metadata and stored_metadata.get("type"):
-                stored_type = stored_metadata.get("type", "").lower()
-                if stored_type == "incus":
-                    detected_type = "Incus"
-                elif stored_type == "microcloud":
-                    detected_type = "MicroCloud"
-        except Exception as e:
-            logger.debug(f"Could not get stored metadata for {node_name}: {e}")
+        # Same rule as _fetch_server_info_for_node: the trusted live payload wins.
+        stored_type = get_node_metadata_store().get_all_node_metadata().get(node_name, {}).get("type")
+        detected_type = resolve_cluster_type(stored_type, client) or detect_cluster_type_from_metadata(metadata)
         
         return ServerInfo(
             node=node_name,

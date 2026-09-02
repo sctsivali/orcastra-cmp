@@ -35,6 +35,7 @@ from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_
 import time
 from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
 from app.core.tenant_visibility import tenant_acl_has_permission
+from app.core.type_utils import resolve_cluster_type
 
 router = APIRouter(
     prefix="/regions",
@@ -223,7 +224,9 @@ async def get_regions_overview(
                             region_data = location_data
                 
                         status = ClusterStatus.PENDING
-                        node_type = metadata.get("type", "LXD")
+                        # Stored value only; resolved against the live client further down,
+                        # once one is in hand. None means not determined yet, not LXD.
+                        node_type = metadata.get("type")
                         node_hardware = ExtendedHardwareInfo()
                         instance_count = 0
                         instance_running = 0
@@ -245,6 +248,9 @@ async def get_regions_overview(
                     
                             if client:
                                 status = ClusterStatus.ONLINE
+                                # The connected host is the authority on its own family; the
+                                # stored string may predate any trusted read.
+                                node_type = resolve_cluster_type(node_type, client)
                                 try:
                                     # important: a live read, not pylxd's client.resources.
                                     # That property memoises the body for the life of the

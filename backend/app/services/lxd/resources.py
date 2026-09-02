@@ -16,7 +16,11 @@ from app.models.schemas import (
     InstanceMetrics,
 )
 from app.core.node_metadata import get_node_metadata_store
-from app.core.type_utils import detect_cluster_type_from_metadata, normalize_node_type
+from app.core.type_utils import (
+    detect_cluster_type_from_metadata,
+    detect_clustered_from_metadata,
+    normalize_node_type,
+)
 from .utils import parse_vm_status, find_instance_in_projects
 from .gpu import GpuInventory, build_gpu_inventory
 from .hardware import build_hardware_profile
@@ -319,39 +323,46 @@ class ResourceManager:
                 logger.debug(f"Could not get tags for {node_name}: {tag_err}")
                 status.tags = []
             
-            # Detect node type (microcloud vs lxd)
+            # Detect hypervisor family and clustering state.
             # Only detect if authenticated (trusted), otherwise leave as None
             auth_status = host_info.get("auth", "")
             if auth_status == "trusted":
                 try:
-                    # Get metadata to check if type was already determined during registration
-                    metadata_store = get_node_metadata_store()
-                    all_metadata = metadata_store.get_all_node_metadata()
-                    node_metadata = all_metadata.get(node_name, {})
-                    
-                    # If type was stored in metadata during registration, use it
-                    if "type" in node_metadata:
-                        status.node_type = normalize_node_type(node_metadata["type"])
-                        logger.debug(f"Node type from metadata for {node_name}: {status.node_type}")
-                    else:
-                        # Fallback to environment-based detection using centralized logic
-                        detected_type = detect_cluster_type_from_metadata(host_info)
-                        status.node_type = normalize_node_type(detected_type)
-                        environment = host_info.get('environment', {})
-                        logger.info(
-                            f"Node type detected for {node_name}: {status.node_type} "
-                            f"(server_clustered={environment.get('server_clustered', False)}, "
-                            f"server={environment.get('server', 'N/A')}, "
-                            f"server_name={environment.get('server_name', 'N/A')})"
-                        )
+                    # important: the live payload wins over the stored value, not the other way
+                    # round. The stored type can be a registration-time guess taken before the
+                    # certificate was trusted, and preferring it is what kept a MicroCloud
+                    # reading as plain LXD. The stored value is only a fallback for a host that
+                    # answers without an environment block.
+                    detected_type = detect_cluster_type_from_metadata(host_info)
+                    status.node_type = normalize_node_type(detected_type)
+                    status.clustered = detect_clustered_from_metadata(host_info)
+
+                    environment = host_info.get('environment', {})
+                    if not environment:
+                        metadata_store = get_node_metadata_store()
+                        stored = metadata_store.get_all_node_metadata().get(node_name, {})
+                        if "type" in stored:
+                            status.node_type = normalize_node_type(stored["type"])
+                            logger.debug(
+                                f"Node type from stored metadata for {node_name}: {status.node_type}"
+                            )
+
+                    logger.info(
+                        f"Node type detected for {node_name}: {status.node_type} "
+                        f"(clustered={status.clustered}, "
+                        f"server={environment.get('server', 'N/A')}, "
+                        f"server_name={environment.get('server_name', 'N/A')})"
+                    )
                 except Exception as type_err:
                     logger.warning(f"Could not determine node type for {node_name}: {type_err}")
                     status.node_type = None  # Don't fallback to "lxd", keep as None
+                    status.clustered = None
             else:
                 # Not trusted/authenticated - don't detect type
                 logger.info(f"Node {node_name} not trusted (auth={auth_status}), skipping type detection")
                 status.node_type = None
-            
+                status.clustered = None
+
             # Get node resources
             try:
                 # important: one live read, threaded into both consumers below. Reading twice
@@ -368,9 +379,11 @@ class ResourceManager:
                     # A GPU read failure must not zero the node's CPU and memory.
                     logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")
                 
-                # If this is a MicroCloud cluster, aggregate resources from all members
-                if status.node_type == "microcloud":
-                    logger.info(f"Detected MicroCloud cluster {node_name}, aggregating resources from all members...")
+                # Aggregate across members whenever the host is clustered. Gating this on the
+                # "microcloud" label under-reported every plain LXD cluster's capacity, since
+                # member resources are a property of clustering, not of the distribution.
+                if status.clustered:
+                    logger.info(f"Detected clustered host {node_name}, aggregating resources from all members...")
                     try:
                         aggregated_resources = aggregate_microcloud_resources(
                             client=client,

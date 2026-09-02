@@ -7,6 +7,7 @@ from typing import Optional
 
 import requests
 
+from app.core.url_safety import normalize_endpoint
 from app.core.vault_client import VaultClientError
 from app.services.lxd import cert_files
 
@@ -40,7 +41,7 @@ class TrustMixin:
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
             current_cert = self.get_cluster_certificate(cluster_id)
             
-            endpoint = metadata["endpoint"]
+            endpoint = normalize_endpoint(metadata["endpoint"])
             
             # Create temp files for current certificate
             # dir= is load-bearing: see cert_files.staging_dir. Without it tempfile falls
@@ -127,7 +128,7 @@ class TrustMixin:
         try:
             # Get cluster metadata
             metadata = self.vault.vault_read(f"{self.clusters_path}/{cluster_id}/metadata")
-            endpoint = metadata["endpoint"]
+            endpoint = normalize_endpoint(metadata["endpoint"])
             
             # Extract base64 from PEM - LXD API expects base64-only format
             cert_base64 = extract_cert_base64(new_cert_pem)
@@ -201,7 +202,7 @@ class TrustMixin:
             os.chmod(key_path, 0o600)
             
             # Test authenticated endpoint
-            test_url = f"{endpoint}/1.0/instances"
+            test_url = f"{normalize_endpoint(endpoint)}/1.0/instances"
             
             response = requests.get(
                 test_url,

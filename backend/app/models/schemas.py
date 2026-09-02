@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 
 # note: ClusterStatus lives in cluster_status.py beside derive_status, the one function
 # allowed to produce it. Re-exported here so existing imports from this module still work.
+from app.core.url_safety import normalize_endpoint
 from app.models.cluster_status import (  # noqa: F401
     AvailabilityReason,
     ClusterStatus,
@@ -649,7 +650,14 @@ class NodeStatus(BaseModel):
     name: str
     endpoint: str
     connected: bool
-    node_type: Optional[str] = Field(None, description="Node type from hypervisor")
+    node_type: Optional[str] = Field(None, description="Hypervisor family from the host")
+    clustered: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether the host reports itself as part of a cluster. None means not determined, "
+            "which is the case whenever the connection is not authenticated."
+        ),
+    )
     server_version: Optional[str] = None
     api_version: Optional[str] = None
     auth: Optional[str] = None
@@ -970,7 +978,10 @@ class ClusterRegisterRequest(BaseModel):
                 raise ValueError("IP address octets must be between 0 and 255")
             if not parsed.port:
                 raise ValueError("Port is required when using an IP address")
-        return v
+        # important: a trailing slash here becomes "//1.0/instances" downstream, which LXD
+        # answers 404 instead of the 403 that means "not trusted yet". Normalize at the
+        # boundary so nothing stored can carry the fault.
+        return normalize_endpoint(v)
     
     class Config:
         json_schema_extra = {
@@ -1002,7 +1013,14 @@ class ClusterInfo(BaseModel):
     display_name: str = Field(..., description="Human-readable display name")
     endpoint: str = Field(..., description="LXD API endpoint")
     zone: Optional[str] = Field(None, description="Zone/location (legacy)")
-    cluster_type: Optional[str] = Field(None, description="Cluster type (auto-detected after authentication)")
+    cluster_type: Optional[str] = Field(None, description="Hypervisor family (auto-detected after authentication)")
+    clustered: Optional[bool] = Field(
+        None,
+        description=(
+            "Whether the hypervisor reports itself as part of a cluster. None means not "
+            "determined yet, which is the case until the certificate is trusted."
+        ),
+    )
     merchant_id: Optional[str] = Field(None, description="Merchant ID")
     status: ClusterStatus = Field(..., description="Current connection status")
     has_certificate: bool = Field(False, description="Whether certificate is configured")
@@ -1051,7 +1069,8 @@ class ClusterAuthCheckResponse(BaseModel):
     status: ClusterStatus = Field(..., description="Current status")
     message: str = Field(..., description="Status message")
     server_info: Optional[Dict[str, Any]] = Field(None, description="LXD server information if connected")
-    cluster_type: Optional[str] = Field(None, description="Auto-detected cluster type (LXD, MicroCloud, Incus) - updated after authenticated detection")
+    cluster_type: Optional[str] = Field(None, description="Auto-detected hypervisor family (LXD, MicroCloud, Incus) - updated after authenticated detection")
+    clustered: Optional[bool] = Field(None, description="Whether the hypervisor reports itself as clustered, read from the authenticated payload")
 
 
 class ClusterListResponse(BaseModel):

@@ -120,7 +120,9 @@ async def list_vms(
                 metadata_path = f"secret/data/clusters/{node_name}/metadata"
                 metadata = lxd_service.cert_manager.vault.vault_read(metadata_path)
                 if metadata:
-                    return metadata.get('type', 'lxd').lower()
+                    # `or`, not a get default: the key exists with a null value for a
+                    # cluster whose type is not determined yet, and None has no .lower().
+                    return (metadata.get('type') or 'lxd').lower()
             except Exception:
                 pass
             return 'lxd'

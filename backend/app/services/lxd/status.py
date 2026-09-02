@@ -27,6 +27,7 @@ from app.core.config import get_settings
 from app.core.node_metadata import get_node_metadata_store
 from app.core.org_scope import get_scope_cache_key
 from app.core.single_flight import single_flight
+from app.core.type_utils import resolve_cluster_type
 from app.models.cluster_status import AvailabilityReason, ClusterStatus, derive_status
 from app.models.schemas import ClusterAvailability, ClusterAvailabilityResponse
 
@@ -209,14 +210,15 @@ def probe_cluster(
         )
 
     try:
-        if not force and connection_manager.get_client(cluster_id) is not None:
+        pooled = None if force else connection_manager.get_client(cluster_id)
+        if pooled is not None:
             return _availability(
                 cluster_id,
                 display_name=vault_display_name,
                 endpoint=endpoint,
                 connected=True,
                 reachable=True,
-                node_type=node_type,
+                node_type=resolve_cluster_type(node_type, pooled),
             )
     except Exception as exc:
         logger.debug("Pooled client lookup failed for %s: %s", cluster_id, exc)
@@ -238,7 +240,7 @@ def probe_cluster(
             connected=client is not None,
             reachable=client is not None,
             error=None if client is not None else health.get_reason(cluster_id),
-            node_type=node_type,
+            node_type=resolve_cluster_type(node_type, client),
         )
     except LXDAuthorizationError as exc:
         # The host answered and refused the certificate. Pending Trust, not Offline.
