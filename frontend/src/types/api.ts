@@ -437,15 +437,32 @@ export interface NodeResources {
   gpu_models?: string[];
   /** LXD reports allocation only. There is no GPU telemetry. */
   gpu_utilization_supported?: boolean;
+  /** Usable capacity. On a clustered host a shared backing store is counted once, not once
+   * per member, so this can be well below the sum of the pool readings. */
   storage_total: number;
+  storage_used: number;
   storage_available: number;
+  /** Every member's every pool added up. Equal to storage_total on a standalone host, higher
+   * on a cluster with shared storage. Kept so no view loses the number it used to show. */
+  storage_raw_total?: number;
+  storage_raw_used?: number;
   storage_pools: Array<{
     name: string;
     driver: string;
+    /** 'shared' means one backing store behind several members, counted once. 'local' means
+     * per-member pools summed. Absent on a standalone host, where the question does not arise. */
+    scope?: "shared" | "local";
+    /** Which members this row was read from. Absent on a standalone host. */
+    members?: string[];
     space_total: number;
     space_used: number;
     space_available: number;
   }>;
+  /** At least one part of the read did not come back, so the numbers are floors. A clustered
+   * host reporting zero storage used to be indistinguishable from one with no storage. */
+  degraded?: boolean;
+  /** Which parts were lost: 'storage', 'storage:<pool>'. */
+  degraded_parts?: string[];
   /** Detected hardware. Absent when the node did not answer, which is not the same as empty. */
   hardware?: HardwareProfile | null;
   /** When this sample was read off the cluster. Absent means unknown, which must never
@@ -1223,7 +1240,12 @@ export interface InstanceMonitoringSummary {
 
 export interface StoragePoolMetrics {
   name: string;
+  /** The registered cluster this pool was read through, not the machine holding the disk. */
   node: string;
+  /** Cluster members this row covers. Empty on a standalone host. */
+  members?: string[];
+  /** 'shared': one backing store counted once. 'local': per-member pools summed. */
+  scope?: "shared" | "local" | null;
   driver: string;
   total_bytes: number;
   used_bytes: number;

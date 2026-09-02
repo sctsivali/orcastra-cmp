@@ -31,7 +31,11 @@ logger = logging.getLogger(__name__)
 # degraded=False, which is indistinguishable from a read that actually completed, so for one
 # full TTL after deploy the surface someone is watching to confirm the fix would report every
 # cached body as healthy. Same argument as v5.
-RESOURCE_SCHEMA_VERSION = "v6"
+# v7: NodeResources.storage_total changed MEANING on a clustered host, from a per-member sum
+# (which was zero in practice, because the read was against a key LXD does not send) to usable
+# capacity with a shared backing store counted once. A v6 body deserializes fine and reports a
+# different number under the same name, which is the one thing a cached body must never do.
+RESOURCE_SCHEMA_VERSION = "v7"
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's

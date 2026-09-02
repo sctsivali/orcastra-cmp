@@ -80,16 +80,12 @@ def _offending_calls(tree: ast.AST) -> List[int]:
 # is the read and CRUD surface, where a wedged cluster now costs a bounded stall per request
 # (the pooled socket timeout is (3, 8)) rather than a parked worker forever.
 BASELINE = {
-    "app/routers/cluster_members.py": 2,
+    # note: only calls inside an `async def` count. The per-node fan-out helpers are plain
+    # `def`s that already run in a thread, so they never appeared here and are not the debt
+    # this tracks. What is left below is genuine: a blocking revalidation on the event loop.
     "app/routers/cluster_registration.py": 1,
     "app/routers/console.py": 3,
-    "app/routers/lxd_operations.py": 3,
-    "app/routers/lxd_server.py": 3,
-    "app/routers/lxd_warnings.py": 2,
     "app/routers/my_keys.py": 3,
-    "app/routers/network_acls.py": 4,
-    "app/routers/permissions.py": 8,
-    "app/routers/storage_volumes.py": 4,
     "app/services/lxd/lxd_service.py": 1,
     "app/services/tag_service.py": 6,
 }

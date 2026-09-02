@@ -28,6 +28,7 @@ from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
+from app.services.lxd.lazy_client import client_for
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -223,7 +224,7 @@ async def get_storage_volume(
     """Get details for a specific storage volume."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
         used_by = filter_visible_lxd_references(host, volume.used_by or [])
@@ -266,7 +267,7 @@ async def create_storage_volume(
     """Create a new storage volume."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         storage_pool = client.storage_pools.get(request.pool)
         
         volume = storage_pool.volumes.create({
@@ -343,7 +344,7 @@ async def update_storage_volume(
     """Update a storage volume."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
         
@@ -423,7 +424,7 @@ async def delete_storage_volume(
     """Delete a storage volume."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         storage_pool = client.storage_pools.get(pool)
         volume = storage_pool.volumes.get(volume_type, volume_name)
 

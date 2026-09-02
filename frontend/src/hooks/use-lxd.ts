@@ -4,6 +4,7 @@
 
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
+import { usePermissions } from "@/hooks/use-permissions";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
 import { 
@@ -845,11 +846,17 @@ export function useHealth() {
 // ========================================
 
 // Warnings Hooks
+// important: /warnings is mounted with require_partner(), so a tenant is answered 403. The
+// dashboard mounts this unconditionally, which meant every tenant page load fired two
+// forbidden requests and logged two console errors. Gated here rather than at the call sites
+// so a new consumer cannot reintroduce it.
 export function useWarnings(host?: string) {
+  const { isPartner } = usePermissions();
   return useRefreshableQuery({
     queryKey: ["warnings", host],
     queryFn: ({ fresh }) => api.warnings.list(host, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
+    enabled: isPartner,
     refetchInterval: 60000, // Check warnings every minute
   });
 }
@@ -1746,7 +1753,10 @@ export function useCancelPendingCert() {
 }
 
 export function useSystemWarnings() {
+  // the same 403 as useWarnings: /warnings/system/all sits behind require_partner()
+  const { isPartner } = usePermissions();
   return useRefreshableQuery({
+    enabled: isPartner,
     queryKey: ["systemWarnings"],
     // note: every sibling destructures { fresh }; this one did not, so the second half of
     // "Refresh all" on the warnings page silently reused whatever was already in flight.

@@ -6,6 +6,7 @@ Provides endpoints for managing LXD networks.
 from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict, Literal
 import logging
+import requests
 import asyncio
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -96,7 +97,7 @@ def validate_network_config(config: Dict[str, str]) -> Dict[str, str]:
 # while 169 other handlers passed `str(e)` through untouched. They now live in app/core so the
 # global 5xx handler and the image and storage-volume delete paths share one definition
 # rather than growing variants that drift.
-from app.core.lxd_errors import lxd_http_error  # noqa: E402
+from app.core.lxd_errors import lxd_http_error, lxd_transport_error  # noqa: E402
 
 
 def _is_clustered(client) -> bool:
@@ -639,6 +640,14 @@ async def get_network_state(
     except (LXDAPIException, ClientConnectionFailed, LXDConnectionError) as e:
         logger.error(f"LXD error getting state for network {network_name} on {host}: {e}")
         raise _lxd_http_error(e, network_name)
+    except (requests.Timeout, requests.ConnectionError) as e:
+        # important: a peer that accepted the connection and then stopped answering is not a
+        # server fault. This fell into the blanket 500 below, and main.py replaces a 500 body
+        # with an opaque reference, so a slow nuc2 reached the interface as an unactionable id.
+        # Same taxonomy as the member resource read: 504 for a read that ran out of budget,
+        # 503 for never getting a usable connection.
+        logger.warning(f"Transport failure getting network state {network_name} on {host}: {e}")
+        raise lxd_transport_error(e, host, f"reporting the state of {network_name}")
     except Exception as e:
         logger.error(f"Unexpected error getting network state {network_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to get network state")

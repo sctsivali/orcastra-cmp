@@ -20,6 +20,7 @@ from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.lxd.resources import public_config, public_environment
 from app.core.type_utils import detect_cluster_type_from_metadata, resolve_cluster_type
 from app.core.node_metadata import get_node_metadata_store
+from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -176,7 +177,7 @@ async def get_server_info(
     """Get server information for a specific node."""
     verify_cluster_access(node_name)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
+        client = require_client(await client_for(lxd_service, node_name), node_name)
         server_data = client.host_info
         
         # Detect node type from api_extensions in the server response
@@ -220,7 +221,7 @@ async def get_server_config(
     """Get server configuration."""
     verify_cluster_access(node_name)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
+        client = require_client(await client_for(lxd_service, node_name), node_name)
         server_data = client.host_info
         # important: the same allowlist as the two ServerInfo builders above. This endpoint
         # returned the raw block, which is where an LXD daemon keeps core.trust_password.
@@ -275,7 +276,7 @@ async def update_server_config(
     """Update server configuration."""
     verify_cluster_access(node_name)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
+        client = require_client(await client_for(lxd_service, node_name), node_name)
         # Update config using PUT method
         # important: client.api is already rooted at <endpoint>/1.0, which is the server
         # config endpoint itself. Indexing '1.0' again addressed /1.0/1.0, so this PUT

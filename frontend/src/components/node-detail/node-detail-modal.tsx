@@ -178,7 +178,7 @@ export function NodeDetailModal({
             </TabsContent>
 
             <TabsContent className="space-y-4" value="storage">
-              <NodeStoragePanel resources={resources} />
+              <NodeStoragePanel nodeName={node.name} resources={resources} />
             </TabsContent>
           </Tabs>
         </DialogBody>

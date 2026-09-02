@@ -482,25 +482,17 @@ class MetricsCollector:
                     if client is None:
                         # No stored connection info, need to fetch from Vault
                         if not self._lxd_service.connection_manager.has_connection_info(cluster_id):
-                            try:
-                                cert_data = cert_manager.get_cluster_certificate(cluster_id)
-                                cluster_info = cert_manager.get_cluster_info(cluster_id)
-                                
-                                healed = self._lxd_service.connection_manager.connect_with_vault_cert(
-                                    cluster_id=cluster_id,
-                                    endpoint=cluster_info["metadata"]["endpoint"],
-                                    cert_content=cert_data["client.crt"],
-                                    key_content=cert_data["client.key"],
-                                    verify=False
-                                )
-                                # note: the breaker can refuse this and return None. Counting that
-                                # as a heal made the sweep report recoveries that never happened.
-                                if healed is not None:
-                                    reconnected += 1
-                                    logger.info(f"Background connected cluster: {cluster_id}")
-                            except Exception as conn_err:
-                                # Expected for clusters without valid trust
-                                logger.debug(f"Could not connect {cluster_id}: {conn_err}")
+                            # important: the same door the read path uses, not a fourth copy of
+                            # the connect block. ensure_connection consults the breaker, reads
+                            # only <cluster>/metadata rather than get_cluster_info (which also
+                            # pulls /secrets for a flag nobody reads, uncached), and records a
+                            # refused certificate as unauthorized instead of losing it to a
+                            # debug line. It returns False rather than raising, and False
+                            # already covers the breaker refusing the attempt, which the old
+                            # None check here existed to catch.
+                            if self._lxd_service.ensure_connection(cluster_id):
+                                reconnected += 1
+                                logger.info(f"Background connected cluster: {cluster_id}")
                 except Exception as e:
                     logger.debug(f"Health check failed for {cluster_id}: {e}")
             

@@ -57,7 +57,7 @@ def test_an_absent_stamp_stays_absent():
 
 def test_the_schema_version_was_bumped():
     """The field is worthless while v4 bodies are still being served under the same key."""
-    assert RESOURCE_SCHEMA_VERSION != "v5", "bump RESOURCE_SCHEMA_VERSION when the shape changes"
+    assert RESOURCE_SCHEMA_VERSION != "v6", "bump RESOURCE_SCHEMA_VERSION when the shape changes"
 
 
 def test_build_node_resources_carries_the_stamp_rather_than_minting_one():

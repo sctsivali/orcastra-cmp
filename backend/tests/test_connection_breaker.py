@@ -185,9 +185,15 @@ def test_a_generic_failure_never_downgrades_an_authorization_one() -> None:
     cluster = "blitz001"
     health.clear(cluster)
 
+    class _Vault:
+        # note: the connect path reads <cluster>/metadata directly. It used to call
+        # get_cluster_info, which also read <cluster>/secrets for a flag it never used.
+        def vault_read(self, path):
+            assert path.endswith("/metadata"), f"unexpected Vault read on a connect: {path}"
+            return {"endpoint": "https://10.1.1.49:9443"}
+
     class _Certs:
-        def get_cluster_info(self, cid, **kw):
-            return {"metadata": {"endpoint": "https://10.1.1.49:9443"}}
+        vault = _Vault()
 
         def get_cluster_certificate(self, cid):
             return {"client.crt": "crt", "client.key": "key"}

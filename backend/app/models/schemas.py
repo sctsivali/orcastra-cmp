@@ -606,9 +606,21 @@ class NodeResources(BaseModel):
     gpu_vendors: List[str] = Field(default_factory=list, description="Vendors of the compute GPUs")
     gpu_models: List[str] = Field(default_factory=list, description="Models of the compute GPUs")
     gpu_utilization_supported: bool = Field(False, description="LXD reports allocation only; there is no GPU telemetry")
-    storage_total: int = Field(0, description="Total storage in bytes")
+    # important: on a clustered host `storage_total` is usable capacity, with a shared backing
+    # store counted once rather than per member. `storage_raw_total` keeps the per-member sum
+    # so no reader loses the figure it had, exactly as gpu_cards_total sits beside gpu_total.
+    # On a standalone host the two are equal. See services/lxd/storage_model.py.
+    storage_total: int = Field(0, description="Usable storage in bytes: a shared pool counted once")
+    storage_used: int = Field(0, description="Used storage in bytes, on the same basis as storage_total")
     storage_available: int = Field(0, description="Available storage in bytes")
-    storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
+    storage_raw_total: int = Field(0, description="Every member's every pool added up. Overstates a cluster with shared storage; kept so no reader loses the number it had")
+    storage_raw_used: int = Field(0, description="Used, on the raw basis")
+    storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info. Each row carries its scope (shared or local) and the members it was read from")
+    # important: a partial read must not answer 200 with a smaller number. A clustered host
+    # reporting zero storage was indistinguishable from one with no storage, which is the
+    # defect MemberResources gained the same pair for.
+    degraded: bool = Field(False, description="At least one part of this read did not come back, so the affected numbers are floors rather than measurements")
+    degraded_parts: List[str] = Field(default_factory=list, description="Which parts were lost: 'storage', 'storage:<pool>'")
     hardware: Optional[HardwareProfile] = Field(None, description="Detected hardware, identifier-stripped. None when the node did not answer, which must not look like an empty profile")
     collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
 
@@ -1261,7 +1273,13 @@ class InstanceMonitoringSummary(BaseModel):
 class StoragePoolMetrics(BaseModel):
     """Metrics for a storage pool."""
     name: str = Field(..., description="Pool name")
-    node: str = Field(..., description="Node hosting this pool")
+    node: str = Field(..., description="Registered cluster this pool was read through")
+    # important: on a clustered host `node` is the cluster, not the machine holding the disk.
+    # Every row used to carry the cluster name and nothing else, so three members each with a
+    # pool called `local` were indistinguishable. `members` names where the bytes are and
+    # `scope` says whether the row was counted once for the whole cluster or summed per member.
+    members: List[str] = Field(default_factory=list, description="Cluster members this pool was read from. Empty on a standalone host, where the node is the member")
+    scope: Optional[str] = Field(None, description="'shared' when one backing store serves every member and the row is counted once, 'local' when per-member pools were summed. None on a standalone host")
     driver: str = Field(..., description="Storage driver")
     total_bytes: int = Field(0, description="Total space in bytes")
     used_bytes: int = Field(0, description="Used space in bytes")

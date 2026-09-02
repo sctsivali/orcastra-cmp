@@ -17,6 +17,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission, apply_cluster_filter
+from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -198,7 +199,7 @@ async def get_warning(
     """Get details for a specific warning."""
     try:
         verify_cluster_access(host)
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         warning_response = client.api.warnings[warning_uuid].get(timeout=(5, 30))
         
         if warning_response.status_code == 200:
@@ -248,7 +249,7 @@ async def delete_warning(
     """Delete a warning."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         response = client.api.warnings[warning_uuid].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:

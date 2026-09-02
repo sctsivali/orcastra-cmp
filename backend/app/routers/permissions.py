@@ -18,6 +18,7 @@ from app.services.lxd_service import (
 from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.core.cache import get_cache_manager
+from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -224,7 +225,7 @@ async def get_identity(
     """Get details for a specific identity."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         response = client.api["auth"]["identities"][identity_id].get()
         
         if response.status_code == 200:
@@ -386,20 +387,7 @@ async def get_group(
     """Get details for a specific group."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
-        
-        # If client is None, try to reconnect
-        if client is None:
-            logger.info(f"Reconnecting to {host} for group lookup")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                logger.error(f"Failed to reconnect to {host}: {e}")
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
-            if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+        client = require_client(await client_for(lxd_service, host), host)
         
         response = client.api.auth.groups[group_name].get(timeout=(5, 30))
         
@@ -453,20 +441,7 @@ async def create_group(
     """Create a new group."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
-        
-        # If client is None, try to reconnect
-        if client is None:
-            logger.info(f"Reconnecting to {host} for create group")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                logger.error(f"Failed to reconnect to {host}: {e}")
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
-            if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+        client = require_client(await client_for(lxd_service, host), host)
         
         group_data = {
             "name": name,
@@ -546,20 +521,7 @@ async def update_group(
     import asyncio
     
     try:
-        client = lxd_service.connection_manager.get_client(host)
-        
-        # If client is None, try to reconnect
-        if client is None:
-            logger.info(f"Reconnecting to {host} for update group")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                logger.error(f"Failed to reconnect to {host}: {e}")
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
-            if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+        client = require_client(await client_for(lxd_service, host), host)
         
         # Build update data - only include fields that were provided
         update_data = {}
@@ -766,20 +728,7 @@ async def delete_group(
     """Delete a group."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
-        
-        # If client is None, try to reconnect
-        if client is None:
-            logger.info(f"Reconnecting to {host} for delete group")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                logger.error(f"Failed to reconnect to {host}: {e}")
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
-            if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+        client = require_client(await client_for(lxd_service, host), host)
         
         response = client.api.auth.groups[group_name].delete(timeout=(5, 30))
         
@@ -813,20 +762,7 @@ async def add_identity_to_group(
     """Add an identity to a group by updating the identity's groups list."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
-        
-        # If client is None, try to reconnect
-        if client is None:
-            logger.info(f"Reconnecting to {host} for add identity")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                logger.error(f"Failed to reconnect to {host}: {e}")
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
-            if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+        client = require_client(await client_for(lxd_service, host), host)
         
         # Get current identity data
         auth_type = request.auth_type.lower()
@@ -893,20 +829,7 @@ async def remove_identity_from_group(
     """Remove an identity from a group by updating the identity's groups list."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
-        
-        # If client is None, try to reconnect
-        if client is None:
-            logger.info(f"Reconnecting to {host} for remove identity")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                logger.error(f"Failed to reconnect to {host}: {e}")
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
-            if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+        client = require_client(await client_for(lxd_service, host), host)
         
         # Get current identity data
         auth_type_lower = auth_type.lower()
@@ -980,20 +903,7 @@ async def delete_identity(
     """Delete an identity from the LXD server."""
     verify_cluster_access(host)
     try:
-        client = lxd_service.connection_manager.get_client(host)
-        
-        # If client is None, try to reconnect
-        if client is None:
-            logger.info(f"Reconnecting to {host} for delete identity")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(host, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                logger.error(f"Failed to reconnect to {host}: {e}")
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
-            if client is None:
-                # the breaker can refuse the reconnect and return None; without this the
-                # next line dereferences None and the caller sees a misleading 404/500.
-                raise HTTPException(status_code=503, detail=f"Cannot connect to node {host}")
+        client = require_client(await client_for(lxd_service, host), host)
         
         auth_type_lower = auth_type.lower()
         

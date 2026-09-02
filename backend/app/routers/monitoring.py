@@ -475,8 +475,11 @@ async def get_monitoring_dashboard(
                     used_cpu += resources.cpu_used
                     total_memory += resources.memory_total
                     used_memory += resources.memory_used
+                    # note: usable capacity, so a shared backing store behind a MicroCloud is
+                    # added once here rather than once per member. storage_raw_total holds the
+                    # per-member sum if a future panel wants to show the difference.
                     total_storage += resources.storage_total
-                    used_storage += resources.storage_total - resources.storage_available
+                    used_storage += resources.storage_used
                     total_gpu += resources.gpu_total
                     total_gpu_cards += resources.gpu_cards_total
                     used_gpu += resources.gpu_used
@@ -486,6 +489,8 @@ async def get_monitoring_dashboard(
                         storage_pools_list.append(StoragePoolMetrics(
                             name=pool.get("name", "unknown"),
                             node=node.name,
+                            members=[str(m) for m in (pool.get("members") or [])],
+                            scope=pool.get("scope"),
                             driver=pool.get("driver", "unknown"),
                             total_bytes=pool.get("space_total", 0),
                             used_bytes=pool.get("space_used", 0),

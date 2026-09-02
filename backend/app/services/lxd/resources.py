@@ -5,7 +5,7 @@ Handles resource usage tracking, node resources, and instance metrics.
 
 import logging
 from collections import OrderedDict
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import time
 import pylxd
@@ -18,11 +18,12 @@ from app.models.schemas import (
 from app.core.node_metadata import get_node_metadata_store
 from app.core.type_utils import (
     detect_cluster_type_from_metadata,
-    detect_clustered_from_metadata,
+    resolve_clustered,
     normalize_node_type,
 )
 from .utils import parse_vm_status, find_instance_in_projects
 from .gpu import GpuInventory, build_gpu_inventory
+from .storage_model import PoolReading, summarise_cluster_storage
 from .hardware import build_hardware_profile
 from .node_resources import aggregate_microcloud_resources, build_node_resources
 from .exceptions import LXDOperationError
@@ -225,7 +226,13 @@ class ResourceManager:
                 cpu_available = cpu_total
             
             # get storage pools
-            storage_pools = []
+            #
+            # important: this host is standalone, so there is one reading per pool and usable
+            # equals raw. It still folds through the same summariser the clustered aggregate
+            # uses, so the two paths cannot answer differently for the same shape, which is the
+            # mistake gpu-inventory.md records: four surfaces counting the same thing four ways.
+            pool_readings: List[PoolReading] = []
+            degraded_parts: List[str] = []
             try:
                 pools = client.storage_pools.all()
                 logger.debug(f"Found {len(pools)} storage pools on {node_name}")
@@ -237,23 +244,26 @@ class ResourceManager:
                         space_info = pool_resources.get("space", {})
                         space_total = space_info.get("total", 0)
                         space_used = space_info.get("used", 0)
-                        space_available = space_total - space_used
-                        logger.debug(f"Pool {pool.name}: {space_total} bytes total, {space_used} bytes used, {space_available} available")
-                        storage_pools.append({
-                            "name": pool.name,
-                            "driver": pool.driver,
-                            "space_total": space_total,
-                            "space_used": space_used,
-                            "space_available": space_available,
-                        })
+                        logger.debug(f"Pool {pool.name}: {space_total} bytes total, {space_used} bytes used")
+                        pool_readings.append(PoolReading(
+                            member=node_name,
+                            name=pool.name,
+                            driver=pool.driver,
+                            space_total=space_total,
+                            space_used=space_used,
+                        ))
                     except Exception as pool_err:
                         logger.warning(f"Could not get resources for pool {pool.name}: {pool_err}")
+                        degraded_parts.append(f"storage:{pool.name}")
             except Exception as e:
                 logger.warning(f"Could not get storage pools for {node_name}: {e}")
-            
-            # calculate available storage
-            storage_available = sum(p.get("space_available", 0) for p in storage_pools)
-            logger.debug(f"Storage for {node_name}: {storage_available} bytes available ({len(storage_pools)} pools)")
+                degraded_parts.append("storage")
+
+            storage = summarise_cluster_storage(pool_readings)
+            logger.debug(
+                f"Storage for {node_name}: {storage.available} bytes available "
+                f"({len(storage.pools)} pools)"
+            )
             
             return {
                 "cpu_total": cpu_total,
@@ -261,9 +271,14 @@ class ResourceManager:
                 "cpu_sockets": cpu_sockets,
                 "memory_total": memory_total,
                 "memory_available": memory_available,
-                "storage_total": sum(p.get("space_total", 0) for p in storage_pools),
-                "storage_available": storage_available,
-                "storage_pools": storage_pools,
+                "storage_total": storage.total,
+                "storage_used": storage.used,
+                "storage_available": storage.available,
+                "storage_raw_total": storage.raw_total,
+                "storage_raw_used": storage.raw_used,
+                "storage_pools": storage.pools,
+                "degraded": bool(degraded_parts),
+                "degraded_parts": sorted(set(degraded_parts)),
                 # Detected hardware, identifier-stripped. resources_data is the raw
                 # /1.0/resources body read above and otherwise discarded, so this costs no
                 # extra round trip and, more importantly, is the same sample the CPU and
@@ -283,8 +298,20 @@ class ResourceManager:
             logger.warning(f"Error getting resources for {node_name}: {e}")
             raise LXDOperationError(f"Failed to get node resources: {str(e)}")
     
-    def check_node_status(self, client: pylxd.Client, node_name: str, endpoint: str) -> NodeStatus:
-        """Check connection status and resources for a specific node."""
+    def check_node_status(
+        self,
+        client: pylxd.Client,
+        node_name: str,
+        endpoint: str,
+        stored_clustered: Optional[bool] = None,
+    ) -> NodeStatus:
+        """Check connection status and resources for a specific node.
+
+        `stored_clustered` is the last reading check-auth wrote to the cluster record. A live
+        trusted payload always outranks it; it only answers for a host that is up but has
+        stopped trusting our certificate, where the clusters table would still report the fact.
+        Both surfaces resolve through the same helper so they cannot drift apart.
+        """
         # Get display name from metadata store
         metadata_store = get_node_metadata_store()
         display_name = metadata_store.get_node_display_name(node_name)
@@ -338,7 +365,7 @@ class ResourceManager:
                     # answers without an environment block.
                     detected_type = detect_cluster_type_from_metadata(host_info)
                     status.node_type = normalize_node_type(detected_type)
-                    status.clustered = detect_clustered_from_metadata(host_info)
+                    status.clustered = resolve_clustered(stored_clustered, client)
 
                     environment = host_info.get('environment', {})
                     if not environment:
@@ -359,12 +386,16 @@ class ResourceManager:
                 except Exception as type_err:
                     logger.warning(f"Could not determine node type for {node_name}: {type_err}")
                     status.node_type = None  # Don't fallback to "lxd", keep as None
-                    status.clustered = None
+                    status.clustered = stored_clustered
             else:
-                # Not trusted/authenticated - don't detect type
+                # Not trusted/authenticated - don't detect type. `clustered` still falls back,
+                # because only a trusted answer ever wrote it and a host that has stopped
+                # trusting us has not stopped being a cluster. `type` deliberately does not:
+                # a stored type can predate the change that stopped guessing it, and nothing in
+                # the value distinguishes a reading from that old default.
                 logger.info(f"Node {node_name} not trusted (auth={auth_status}), skipping type detection")
                 status.node_type = None
-                status.clustered = None
+                status.clustered = stored_clustered
 
             # Get node resources
             try:

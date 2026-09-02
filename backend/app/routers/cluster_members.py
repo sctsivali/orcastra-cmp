@@ -33,6 +33,7 @@ from app.services.lxd.member_resources import (
 )
 from app.core.dependencies import require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.services.lxd.lazy_client import client_for
 
 logger = logging.getLogger(__name__)
 
@@ -106,46 +107,11 @@ async def list_cluster_members(
         return ClusterMembersResponse(**cached_data)
     
     try:
-        # Try to get client from connection manager first
-        client = lxd_service.connection_manager.get_client(node)
-        
-        # If not found, try to connect using Vault certificate
-        if client is None:
-            logger.info(f"Node {node} not in connection manager, trying Vault...")
-            from app.core.config import get_settings
-            from app.core.vault_client import get_vault_client
-            from app.services.lxd_cert_manager import LXDCertificateManager
-            
-            settings = get_settings()
-            if settings.vault_enabled and settings.vault_token:
-                try:
-                    vault_client = get_vault_client(settings.vault_addr, settings.vault_token)
-                    cert_manager = LXDCertificateManager(
-                        vault_client=vault_client,
-                        clusters_path=settings.vault_clusters_path
-                    )
-                    
-                    # Get cluster info and certificate
-                    cluster_info = cert_manager.get_cluster_info(node)
-                    cert_data = cert_manager.get_cluster_certificate(node)
-                    
-                    # Connect with certificate
-                    client = lxd_service.connection_manager.connect_with_vault_cert(
-                        cluster_id=node,
-                        endpoint=cluster_info["metadata"]["endpoint"],
-                        cert_content=cert_data["client.crt"],
-                        key_content=cert_data["client.key"],
-                        verify=False
-                    )
-                    logger.info(f"Successfully connected to {node} via Vault certificate")
-                except Exception as e:
-                    logger.error(f"Failed to connect to {node} via Vault: {e}")
-        
         # important: an unreachable cluster answers 503 here like everywhere else. This
         # used to return is_clustered=False, and the members page renders that as
         # "Not a Clustered Node", so an outage read as a configuration fact. The sibling
         # get_member_resources has always used require_client.
-        client = require_client(client, node)
+        client = require_client(await client_for(lxd_service, node), node)
 
         # Check if clustering is enabled
         host_info = client.host_info
@@ -254,7 +220,7 @@ async def get_cluster_member(
     """Get details for a specific cluster member."""
     verify_cluster_access(node)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(node), node)
+        client = require_client(await client_for(lxd_service, node), node)
         
         # Get specific member
         response = client.api.cluster.members[member_name].get()

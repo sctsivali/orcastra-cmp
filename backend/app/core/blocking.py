@@ -20,6 +20,7 @@ app.routers, so any layer can use it without an import cycle.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import threading
 import time
@@ -115,11 +116,33 @@ async def run_blocking(
     loop = asyncio.get_running_loop()
     started = time.monotonic()
 
-    call = partial(fn, *args, **kwargs) if kwargs else None
-    if call is not None:
-        future = loop.run_in_executor(executor, call)
-    else:
-        future = loop.run_in_executor(executor, fn, *args)
+    # important: carry the caller's context into the worker. `loop.run_in_executor` does not,
+    # so every ContextVar read in the thread returned its DEFAULT, and this codebase runs two
+    # semantics side by side: `asyncio.to_thread` copies the context (it wraps the call in
+    # `ctx.run` itself) and this did not. Three things depended on the difference and none of
+    # them announced it.
+    #
+    # The org-scope filter at the top of connection.get_client reads `_allowed_clusters_var`,
+    # which defaults to None meaning "no filter", so the filter could never deny anything
+    # reached through here. services/lxd/status.py already records that and warns that a future
+    # caller which does not pre-filter its own list gets no second line of defence.
+    #
+    # `org_scope.get_scope_cache_key` returns ":scope=all" on a None var, which is the ADMIN
+    # cache namespace. Every current call site runs on the loop before the offload, so nothing
+    # is poisoned today, and this removes the way it could be.
+    #
+    # `org_scope.check_tenant_permission` returns True on a None ACL. In a worker that is
+    # unconditional, so it fails OPEN. No target of this helper calls it today.
+    #
+    # It also restores the request id and the actor to every log line emitted from a worker,
+    # since core/request_context.py is a ContextVar too.
+    ctx = contextvars.copy_context()
+    call = (
+        partial(ctx.run, fn, *args, **kwargs)
+        if kwargs
+        else partial(ctx.run, fn, *args)
+    )
+    future = loop.run_in_executor(executor, call)
 
     if tracked:
         # note: shield below keeps `future` pending until the thread really finishes, so this

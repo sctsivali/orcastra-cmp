@@ -42,6 +42,7 @@ from app.services.lxd.proxy import (
 )
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd.availability import require_client, unreachable_detail
+from app.services.lxd.lazy_client import connect_or_get_client
 from app.services.lxd.proxy_operations import (
     CLUSTER_WIDE_OPERATIONS,
     GUEST_ACCESS_OPERATIONS,
@@ -876,9 +877,11 @@ def _fetch_cluster_projects(lxd_service, cluster_id: str) -> List[Dict[str, Any]
     contract the rest of the fan-out helpers already follow. Returning empty here made a dead
     cluster and an empty cluster identical in the response.
     """
-    client = require_client(
-        lxd_service.connection_manager.get_client(cluster_id), cluster_id
-    )
+    # note: connect_or_get_client, not get_client. This runs on proxy_executor, so the Vault
+    # fallback is off the loop already, and it is breaker-gated: a dead cluster in the fan-out
+    # still costs nothing after the first failure. Without it an API key read answered 503 on
+    # three workers out of four for a cluster registered after boot.
+    client = require_client(connect_or_get_client(lxd_service, cluster_id), cluster_id)
     return [
         {"name": p.name, "cluster_id": cluster_id, "description": p.description}
         for p in client.projects.all()
@@ -940,9 +943,11 @@ def _fetch_instance_detail(
     """
     from app.services.lxd.utils import find_instance_in_projects
 
-    client = require_client(
-        lxd_service.connection_manager.get_client(cluster_id), cluster_id
-    )
+    # note: connect_or_get_client, not get_client. This runs on proxy_executor, so the Vault
+    # fallback is off the loop already, and it is breaker-gated: a dead cluster in the fan-out
+    # still costs nothing after the first failure. Without it an API key read answered 503 on
+    # three workers out of four for a cluster registered after boot.
+    client = require_client(connect_or_get_client(lxd_service, cluster_id), cluster_id)
     # important: search only what the key may see. find_instance_in_projects with project=None
     # lists every project on the cluster and then does one GET per project, so a miss cost
     # 1 + N round trips on the shared proxy pool for a key that may be allowed to see one of

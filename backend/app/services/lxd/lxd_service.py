@@ -18,13 +18,14 @@ from app.models.schemas import (
 from .availability import require_client
 from .connection import LXDConnectionManager
 from .gpu import GpuInventory, build_gpu_inventory
-from .node_resources import build_node_resources
+from .lazy_client import connect_or_get_client
+from .node_resources import resources_for_host
 from .freshness import read_resources
 from .resources import ResourceManager
 from .instance import InstanceManager
 from .projects import ProjectManager
 from .images import ImageManager
-from app.core.type_utils import normalize_node_type
+from app.core.type_utils import normalize_node_type, resolve_clustered
 from .exceptions import LXDConnectionError, LXDLocalStorageError
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import VaultClient
@@ -91,12 +92,20 @@ class LXDService:
 
         # Try to connect
         try:
-            cluster_info = self.cert_manager.get_cluster_info(cluster_id)
+            # important: the metadata path, not get_cluster_info. That helper also reads
+            # <cluster>/secrets to compute a has_trust_password flag nothing on this path
+            # looks at, and only /metadata is on the Vault read cache allowlist
+            # (core/vault_client.py CACHEABLE_PATH_SUFFIXES), so the flag cost one uncached
+            # round trip on every cold connect. Certificates are deliberately never cached,
+            # so this is the only Vault read here that could be removed at all.
+            metadata = self.cert_manager.vault.vault_read(
+                f"{get_settings().vault_clusters_path}/{cluster_id}/metadata"
+            )
             cert_data = self.cert_manager.get_cluster_certificate(cluster_id)
             
             connected = self.connection_manager.connect_with_vault_cert(
                 cluster_id=cluster_id,
-                endpoint=cluster_info["metadata"]["endpoint"],
+                endpoint=metadata["endpoint"],
                 cert_content=cert_data["client.crt"],
                 key_content=cert_data["client.key"],
                 verify=False
@@ -184,18 +193,36 @@ class LXDService:
 
         note: `type` is normalised only when one was recorded. normalize_node_type(None) answers
         "lxd", which would put back the everything-is-LXD default this removes.
+
+        note: `clustered` rides along for free. This read already happens on every path, so the
+        clusters table and the dashboard node card can stop disagreeing about whether an offline
+        host is clustered without paying anything for it. An earlier note in
+        documentation/clusters/hypervisor-type-and-clustering.md claimed the opposite, that
+        giving /nodes the stored fallback would mean a storage read on a per-cluster fan-out.
+        It would not; the record is already in hand and the key was simply dropped on the way
+        out.
         """
         try:
             metadata = self.cert_manager.vault.vault_read(
                 f"{settings.vault_clusters_path}/{node_name}/metadata"
             )
         except Exception:
-            return {"endpoint": "unknown", "display_name": None, "node_type": None}
+            return {
+                "endpoint": "unknown",
+                "display_name": None,
+                "node_type": None,
+                "clustered": None,
+            }
         registered_type = metadata.get("type")
+        stored_clustered = metadata.get("clustered")
         return {
             "endpoint": metadata.get("endpoint", "unknown"),
             "display_name": metadata.get("display_name") or None,
             "node_type": normalize_node_type(registered_type) if registered_type else None,
+            # A stored value is only ever written by check-auth, after a trusted answer, so an
+            # absent key means unknown rather than standalone. Anything that is not a bool is
+            # not a reading.
+            "clustered": stored_clustered if isinstance(stored_clustered, bool) else None,
         }
 
     def _check_single_node_status(self, node_name: str, settings) -> NodeStatus:
@@ -221,6 +248,7 @@ class LXDService:
                 endpoint=endpoint,
                 display_name=registry["display_name"],
                 node_type=registry["node_type"],
+                clustered=registry["clustered"],
                 connected=False,
                 reachable=health.get_kind(node_name) == health.KIND_UNAUTHORIZED,
                 error=health.get_reason(node_name) or "Node recently failed - retry later"
@@ -231,7 +259,9 @@ class LXDService:
             # Use get_client_with_reconnect for automatic reconnection
             client = self.get_client_with_reconnect(node_name)
             if client:
-                status = self.resource_manager.check_node_status(client, node_name, endpoint)
+                status = self.resource_manager.check_node_status(
+                    client, node_name, endpoint, stored_clustered=registry["clustered"]
+                )
                 return status
             else:
                 # important: get_client has already recorded WHY it failed, and an untrusted
@@ -249,6 +279,7 @@ class LXDService:
                     endpoint=endpoint,
                     display_name=registry["display_name"],
                     node_type=registry["node_type"],
+                    clustered=registry["clustered"],
                     connected=False,
                     reachable=kind == health.KIND_UNAUTHORIZED,
                     error=health.get_reason(node_name) or "Client not connected"
@@ -329,7 +360,7 @@ class LXDService:
         the CPU/memory/storage dict alone, so every GPU field it declared was served as its
         default. The endpoint reported zero GPUs on hardware that has one.
         """
-        client = require_client(self.connection_manager.get_client(node_name), node_name)
+        client = require_client(connect_or_get_client(self, node_name), node_name)
         # important: one live read for both consumers. Reading twice doubles the round trips
         # and lets the memory figure and the GPU inventory disagree about the same host.
         live = read_resources(client, node_name)
@@ -341,11 +372,13 @@ class LXDService:
             gpu = build_gpu_inventory(live.body, client.instances.all(recursion=1))
         except Exception as e:
             logger.debug(f"Could not read GPU inventory for {node_name}: {e}")
-        return build_node_resources(data, gpu)
+        return resources_for_host(
+            client, node_name, data, gpu, resolve_clustered(client=client)
+        )
 
     def get_node_gpus(self, node_name: str) -> GpuInventory:
         """List the GPUs on a specific node, with their class and allocation state."""
-        client = require_client(self.connection_manager.get_client(node_name), node_name)
+        client = require_client(connect_or_get_client(self, node_name), node_name)
         return self.resource_manager.get_node_gpus(client, node_name)
     
     # Instance/VM operations

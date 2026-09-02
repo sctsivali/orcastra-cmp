@@ -7,6 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Optional, Set, Tuple
 import logging
 import asyncio
+import contextvars
+from dataclasses import replace
+from functools import partial
 from datetime import datetime, timezone
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,6 +26,8 @@ from app.models.schemas import (
 
 from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
+from app.services.lxd.node_resources import aggregate_microcloud_resources
+from app.services.lxd.storage_model import PoolReading, summarise_cluster_storage
 
 logger = logging.getLogger(__name__)
 from app.core.dependencies import require_tenant
@@ -35,7 +40,7 @@ from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_
 import time
 from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
 from app.core.tenant_visibility import tenant_acl_has_permission
-from app.core.type_utils import resolve_cluster_type
+from app.core.type_utils import resolve_cluster_type, resolve_clustered
 
 router = APIRouter(
     prefix="/regions",
@@ -277,9 +282,21 @@ async def get_regions_overview(
                                     disk_info = resources.get("storage", {})
                                     storage_types = storage_types_from_disks(disk_info)
                             
-                                    storage_total = 0
-                                    storage_used = 0
+                                    # important: folded through the same summariser /nodes uses,
+                                    # so a region's capacity and a node's capacity are the same
+                                    # arithmetic. This loop used to add every pool it saw, which
+                                    # on a clustered host counts a shared backing store once per
+                                    # member, and /regions and /nodes then disagreed about the
+                                    # same cluster. That is the defect gpu-inventory.md exists to
+                                    # stop repeating.
+                                    #
+                                    # note: still the coordinator's untargeted view, so a
+                                    # clustered host contributes what the member we are connected
+                                    # to can see. Reading every member here would multiply this
+                                    # fan-out by the cluster size; /nodes carries the per-member
+                                    # figure and is cached for it.
                                     storage_drivers: Set[str] = set()
+                                    region_pool_readings: List[PoolReading] = []
                                     try:
                                         pools = client.storage_pools.all()
                                         for pool in pools:
@@ -288,12 +305,20 @@ async def get_regions_overview(
                                                 pool_resources = client.api.storage_pools[pool.name].resources.get()
                                                 pool_data = pool_resources.json().get("metadata", {})
                                                 space = pool_data.get("space", {})
-                                                storage_total += space.get("total", 0)
-                                                storage_used += space.get("used", 0)
+                                                region_pool_readings.append(PoolReading(
+                                                    member=cluster_id,
+                                                    name=pool.name,
+                                                    driver=pool.driver,
+                                                    space_total=space.get("total", 0),
+                                                    space_used=space.get("used", 0),
+                                                ))
                                             except Exception:
                                                 pass
                                     except Exception:
                                         pass
+                                    region_storage = summarise_cluster_storage(region_pool_readings)
+                                    storage_total = region_storage.total
+                                    storage_used = region_storage.used
                             
                                     try:
                                         # recursion=1: the attribute reads below are
@@ -324,6 +349,49 @@ async def get_regions_overview(
                                         for card in network_cards if card.get("ports")
                                     ]
                             
+                                    # important: a clustered host's capacity is the sum of its
+                                    # members, and /nodes has aggregated it since the MicroCloud
+                                    # work. This map did not, so the SAME cluster reported one
+                                    # member's CPU, memory, GPU and storage here and the whole
+                                    # cluster's on the nodes page. The aggregate is cached under
+                                    # the key /nodes writes, so a warm fleet pays a Redis get and
+                                    # the two pages cannot drift apart again.
+                                    if resolve_clustered(metadata.get("clustered"), client):
+                                        try:
+                                            cluster_totals = aggregate_microcloud_resources(
+                                                client=client,
+                                                node_name=cluster_id,
+                                                base_resources={},
+                                            )
+                                        except Exception as agg_err:
+                                            cluster_totals = None
+                                            logger.warning(
+                                                "Could not aggregate members of %s for the region "
+                                                "map, falling back to the coordinator's own view: %s",
+                                                cluster_id,
+                                                agg_err,
+                                            )
+                                        if cluster_totals is not None:
+                                            cpu_total = cluster_totals.cpu_total
+                                            cpu_sockets = cluster_totals.cpu_sockets
+                                            memory_total = cluster_totals.memory_total
+                                            memory_used = cluster_totals.memory_used
+                                            gpu_inv = replace(
+                                                gpu_inv,
+                                                gpu_total=cluster_totals.gpu_total,
+                                                gpu_cards_total=cluster_totals.gpu_cards_total,
+                                                gpu_integrated_total=cluster_totals.gpu_integrated_total,
+                                                vendors=cluster_totals.gpu_vendors,
+                                                models=cluster_totals.gpu_models,
+                                            )
+                                            storage_total = cluster_totals.storage_total
+                                            storage_used = cluster_totals.storage_used
+                                            storage_drivers.update(
+                                                str(pool.get("driver"))
+                                                for pool in cluster_totals.storage_pools
+                                                if pool.get("driver")
+                                            )
+
                                     node_hardware = ExtendedHardwareInfo(
                                         cpu_total=cpu_total, cpu_sockets=cpu_sockets,
                                         cpu_architecture=cpu_architecture, cpu_vendor=cpu_vendor, cpu_model=cpu_model,
@@ -356,9 +424,22 @@ async def get_regions_overview(
                         return None
         
                 # run all cluster introspections in parallel
+                #
+                # important: each task carries its OWN copy of the caller's context.
+                # `loop.run_in_executor` copies nothing, so `get_client` inside the thread read
+                # an unset org-scope var and its filter could never deny; core/blocking.py
+                # records the full consequence list. One shared Context would be worse than
+                # none: `Context.run` refuses re-entry, so ten threads entering the same copy
+                # raise "cannot enter context", which is why the copy is per task and not
+                # hoisted out of the comprehension.
                 loop = asyncio.get_event_loop()
                 executor = ThreadPoolExecutor(max_workers=min(len(cluster_ids), 10))
-                tasks = [loop.run_in_executor(executor, _process_cluster, cid) for cid in cluster_ids]
+                tasks = [
+                    loop.run_in_executor(
+                        executor, partial(contextvars.copy_context().run, _process_cluster, cid)
+                    )
+                    for cid in cluster_ids
+                ]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 executor.shutdown(wait=False)
         

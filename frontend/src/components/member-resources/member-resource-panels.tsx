@@ -5,7 +5,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { EmptyState } from "@/components/ui/empty-state";
 import { Progress } from "@/components/ui/progress";
 import { TableLink } from "@/components/ui/table-link";
-import { AlertTriangle, Cpu, HardDrive, Layers, MemoryStick, Sparkles } from "lucide-react";
+import { Cpu, HardDrive, Layers, MemoryStick, Sparkles } from "lucide-react";
+import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { formatLabel } from "@/lib/utils";
 import { usageTone } from "@/lib/usage-tone";
 import type { MemberResources } from "@/types/api";
@@ -39,12 +40,8 @@ export function MemberResourcePanels({
   return (
     <div className="space-y-6">
       {resources.degraded && (
-        <div
-          className="flex items-start gap-3 rounded-md border border-status-pending/40 bg-muted/50 p-3"
-          role="status"
-        >
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-status-pending" aria-hidden="true" />
-          <p className="text-sm text-muted-foreground">
+        <PartialReadNotice>
+          <>
             Part of this reading did not come back from the cluster
             {storageLost && instancesLost
               ? ", so the storage and instance figures below are floors rather than measurements."
@@ -54,8 +51,8 @@ export function MemberResourcePanels({
                   ? ", so the instance and allocation figures below are floors rather than measurements."
                   : "."}{" "}
             Refreshing usually clears it.
-          </p>
-        </div>
+          </>
+        </PartialReadNotice>
       )}
 
       {/* Overview Cards */}

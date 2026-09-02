@@ -2711,12 +2711,30 @@ export default function MonitoringContent() {
                   ? (b.usage_percent || 0) - (a.usage_percent || 0)
                   : (a.usage_percent || 0) - (b.usage_percent || 0))
                 .map((pool) => (
-                <div key={`${pool.node}-${pool.name}`} className="space-y-1.5">
+                <div
+                  key={`${pool.node}-${pool.name}-${pool.driver}`}
+                  className="space-y-1.5"
+                >
                   <div className="flex items-center justify-between text-sm">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{pool.name}</span>
                       <Badge variant="outline" className="text-xs">{pool.driver}</Badge>
-                      <span className="text-muted-foreground">({pool.node})</span>
+                      {/* note: `node` is the registered cluster. On a MicroCloud the bytes live
+                          on the members, and a shared pool is one store all of them can see,
+                          so the row says which rather than implying the cluster owns a disk.
+                          Member hostnames are operator content, gated like status_message
+                          above: a tenant is told the shape, not the names. */}
+                      <span className="text-muted-foreground">
+                        ({pool.node}
+                        {pool.members && pool.members.length > 0
+                          ? isPartner
+                            ? `: ${pool.scope === "shared" ? "shared by " : ""}${pool.members.join(", ")}`
+                            : pool.scope === "shared"
+                              ? `, shared by ${pool.members.length} members`
+                              : `, ${pool.members.length} members`
+                          : ""}
+                        )
+                      </span>
                     </div>
                     <span className="font-medium">
                       {formatBytes(pool.used_bytes)} / {formatBytes(pool.total_bytes)}

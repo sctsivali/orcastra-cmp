@@ -7,7 +7,7 @@ built here so a new field can never be added to one path and forgotten on anothe
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pylxd
 
@@ -15,6 +15,8 @@ from app.models.schemas import NodeResources
 
 from .gpu import GpuInventory, build_gpu_inventory
 from .hardware import build_hardware_profile, merge_hardware_profiles
+from .member_resources import list_member_pools, read_pool_space
+from .storage_model import PoolReading, summarise_cluster_storage
 
 logger = logging.getLogger(__name__)
 
@@ -48,13 +50,117 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
         gpu_models=gpu.models,
         gpu_utilization_supported=gpu.utilization_supported,
         storage_total=resources_data.get("storage_total", 0),
+        # note: derived when absent rather than defaulted to zero, so a dict built by hand
+        # cannot report a full pool as unused. Every reader of storage_used is entitled to
+        # assume it agrees with total and available.
+        storage_used=resources_data.get(
+            "storage_used",
+            resources_data.get("storage_total", 0)
+            - resources_data.get("storage_available", 0),
+        ),
         storage_available=resources_data.get("storage_available", 0),
+        # On a standalone host usable and raw are the same number. Falling back to the usable
+        # figure rather than to zero keeps that true for any caller that builds the dict by
+        # hand, instead of reporting a cluster with no raw total.
+        storage_raw_total=resources_data.get(
+            "storage_raw_total", resources_data.get("storage_total", 0)
+        ),
+        storage_raw_used=resources_data.get(
+            "storage_raw_used",
+            resources_data.get(
+                "storage_used",
+                resources_data.get("storage_total", 0)
+                - resources_data.get("storage_available", 0),
+            ),
+        ),
         storage_pools=resources_data.get("storage_pools", []),
+        degraded=resources_data.get("degraded", False),
+        degraded_parts=resources_data.get("degraded_parts", []),
         hardware=resources_data.get("hardware"),
         # note: carried, never minted here. This function runs on the cached path too, and a
         # datetime.now() at this line would stamp a 60s-old body as current.
         collected_at=resources_data.get("collected_at"),
     )
+
+
+def _read_member_pools(
+    client: pylxd.Client,
+    node_name: str,
+    member_name: str,
+    degraded_parts: List[str],
+) -> List[PoolReading]:
+    """Every pool on one member, with its space, through the leaves the member panel uses.
+
+    important: a pool that cannot be read is recorded, not skipped. A swallowed failure here
+    answers 200 with a smaller number, and a capacity figure that is quietly a floor is worse
+    than one that says so. Same rule, same words, as services/lxd/member_resources.py.
+    """
+    readings: List[PoolReading] = []
+    try:
+        raw = list_member_pools(client, member_name)
+    except Exception as err:
+        logger.warning("Could not list pools on %s/%s: %s", node_name, member_name, err)
+        degraded_parts.append("storage")
+        return readings
+
+    for entry in raw:
+        if isinstance(entry, dict):
+            name, driver = entry.get("name"), entry.get("driver") or "unknown"
+        elif isinstance(entry, str) and entry:
+            name, driver = entry.rstrip("/").split("/")[-1], "unknown"
+        else:
+            continue
+        if not name:
+            continue
+        try:
+            space = read_pool_space(client, member_name, name)
+        except Exception as err:
+            logger.warning(
+                "Could not read pool %s on %s/%s: %s", name, node_name, member_name, err
+            )
+            degraded_parts.append(f"storage:{name}")
+            continue
+        readings.append(
+            PoolReading(
+                member=member_name,
+                name=name,
+                driver=driver,
+                space_total=space["total"],
+                space_used=space["used"],
+            )
+        )
+    return readings
+
+
+def resources_for_host(
+    client: pylxd.Client,
+    node_name: str,
+    resources_data: Dict[str, Any],
+    gpu: GpuInventory,
+    clustered: Optional[bool],
+) -> NodeResources:
+    """What this host has, whether it is one machine or a cluster of them.
+
+    important: the one place that decision is made. It used to be made twice and only one of
+    them aggregated, so GET /nodes reported a MicroCloud's whole capacity while
+    GET /nodes/<name>/resources reported the coordinator member's share of it. The node detail
+    dialog reads the list row first and the per-node endpoint once a tab is opened, so the
+    numbers visibly shrank on the second render: 28 cores on the card, 8 in the Storage tab.
+
+    A failed aggregation falls back to this host's own reading rather than to nothing, which is
+    the same contract check_node_status has always had.
+    """
+    if clustered:
+        aggregated = aggregate_microcloud_resources(
+            client=client, node_name=node_name, base_resources=resources_data
+        )
+        if aggregated is not None:
+            return aggregated
+        logger.warning(
+            "Could not aggregate members of %s; reporting the connected member only",
+            node_name,
+        )
+    return build_node_resources(resources_data, gpu)
 
 
 def aggregate_microcloud_resources(
@@ -144,9 +250,10 @@ def aggregate_microcloud_resources(
             # now() here would report a cluster as current on the strength of whichever
             # member happened to answer last.
             member_read_times = []
-            total_storage = 0
-            total_storage_available = 0
-            storage_pools_map = {}
+            # Per-member pool readings, folded once at the end so a shared backing store is
+            # counted once rather than per member. See services/lxd/storage_model.py.
+            pool_readings: List[PoolReading] = []
+            degraded_parts: List[str] = []
             
             successful_members = 0
 
@@ -208,37 +315,16 @@ def aggregate_microcloud_resources(
                         for card in member_gpu_inv.cards:
                             card.index = base_index + card.index
                         
-                        # Extract storage resources from storage pools
-                        storage_info = member_resources.get("storage", {})
-                        storage_pools_raw = storage_info.get("pools", [])
-                        
-                        member_storage_total = 0
-                        member_storage_available = 0
-                        
-                        for pool in storage_pools_raw:
-                            pool_name = pool.get("name", "")
-                            pool_driver = pool.get("driver", "unknown")
-                            space = pool.get("space", {})
-                            space_total = space.get("total", 0)
-                            space_used = space.get("used", 0)
-                            space_available = space_total - space_used
-                            
-                            member_storage_total += space_total
-                            member_storage_available += space_available
-                            
-                            # Aggregate storage pools
-                            pool_key = f"{pool_name}_{pool_driver}"
-                            if pool_key not in storage_pools_map:
-                                storage_pools_map[pool_key] = {
-                                    "name": pool_name,
-                                    "driver": pool_driver,
-                                    "space_total": 0,
-                                    "space_used": 0,
-                                    "space_available": 0,
-                                }
-                            storage_pools_map[pool_key]["space_total"] += space_total
-                            storage_pools_map[pool_key]["space_used"] += space_used
-                            storage_pools_map[pool_key]["space_available"] += space_available
+                        # important: pool space is NOT in the /1.0/resources body. This used to
+                        # read `storage.pools`, a key LXD does not send, so every clustered host
+                        # reported zero storage and no test looked. The real block is
+                        # `storage.disks`, which is physical media: raw device capacity double
+                        # counts a mirror and counts disks belonging to no pool. Space exists
+                        # only at /1.0/storage-pools/<pool>/resources?target=<member>, so it is
+                        # read here, per member, through the same leaves the member panel uses.
+                        pool_readings.extend(
+                            _read_member_pools(client, node_name, member_name, degraded_parts)
+                        )
                         
                         # For CPU sockets, we'll sum them up (each member has its own sockets)
                         cpu_sockets_data = cpu_info.get("sockets", [])
@@ -283,8 +369,6 @@ def aggregate_microcloud_resources(
                         total_cpu_sockets += cpu_sockets
                         total_memory += member_memory_total
                         total_memory_used += member_memory_used
-                        total_storage += member_storage_total
-                        total_storage_available += member_storage_available
                         
                         successful_members += 1
                         logger.debug(
@@ -307,8 +391,14 @@ def aggregate_microcloud_resources(
                 logger.warning(f"No member resources could be aggregated for {node_name}")
                 return None
             
-            # Convert storage pools map to list
-            storage_pools_list = list(storage_pools_map.values())
+            storage = summarise_cluster_storage(pool_readings)
+            if storage.unknown_drivers:
+                logger.info(
+                    "Unclassified storage driver(s) on %s: %s. Counted per member, which "
+                    "understates a shared pool rather than overstating it.",
+                    node_name,
+                    ", ".join(storage.unknown_drivers),
+                )
             
             # Create aggregated NodeResources
             aggregated = NodeResources(
@@ -330,9 +420,14 @@ def aggregate_microcloud_resources(
                 gpu_vendors=cluster_gpu.vendors,
                 gpu_models=cluster_gpu.models,
                 gpu_utilization_supported=cluster_gpu.utilization_supported,
-                storage_total=total_storage,
-                storage_available=total_storage_available,
-                storage_pools=storage_pools_list,
+                storage_total=storage.total,
+                storage_used=storage.used,
+                storage_available=storage.available,
+                storage_raw_total=storage.raw_total,
+                storage_raw_used=storage.raw_used,
+                degraded=bool(degraded_parts),
+                degraded_parts=sorted(set(degraded_parts)),
+                storage_pools=storage.pools,
                 hardware=merge_hardware_profiles(member_hardware),
                 collected_at=min(member_read_times) if member_read_times else None,
             )

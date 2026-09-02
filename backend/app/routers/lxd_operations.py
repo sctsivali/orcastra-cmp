@@ -17,6 +17,7 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
+from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -220,7 +221,7 @@ async def get_operation(
     """Get details for a specific operation."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         operation = client.operations.get(operation_id)
         
         return OperationInfo(
@@ -261,7 +262,7 @@ async def cancel_operation(
     """Cancel an operation."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         # pylxd Operation objects don't have a cancel() method;
         # use the raw API to send DELETE to /1.0/operations/<uuid>
         client.api.operations[operation_id].delete()
@@ -295,7 +296,7 @@ async def wait_operation(
     """Wait for an operation to complete."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         operation = client.operations.get(operation_id)
         operation.wait(timeout=timeout)
         

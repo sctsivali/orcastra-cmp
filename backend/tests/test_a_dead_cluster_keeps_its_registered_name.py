@@ -53,6 +53,7 @@ def test_the_registration_is_read_whatever_the_cluster_is_doing():
         "endpoint": "https://10.1.1.49:9443",
         "display_name": "BSD Lab",
         "node_type": "lxd",
+        "clustered": None,
     }
 
 
@@ -65,7 +66,38 @@ def test_the_type_is_normalised_but_only_when_one_was_recorded():
 
 def test_an_unreadable_registration_says_so_rather_than_guessing():
     unknown = _registry("blitz001", fail={"blitz001"})
-    assert unknown == {"endpoint": "unknown", "display_name": None, "node_type": None}
+    assert unknown == {
+        "endpoint": "unknown",
+        "display_name": None,
+        "node_type": None,
+        "clustered": None,
+    }
+
+
+def test_the_clustering_state_rides_along_on_a_read_that_already_happens():
+    """A clustered host that is down keeps its Clustered marker.
+
+    /clusters gained a stored fallback for this; /nodes did not, so the clusters table and the
+    dashboard node card disagreed about the same offline host. The record was already being read
+    here on every path, before the breaker check, and the key was simply dropped on the way out.
+
+    Only a bool is a reading. A record written before this key existed has no opinion, and a
+    legacy string must not be coerced into one.
+    """
+    REGISTERED["clustered-host"] = {
+        "endpoint": "https://10.1.1.60:8443",
+        "display_name": "Clustered Host",
+        "type": "MicroCloud",
+        "clustered": True,
+    }
+    REGISTERED["stringly"] = dict(REGISTERED["clustered-host"], clustered="true")
+    try:
+        assert _registry("clustered-host")["clustered"] is True
+        assert _registry("stringly")["clustered"] is None
+        assert _registry("blitz001")["clustered"] is None
+    finally:
+        del REGISTERED["clustered-host"]
+        del REGISTERED["stringly"]
 
 
 @pytest.fixture

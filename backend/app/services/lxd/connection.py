@@ -440,9 +440,21 @@ class LXDConnectionManager:
         recently failed to connect.
         """
         # org-scope filter: deny access to clusters outside user's org
+        #
+        # important: this used to be the one branch here that returned None with no log at all,
+        # while every other None is logged, at DEBUG for a tripped breaker and WARNING for a
+        # failed connect. Callers turn None into 503 "Could not connect", so an authorization
+        # decision arrived looking like an outage with nothing in the log to say otherwise, and
+        # an operator went to check a cluster that was fine. The status itself stays as it is:
+        # verify_cluster_access answers 403 first at every cluster-taking handler, which
+        # test_cluster_scope_ratchet.py keeps structural, so reaching here at all means a caller
+        # that skipped it and the log is what will name them.
         from app.core.org_scope import get_current_allowed_clusters
         allowed = get_current_allowed_clusters()
         if allowed is not None and cluster_id not in allowed:
+            logger.debug(
+                "Refusing %s: outside the caller's organization scope", cluster_id
+            )
             return None
 
         # important: the breaker belongs HERE, at the one chokepoint every caller funnels

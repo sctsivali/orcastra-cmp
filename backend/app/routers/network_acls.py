@@ -22,6 +22,7 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.services.activity_logger import get_activity_logger
+from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -192,7 +193,7 @@ async def get_network_acl(
     """Get details for a specific network ACL."""
     try:
         verify_cluster_access(host)
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         response = client.api["network-acls"][acl_name].get()
         
         if response.status_code == 200:
@@ -234,7 +235,7 @@ async def create_network_acl(
     """Create a new network ACL."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         
         acl_data = {
             "name": request.name,
@@ -311,7 +312,7 @@ async def update_network_acl(
     """Update a network ACL."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         
         # Get current ACL
         get_response = client.api["network-acls"][acl_name].get()
@@ -366,7 +367,7 @@ async def delete_network_acl(
     """Delete a network ACL."""
     verify_cluster_access(host)
     try:
-        client = require_client(lxd_service.connection_manager.get_client(host), host)
+        client = require_client(await client_for(lxd_service, host), host)
         response = client.api["network-acls"][acl_name].delete()
         
         if response.status_code in [200, 202]:
