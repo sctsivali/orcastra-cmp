@@ -109,7 +109,9 @@ for (const file of walk(ROOT)) {
 // Status and Severity columns keep their Badge by an explicit product decision, so a hard
 // ban would fail on purpose-built code. A ratchet instead: the count may fall, never rise.
 // Raise BADGE_BASELINE only with a reason.
-const BADGE_BASELINE = 17;
+// 17 to 16: the clusters page rendered the hypervisor type as a pill. Type is not Status or
+// Severity, so it was never one of the two exceptions this baseline exists to hold.
+const BADGE_BASELINE = 16;
 // A ratchet, not a ban. The remaining occurrences live on chart, console and dialog-form
 // surfaces rather than in table cells: the on-screen keyboard's legends are laid out to a
 // fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping those

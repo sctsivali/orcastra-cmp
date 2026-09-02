@@ -12,11 +12,9 @@ import {
   CheckCircle, 
   XCircle, 
   Clock, 
-  AlertTriangle,
   RefreshCw,
   Trash2,
   Plus,
-  ExternalLink,
   Users,
   KeyRound,
   Copy,
@@ -78,7 +76,13 @@ const CLUSTERS = defineTable<any>()({
       label: "Type",
       sort: (c) => c.cluster_type,
       facet: (c) => c.cluster_type,
-      facetSpec: { primary: true, format: formatHypervisorType } },
+      facetSpec: {
+        primary: true,
+        format: formatHypervisorType,
+        // A null type is the empty bucket, which never reaches `format`. Naming it keeps the
+        // chip honest instead of reading "(none)" for a fact that is simply not known yet.
+        emptyLabel: "(not determined)",
+      } },
     {
       field: "zone",
       label: "Zone",
@@ -467,8 +471,25 @@ EOF`}
                         </TableLink>
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{formatHypervisorType(cluster.cluster_type)}</Badge>
-                        {cluster.clustered && <TableSubText>Clustered</TableSubText>}
+                        {/* important: a value, not a chip. documentation/ui/table-conventions.md
+                            keeps Badge in a data cell for Status and Severity only, and the pill
+                            also inverted the type scale here: it is text-xs font-semibold, so the
+                            Type value rendered smaller and bolder than every other value in the
+                            row while its own qualifier underneath was the same size. As text both
+                            tiers start at the same x, which is what the badge padding broke.
+                            The monitoring and technologies node cards already render this value
+                            as text. */}
+                        <div>
+                          {cluster.cluster_type ? (
+                            formatHypervisorType(cluster.cluster_type)
+                          ) : (
+                            /* The backend refuses to guess this before the certificate is
+                               trusted, so neither do we. formatHypervisorType(null) answers the
+                               literal string "Hypervisor", which reads as a reading. */
+                            <TableEmptyValue label="Hypervisor type not determined" />
+                          )}
+                          {cluster.clustered && <TableSubText>Clustered</TableSubText>}
+                        </div>
                       </TableCell>
                       <TableCell>
                         {cluster.zone || <TableEmptyValue label="No zone" />}
