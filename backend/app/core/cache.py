@@ -27,7 +27,11 @@ logger = logging.getLogger(__name__)
 # which the UI is required to render as "unknown" rather than "now" - correct, but it would
 # describe every cached body for a full TTL after deploy as having no known age, on exactly the
 # surfaces someone would be watching to confirm the fix. Re-keying costs one cold window.
-RESOURCE_SCHEMA_VERSION = "v5"
+# v6: MemberResources gained `degraded` and `degraded_parts`. A v5 body deserializes with
+# degraded=False, which is indistinguishable from a read that actually completed, so for one
+# full TTL after deploy the surface someone is watching to confirm the fix would report every
+# cached body as healthy. Same argument as v5.
+RESOURCE_SCHEMA_VERSION = "v6"
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's

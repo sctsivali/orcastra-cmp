@@ -50,6 +50,10 @@ const CLEARED = [
   'app/inventory/server/',
   'app/inventory/operations/',
   'app/inventory/warnings/',
+  // The member resource dialog renders inside app/inventory/clustering/ but lives under
+  // components/, so the route prefixes above never reached it. It carried a four-step
+  // utilisation ramp in raw palette steps the whole time this ban was described as absolute.
+  'components/member-resources/',
 ];
 
 // Console and terminal chrome does not follow the theme: it paints its own fixed dark surface

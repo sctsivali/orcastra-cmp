@@ -154,7 +154,12 @@ def aggregate_microcloud_resources(
             # call instances.all() twice per member, so a ten-member cluster made twenty
             # identical round trips to build one number.
             try:
-                cluster_instances = client.instances.all()
+                # important: recursion=1, never pylxd's default of 0. At recursion=0 the
+                # daemon returns URL strings and pylxd builds Instance objects carrying only a
+                # name, so the `.location`, `.status` and `.config` reads below each fall into
+                # Model.__getattribute__ -> sync() -> one GET per instance. That is invisible
+                # at the call site and scales with the whole cluster.
+                cluster_instances = client.instances.all(recursion=1)
             except Exception as inst_err:
                 logger.debug(f"Could not list instances for {node_name}: {inst_err}")
                 cluster_instances = []

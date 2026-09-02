@@ -19,6 +19,7 @@ import { useNodeResources } from "@/hooks/use-lxd";
 import { STALE_AFTER_MS } from "@/lib/query-config";
 import { ClusterStatus, type NodeStatus } from "@/types/api";
 import { clusterStatusMeta } from "@/lib/cluster-status";
+import { toMillis } from "@/lib/utils";
 import { NodeSystemPanel } from "./node-system-panel";
 import {
   NodeCpuPanel,
@@ -37,12 +38,6 @@ export interface NodeDetailModalProps {
   listCollectedAt?: string | null;
   /** The row has left the list. What is shown is the last state we saw. */
   isOrphaned?: boolean;
-}
-
-function toMillis(value: string | null | undefined): number | null {
-  if (!value) return null;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? null : parsed;
 }
 
 /**

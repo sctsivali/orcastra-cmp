@@ -150,18 +150,27 @@ def resolve_cluster_type(stored: Optional[str], client: Any = None) -> Optional[
     return normalize_cluster_type(stored) if stored else None
 
 
-def resolve_clustered(client: Any = None) -> Optional[bool]:
-    """Whether the cluster is clustered, read from the connected client.
+def resolve_clustered(stored: Optional[bool] = None, client: Any = None) -> Optional[bool]:
+    """Whether the cluster is clustered, preferring what the host says now over what was stored.
 
-    Unlike the hypervisor family this takes no stored fallback, because there is nothing
-    stored to fall back to: clustering is derived on every request rather than persisted.
-    A snapshot of live state in a field nothing refreshes is what left a MicroCloud labelled
-    LXD, and adding a second one would repeat it. None means the client could not answer.
+    Same two-source contract as resolve_cluster_type: a live trusted payload always outranks the
+    stored value, and None means neither source knows.
+
+    important: an earlier revision took no stored fallback, on the reasoning that a snapshot of
+    live state in a field nothing refreshes is what left a MicroCloud labelled LXD. That defect
+    was narrower than the rule drawn from it. The value that went stale was written at
+    registration from an UNTRUSTED probe, which cannot see `environment` at all, and nothing ever
+    re-derived it. What is stored here is only ever a reading the host answered as trusted, and it
+    is only consulted when there is no client to ask, so it can never outrank the truth.
+
+    Without a fallback the picker at /inventory/clustering/members cannot tell a host pending
+    trust from a clustered host that is merely offline, because both answer None. That is the
+    concrete cost the fallback buys.
     """
     host_info = _trusted_host_info(client)
-    if host_info is None:
-        return None
-    return detect_clustered_from_metadata(host_info)
+    if host_info is not None:
+        return detect_clustered_from_metadata(host_info)
+    return stored if isinstance(stored, bool) else None
 
 
 def normalize_cluster_type(cluster_type: Optional[str]) -> str:

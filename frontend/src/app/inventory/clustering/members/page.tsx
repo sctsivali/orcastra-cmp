@@ -12,6 +12,7 @@ import {
   
   RefreshCw,
   Shield,
+  ShieldAlert,
   Globe,
   AlertTriangle } from "lucide-react";
 import { RefreshButton } from "@/components/ui/refresh-button";
@@ -31,9 +32,12 @@ import {
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
+import { IntentLink } from "@/components/navigation/route-intent";
+import type { ClusterInfo } from "@/types/api";
 import { toast } from "@/hooks/use-toast";
-import { useClusters, useClusterMembers, useMemberResources } from "@/hooks/use-lxd";
-import { MemberResourceModal } from "@/components/member-resource-modal";
+import { useClusters, useClusterMembers } from "@/hooks/use-lxd";
+import { MemberResourceModal } from "@/components/member-resources/member-resource-modal";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
@@ -88,7 +92,7 @@ function ClusterMembersContent() {
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   
   const { data: clustersData } = useClusters();
-  const clusters = React.useMemo(() => {
+  const clusters = React.useMemo<ClusterInfo[]>(() => {
     // important: the status filter that used to sit beside the type filter is gone. An offline
     // clustered host simply vanished from this picker, so an operator whose cluster had
     // gone down was left with no row, no status and nothing to explain the absence. It is
@@ -97,40 +101,48 @@ function ClusterMembersContent() {
     // important: filtered on `clustered`, not on the MicroCloud label. Cluster members are a
     // property of clustering, and the clusters page offers the Members button on the same
     // rule - filtering by label here left a plain LXD cluster with a button leading to a
-    // picker that did not list it. A host whose clustering is not yet determined is kept,
-    // so a cluster pending trust is still selectable rather than silently absent.
-    const rows = (clustersData?.clusters || []).filter(
-      (c: any) => c.clustered !== false
+    // picker that did not list it.
+    //
+    // important: `=== true`, where this used to be `!== false`. Keeping the undetermined case
+    // was deliberate and it was wrong: `clustered` reads null for a host that has never
+    // completed its trust handshake, so the picker offered clusters that answer 503 the moment
+    // they are chosen, while the clusters page only offers its Members button for a host that
+    // is both clustered and online. The backend now persists the clustering state whenever a
+    // host proves it on a trusted read, so `true` survives an outage and this filter keeps a
+    // clustered host that is merely down. See documentation/clusters/hypervisor-type-and-clustering.md.
+    const rows = (clustersData?.clusters ?? []).filter(
+      // important: never drop the cluster the URL named, even if it fails the rule.
+      // SearchableSelect falls back to its placeholder when `value` matches no option, so a
+      // filtered-out deep link leaves the trigger reading "Select a clustered node" while the
+      // page underneath queries that very cluster. Two surfaces disagreeing is worse than one
+      // extra row, and a registration that predates the persistence change reads null until
+      // someone presses Check Authentication once.
+      (c: ClusterInfo) => c.clustered === true || c.cluster_id === node,
     );
     // Reachable clusters lead, so the list does not open on a row that cannot be read.
     return rows.sort(
-      (a: any, b: any) =>
+      (a: ClusterInfo, b: ClusterInfo) =>
         clusterStatusMeta(a.status).toneRank - clusterStatusMeta(b.status).toneRank ||
         (a.display_name || a.cluster_id).localeCompare(b.display_name || b.cluster_id)
     );
-  }, [clustersData]);
+  }, [clustersData, node]);
   
   const { data: membersData, isLoading, refreshNow, dataUpdatedAt, error } = useClusterMembers(node);
   const members = React.useMemo(() => membersData?.members || [], [membersData]);
   const isClustered = membersData?.is_clustered || false;
   const nodeName = membersData?.node || "";
   
-  // note: gated on the modal. Without it this kept polling a live per-member read in the
-  // background for a panel nobody had open.
-  const { data: memberResources, isLoading: isLoadingResources } = useMemberResources(
-    node,
-    selectedMember || "",
-    { enabled: isModalOpen },
-  );
-  
   const handleMemberClick = (memberName: string) => {
     setSelectedMember(memberName);
     setIsModalOpen(true);
   };
-  
+
+  // important: the member is kept, not cleared. Clearing it moved the query key while Radix
+  // was still animating the dialog out, so the body repainted as an empty panel on the way
+  // closed. The query is still stopped, because the modal gates it on isOpen, and reopening
+  // still refetches: react-query treats a query whose enabled was false as needing a fetch.
   const handleCloseModal = () => {
     setIsModalOpen(false);
-    setSelectedMember(null);
   };
   
   // Show error toast if fetch fails
@@ -191,7 +203,12 @@ function ClusterMembersContent() {
             className="w-[300px]"
             placeholder="Select a clustered node"
             searchPlaceholder="Search clusters..."
-            emptyText="No clustered hosts available"
+            // important: not disabled when the list is empty. SearchableSelect carries
+            // `emptyText` for exactly this, every other picker in the app stays operable, and
+            // node-picker-status-coverage.spec.ts opens this control before deciding whether
+            // there is anything to assert. A disabled control turns "nothing to choose" into a
+            // dead end the operator cannot confirm by looking.
+            emptyText="No clustered host is available"
             options={clusters.map((cluster: any) => {
               const meta = clusterStatusMeta(cluster.status);
               return {
@@ -251,7 +268,30 @@ function ClusterMembersContent() {
               undefined and is_clustered false. Rendering that as "Not a clustered node"
               told the operator their cluster is not a cluster, presenting an outage as a
               configuration fact. Reachability is checked before clustering. */}
-          {error ? (
+          {/* important: selection is checked before clustering. With no node chosen this fell
+              through to "Not a clustered node", which told an operator that a cluster they had
+              not picked yet is not a cluster. Tightening the filter made that state reachable
+              on a fleet where nothing has proven itself clustered. */}
+          {!node ? (
+            clusters.length === 0 ? (
+              <EmptyState
+                icon={ShieldAlert}
+                title="No cluster here is known to be clustered"
+                description="A host is listed once it has authenticated and reported its clustering state. Clusters still waiting on their trust handshake are not offered here."
+                action={
+                  <Button asChild variant="outline" size="sm">
+                    <IntentLink href="/inventory/clusters">Go to clusters</IntentLink>
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={Server}
+                title="No cluster selected"
+                description="Pick a clustered node above to see its members."
+              />
+            )
+          ) : error ? (
             <EmptyState
               icon={AlertTriangle}
               title="Could not reach this cluster"
@@ -359,8 +399,6 @@ function ClusterMembersContent() {
         onClose={handleCloseModal}
         memberName={selectedMember}
         nodeName={node}
-        resources={memberResources || null}
-        isLoading={isLoadingResources}
       />
     </div>
   );

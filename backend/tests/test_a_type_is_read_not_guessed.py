@@ -125,12 +125,28 @@ class LiveOutranksStoredTests(unittest.TestCase):
         self.assertIsNone(resolve_cluster_type(None, None))
         self.assertIsNone(resolve_cluster_type(None, _Client(UNTRUSTED)))
 
-    def test_clustering_is_read_only_from_a_trusted_client(self):
-        """No stored fallback by design: clustering is derived, never persisted."""
-        self.assertTrue(resolve_clustered(_Client(MICROCLOUD)))
-        self.assertIs(resolve_clustered(_Client(STANDALONE)), False)
-        self.assertIsNone(resolve_clustered(_Client(UNTRUSTED)))
-        self.assertIsNone(resolve_clustered(None))
+    def test_a_trusted_client_outranks_the_stored_clustering_state(self):
+        """Same two-source contract as the family: live wins, stored answers when nobody can."""
+        self.assertTrue(resolve_clustered(None, _Client(MICROCLOUD)))
+        self.assertIs(resolve_clustered(None, _Client(STANDALONE)), False)
+        # A host that says it is standalone overrides a stale True, and vice versa.
+        self.assertIs(resolve_clustered(True, _Client(STANDALONE)), False)
+        self.assertTrue(resolve_clustered(False, _Client(MICROCLOUD)))
+
+    def test_the_stored_clustering_state_answers_when_there_is_no_client(self):
+        """An offline host that proved itself clustered must not read the same as one that
+        never proved anything. Both used to answer None, which is what let the members picker
+        offer a cluster pending trust."""
+        self.assertTrue(resolve_clustered(True, None))
+        self.assertIs(resolve_clustered(False, None), False)
+        self.assertTrue(resolve_clustered(True, _Client(UNTRUSTED)))
+
+    def test_nothing_stored_and_nothing_trusted_reports_unknown(self):
+        self.assertIsNone(resolve_clustered(None, None))
+        self.assertIsNone(resolve_clustered(None, _Client(UNTRUSTED)))
+        # Anything that is not a bool is not a reading. A legacy record holding a string must
+        # not be coerced into a claim.
+        self.assertIsNone(resolve_clustered("true", None))
 
     def test_resolving_costs_no_request(self):
         """host_info is pylxd's cached body; resolving must not reach for the network."""

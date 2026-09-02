@@ -1,6 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import { usageTone } from "@/lib/usage-tone";
 
 export interface UsageMeterProps {
   label: string;
@@ -27,8 +28,8 @@ export function usagePercent(used: number, total: number): number {
  */
 export function UsageMeter({ label, value, used, total, className }: UsageMeterProps) {
   const percent = usagePercent(used, total);
-  const fill =
-    percent >= 90 ? "bg-destructive" : percent >= 75 ? "bg-status-pending" : "bg-success";
+  // Shared with the member resource modal, which had grown its own four-step copy of this.
+  const { fill } = usageTone(percent);
 
   return (
     <div className={cn("space-y-1", className)}>

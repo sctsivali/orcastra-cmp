@@ -26,7 +26,8 @@ class VaultStorageMixin:
         zone: str = "",
         cluster_type: Optional[str] = None,
         merchant_id: str = "",
-        location: Optional[Dict[str, Any]] = None
+        location: Optional[Dict[str, Any]] = None,
+        clustered: Optional[bool] = None
     ) -> bool:
         """
         Save cluster metadata to Vault.
@@ -38,8 +39,29 @@ class VaultStorageMixin:
             cluster_type: Type of cluster (auto-detected from hypervisor)
             merchant_id: Merchant/organization identifier
             location: Geographic location information (region, country, coordinates)
+            clustered: Whether the host proved itself clustered on its last trusted answer
+
+        important: this merges over whatever is already stored rather than replacing it. The
+        write is a whole-record `vault_kv_put`, so a key that is not a parameter here used to be
+        deleted by any unrelated save. Both internal callers re-save the full record by hand for
+        exactly that reason (routers/nodes.py on rename, routers/cluster_registration.py on a
+        location update), and the rename site even claimed to "preserve all fields" while
+        dropping every field this signature does not name. `server_type` was already lost that
+        way once. Merging fixes the class, not just the field that exposed it.
         """
+        path = f"{self.clusters_path}/{cluster_id}/metadata"
+        try:
+            # note: uncached on purpose. This is the read half of a read-modify-write, and
+            # merging a cached body over a fresher one would drop exactly the keys this merge
+            # exists to keep.
+            stored = self.vault.vault_read(path, use_cache=False) or {}
+        except VaultClientError:
+            # A first save has nothing to read back, and a Vault that cannot be read here will
+            # fail the write below anyway with a better message.
+            stored = {}
+
         metadata = {
+            **stored,
             "display_name": display_name,
             # Normalized here as well as at the request boundary, so the internal callers
             # that re-save metadata (rename, location update) also clean the stored value.
@@ -49,9 +71,10 @@ class VaultStorageMixin:
             "merchant_id": merchant_id,
             "location": location or {}
         }
-        
+        if clustered is not None:
+            metadata["clustered"] = clustered
+
         try:
-            path = f"{self.clusters_path}/{cluster_id}/metadata"
             self.vault.vault_kv_put(path, metadata)
             logger.info(f"Saved metadata for cluster {cluster_id}")
             return True

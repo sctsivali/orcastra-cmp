@@ -478,8 +478,19 @@ class InstanceManager:
                     return [], False
             
             if client is None:
-                if health.get_kind(node_name) is None:
-                    health.record_failure(node_name, "Client not connected")
+                # important: do NOT trip the breaker on a missing client. connection.py's
+                # _auto_reconnect already refuses to, and says why: an empty in-process cache is
+                # the normal state for a cluster registered after this worker booted, and
+                # tripping there "seals the only doors that could reopen it". Every path that
+                # DID fail records its own kind before returning None, so the `get_kind is None`
+                # guard that used to sit here fired only in the case that must never trip: a
+                # cluster this worker has simply not connected to yet, or one the caller's org
+                # scope excluded. The effect was a freshly registered cluster reading offline
+                # across the product for a full breaker TTL, with no log line anywhere.
+                logger.debug(
+                    "No client for %s in this worker; reporting unreachable without tripping "
+                    "the breaker", node_name
+                )
                 return [], False
             
             # Get all projects on this node

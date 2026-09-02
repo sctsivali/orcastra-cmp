@@ -296,7 +296,9 @@ async def get_regions_overview(
                                         pass
                             
                                     try:
-                                        instances = client.instances.all()
+                                        # recursion=1: the attribute reads below are
+                                        # one HTTP request each at pylxd's default.
+                                        instances = client.instances.all(recursion=1)
                                         visible_instances = [
                                             instance for instance in instances
                                             if tenant_acl_has_permission(

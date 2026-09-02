@@ -150,6 +150,30 @@ def test_a_standalone_host_is_reported_lxd_and_not_clustered(client):
     assert row["clustered"] is False, row
 
 
+def test_a_stored_clustering_state_unlocks_the_stored_type(client, monkeypatch):
+    """An offline host that proved both facts keeps reporting both.
+
+    The two are gated differently and the marker is the reason. A stored `type` on its own can
+    still be the registration-time guess this fixture carries, so an unauthenticated cluster
+    must not report it. A stored `clustered` can only have been written by check-auth, which
+    writes the family in the same statement, so its presence is the evidence that the stored
+    type came off a host rather than out of a default.
+    """
+    original = _CertManager.get_cluster_info
+
+    def with_clustering(self, cluster_id, include_cert_content=False):
+        info = original(self, cluster_id, include_cert_content)
+        info["metadata"]["type"] = "MicroCloud"
+        info["metadata"]["clustered"] = True
+        return info
+
+    monkeypatch.setattr(_CertManager, "get_cluster_info", with_clustering)
+
+    row = _row(client, UNTRUSTED)
+    assert row["clustered"] is True, row
+    assert row["cluster_type"] == "MicroCloud", row
+
+
 def test_an_untrusted_cluster_reports_neither_rather_than_defaulting(client):
     row = _row(client, UNTRUSTED)
     assert row["cluster_type"] is None, row

@@ -44,7 +44,16 @@ class FakeClient:
         self.host_info = {"environment": {"server_clustered": True, "server_name": members[0]["server_name"]}}
         self._members = members
         self._per_member = per_member
-        self.instances = SimpleNamespace(all=lambda: list(instances))
+        # note: the signature is the assertion. pylxd's Instance.all defaults to recursion=0,
+        # which returns names only and makes every later attribute read its own HTTP request,
+        # so a caller that forgets the keyword must fail here rather than quietly work.
+        self.recursions: List[Any] = []
+
+        def _all(recursion: int = 0) -> List[Any]:
+            self.recursions.append(recursion)
+            return list(instances)
+
+        self.instances = SimpleNamespace(all=_all)
         self.api = _Api(self)
 
 
@@ -160,12 +169,21 @@ def test_the_instance_list_is_fetched_once_for_the_whole_cluster() -> None:
     client = _cluster()
     real = client.instances.all
 
-    def counting_all():
+    def counting_all(recursion: int = 0):
         calls["n"] += 1
-        return real()
+        return real(recursion=recursion)
 
     client.instances = SimpleNamespace(all=counting_all)
 
     nr.aggregate_microcloud_resources(client, "microcloud", {})
 
     assert calls["n"] == 1, f"instances.all() called {calls['n']} times"
+
+
+def test_the_instance_list_is_fetched_with_recursion() -> None:
+    """At pylxd's default recursion=0 the list is names only, and every `.location` read below
+    turns into its own GET. Costed one request per instance in the whole cluster, sequentially,
+    each under the same 8s socket budget, and nothing at the call site showed it."""
+    client = _cluster()
+    nr.aggregate_microcloud_resources(client, "microcloud", {})
+    assert client.recursions == [1], f"expected one recursion=1 call, got {client.recursions}"

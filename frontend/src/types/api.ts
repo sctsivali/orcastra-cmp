@@ -922,6 +922,10 @@ export interface MemberResources {
   instances_running: number;
   /** When this sample was read off the cluster. Absent means unknown, never "now". */
   collected_at?: string | null;
+  /** At least one part of the read did not come back, so the numbers above are floors. */
+  degraded?: boolean;
+  /** Which parts were lost: "storage", "storage:<pool>", "instances". */
+  degraded_parts?: string[];
 }
 
 export interface ClusterInfo {

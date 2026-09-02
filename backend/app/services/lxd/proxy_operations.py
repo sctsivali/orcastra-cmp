@@ -344,7 +344,8 @@ def execute_proxy_operation(
                 config=dict(i.config or {}),
                 expanded_devices=dict(getattr(i, "expanded_devices", {}) or {}),
             )
-            for i in client.instances.all()
+            # recursion=1: every field read above is lazily synced otherwise.
+            for i in client.instances.all(recursion=1)
         ]
 
     if operation == "get_instance":

@@ -3,10 +3,12 @@ API Router for MicroCloud cluster members.
 Provides endpoints for listing cluster members in a MicroCloud setup.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import List, Optional
 import logging
-from datetime import datetime, timezone
+
+import requests.exceptions as requests_exc
 
 from app.services.lxd_service import (
     LXDService,
@@ -15,6 +17,8 @@ from app.services.lxd_service import (
 )
 from pydantic import BaseModel, Field
 from pylxd.exceptions import LXDAPIException
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.lxd_errors import lxd_transport_error
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager, MEMBER_RESOURCES_CACHE_PREFIX
 from app.core.config import get_settings
@@ -23,10 +27,26 @@ from app.models.schemas import (
 )
 
 from app.services.lxd.gpu import build_gpu_inventory
+from app.services.lxd.member_resources import (
+    collect_member_fanout,
+    count_member_instances,
+)
 from app.core.dependencies import require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 
 logger = logging.getLogger(__name__)
+
+_connect_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="member_connect")
+# get_client revalidates with a live (3, 5) GET and may rebuild the client, which costs a TLS
+# handshake plus a verifying (2, 5) GET. Matches the recovery-connect budget in image_uploads.
+MEMBER_CONNECT_TIMEOUT: float = 30.0
+# A body carrying floors instead of measurements must not sit in the cache for a full minute.
+DEGRADED_CACHE_TTL: int = 10
+
+
+def _percent(used: float, total: float) -> float:
+    """Usage as a percentage, with a zero total reported as zero rather than dividing."""
+    return round((used / total * 100), 2) if total > 0 else 0.0
 
 # important: raised from require_tenant() to require_partner(). Every page that consumes this
 # router declares useRequireRole(Role.PARTNER), so the UI already treated it as partner-tier while
@@ -283,157 +303,67 @@ async def get_member_resources(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """Get resource information for a specific cluster member."""
+    """Get resource information for a specific cluster member.
+
+    The fan-out itself lives in services/lxd/member_resources.py. This keeps the HTTP concerns:
+    scope, cache, the connection hop, and turning a failure into a status an operator can act on.
+    """
     verify_cluster_access(node)
     cache = get_cache_manager()
     settings = get_settings()
     cache_ttl = settings.cache_ttl_lxd_data
-    
+
     # Check cache first
     cache_key = get_scope_cache_key(f"{MEMBER_RESOURCES_CACHE_PREFIX}:{node}:{member_name}")
     cached_resources = None if fresh else cache.get("lxd_resources", cache_key)
     if cached_resources is not None:
         logger.info(f"Cache HIT for member resources: {node}/{member_name}")
         return MemberResources(**cached_resources)
-    
-    logger.info(f"Cache MISS for member resources: {node}/{member_name}")
-    
-    try:
-        client = require_client(lxd_service.connection_manager.get_client(node), node)
-        
-        # Get resources for this specific member by targeting it
-        member_resources_response = client.api.resources.get(params={"target": member_name})
-        # important: stamped at the read, then carried through the 60s cache untouched.
-        collected_at = datetime.now(timezone.utc)
-        member_resources = member_resources_response.json().get("metadata", {})
-        
-        # Extract CPU resources
-        cpu_info = member_resources.get("cpu", {})
-        cpu_total = cpu_info.get("total", 0)
-        
-        # Extract memory resources
-        memory_info = member_resources.get("memory", {})
-        memory_total = memory_info.get("total", 0)
-        memory_used = memory_info.get("used", 0)
-        memory_available = memory_total - memory_used
-        
-        
-        # Get storage pools from separate endpoint
-        storage_total = 0
-        storage_used = 0
-        storage_available = 0
-        storage_pools = []
-        
-        try:
-            # Query storage pools for this specific member
-            logger.debug(f"Querying storage pools for member {member_name}")
-            pools_response = client.api["storage-pools"].get(params={"target": member_name})
-            pool_paths = pools_response.json().get("metadata", [])
-            # Extract pool names from paths like /1.0/storage-pools/local -> local
-            pool_names = [p.split("/")[-1] for p in pool_paths if p]
-            logger.info(f"Found {len(pool_names)} storage pools for member {member_name}: {pool_names}")
-            
-            for pool_name in pool_names:
-                try:
-                    # Get detailed info for each pool
-                    pool_response = client.api["storage-pools"][pool_name].get(params={"target": member_name})
-                    pool_data = pool_response.json().get("metadata", {})
-                    
-                    _pool_config = pool_data.get("config", {})
-                    pool_driver = pool_data.get("driver", "unknown")
-                    
-                    # Get pool resources
-                    try:
-                        pool_resources = client.api["storage-pools"][pool_name]["resources"].get(params={"target": member_name})
-                        resources_data = pool_resources.json().get("metadata", {})
-                        space = resources_data.get("space", {})
-                        space_total = space.get("total", 0)
-                        space_used = space.get("used", 0)
-                        logger.debug(f"Pool {pool_name}: {space_total} total, {space_used} used")
-                    except Exception as res_err:
-                        # Fallback if resources endpoint not available
-                        logger.warning(f"Could not get resources for pool {pool_name}: {res_err}")
-                        space_total = 0
-                        space_used = 0
-                    
-                    space_available = space_total - space_used
-                    
-                    storage_total += space_total
-                    storage_used += space_used
-                    storage_available += space_available
-                    
-                    storage_pools.append({
-                        "name": pool_name,
-                        "driver": pool_driver,
-                        "space_total": space_total,
-                        "space_used": space_used,
-                        "space_available": space_available,
-                    })
-                except Exception as pool_err:
-                    logger.warning(f"Could not get details for pool {pool_name}: {pool_err}")
-                    continue
-        except Exception as storage_err:
-            logger.warning(f"Could not get storage pools for member {member_name}: {storage_err}")
-        
-        # Get CPU and GPU usage by counting instances on this member
-        cpu_used = 0
-        instances_count = 0
-        instances_running = 0
-        instances = []
 
-        try:
-            instances = client.instances.all()
-            for instance in instances:
-                instance_location = getattr(instance, 'location', '')
-                if instance_location == member_name:
-                    instances_count += 1
-                    if instance.status == "Running":
-                        instances_running += 1
-                        
-                        # Count CPU
-                        config = getattr(instance, 'config', {}) or {}
-                        limits_cpu = config.get('limits.cpu')
-                        if limits_cpu:
-                            try:
-                                if '-' in str(limits_cpu):
-                                    # Range like "0-3"
-                                    parts = str(limits_cpu).split('-')
-                                    cpu_used += int(parts[1]) - int(parts[0]) + 1
-                                elif ',' in str(limits_cpu):
-                                    # List like "0,1,2"
-                                    cpu_used += len(str(limits_cpu).split(','))
-                                else:
-                                    # Single number
-                                    cpu_used += int(limits_cpu)
-                            except:
-                                cpu_used += 1
-                        else:
-                            cpu_used += 1
-                        
-        except Exception as usage_err:
-            logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
-        
+    logger.info(f"Cache MISS for member resources: {node}/{member_name}")
+
+    try:
+        # note: get_client revalidates the pooled connection with a live request and may rebuild
+        # it through a TLS handshake, so it is blocking work and does not belong on the loop.
+        raw_client = await run_blocking(
+            lxd_service.connection_manager.get_client,
+            node,
+            timeout=MEMBER_CONNECT_TIMEOUT,
+            label=f"member_resources_connect[{node}]",
+            executor=_connect_executor,
+        )
+        client = require_client(raw_client, node)
+
+        fanout = await collect_member_fanout(client, node, member_name)
+
+        cpu_info = fanout.resources_body.get("cpu", {}) or {}
+        cpu_total = cpu_info.get("total", 0) or 0
+        memory_info = fanout.resources_body.get("memory", {}) or {}
+        memory_total = memory_info.get("total", 0) or 0
+        memory_used = memory_info.get("used", 0) or 0
+
+        usage = count_member_instances(fanout.instances, member_name)
+
+        storage_total = sum(pool.space_total for pool in fanout.pools)
+        storage_used = sum(pool.space_used for pool in fanout.pools)
+
         # GPU capacity, allocation and card detail from the canonical inventory, scoped to
         # this member. Counting cards here by hand is what made this endpoint report two GPUs
         # on a Jetson while the rest of the product reported one.
-        gpu_inv = build_gpu_inventory(member_resources, instances, member=member_name)
-        
-        # Calculate percentages
-        cpu_usage_percent = round((cpu_used / cpu_total * 100), 2) if cpu_total > 0 else 0.0
-        memory_usage_percent = round((memory_used / memory_total * 100), 2) if memory_total > 0 else 0.0
-        storage_usage_percent = round((storage_used / storage_total * 100), 2) if storage_total > 0 else 0.0
-        
-        # Create response
+        gpu_inv = build_gpu_inventory(
+            fanout.resources_body, fanout.instances, member=member_name
+        )
+
         resources = MemberResources(
             member_name=member_name,
             cpu_total=cpu_total,
-            cpu_used=cpu_used,
-            cpu_available=cpu_total - cpu_used,
-            cpu_usage_percent=cpu_usage_percent,
+            cpu_used=usage.cpu_used,
+            cpu_available=cpu_total - usage.cpu_used,
+            cpu_usage_percent=_percent(usage.cpu_used, cpu_total),
             memory_total=memory_total,
             memory_used=memory_used,
-            memory_available=memory_available,
-            memory_usage_percent=memory_usage_percent,
+            memory_available=memory_total - memory_used,
+            memory_usage_percent=_percent(memory_used, memory_total),
             gpu_total=gpu_inv.gpu_total,
             gpu_used=gpu_inv.gpu_used,
             gpu_available=gpu_inv.gpu_available,
@@ -447,29 +377,50 @@ async def get_member_resources(
             gpu_utilization_supported=gpu_inv.utilization_supported,
             storage_total=storage_total,
             storage_used=storage_used,
-            storage_available=storage_available,
-            storage_usage_percent=storage_usage_percent,
-            storage_pools=storage_pools,
-            instances_count=instances_count,
-            instances_running=instances_running,
-            collected_at=collected_at,
+            storage_available=storage_total - storage_used,
+            storage_usage_percent=_percent(storage_used, storage_total),
+            storage_pools=[pool.as_dict() for pool in fanout.pools],
+            instances_count=usage.count,
+            instances_running=usage.running,
+            collected_at=fanout.collected_at,
+            degraded=fanout.degraded,
+            degraded_parts=fanout.degraded_parts,
         )
-        
-        # Cache the result
-        cache.set("lxd_resources", cache_key, resources.model_dump(), ttl=cache_ttl)
+
+        # important: a partial read gets a much shorter TTL. Caching a body whose storage or
+        # instance numbers are floors for the full minute would keep serving them long after
+        # the transient that caused it, and the operator has no way to ask for a rebuild that
+        # the cache would not answer.
+        cache.set(
+            "lxd_resources",
+            cache_key,
+            resources.model_dump(),
+            ttl=DEGRADED_CACHE_TTL if fanout.degraded else cache_ttl,
+        )
         logger.info(
-            f"Member {member_name} resources: CPU={cpu_total} cores ({cpu_used} used), "
+            f"Member {member_name} resources: CPU={cpu_total} cores ({usage.cpu_used} used), "
             f"RAM={memory_total / 1024 / 1024 / 1024:.1f} GB ({memory_used / 1024 / 1024 / 1024:.1f} GB used), "
             f"GPU={gpu_inv.gpu_total} compute of {gpu_inv.gpu_cards_total} cards "
-            f"({gpu_inv.gpu_used} used), {instances_running}/{instances_count} instances running"
+            f"({gpu_inv.gpu_used} used), {usage.running}/{usage.count} instances running"
+            + (f", degraded: {','.join(fanout.degraded_parts)}" if fanout.degraded else "")
         )
-        
+
         return resources
-        
+
     except HTTPException:
         # important: let require_client's 503 through, so an offline cluster does not read as a
         # server fault. Without this the broad handler below converts it into a 500.
         raise
+    except BlockingTimeout:
+        raise HTTPException(
+            status_code=504,
+            detail=f"Reading resources for '{member_name}' on {node} timed out",
+        ) from None
+    except BlockingPoolFull:
+        raise HTTPException(
+            status_code=503,
+            detail="Cluster reads are saturated right now, please retry shortly",
+        ) from None
     except LXDAPIException as e:
         # important: LXD answers 404 for `?target=<name>` on a host that is not clustered, and
         # for a member name that does not exist. Neither is a server fault, and reporting them
@@ -486,9 +437,14 @@ async def get_member_resources(
             status_code=502,
             detail=f"Cluster '{node}' rejected the member resource request: {str(e)}",
         )
+    except (requests_exc.ConnectionError, requests_exc.Timeout) as e:
+        # important: a read timeout reaches here as ConnectionError, not ReadTimeout, because
+        # the pooled adapter runs Retry(read=0). lxd_errors.read_timed_out carries the proof.
+        logger.error(f"Transport failure reading resources for {member_name} from {node}: {e}")
+        raise lxd_transport_error(e, node, f"reading resources for '{member_name}'") from None
     except Exception as e:
         logger.error(f"Error getting resources for member {member_name} from {node}: {e}")
         raise HTTPException(
-            status_code=500, 
+            status_code=503,
             detail=f"Failed to get resources for member '{member_name}': {str(e)}"
         )

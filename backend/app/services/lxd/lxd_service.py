@@ -239,10 +239,11 @@ class LXDService:
                 # "Client not connected" downgrades a cluster that answered and refused us
                 # into one that looks powered off, and the breaker then serves that wrong
                 # answer to every reader for its whole TTL.
-                kind = health.get_kind(node_name)
-                if kind is None:
-                    health.record_failure(node_name, "Client not connected")
-                    kind = health.KIND_OFFLINE
+                # important: same rule as instance.py. A missing client is not evidence the
+                # cluster failed, and recording one here trips the breaker for a cluster this
+                # worker has merely never connected to. Report it offline for this response
+                # and leave the door open. Only a path that actually reached the peer records.
+                kind = health.get_kind(node_name) or health.KIND_OFFLINE
                 return NodeStatus(
                     name=node_name,
                     endpoint=endpoint,
@@ -335,7 +336,9 @@ class LXDService:
         data = self.resource_manager.get_node_resources(client, node_name, resources=live)
         gpu = GpuInventory.empty()
         try:
-            gpu = build_gpu_inventory(live.body, client.instances.all())
+            # recursion=1: build_gpu_inventory reads location, status and the expanded
+            # config off each instance, which at recursion=0 is a request apiece.
+            gpu = build_gpu_inventory(live.body, client.instances.all(recursion=1))
         except Exception as e:
             logger.debug(f"Could not read GPU inventory for {node_name}: {e}")
         return build_node_resources(data, gpu)

@@ -220,3 +220,16 @@ export function formatInstanceType(type: string | null | undefined): string {
   if (t === "container" || t === "ct") return "Container";
   return formatLabel(type);
 }
+
+/**
+ * An ISO timestamp as epoch milliseconds, or null when there is nothing to read.
+ *
+ * important: an unparseable or absent stamp must stay null. LiveTimestamp renders null as
+ * "Age unknown", and coercing it to 0 or to Date.now() would report a body of unknown age as
+ * current, which is the one thing that component exists to prevent.
+ */
+export function toMillis(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}

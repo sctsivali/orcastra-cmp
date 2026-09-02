@@ -429,22 +429,37 @@ async def check_cluster_authentication(
                         f"{settings.vault_clusters_path}/{cluster_id}/metadata"
                     )
                     current_type = vault_metadata.get("type")
+                    current_clustered = vault_metadata.get("clustered")
                     current_endpoint = vault_metadata.get("endpoint", "")
                     clean_endpoint = normalize_endpoint(current_endpoint)
 
-                    # important: `clustered` is deliberately NOT persisted. It is read from the
-                    # connected client on every request, and storing a snapshot of live state
-                    # in a field nothing refreshes is the exact mistake that left a MicroCloud
-                    # labelled LXD. `type` is still stored because consumers without a client
-                    # (the regions fallback, the node counters) read it, and every consumer
-                    # that does hold one overrides it.
-                    if current_type != detected_type or current_endpoint != clean_endpoint:
+                    # important: this is the ONLY place either fact is written, and it runs only
+                    # after the host has answered a trusted request, so nothing here can be a
+                    # pre-auth guess. That distinction is what makes storing them safe: the
+                    # defect that left a MicroCloud labelled LXD was a value written at
+                    # REGISTRATION from an untrusted probe, which cannot see `environment`, and
+                    # which nothing ever re-derived. Both resolvers prefer a live client, so a
+                    # stored reading can only ever answer when there is nobody to ask.
+                    #
+                    # `clustered` is stored as well as `type` because the members picker has to
+                    # tell a host pending trust apart from a clustered host that is merely
+                    # offline, and both answer None with no fallback.
+                    #
+                    # The comparison includes `clustered` on purpose: gating the write on the
+                    # type alone would mean a host whose type is already correct never got its
+                    # clustering state written at all.
+                    if (
+                        current_type != detected_type
+                        or current_clustered != final_clustered
+                        or current_endpoint != clean_endpoint
+                    ):
                         logger.info(
                             f"Updating cluster metadata for {cluster_id}: "
                             f"type {current_type} -> {detected_type}, "
-                            f"clustered now reads {final_clustered}"
+                            f"clustered {current_clustered} -> {final_clustered}"
                         )
                         vault_metadata["type"] = detected_type
+                        vault_metadata["clustered"] = final_clustered
                         # Heal a stored endpoint that carries a trailing slash while we are
                         # already writing this record; the probe normalizes on read anyway.
                         vault_metadata["endpoint"] = clean_endpoint
@@ -641,14 +656,25 @@ async def _get_cluster_info_async(cluster_id: str, cert_manager: LXDCertificateM
             connected=connected, reachable=reachable, error=error_msg
         )
         
-        # Only report type and clustering when authenticated, and prefer what the host says
-        # now over what registration guessed: the stored value may predate any trusted read.
-        # client.host_info is pylxd's cached /1.0 body, so this costs no extra round trip.
+        # Prefer what the host says now over what was stored. client.host_info is pylxd's
+        # cached /1.0 body, so resolving from a live client costs no extra round trip.
+        #
+        # important: `clustered` is safe to read from storage unconditionally. This release is
+        # the first thing that ever writes it, and the only writer is the check-auth path, after
+        # the host has answered a trusted request, so a stored value is always evidence. That is
+        # what lets the members picker tell a host pending trust apart from a clustered host
+        # that is merely offline.
+        #
+        # `type` cannot be read from storage unconditionally, because a record written before
+        # registration stopped guessing can still hold a "LXD" default nobody ever read off a
+        # host. A stored `clustered` is the marker that separates the two: check-auth writes
+        # both facts in the same statement, so its presence proves this record came from a
+        # trusted read rather than from the old pre-auth probe.
+        stored_clustered = info["metadata"].get("clustered")
+        clustered = resolve_clustered(stored_clustered, live_client)
         cluster_type = None
-        clustered = None
-        if connected:
+        if connected or isinstance(stored_clustered, bool):
             cluster_type = resolve_cluster_type(info["metadata"].get("type"), live_client)
-            clustered = resolve_clustered(live_client)
 
         return ClusterInfo(
             cluster_id=cluster_id,
@@ -827,23 +853,25 @@ async def get_cluster(
             connected=connected, reachable=probe.reachable, error=error_msg
         )
 
-        # Same rule as the list endpoint: the live authenticated payload outranks the stored
-        # value, and an unauthenticated cluster reports no type rather than a guessed one.
+        # Same rule as the list endpoint, including why the two facts are gated differently.
+        live_client = None
+        stored_clustered = info["metadata"].get("clustered")
         cluster_type = None
-        clustered = None
         if connected:
             from app.services.lxd_service import get_lxd_service
             # Off the loop: get_client revalidates the pooled connection with a live request.
             # Passed by reference, not called here, for the same reason. A None result is fine -
-            # it only means the type stays unreported, and this endpoint must still answer for
-            # a cluster that is down.
+            # it only means the resolvers fall back to storage, and this endpoint must still
+            # answer for a cluster that is down. Skipped entirely when not connected, because
+            # the revalidation is the expensive part and it cannot succeed.
             loop = asyncio.get_event_loop()
             with ThreadPoolExecutor(max_workers=1) as executor:
                 live_client = await loop.run_in_executor(
                     executor, get_lxd_service().connection_manager.get_client, cluster_id
                 )
+        if connected or isinstance(stored_clustered, bool):
             cluster_type = resolve_cluster_type(info["metadata"].get("type"), live_client)
-            clustered = resolve_clustered(live_client)
+        clustered = resolve_clustered(stored_clustered, live_client)
 
         return ClusterInfo(
             cluster_id=cluster_id,

@@ -643,6 +643,11 @@ class MemberResources(BaseModel):
     instances_count: int = Field(0, description="Number of instances on this member")
     instances_running: int = Field(0, description="Number of running instances")
     collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
+    # important: a partial read used to answer 200 with zeroes, which is not a degraded answer
+    # but a wrong one: storage_total=0 renders as "0 B / 0 B" and drops the pools card entirely,
+    # so an operator reads "this member has no storage". These two say which numbers are floors.
+    degraded: bool = Field(False, description="At least one part of this read did not come back, so the affected numbers are floors rather than measurements")
+    degraded_parts: List[str] = Field(default_factory=list, description="Which parts were lost: 'storage', 'storage:<pool>', 'instances'")
 
 
 class NodeStatus(BaseModel):
