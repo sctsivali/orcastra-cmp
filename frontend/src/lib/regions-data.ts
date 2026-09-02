@@ -4,8 +4,6 @@
  * ISO 3166-1 compliant country codes
  */
 
-import { CONTINENT_NAMES } from "@/lib/utils";
-
 // Major cloud regions based on global datacenter locations
 export interface Region {
   id: string;
@@ -18,23 +16,6 @@ export interface Region {
   timezone: string;
   continent: string;
 }
-
-export interface Country {
-  code: string; // ISO 3166-1 alpha-2
-  name: string;
-  continent: string;
-  regions: Region[];
-}
-
-export interface Continent {
-  id: string;
-  name: string;
-  countries: Country[];
-}
-
-// All continents. The table itself lives next to formatContinent, which is what renders it,
-// so the codes cannot drift apart from the names the screen shows.
-export const CONTINENTS = CONTINENT_NAMES;
 
 // Comprehensive list of countries with major cities/datacenters
 // Organized by continent for easy navigation
@@ -454,66 +435,10 @@ export const REGIONS_DATA: Region[] = [
   // { id: "gh-acc", name: "Accra", country_code: "GH", country_name: "Ghana", city: "Accra", latitude: 5.6037, longitude: -0.1870, timezone: "Africa/Accra", continent: "AF" },
 ];
 
-// Helper to get all unique countries
-export function getCountries(): Array<{ code: string; name: string; continent: string }> {
-  const countryMap = new Map<string, { code: string; name: string; continent: string }>();
-  
-  REGIONS_DATA.forEach((region) => {
-    if (!countryMap.has(region.country_code)) {
-      countryMap.set(region.country_code, {
-        code: region.country_code,
-        name: region.country_name,
-        continent: region.continent,
-      });
-    }
-  });
-  
-  return Array.from(countryMap.values()).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-// Helper to get regions by country
-export function getRegionsByCountry(countryCode: string): Region[] {
-  return REGIONS_DATA.filter((r) => r.country_code === countryCode);
-}
-
 // Helper to get region by ID
 export function getRegionById(regionId: string): Region | undefined {
   return REGIONS_DATA.find((r) => r.id === regionId);
 }
-
-// Helper to search regions by name or city
-export function searchRegions(query: string): Region[] {
-  const lowerQuery = query.toLowerCase();
-  return REGIONS_DATA.filter(
-    (r) =>
-      r.name.toLowerCase().includes(lowerQuery) ||
-      r.city.toLowerCase().includes(lowerQuery) ||
-      r.country_name.toLowerCase().includes(lowerQuery)
-  );
-}
-
-// Helper to get countries grouped by continent
-export function getCountriesByContinent(): Record<string, Array<{ code: string; name: string }>> {
-  const result: Record<string, Array<{ code: string; name: string }>> = {};
-  
-  Object.keys(CONTINENTS).forEach((continent) => {
-    result[continent] = [];
-  });
-  
-  getCountries().forEach((country) => {
-    if (result[country.continent]) {
-      result[country.continent].push({ code: country.code, name: country.name });
-    }
-  });
-  
-  return result;
-}
-
-// Default coordinates for a custom location (center of Indonesia)
-export const DEFAULT_COORDINATES = {
-  latitude: -2.5,
-  longitude: 118.0,
-};
 
 // Map bounds for initial view - strictly Indonesia
 // Bounds: North (6°N Sabang), South (-11°S Rote Island), West (95°E Sabang), East (141°E Papua)
@@ -531,5 +456,3 @@ export const INDONESIA_BOUNDS = {
   },
 };
 
-// Legacy alias for backward compatibility
-export const WORLD_BOUNDS = INDONESIA_BOUNDS;

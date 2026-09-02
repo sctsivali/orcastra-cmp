@@ -50,7 +50,13 @@ function RegionCard({
   onViewOnMap: () => void;
 }) {
   const onlineNodes = region.nodes.filter((n) => n.status === "online").length;
-  
+  // Every cluster with no recorded location is grouped into one synthetic region whose fields
+  // the backend fills with "XX" and "Unknown" (routers/regions.py). Rendering those verbatim
+  // put an "XX" country badge over the line "Unknown, Unknown", which states a place rather
+  // than an absence. The map card beside this list already declines to plot the same row and
+  // says so in these words.
+  const hasCountry = Boolean(region.country_code) && region.country_code.toUpperCase() !== "XX";
+
   return (
     <Card id={`region-card-${region.region_id}`} className="overflow-hidden transition-all duration-300">
       <Collapsible open={isExpanded} onOpenChange={onToggle}>
@@ -64,12 +70,14 @@ function RegionCard({
                 <div>
                   <CardTitle className="text-base flex items-center gap-2">
                     {region.region_name}
-                    <Badge variant="outline" className="text-xs">
-                      {region.country_code}
-                    </Badge>
+                    {hasCountry && (
+                      <Badge variant="outline" className="text-xs">
+                        {region.country_code}
+                      </Badge>
+                    )}
                   </CardTitle>
                   <CardDescription className="text-xs">
-                    {region.city}, {region.country_name}
+                    {hasCountry ? `${region.city}, ${region.country_name}` : "No location data"}
                   </CardDescription>
                   {region.facility_name && (
                     <div className="flex items-center gap-1.5 mt-1">
