@@ -4,6 +4,8 @@
  * ISO 3166-1 compliant country codes
  */
 
+import { CONTINENT_NAMES } from "@/lib/utils";
+
 // Major cloud regions based on global datacenter locations
 export interface Region {
   id: string;
@@ -30,16 +32,9 @@ export interface Continent {
   countries: Country[];
 }
 
-// All continents
-export const CONTINENTS: Record<string, string> = {
-  AF: "Africa",
-  AS: "Asia",
-  EU: "Europe",
-  NA: "North America",
-  SA: "South America",
-  OC: "Oceania",
-  AN: "Antarctica",
-};
+// All continents. The table itself lives next to formatContinent, which is what renders it,
+// so the codes cannot drift apart from the names the screen shows.
+export const CONTINENTS = CONTINENT_NAMES;
 
 // Comprehensive list of countries with major cities/datacenters
 // Organized by continent for easy navigation

@@ -8,7 +8,7 @@ import { TableLink } from "@/components/ui/table-link";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { KeyValueList } from "@/components/used-by/panels/config-panel";
-import { formatDateTime } from "@/lib/utils";
+import { formatContinent, formatDateTime } from "@/lib/utils";
 import { MapPin } from "lucide-react";
 import type { ClusterInfo } from "@/types/api";
 
@@ -99,7 +99,7 @@ export function ClusterDetailDialog({
               <DetailField label="Region" value={location.region_name} />
               <DetailField label="Country" value={location.country_name} />
               <DetailField label="City" value={location.city} />
-              <DetailField label="Continent" value={location.continent} />
+              <DetailField label="Continent" value={formatContinent(location.continent)} />
               <DetailField label="Timezone" value={location.timezone} />
               <DetailField
                 label="Coordinates"

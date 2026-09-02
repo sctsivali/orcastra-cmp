@@ -113,6 +113,33 @@ export function formatHypervisorType(type: string | null | undefined): string {
   return trimmed || "Hypervisor";
 }
 
+// The seven continent codes the region catalogue uses. Also the single source of truth for
+// lib/regions-data.ts, which used to carry its own copy of the same table.
+export const CONTINENT_NAMES: Record<string, string> = {
+  AF: "Africa",
+  AN: "Antarctica",
+  AS: "Asia",
+  EU: "Europe",
+  NA: "North America",
+  OC: "Oceania",
+  SA: "South America",
+};
+
+// important: the API stores and filters on the code, so nothing here may reach a request or a
+// URL. A code is also actively misleading on screen: an operator reading the console in
+// Indonesian reads "AS" (Asia) as "Amerika Serikat", and formatLabel turns it into "As".
+//
+// note: returns undefined rather than a placeholder string for a missing or unknown-sentinel
+// value, so the caller's own empty rendering applies. "XX" is what the backend writes for a
+// cluster with no recorded location (routers/regions.py).
+export function formatContinent(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  const code = trimmed.toUpperCase();
+  if (!code || code === "XX") return undefined;
+  return CONTINENT_NAMES[code] ?? trimmed;
+}
+
 // Relative age of a timestamp, for "last updated" labels in dense toolbars.
 // Kept local rather than pulling in date-fns' formatDistanceToNow, whose
 // "less than a minute ago" phrasing is too long for a table header.
