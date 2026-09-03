@@ -49,7 +49,11 @@ const src = join(root, 'frontend', 'src');
 // the terminal and console trays, which is the shape this check exists for: their Tooltip supplied
 // a description and never a name, so a screen reader announced "button" four times while the only
 // thing identifying which session they acted on was a clipped label beside them.
-const BASELINE = 50;
+// Lowered 50 -> 48 when the certificate renewal modal moved onto the shared CodeBlock. Its two
+// copy buttons were bare Copy glyphs pinned over a Textarea; CodeBlock's carries a visible label
+// and an aria-label naming what it copies, which matters most here because the two sat adjacent
+// and copied different things, the command and the PEM.
+const BASELINE = 48;
 
 // `vm-table.tsx` is deprecated and rendered by nothing, so its buttons cannot be announced
 // to anybody. Counting them would mean either a permanently failing check or a baseline

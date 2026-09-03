@@ -17,7 +17,6 @@ import {
   Plus,
   Users,
   KeyRound,
-  Copy,
   Terminal,
   Shield,
   MapPin,
@@ -27,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { CodeBlock } from "@/components/ui/code-block";
 import {
   Table,
   TableBody,
@@ -57,7 +57,6 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { Role } from "@/types/rbac";
-import { copyText } from "@/lib/clipboard";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 
 
@@ -187,18 +186,6 @@ function ClustersContent() {
     }
   };
 
-  const copyToClipboard = async (text: string, label: string) => {
-    const ok = await copyText(text);
-    toast(
-      ok
-        ? { title: "Copied!", description: `${label} copied to clipboard` }
-        : {
-            title: "Copy Failed",
-            description: "Please select and copy the text manually (Ctrl+C or Cmd+C)",
-            variant: "destructive" },
-    );
-  };
-
   const handleDeleteClick = (cluster: any) => {
     setDeleteConfirmModal({ open: true, cluster });
     setDeleteConfirmText("");
@@ -268,36 +255,16 @@ function ClustersContent() {
                     const badgeVariant = isIncus ? "secondary" : "outline";
                     
                     return (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs text-muted-foreground">
+                      <CodeBlock
+                        value={`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${regeneratedCert.identityName}"\n${regeneratedCert.certificate}\nEOF`}
+                        label={
+                          <>
                             <Badge variant={badgeVariant} className="mr-2">{typeLabel}</Badge>
-                            Identity: <code className="bg-muted px-1 py-0.5 rounded">{regeneratedCert.identityName}</code>
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              const cmd = `cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${regeneratedCert.identityName}"\n${regeneratedCert.certificate}\nEOF`;
-                              copyToClipboard(cmd, `${typeLabel} Command`);
-                            }}
-                          >
-                            <Copy className="h-3 w-3 mr-1" />
-                            Copy
-                          </Button>
-                        </div>
-                        <pre className="bg-muted text-foreground font-mono p-3 rounded text-xs overflow-x-auto select-all cursor-text" onClick={(e) => {
-                          const selection = window.getSelection();
-                          const range = document.createRange();
-                          range.selectNodeContents(e.currentTarget);
-                          selection?.removeAllRanges();
-                          selection?.addRange(range);
-                        }}>
-{`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${regeneratedCert.identityName}"
-${regeneratedCert.certificate}
-EOF`}
-                        </pre>
-                      </div>
+                            Identity: <span className="font-mono">{regeneratedCert.identityName}</span>
+                          </>
+                        }
+                        copyLabel="CLI command"
+                      />
                     );
                   })()}
                 </AlertDescription>

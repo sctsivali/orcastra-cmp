@@ -10,7 +10,6 @@ import {
   AlertTriangle,
   RefreshCw,
   KeyRound,
-  Copy,
   Terminal,
   ChevronLeft,
   ShieldCheck } from "lucide-react";
@@ -44,7 +43,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { certificateStatusMeta } from "./components/certificate-status";
-import { Textarea } from "@/components/ui/textarea";
+import { CodeBlock } from "@/components/ui/code-block";
 import { toast } from "@/hooks/use-toast";
 import {
   CertificateStatus,
@@ -66,7 +65,6 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { formatDate, formatLabel } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
-import { copyText } from "@/lib/clipboard";
 
 function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return "N/A";
@@ -252,18 +250,6 @@ function CertificatesContent() {
         description: error.message || "Failed to cancel pending renewal",
         variant: "destructive" });
     }
-  };
-
-  const copyToClipboard = async (text: string, label: string) => {
-    const ok = await copyText(text);
-    toast(
-      ok
-        ? { title: "Copied", description: `${label} copied to clipboard` }
-        : {
-            title: "Failed to copy",
-            description: "Please copy manually",
-            variant: "destructive" },
-    );
   };
 
   if (isLoading) {
@@ -635,49 +621,19 @@ function CertificatesContent() {
               </Alert>
 
               {renewalResult?.cli_command && (
-                <div className="space-y-2">
-                  <Label>CLI Command</Label>
-                  <div className="relative">
-                    <Textarea
-                      readOnly
-                      value={renewalResult.cli_command}
-                      className="font-mono text-xs h-20"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="absolute top-2 right-2"
-                      onClick={() =>
-                        copyToClipboard(renewalResult.cli_command!, "Command")
-                      }
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
+                <CodeBlock
+                  value={renewalResult.cli_command}
+                  label="CLI Command"
+                  copyLabel="CLI command"
+                />
               )}
 
               {renewalResult?.certificate && (
-                <div className="space-y-2">
-                  <Label>Certificate (PEM)</Label>
-                  <div className="relative">
-                    <Textarea
-                      readOnly
-                      value={renewalResult.certificate}
-                      className="font-mono text-xs h-32"
-                    />
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="absolute top-2 right-2"
-                      onClick={() =>
-                        copyToClipboard(renewalResult.certificate!, "Certificate")
-                      }
-                    >
-                      <Copy className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
+                <CodeBlock
+                  value={renewalResult.certificate}
+                  label="Certificate (PEM)"
+                  copyLabel="Certificate"
+                />
               )}
 
               <DialogFooter className="gap-2">

@@ -8,7 +8,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { 
   ArrowLeft, Info, CheckCircle, 
-  Copy, Terminal, RefreshCw, Loader2, MapPin, Building2, ChevronsUpDown, Check 
+  Terminal, RefreshCw, Loader2, MapPin, Building2, ChevronsUpDown, Check 
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { CodeBlock } from "@/components/ui/code-block";
 import {
   Popover,
   PopoverContent,
@@ -35,7 +36,6 @@ import { formatHypervisorType } from "@/lib/utils";
 import { ClusterStatus, APIError } from "@/types/api";
 import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
 import { getRegionById, REGIONS_DATA, type Region } from "@/lib/regions-data";
-import { copyText } from "@/lib/clipboard";
 
 const nodeRegisterSchema = z.object({
   cluster_id: z
@@ -207,19 +207,6 @@ export function NodeRegisterForm() {
     }
   };
 
-  const copyToClipboard = async (text: string, label: string) => {
-    const ok = await copyText(text);
-    toast(
-      ok
-        ? { title: "Copied!", description: `${label} copied to clipboard` }
-        : {
-            title: "Copy Failed",
-            description: "Please copy manually",
-            variant: "destructive",
-          },
-    );
-  };
-
   // important: the disabled flag is React state, so it only reaches the button on the next
   // render. Two clicks inside one tick both pass it and both fire the mutation. react-hook-form
   // does not help here: its handleSubmit has no re-entry guard and awaits the resolver before
@@ -368,30 +355,16 @@ export function NodeRegisterForm() {
                     const typeLabel = registrationResult.cluster_type ? formatHypervisorType(registrationResult.cluster_type) : null; // only show badge when type is detected
                     
                     return (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs text-muted-foreground">
+                      <CodeBlock
+                        value={`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${identityName}"\n${registrationResult.certificate}\nEOF`}
+                        label={
+                          <>
                             {typeLabel && <Badge variant={isIncus ? "secondary" : "outline"} className="mr-2">{typeLabel}</Badge>}
-                            Identity: <code className="text-xs bg-muted px-1 py-0.5 rounded">{identityName}</code>
-                          </p>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              const cmd = `cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${identityName}"\n${registrationResult.certificate}\nEOF`;
-                              copyToClipboard(cmd, "CLI Command");
-                            }}
-                          >
-                            <Copy className="h-3 w-3 mr-1" />
-                            Copy
-                          </Button>
-                        </div>
-                        <pre className="bg-black text-green-400 p-3 rounded text-xs overflow-x-auto">
-{`cat <<EOF | ${cliTool} config trust ${trustSubCmd} - --name "${identityName}"
-${registrationResult.certificate}
-EOF`}
-                        </pre>
-                      </div>
+                            Identity: <span className="font-mono">{identityName}</span>
+                          </>
+                        }
+                        copyLabel="CLI command"
+                      />
                     );
                   })()}
                 </AlertDescription>
