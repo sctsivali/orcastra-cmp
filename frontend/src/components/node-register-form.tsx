@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { CodeBlock } from "@/components/ui/code-block";
 import {
@@ -32,7 +32,7 @@ import {
 } from "@/components/ui/command";
 
 import { toast } from "@/hooks/use-toast";
-import { formatHypervisorType } from "@/lib/utils";
+import { formatHypervisorType, generateIdentityName } from "@/lib/utils";
 import { ClusterStatus, APIError } from "@/types/api";
 import { useRegisterCluster, useCheckClusterAuth, useFacilitySuggestions } from "@/hooks/use-lxd";
 import { getRegionById, REGIONS_DATA, type Region } from "@/lib/regions-data";
@@ -126,23 +126,6 @@ export function NodeRegisterForm() {
   );
 
   // Generate unique identity name: orca-{clustername}-{datetime}
-  const generateIdentityName = (clusterId: string): string => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    const millis = String(now.getMilliseconds()).padStart(3, '0');
-    
-    // Add random suffix for extra uniqueness (4 random alphanumeric chars)
-    const randomSuffix = Math.random().toString(36).substring(2, 6);
-    
-    // Format: YYYYMMDD-HHMMSSmmm-xxxx
-    const datetime = `${year}${month}${day}-${hours}${minutes}${seconds}${millis}-${randomSuffix}`;
-    return `orca-${clusterId}-${datetime}`;
-  };
 
   const {
     register,

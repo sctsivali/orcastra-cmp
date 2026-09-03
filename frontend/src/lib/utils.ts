@@ -121,6 +121,32 @@ export function safeRandomUUID(): string {
     .join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10, 16).join("")}`;
 }
 
+// The `--name` an operator pastes into `lxc config trust add`, identifying the certificate on
+// the hypervisor's trust list.
+//
+// important: this is generated in the browser and never sent to the backend, which is why two
+// screens grew byte-identical copies of it. The cluster regenerate flow and node registration
+// both label the certificate this way, and the string has to stay stable because it is what an
+// operator matches against when auditing or removing trust later. The random suffix only breaks
+// ties between two registrations inside the same millisecond, so a non-cryptographic source is
+// the right one; nothing authenticates on this value.
+//
+// note: the `/certificates/renew` flow does NOT use this. The backend builds that identity
+// itself, in a different shape, and returns the whole command ready to paste.
+export function generateIdentityName(clusterId: string): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+  const millis = String(now.getMilliseconds()).padStart(3, "0");
+  const randomSuffix = Math.random().toString(36).substring(2, 6);
+  const datetime = `${year}${month}${day}-${hours}${minutes}${seconds}${millis}-${randomSuffix}`;
+  return `orca-${clusterId}-${datetime}`;
+}
+
 // standardize known hypervisor type display while preserving future providers
 export function formatHypervisorType(type: string | null | undefined): string {
   if (!type) return "Hypervisor";

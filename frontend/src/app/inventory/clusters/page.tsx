@@ -3,15 +3,12 @@
 import * as React from "react";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { formatHypervisorType } from "@/lib/utils";
+import { formatHypervisorType, generateIdentityName } from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { 
   Server, 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
   RefreshCw,
   Trash2,
   Plus,
@@ -148,19 +145,6 @@ function ClustersContent() {
     }
   };
 
-  const generateIdentityName = (clusterId: string): string => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, '0');
-    const day = String(now.getDate()).padStart(2, '0');
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    const seconds = String(now.getSeconds()).padStart(2, '0');
-    const millis = String(now.getMilliseconds()).padStart(3, '0');
-    const randomSuffix = Math.random().toString(36).substring(2, 6);
-    const datetime = `${year}${month}${day}-${hours}${minutes}${seconds}${millis}-${randomSuffix}`;
-    return `orca-${clusterId}-${datetime}`;
-  };
 
   const handleRegenerateCert = async (cluster: any) => {
     try {
