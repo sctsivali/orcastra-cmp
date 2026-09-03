@@ -4,12 +4,14 @@
  / / / / ___/ ___/ __ `/ ___/ __/ ___/ __ `/
 / /_/ / /  / /__/ /_/ (__  ) /_/ /  / /_/ /
 \____/_/   \___/\__,_/____/\__/_/   \__,_/
+
+Open Reliable Cloud Access and Orchestration
 ```
 
-# Orcastra Dashboard
+# Orcastra CMP
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0--RC4-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases/tag/v1.0.0-RC4)
-[![Stability](https://img.shields.io/badge/Stability-Release_Candidate-1F6FEB?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--RC4-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-cmp/releases/tag/v1.0.0-RC4)
+[![Stability](https://img.shields.io/badge/Stability-Release_Candidate-1F6FEB?style=flat-square)](https://github.com/sctsivali/orcastra-cmp/releases)
 [![License](https://img.shields.io/badge/License-GPLv3-2EA043?style=flat-square)](LICENSE)
 [![Community](https://img.shields.io/badge/Community-Forum-5865F2?style=flat-square)](https://discourse.orca.id)
 [![Docs](https://img.shields.io/badge/Docs-docs.orcastra.io-555555?style=flat-square)](https://docs.orcastra.io)
@@ -107,7 +109,7 @@ not part of the logging path.
 graph TB
     U["User Browser"]
 
-    subgraph dash["Orcastra Dashboard"]
+    subgraph dash["Orcastra CMP"]
         FE["Frontend<br/>Next.js"]
         BE["Backend<br/>FastAPI"]
         PG[("PostgreSQL")]
@@ -213,8 +215,8 @@ See `/docs` for interactive Swagger API documentation.
 
 ```bash
 # clone and configure
-git clone https://github.com/sctsivali/orcastra-dashboard.git
-cd orcastra-dashboard
+git clone https://github.com/sctsivali/orcastra-cmp.git
+cd orcastra-cmp
 cp .env.example .env
 # edit .env with your values (vault, authentik, database, etc.)
 
