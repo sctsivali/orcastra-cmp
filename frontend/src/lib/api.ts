@@ -1,5 +1,5 @@
 /**
- * API Client for Orcastra Dashboard Backend
+ * API Client for the Orcastra CMP Backend
  */
 
 import {

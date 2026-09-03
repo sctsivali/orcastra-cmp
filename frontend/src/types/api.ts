@@ -1,5 +1,5 @@
 /**
- * TypeScript type definitions for Orcastra Dashboard API
+ * TypeScript type definitions for the Orcastra CMP API
  */
 
 // Enums

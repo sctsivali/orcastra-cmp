@@ -80,7 +80,7 @@ function SignInContent() {
 
           <div>
             <CardTitle className="text-2xl font-bold">
-              Orcastra Dashboard
+              Orcastra CMP
             </CardTitle>
             <CardDescription className="mt-2">
               Sign in with your organization account to continue

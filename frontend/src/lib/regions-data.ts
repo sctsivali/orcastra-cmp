@@ -1,5 +1,5 @@
 /**
- * Comprehensive global regions data for Orcastra Dashboard
+ * Comprehensive global regions data for Orcastra CMP
  * Enterprise-grade region/country/city database with coordinates
  * ISO 3166-1 compliant country codes
  */

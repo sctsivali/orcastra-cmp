@@ -1,5 +1,5 @@
 /**
- * Custom React Query hooks for Orcastra Dashboard
+ * Custom React Query hooks for Orcastra CMP
  */
 
 import { useQuery, useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";

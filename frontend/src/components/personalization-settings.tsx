@@ -450,7 +450,7 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
             <div className="border rounded-lg p-4 bg-card flex-1">
               <p className="text-xs text-muted-foreground mb-2">Footer</p>
               <p className="text-sm text-muted-foreground">
-                {settings.branding.appName} Dashboard • {settings.branding.footerText.replace("{YEAR}", new Date().getFullYear().toString())}
+                {settings.branding.appName} • {settings.branding.footerText.replace("{YEAR}", new Date().getFullYear().toString())}
               </p>
             </div>
           </div>

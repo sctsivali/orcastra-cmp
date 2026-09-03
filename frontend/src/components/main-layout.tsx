@@ -94,7 +94,7 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
             <div className="container px-4 md:px-6">
               <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-sm text-muted-foreground">
                 <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
-                  <p className="text-center sm:text-left">{appName} Dashboard</p>
+                  <p className="text-center sm:text-left">{appName}</p>
                   {!isLandingPage && (
                     <span className="text-xs opacity-70">
                       v{APP_VERSION}

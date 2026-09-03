@@ -1,5 +1,5 @@
 /**
- * Personalization Types for Orcastra Dashboard
+ * Personalization Types for Orcastra CMP
  * Allows users to customize branding and appearance
  */
 

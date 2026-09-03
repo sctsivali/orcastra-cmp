@@ -58,7 +58,7 @@ packages:
   - vim
 
 runcmd:
-  - echo "VM provisioned via Orcastra Dashboard" > /etc/motd
+  - echo "VM provisioned via Orcastra CMP" > /etc/motd
 `;
 
 function ImageSelector({

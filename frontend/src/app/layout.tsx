@@ -9,9 +9,9 @@ import { MainLayout } from "@/components/main-layout";
 import { Toaster } from "@/components/ui/toaster";
 
 export const metadata: Metadata = {
-  title: "Orcastra Dashboard",
-  description: "Enterprise operations center for managing virtualized infrastructure, containers, and cloud resources across distributed clusters",
-  keywords: ["infrastructure", "operations", "dashboard", "virtualization", "containers", "cloud"],
+  title: "Orcastra CMP",
+  description: "Open Reliable Cloud Access and Orchestration. Orcastra CMP manages virtualized infrastructure, containers, and cloud resources across distributed clusters.",
+  keywords: ["cmp", "infrastructure", "operations", "dashboard", "virtualization", "containers", "cloud"],
   icons: {
     icon: [
       { url: "/favicon-light.ico", media: "(prefers-color-scheme: light)" },
