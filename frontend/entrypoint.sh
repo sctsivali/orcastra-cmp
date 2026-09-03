@@ -11,12 +11,20 @@ set -e
 replace_env() {
   local placeholder="$1"
   local value="$2"
+  local escaped
 
   if [ -n "$value" ]; then
-    find /app/.next -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s|${placeholder}|${value}|g" {} +
+    # important: escape the replacement before handing it to sed. On the right-hand side of
+    # s|||, a bare & expands to the whole match (silent corruption) and a bare | ends the
+    # command, which makes sed exit non-zero and set -e kill the container at startup. Both
+    # are reachable from an ordinary value: an OIDC end-session URL carries
+    # ?post_logout_redirect_uri=...&client_id=..., and an issue-tracker URL carries query
+    # parameters of its own.
+    escaped=$(printf '%s' "$value" | sed -e 's/[\\&|]/\\&/g')
+    find /app/.next -type f \( -name '*.js' -o -name '*.json' \) -exec sed -i "s|${placeholder}|${escaped}|g" {} +
     echo "[entrypoint] Replaced ${placeholder} -> ${value}"
   else
-    echo "[entrypoint] WARNING: ${placeholder} has no value set, skipping"
+    echo "[entrypoint] WARNING: ${placeholder} has no value set, keeping the built-in default"
   fi
 }
 
