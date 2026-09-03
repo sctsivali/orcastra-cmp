@@ -303,6 +303,25 @@ const PALETTE_ANY = new RegExp(
 );
 const PALETTE_FG_IN_TAG = new RegExp(`(?:^|[\\s"\`{(])(?:dark:)?text-${HUE}-\\d{2,3}(?=[\\s"\`)},]|$)`, 'g');
 
+// A Tailwind arbitrary value carrying a literal colour, ex; `bg-[#1a1b26]`, `dark:text-[#c0caf5]`.
+//
+// Every rule above is shaped like hue-plus-step, so an arbitrary hex slips past all of them: it is
+// neither a palette step to ban nor a token to measure, and no counter moves when one appears.
+// That is a hole, not a permission. It stays closed by naming the utilities that take a colour, so
+// a sizing arbitrary (`w-[var(--radix-...)]`, `text-[10px]`, `max-h-[85vh]`) is untouched.
+const ARBITRARY_COLOUR = new RegExp(
+  `(?:^|[\\s"\`{(])(?:[a-z-]+:)?(?:bg|text|border|ring|fill|stroke|from|to|via|decoration|outline|shadow|accent|caret|divide|placeholder)-\\[#[0-9a-fA-F]{3,8}\\]`,
+  'g',
+);
+
+// The one file allowed to paint a fixed surface outside the chrome trees.
+//
+// A snippet is destined for a shell or a config file, so CodeBlock paints it as terminal output
+// rather than as themed app surface. It reuses the xterm surface and green this app already ships
+// rather than inventing a third dark surface, and it carries the reasoning in its own header. It
+// is listed here by exact path so the exemption cannot spread by directory.
+const FIXED_SURFACE = new Set(['components/ui/code-block.tsx']);
+
 /** Every class string in a file: quoted literals plus each literal chunk of a template. */
 function classStrings(code) {
   const out = [];
@@ -384,6 +403,24 @@ for (const file of walk(src)) {
       offenders.push(
         `${rel}:${lineOf(code, m.index)} writes a raw palette step "${m[0].replace(/^[^a-z]+/, '')}" inside the Cluster submenu. ` +
           'Use a --status-* token, or a Badge tone variant.',
+      );
+    }
+  }
+
+  // --- Rule 1b: no arbitrary colour hex outside the fixed-surface trees ---------------
+  //
+  // A hard ban for the same reason Rule 1 is one: a census over frontend/src found zero of these
+  // outside the chrome trees, so there is nothing to grandfather and no baseline to drift. The
+  // chrome trees and CodeBlock paint a fixed surface on purpose and say so in place; everywhere
+  // else a colour comes from a token, and a hex is how a screen quietly stops following the theme.
+  if (!isChrome && !isDead && !FIXED_SURFACE.has(rel)) {
+    ARBITRARY_COLOUR.lastIndex = 0;
+    let a;
+    while ((a = ARBITRARY_COLOUR.exec(code)) !== null) {
+      if (waived(code, a.index)) continue;
+      offenders.push(
+        `${rel}:${lineOf(code, a.index)} paints "${a[0].replace(/^[^a-z]+/, '')}", an arbitrary colour ` +
+          'that follows no theme. Use a token, or state the case in FIXED_SURFACE.',
       );
     }
   }
@@ -600,6 +637,9 @@ if (measured.length < 20) offenders.push(`only ${measured.length} colour pairs m
 
 console.log(`semantic colour: ${files} files, ${badgeTags} badges, ${measured.length} colour pairs measured`);
 console.log(`  Cluster submenu raw palette: 0 (hard ban across ${CLEARED.length} trees)`);
+console.log(
+  `  arbitrary colour hex: 0 outside the chrome trees (hard ban, ${FIXED_SURFACE.size} named exemption)`,
+);
 console.log(`  tint under same-hue text: ${tintPairs} (baseline ${TINT_PAIR_BASELINE}), ${chromeHits} more inside the fixed-dark chrome exemption`);
 console.log(`  Badges naming their own colour: ${badgeOverrides} (baseline ${BADGE_OVERRIDE_BASELINE})`);
 console.log(

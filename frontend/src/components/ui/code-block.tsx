@@ -29,9 +29,25 @@ interface CodeBlockProps {
 // A copyable multi-line snippet.
 //
 // The idiom existed three times already (node-register-form, the certificates page, the server
-// page) and none of them was shared. This takes the theme-aware styling of the newest one: the
-// oldest hardcodes `bg-black text-green-400`, which is a terminal look that ignores the light
-// theme entirely.
+// page) and none of them was shared. Every snippet in the product now renders here, so there is
+// one look rather than one per screen.
+//
+// important: the block is deliberately theme-independent, and the hexes are deliberate too. What
+// it holds is destined for a shell or a config file, so it is painted as terminal output, which
+// is what a reader already expects a snippet to look like. The values are not new: `#1a1b26` and
+// `#9ece6a` are the surface and green of the xterm theme this app already ships in
+// `components/terminal/terminal-instance.tsx`, and the border matches the frame around the real
+// terminal window. Reusing them keeps the product at two dark surfaces instead of three.
+//
+// The pair has to move together. Leaving `text-foreground` over a fixed dark background renders
+// near-black on near-black in the light theme, which is why the browser check measures contrast
+// in BOTH themes rather than only the dark one. Measured 9.35:1 against a 4.5:1 floor.
+//
+// `scripts/checks/check-semantic-colour.mjs` bans arbitrary colour hex outside the terminal and
+// console trees and names this file as its one exemption. Do not spread the hexes from here.
+//
+// The header row stays outside the block on the themed surface: the copy button belongs to the
+// app's control language, not to the terminal.
 //
 // Click selects the whole block, because a snippet is copied far more often than it is edited,
 // and the copy button is the same ghost-sized control the rest of the app uses.
@@ -82,7 +98,7 @@ export function CodeBlock({ value, copyValue, label, copyLabel = "Snippet", clas
       </div>
       <pre
         onClick={selectAll}
-        className="cursor-text select-all overflow-x-auto rounded bg-muted p-3 font-mono text-xs text-foreground"
+        className="cursor-text select-all overflow-x-auto rounded border border-[#292e42] bg-[#1a1b26] p-3 font-mono text-xs text-[#9ece6a]"
       >
         {value}
       </pre>
