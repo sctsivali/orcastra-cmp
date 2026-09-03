@@ -32,6 +32,15 @@ class Settings(BaseSettings):
         alias="BUILD_COMMIT",
         description="Git commit the image was built from"
     )
+    # note: compose has always passed API_VERSION through and .env.example has always described it
+    # as the version the API reports, but nothing declared it, so `extra = "ignore"` dropped it and
+    # the two /system endpoints the frontend reads it from never carried it. Declared here so the
+    # documented contract is the one that runs.
+    api_version: str = Field(
+        default="",
+        alias="API_VERSION",
+        description="Version string the API reports for itself"
+    )
     
     # API Settings
     api_title: str = "Orcastra CMP API"

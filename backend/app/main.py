@@ -21,7 +21,7 @@ import urllib3
 # This is expected behavior when connecting to LXD with self-signed certificates
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-from app.core import vault_status
+from app.core import build_identity, vault_status
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
 from app.middleware import (
@@ -633,9 +633,15 @@ Ensure your client certificates are properly configured.
             )
         # important: "service" is an identifier monitoring keys on, and Authentik registers
         # the same string as the OAuth2 audience. It does not follow the product name.
+        # important: the version and nothing else. f270eb0 took the build commit and date off the
+        # unauthenticated surface for the reason stated above, and that decision stands. The version
+        # is already published to these same callers by `/` below, so repeating it here discloses
+        # nothing new while giving a monitoring probe the build without a second request. The full
+        # identity lives behind a credential, on the integrations validate and whoami responses.
         return {
             "status": "healthy",
             "service": "orcastra-dashboard-api",
+            **build_identity.public(),
             "temp_storage": public_storage,
             "vault": vault,
         }

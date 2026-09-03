@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
+from app.core import build_identity
 from app.core.config import get_settings
 from app.core.dependencies import require_tenant, require_admin, AuthenticatedUser
 
@@ -25,12 +26,14 @@ router = APIRouter(
 class SystemSettings(BaseModel):
     """System settings response model."""
     read_only_mode: bool
+    api_version: str
     debug: bool
 
 
 class VersionInfo(BaseModel):
     """Comprehensive version information."""
     app_version: str
+    api_version: str
     build_date: Optional[str] = None
     build_commit: Optional[str] = None
     environment: str
@@ -45,10 +48,16 @@ async def get_version():
     This endpoint is used by the frontend to display version information.
     """
     settings = get_settings()
+    # note: build_date and build_commit read through build_identity so an unstamped image answers
+    # null rather than the empty string. The getattr calls this replaces were written before the
+    # fields existed on Settings; once they landed with default="" they stopped returning None and
+    # started returning "", which a client testing `if (build_commit)` reads as a value.
+    # app_version and api_version stay raw strings: the frontend types both as required strings.
     return VersionInfo(
         app_version=settings.app_version,
-        build_date=getattr(settings, 'build_date', None),
-        build_commit=getattr(settings, 'build_commit', None),
+        api_version=settings.api_version,
+        build_date=build_identity.built_at(),
+        build_commit=build_identity.commit(),
         environment="development" if settings.debug else "production"
     )
 
@@ -64,6 +73,7 @@ async def get_system_settings():
     settings = get_settings()
     return SystemSettings(
         read_only_mode=settings.read_only_mode,
+        api_version=settings.api_version,
         debug=settings.debug
     )
 

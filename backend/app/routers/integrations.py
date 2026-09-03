@@ -84,6 +84,7 @@ from app.core.api_key_capabilities import (
     default_capabilities_for,
     granted_capabilities,
 )
+from app.core import build_identity
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
 from app.middleware.security import consume_api_key_budget
@@ -359,6 +360,29 @@ class APIKeyValidateRequest(BaseModel):
     api_key_secret: str = Field(..., description="API Key Secret")
 
 
+class ServerIdentity(BaseModel):
+    """Which build of this server answered.
+
+    Carried only on responses a credential has already unlocked. The version alone is public, on
+    `/health` and `/`; the commit and the build date are not, because f270eb0 took them off the
+    unauthenticated surface and that decision stands. An integrator holding a key is a different
+    caller from an anonymous one, and this is the call it already makes to prove it is connected.
+
+    important: self-reported. It says which build this deployment believes it is running, which is
+    what an operator needs to answer "which version is this partner on" without asking them. It is
+    not evidence the deployment is genuine, and nothing should be built on it as if it were.
+    """
+    version: Optional[str] = Field(
+        default=None, description="Version label the image was built with, null if unstamped"
+    )
+    commit: Optional[str] = Field(
+        default=None, description="Git commit the image was built from, null if unstamped"
+    )
+    built_at: Optional[str] = Field(
+        default=None, description="When the image was built, ISO 8601 UTC, null if unstamped"
+    )
+
+
 class APIKeyValidateResponse(BaseModel):
     """Response for API key validation."""
     valid: bool
@@ -379,6 +403,11 @@ class APIKeyValidateResponse(BaseModel):
         description="Granted capabilities, or null for a legacy key with unrestricted access",
     )
     cluster_permissions: List[ClusterPermission] = Field(default_factory=list)
+    # note: present only on the branches that verified a credential. A refusal carries null, so the
+    # build stays invisible to anyone who cannot already authenticate.
+    server: Optional[ServerIdentity] = Field(
+        default=None, description="Which build of this server answered"
+    )
     error: Optional[str] = None
 
 
@@ -2309,6 +2338,7 @@ async def validate_api_key_endpoint(request: APIKeyValidateRequest):
             expires_at=metadata.get("expires_at"),
             expires_in_days=days_remaining(metadata.get("expires_at")),
             cluster_permissions=enriched_permissions,
+            server=ServerIdentity(**build_identity.full()),
         )
         
     except HTTPException:
@@ -2705,6 +2735,7 @@ async def whoami(api_key: Dict[str, Any] = Depends(validate_api_key)):
             for grant in api_key.get("cluster_permissions", [])
             if isinstance(grant, dict) and "cluster_id" in grant
         ],
+        server=ServerIdentity(**build_identity.full()),
     )
 
 
