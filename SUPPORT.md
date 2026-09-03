@@ -46,7 +46,7 @@ Use GitHub Issues when the discussion is actionable and needs tracking as a task
 
 Before opening an issue, include:
 
-- Orcastra Dashboard version
+- Orcastra CMP version
 - Environment details (OS, Docker, browser)
 - Exact steps to reproduce
 - Expected vs actual behavior

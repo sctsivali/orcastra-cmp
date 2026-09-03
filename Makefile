@@ -1,4 +1,4 @@
-# Makefile for Orcastra Dashboard
+# Makefile for Orcastra CMP
 # This Makefile provides convenient commands for managing the development and production environment
 
 .PHONY: release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
@@ -44,7 +44,7 @@ COLOR_CYAN = \033[36m
 ##@ Help
 
 help: ## Display this help message
-	@echo "$(COLOR_BOLD)Orcastra Dashboard - Available Commands$(COLOR_RESET)"
+	@echo "$(COLOR_BOLD)Orcastra CMP - Available Commands$(COLOR_RESET)"
 	@echo ""
 	@awk 'BEGIN {FS = ":.*##"; printf ""} /^[a-zA-Z_-]+:.*?##/ { printf "  $(COLOR_CYAN)%-20s$(COLOR_RESET) %s\n", $$1, $$2 } /^##@/ { printf "\n$(COLOR_BOLD)%s$(COLOR_RESET)\n", substr($$0, 5) } ' $(MAKEFILE_LIST)
 
@@ -597,7 +597,7 @@ deploy-package: ## Create deployment package (tar.gz) for on-prem installation
 	cp scripts/setup_opensearch_dashboards.sh /tmp/$$DEPLOY_DIR/scripts/ && \
 	chmod +x /tmp/$$DEPLOY_DIR/scripts/*.sh && \
 	printf '%s\n' \
-		"Orcastra Dashboard $(APP_VERSION)" \
+		"Orcastra CMP $(APP_VERSION)" \
 		"" \
 		"Images this package expects:" \
 		"  $(REGISTRY_REPO):backend-$(APP_VERSION)" \

@@ -1,4 +1,4 @@
-# Frontend Dockerfile for Orcastra Dashboard
+# Frontend Dockerfile for Orcastra CMP
 FROM node:20-alpine AS base
 
 # Install dependencies only when needed

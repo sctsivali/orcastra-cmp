@@ -1,5 +1,5 @@
 # =============================================================================
-# Orcastra Dashboard - Production Docker Compose
+# Orcastra CMP - Production Docker Compose
 # =============================================================================
 # USE THIS for on-prem deployment (pulls pre-built images from Docker Hub)
 # DO NOT use docker-compose.yml (that's for development/building from source)

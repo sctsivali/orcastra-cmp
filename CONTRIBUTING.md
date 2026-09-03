@@ -1,6 +1,6 @@
-# Contributing to Orcastra Dashboard
+# Contributing to Orcastra CMP
 
-Thanks for your interest in improving Orcastra Dashboard.
+Thanks for your interest in improving Orcastra CMP.
 
 ## Contribution Model
 

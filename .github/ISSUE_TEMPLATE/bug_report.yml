@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a reproducible bug in Orcastra Dashboard
+description: Report a reproducible bug in Orcastra CMP
 title: "[Bug]: "
 labels:
   - bug

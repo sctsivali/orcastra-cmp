@@ -100,7 +100,7 @@ done
 
 echo ""
 echo "=========================================="
-echo "  Orcastra Dashboard Import"
+echo "  Orcastra OpenSearch Dashboards Import"
 echo "=========================================="
 echo "  URL:       $DASHBOARDS_URL"
 echo "  User:      $ADMIN_USER"

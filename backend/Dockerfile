@@ -1,4 +1,4 @@
-# Backend Dockerfile for Orcastra Dashboard API
+# Backend Dockerfile for the Orcastra CMP API
 FROM python:3.12-slim as base
 
 # Build arguments for version management
