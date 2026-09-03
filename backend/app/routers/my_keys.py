@@ -194,6 +194,9 @@ def generate_certificate(common_name: str, expire_days: int) -> tuple[bytes, byt
     )
     
     # Generate certificate
+    # note: the O stays on the pre-CMP name so every issued certificate carries one value.
+    # Nothing reads it back (cert_manager matches on COMMON_NAME, and the LXD trust identity
+    # is named "<name>@orcastra" below), so renaming it would only split the fleet in two.
     subject = issuer = x509.Name([
         x509.NameAttribute(NameOID.COMMON_NAME, common_name),
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, "Orcastra Dashboard"),
@@ -929,7 +932,7 @@ async def cleanup_orphaned_groups(
                 for group_url in groups_data:
                     group_name = group_url.split('/')[-1]
                     
-                    # SAFETY: Only process groups created by Orcastra Dashboard
+                    # SAFETY: Only process groups created by Orcastra CMP
                     # Groups created manually by users in LXD UI are SKIPPED
                     if not group_name.startswith("key_"):
                         skipped_groups += 1
@@ -967,7 +970,7 @@ async def cleanup_orphaned_groups(
             "deleted_count": deleted_count,
             "valid_groups": len(valid_groups),
             "message": f"Cleanup completed. Deleted {deleted_count} orphaned Orcastra groups. (User-created groups in LXD were not touched)",
-            "safety_note": "Only groups created by Orcastra Dashboard (prefix: 'key_') are processed. Manual user-created groups are skipped."
+            "safety_note": "Only groups created by Orcastra CMP (prefix: 'key_') are processed. Manual user-created groups are skipped."
         }
         
         if errors:

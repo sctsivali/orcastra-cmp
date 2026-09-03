@@ -1,6 +1,6 @@
 """
 Logging Configuration Module
-Provides structured JSON logging for Orcastra Dashboard.
+Provides structured JSON logging for Orcastra CMP.
 """
 
 import json

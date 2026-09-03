@@ -2,7 +2,7 @@
 
 Same tus flow + import/recovery machinery as ``image_uploads.py`` (which is
 OrcaHub-facing, API-key auth), but authenticated with the user session and
-org-scope so a Partner can upload a custom LXD image from the Orcastra dashboard.
+org-scope so a Partner can upload a custom LXD image from Orcastra CMP.
 
 Everything durable is reused verbatim: the ``image_upload_sessions`` table, the
 staging dir, ``_run_import`` (verify -> stream into the cluster's LXD image store

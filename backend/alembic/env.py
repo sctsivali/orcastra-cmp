@@ -1,5 +1,5 @@
 """
-Alembic Environment Configuration for Orcastra Dashboard.
+Alembic Environment Configuration for Orcastra CMP.
 
 Supports both online and offline migrations with async PostgreSQL.
 """

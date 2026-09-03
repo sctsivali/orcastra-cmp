@@ -2,7 +2,7 @@
 
 Same tus flow + import/recovery machinery as ``iso_uploads.py`` (which is
 OrcaHub-facing, API-key auth), but authenticated with the user session and
-org-scope so a Partner can upload a custom ISO from the Orcastra dashboard.
+org-scope so a Partner can upload a custom ISO from Orcastra CMP.
 
 Everything durable is reused verbatim: the ``iso_upload_sessions`` table, the
 staging dir, ``_run_import`` (verify -> stream into the pool as an LXD custom

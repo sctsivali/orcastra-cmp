@@ -1,5 +1,5 @@
 """
-Caching layer for Orcastra Dashboard.
+Caching layer for Orcastra CMP.
 Provides Redis caching with fallback to in-memory cache.
 """
 

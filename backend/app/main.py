@@ -1,5 +1,5 @@
 """
-Orcastra Dashboard Backend API
+Orcastra CMP Backend API
 Main FastAPI application entry point.
 """
 
@@ -73,7 +73,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown."""
     # Startup
-    logger.info("Starting Orcastra Dashboard API...")
+    logger.info("Starting Orcastra CMP API...")
     settings = get_settings()
 
     # important: the per-key budget only isolates integrations from each other while it is
@@ -332,12 +332,12 @@ async def lifespan(app: FastAPI):
     except Exception as tag_err:
         logger.warning(f"Could not initialize tag categories: {tag_err}")
     
-    logger.info("Orcastra Dashboard API started successfully")
+    logger.info("Orcastra CMP API started successfully")
     
     yield
     
     # Shutdown
-    logger.info("Shutting down Orcastra Dashboard API...")
+    logger.info("Shutting down Orcastra CMP API...")
     
     # Close archive service client
     try:
@@ -396,7 +396,7 @@ def create_app() -> FastAPI:
         title=settings.api_title,
         version=settings.app_version,
         description="""
-## Orcastra Dashboard API
+## Orcastra CMP API
 
 A unified REST API for managing virtual machines across multiple nodes.
 
@@ -631,6 +631,8 @@ Ensure your client certificates are properly configured.
                 "until this clears; check whether Vault is sealed.",
                 vault.get("error"),
             )
+        # important: "service" is an identifier monitoring keys on, and Authentik registers
+        # the same string as the OAuth2 audience. It does not follow the product name.
         return {
             "status": "healthy",
             "service": "orcastra-dashboard-api",

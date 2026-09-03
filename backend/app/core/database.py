@@ -1,5 +1,5 @@
 """
-Database Configuration for Orcastra Dashboard.
+Database Configuration for Orcastra CMP.
 Uses SQLAlchemy async with PostgreSQL.
 """
 

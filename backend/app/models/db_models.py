@@ -1,5 +1,5 @@
 """
-Database Models for Orcastra Dashboard.
+Database Models for Orcastra CMP.
 SQLAlchemy ORM models for PostgreSQL.
 """
 
@@ -253,7 +253,7 @@ class Organization(Base):
     Admin has visibility into all organizations.
 
     source values:
-      - 'local': created directly in Orcastra Dashboard
+      - 'local': created directly in Orcastra CMP
       - 'orcahub': synced from OrcaHub via API key integration
     """
     __tablename__ = "organizations"
@@ -422,7 +422,7 @@ class TenantAccessPolicy(Base):
     3. Tenants inherit cluster/project/instance permissions from assigned policies.
 
     source values:
-      - 'local': created in Orcastra Dashboard
+      - 'local': created in Orcastra CMP
       - 'orcahub': synced from OrcaHub via API integration
     """
     __tablename__ = "tenant_access_policies"
@@ -532,7 +532,7 @@ class TenantPolicyAssignment(Base):
     Supports expiration for temporary access grants.
 
     source values:
-      - 'local': assigned via Orcastra Dashboard
+      - 'local': assigned via Orcastra CMP
       - 'orcahub': synced from OrcaHub
     """
     __tablename__ = "tenant_policy_assignments"

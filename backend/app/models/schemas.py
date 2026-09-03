@@ -1,5 +1,5 @@
 """
-Pydantic models for Orcastra Dashboard API.
+Pydantic models for Orcastra CMP API.
 Defines request/response schemas for VMs and operations.
 """
 

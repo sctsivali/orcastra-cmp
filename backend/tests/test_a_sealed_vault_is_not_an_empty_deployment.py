@@ -5,7 +5,7 @@ an empty list, and from that point the two facts are indistinguishable:
 
     Found 0 registered clusters in Vault
     Startup: Connected 0/0 clusters
-    Orcastra Dashboard API started successfully
+    Orcastra CMP API started successfully
 
 Worse than the logs, startup handed that empty list to `sync_registered_clusters`, which sets
 the in-memory whitelist to the empty set. `get_node_names()` intersects live clients against

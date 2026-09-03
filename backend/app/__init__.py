@@ -1,1 +1,1 @@
-"""Orcastra Dashboard Backend Application."""
+"""Orcastra CMP Backend Application."""

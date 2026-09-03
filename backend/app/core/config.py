@@ -1,5 +1,5 @@
 """
-Configuration settings for the Orcastra Dashboard backend.
+Configuration settings for the Orcastra CMP backend.
 Loads environment variables and provides typed configuration.
 """
 
