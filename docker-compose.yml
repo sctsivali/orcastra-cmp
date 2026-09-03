@@ -147,6 +147,11 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
       - NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=${NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL}
+      # Sidebar support links. Left unset the dashboard uses the Orcastra project's own
+      # issue tracker and community forum, which are baked into the image. Point them at
+      # your own to redirect reports from a fork. Runtime only, no rebuild.
+      - NEXT_PUBLIC_BUG_REPORT_URL=${NEXT_PUBLIC_BUG_REPORT_URL:-}
+      - NEXT_PUBLIC_COMMUNITY_URL=${NEXT_PUBLIC_COMMUNITY_URL:-}
       # important: opt-in. This is re-emitted as the client IP the backend trusts, and
       # this port is reachable directly, so a caller can otherwise choose the address
       # it is rate-limited and audited by. Set true only behind a real reverse proxy.

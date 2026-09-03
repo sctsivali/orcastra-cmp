@@ -35,6 +35,12 @@ ARG AUTHENTIK_CLIENT_ID
 # Actual values are injected at container startup via entrypoint.sh
 ENV NEXT_PUBLIC_API_URL=http://NEXT_PUBLIC_API_URL_PLACEHOLDER
 ENV NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL=http://NEXT_PUBLIC_AUTHENTIK_LOGOUT_URL_PLACEHOLDER
+# The two support links below use their real default as the swap pattern rather than an
+# invented placeholder. An ENV set here is truthy during the build, so `process.env.X ||
+# DEFAULT` in the bundle can never fall back; leaving the variable unset at runtime would
+# otherwise ship a link pointing at a placeholder host.
+ENV NEXT_PUBLIC_BUG_REPORT_URL=https://github.com/sctsivali/orcastra-cmp/issues/new
+ENV NEXT_PUBLIC_COMMUNITY_URL=https://discourse.orca.id
 ENV APP_VERSION=$APP_VERSION
 ENV NEXT_TELEMETRY_DISABLED=1
 
