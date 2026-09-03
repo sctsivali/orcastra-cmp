@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     )
     
     # API Settings
-    api_title: str = "Orcastra Dashboard API"
+    api_title: str = "Orcastra CMP API"
     api_prefix: str = "/api/v1"
     debug: bool = Field(default=False, alias="DEBUG")
     
