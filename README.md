@@ -266,10 +266,10 @@ make shell-backend      # exec into backend container
 make shell-frontend     # exec into frontend container
 
 # quality
-make lint-backend       # pylint app/
-make lint-frontend      # next lint
-make test-backend       # run backend pytest in container
-make test-frontend      # run frontend tests in container
+make lint-backend       # ruff, bug-shaped rules only
+make lint-frontend      # eslint
+make test-backend       # pytest, needs no database or cluster
+make test-frontend      # typecheck + structural guards
 
 # version management
 make version            # show current version
