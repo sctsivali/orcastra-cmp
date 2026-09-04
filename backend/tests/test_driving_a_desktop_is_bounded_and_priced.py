@@ -418,3 +418,99 @@ def test_looking_typing_and_the_clipboard_are_audited_apart() -> None:
         for op in ("desktop_view", "desktop_input", "desktop_clipboard")
     }
     assert len(names) == 3, f"desktop actions share an audit name: {names}"
+
+
+# ── a captured frame has to reach the model as an image ────────────────────────────────────────
+
+def _capture_result(png_b64: str = "aGVsbG8="):
+    from mcp.types import CallToolResult, TextContent
+
+    payload = {
+        "operation": "desktop_view",
+        "cluster_id": "nuc2",
+        "data": {
+            "ok": True,
+            "action": "screenshot",
+            "display": {"width": 1280, "height": 800, "scale": 1.0, "generation": 1},
+            "image": {"media_type": "image/png", "data": png_b64, "bytes": 5},
+        },
+    }
+    import json as _json
+
+    return CallToolResult(
+        content=[TextContent(type="text", text=_json.dumps(payload))],
+        structured_content=payload,
+        is_error=False,
+    )
+
+
+def test_a_screenshot_comes_back_as_an_image_not_as_text() -> None:
+    """The whole feature is a model seeing a screen, and it did not.
+
+    The capture travelled as base64 inside the JSON rendering of the payload. No client presents
+    that as an image, so the model received a long string and could not see anything, and it was
+    charged as text: roughly a token per four base64 characters, against the 1334 visual tokens
+    the 1280x800 target is sized for. On a real desktop rather than an empty test one the same
+    frame is hundreds of thousands of text tokens.
+    """
+    from app.mcp.errors import promote_image
+
+    promoted = promote_image(_capture_result())
+    kinds = [c.type for c in promoted.content]
+    assert "image" in kinds, f"a capture must carry an image content block, got {kinds}"
+
+    image = next(c for c in promoted.content if c.type == "image")
+    assert image.data == "aGVsbG8="
+    # note: the field is mime_type on the model and serialises as the spec's mimeType.
+    assert image.mime_type == "image/png"
+    assert image.model_dump(by_alias=True)["mimeType"] == "image/png"
+
+
+def test_the_frame_is_not_sent_twice() -> None:
+    """It was in the text block and in the structured payload, so every capture crossed the wire
+    twice. The metadata a programmatic caller needs stays; only the bytes move."""
+    from app.mcp.errors import promote_image
+
+    promoted = promote_image(_capture_result("QUJDREVG"))
+    text = "".join(c.text for c in promoted.content if c.type == "text")
+    assert "QUJDREVG" not in text, "the base64 is still duplicated in the text block"
+
+    stored = promoted.structured_content["data"]["image"]
+    assert "data" not in stored, "the base64 is still duplicated in the structured payload"
+    assert stored["media_type"] == "image/png" and stored["bytes"] == 5
+    assert "1280" in text, "the geometry a caller plans against must survive"
+
+
+def test_a_refusal_is_passed_through_untouched() -> None:
+    from app.mcp.errors import promote_image, tool_error
+
+    refusal = tool_error("nope", error_code="forbidden")
+    assert promote_image(refusal) is refusal
+
+
+def test_a_result_with_no_frame_is_unchanged() -> None:
+    """cursor_position and the input actions share the operation and carry no image."""
+    from app.mcp.errors import promote_image, tool_result
+
+    plain = tool_result({"data": {"ok": True, "action": "cursor_position"}})
+    assert promote_image(plain) is plain
+
+
+def test_every_capture_tool_promotes_its_frame() -> None:
+    """A new capture tool that forgets this is invisible from the outside: the call succeeds, the
+    payload looks right, and only the model's inability to see is the symptom."""
+    import ast
+    import inspect
+
+    from app.mcp import tools_desktop
+
+    tree = ast.parse(inspect.getsource(tools_desktop))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        rendered = ast.unparse(node)
+        if '"action": "screenshot"' not in rendered and '"action": "zoom"' not in rendered:
+            continue
+        assert "promote_image" in rendered, (
+            f"{node.name} captures a frame and does not promote it to an image block"
+        )

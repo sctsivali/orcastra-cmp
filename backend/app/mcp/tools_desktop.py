@@ -18,6 +18,7 @@ from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
 from .dispatch import call_proxy
+from .errors import promote_image
 
 __all__ = ["register"]
 
@@ -73,10 +74,13 @@ def register(mcp: MCPServer) -> None:
         project: Project = "default",
         settle_ms: Annotated[int, Field(default=0, ge=0, le=2000, description="Wait before capturing.")] = 0,
     ) -> CallToolResult:
-        return await call_proxy(
+        # important: promoted to an image content block. Left as the proxy returns it the frame
+        # travels as base64 inside the JSON text, which is not an image to any client and is
+        # charged as text rather than in visual tokens.
+        return promote_image(await call_proxy(
             "desktop_view", cluster_id, project=project,
             params={"name": name, "action": "screenshot", "settle_ms": settle_ms},
-        )
+        ))
 
     @mcp.tool(
         name="desktop_zoom",
@@ -96,10 +100,10 @@ def register(mcp: MCPServer) -> None:
         ],
         project: Project = "default",
     ) -> CallToolResult:
-        return await call_proxy(
+        return promote_image(await call_proxy(
             "desktop_view", cluster_id, project=project,
             params={"name": name, "action": "zoom", "region": region},
-        )
+        ))
 
     @mcp.tool(
         name="desktop_cursor_position",
