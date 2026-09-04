@@ -606,6 +606,11 @@ Ensure your client certificates are properly configured.
     from app.routers.break_glass import router as break_glass_router
     app.include_router(break_glass_router, prefix=settings.api_prefix)
 
+    # The organization's own consent to desktop control. Mounted beside break-glass because the
+    # two answer the same shape of question: who authorised this, and can they withdraw it.
+    from app.routers.desktop_policy import router as desktop_policy_router
+    app.include_router(desktop_policy_router, prefix=settings.api_prefix)
+
     # User Groups Router (Admin user assignment + Authentik sync)
     from app.routers.user_groups import router as user_groups_router
     app.include_router(user_groups_router, prefix=settings.api_prefix)

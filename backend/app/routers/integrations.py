@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, NamedTuple, Union
+from typing import Optional, List, Dict, Any, NamedTuple, Tuple, Union
 from fastapi import APIRouter, HTTPException, Depends, Query, Header
 from pydantic import BaseModel, Field, field_validator
 import requests
@@ -2597,6 +2597,9 @@ async def _assert_desktop_allowed(
 
     key_id = str(api_key.get("id") or "")
     instance = str((request.params or {}).get("name") or "")
+    # Filled in as soon as the session opens, so a refusal is attributable to the tenant whose
+    # screen was reached even when it is refused before anything else happens.
+    org: Tuple[Optional[int], Optional[str]] = (None, None)
 
     def _refuse(status: int, detail: str, refused: str, headers=None) -> None:
         _audit_key_action(
@@ -2613,13 +2616,15 @@ async def _assert_desktop_allowed(
             },
             external_user_email=request.external_user_email,
             error_message=refused,
+            target_organization_id=org[0],
+            target_organization_slug=org[1],
         )
         raise HTTPException(status_code=status, detail=detail, headers=headers)
 
     async with async_session_maker() as db:
-        _org_id, _org_slug = await resolve_cluster_org(request.cluster_id, db)
+        org = await resolve_cluster_org(request.cluster_id, db)
 
-        consent = await get_consent(db, _org_id)
+        consent = await get_consent(db, org[0])
         if not consent.may_view:
             _refuse(
                 403,
@@ -2748,8 +2753,17 @@ def _audit_key_action(
     details: Optional[Dict[str, Any]] = None,
     external_user_email: Optional[str] = None,
     error_message: Optional[str] = None,
+    target_organization_id: Optional[int] = None,
+    target_organization_slug: Optional[str] = None,
 ) -> None:
     """Record what a key did, in the index a human reviews rather than only the app log.
+
+    important: the owning organization is passed through. Without it every record on this surface
+    landed with a NULL org, so an action against a tenant's guest was not attributable to that
+    tenant and could not appear in a tenant-scoped view of the audit. The human console and
+    terminal paths have carried it since break-glass shipped; the key-authenticated surface did
+    not, which made the tenant-visible trail those paths promise incomplete for exactly the
+    unattended callers it most needed to cover.
 
     important: this surface had no audit record at all. The one `logger.info` beside it names the
     method and path but never the body, is not routed to the audit index, and is subject to
@@ -2770,6 +2784,8 @@ def _audit_key_action(
             target_project=project,
             result=result,
             error_message=error_message,
+            target_organization_id=target_organization_id,
+            target_organization_slug=target_organization_slug,
             details={
                 **(details or {}),
                 "api_key_id": api_key.get("id"),
@@ -3573,6 +3589,25 @@ async def proxy_operation(
             guest_capability = config_reaches_inside(
                 (request.params or {}).get("config"), (request.params or {}).get("devices")
             )
+        # The owning organization, resolved once for every audit record this call may write.
+        # One indexed lookup against a path already budgeted in tens of seconds, and without it
+        # the record cannot be attributed to the tenant whose guest was reached.
+        _guest_org_id: Optional[int] = None
+        _guest_org_slug: Optional[str] = None
+        if guest_capability:
+            from app.core.database import async_session_maker as _org_session
+            from app.core.org_scope import resolve_cluster_org as _resolve_org
+
+            try:
+                async with _org_session() as _org_db:
+                    _guest_org_id, _guest_org_slug = await _resolve_org(
+                        request.cluster_id, _org_db
+                    )
+            except Exception:  # noqa: BLE001 - attribution must not fail the request
+                logger.warning(
+                    "Could not resolve the owning organization for %s", request.cluster_id
+                )
+
         if guest_capability:
             try:
                 assert_explicit_capability(api_key, guest_capability)
@@ -3594,6 +3629,8 @@ async def proxy_operation(
                     },
                     external_user_email=request.external_user_email,
                     error_message=str(refusal.detail),
+                    target_organization_id=_guest_org_id,
+                    target_organization_slug=_guest_org_slug,
                 )
                 raise
 
@@ -3682,6 +3719,8 @@ async def proxy_operation(
                     },
                     external_user_email=request.external_user_email,
                     error_message="timeout",
+                    target_organization_id=_guest_org_id,
+                    target_organization_slug=_guest_org_slug,
                 )
                 logger.warning(
                     "Guest access timeout: %s %s on %s after %ss",
@@ -3766,6 +3805,8 @@ async def proxy_operation(
                     "truncated": result_data.get("truncated"),
                 },
                 external_user_email=request.external_user_email,
+                target_organization_id=_guest_org_id,
+                target_organization_slug=_guest_org_slug,
             )
 
         # An accepted-but-unfinished operation carries its id at the top level too, so a
@@ -3802,6 +3843,8 @@ async def proxy_operation(
                 },
                 external_user_email=request.external_user_email,
                 error_message=error_code,
+                target_organization_id=_guest_org_id,
+                target_organization_slug=_guest_org_slug,
             )
         if request.operation in GUEST_ACCESS_OPERATIONS and error_code == "timeout":
             # important: a socket read can still expire before the budget on the pooled path, and

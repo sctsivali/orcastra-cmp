@@ -418,3 +418,55 @@ def test_the_budget_is_keyed_per_guest_not_per_key() -> None:
     c = bucket_key("actions", "oak_x", "pandora", "default", "vm-a")
     assert len({a, b, c}) == 3
     assert bucket_key("captures", "oak_x", "nuc2", "default", "vm-a") != a
+
+
+def test_a_guest_action_is_attributable_to_the_tenant() -> None:
+    """Without the owning organization every record on this surface landed with a NULL org, so an
+    action against a tenant's guest could not appear in a tenant-scoped view of the audit.
+
+    The human console and terminal paths have carried it since break-glass shipped. The
+    key-authenticated surface did not, which left the tenant-visible trail those paths promise
+    incomplete for exactly the unattended callers it most needed to cover.
+    """
+    import ast
+    import inspect
+
+    from app.routers import integrations
+
+    signature = inspect.signature(integrations._audit_key_action)
+    assert "target_organization_id" in signature.parameters
+
+    handler = ast.unparse(
+        ast.parse(inspect.getsource(integrations.proxy_operation).lstrip())
+    )
+    assert "resolve_cluster_org" in handler, "the owning organization is never resolved"
+    # Every audit call on the guest path must carry it, not just one.
+    assert handler.count("target_organization_id=_guest_org_id") >= 4, (
+        "some guest audit records still land without the tenant they belong to"
+    )
+
+    gate = ast.unparse(
+        ast.parse(inspect.getsource(integrations._assert_desktop_allowed).lstrip())
+    )
+    assert "target_organization_id=org[0]" in gate, (
+        "a refused desktop action is not attributed to the organization it was refused against"
+    )
+
+
+def test_the_consent_route_exists_and_is_the_organizations_own() -> None:
+    """The gate reads a row that nothing could write. A consent nobody can give is not a consent,
+    and an operator could not tell a deliberate refusal from a missing endpoint."""
+    from app.routers.desktop_policy import router
+
+    paths = {route.path for route in router.routes}
+    assert "/organizations/{org_id}/desktop-control" in paths
+    methods = {m for route in router.routes for m in (route.methods or set())}
+    assert {"GET", "PUT"} <= methods
+
+    import inspect
+
+    from app.routers import desktop_policy
+
+    source = inspect.getsource(desktop_policy)
+    assert "user_has_access" in source, "any partner could set another organization's consent"
+    assert "check_read_only_mode" in source, "consent can be changed in a read-only deployment"

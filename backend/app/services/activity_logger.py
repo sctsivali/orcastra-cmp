@@ -97,6 +97,7 @@ ACTION_CATEGORIES = {
     # Seeing and driving a guest's graphical session. Three names rather than one so an alert can
     # tell an agent looking at a screen from an agent typing into it: they are different events to
     # whoever reviews them, and only one of them can change anything.
+    "desktop_control.consent.set": EventCategory.ADMIN,
     "integration.instance.desktop_view": EventCategory.ADMIN,
     "integration.instance.desktop_input": EventCategory.ADMIN,
     "integration.instance.desktop_clipboard": EventCategory.ADMIN,
@@ -164,6 +165,7 @@ HIGH_SEVERITY_ACTIONS = {
     "console.session.create",
     "integration.instance.exec",
     "integration.instance.files",
+    "desktop_control.consent.set",
     "integration.instance.desktop_view",
     "integration.instance.desktop_input",
     "integration.instance.desktop_clipboard",
