@@ -149,6 +149,22 @@ const API_URL = "";
 
 // ============ Main Component ============
 
+// What kind of session this was.
+//
+// important: a lookup rather than `isGraphics ? "SPICE (VGA)" : "Terminal"`, which was written
+// when there were exactly two protocols and quietly labelled anything else as a human terminal
+// session. An agent driving a desktop through the MCP surface is neither, and reading it as a
+// terminal is worse than reading it as unknown: it attributes machine activity to a person.
+const PROTOCOL_LABELS: Record<string, string> = {
+  "spice-graphics": "SPICE (VGA)",
+  "websocket-terminal": "Terminal",
+  "mcp-desktop": "Agent (desktop)",
+};
+
+function protocolLabelFor(protocol: string | null | undefined): string {
+  return PROTOCOL_LABELS[protocol ?? ""] ?? formatLabel(protocol ?? "unknown");
+}
+
 export default function SessionsPage() {
   const [activeTab, setActiveTab] = useState("active");
 
@@ -656,7 +672,7 @@ function ActiveRow({ session, onSelect, scope }: {
   scope: SessionScope;
 }) {
   const isGraphics = session.protocol === "spice-graphics";
-  const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
+  const protocolLabel = protocolLabelFor(session.protocol);
 
   return (
     <TableRow className="hover:bg-muted/50">
@@ -754,7 +770,7 @@ function HistoryRow({ log, onSelect, scope }: {
   scope: SessionScope;
 }) {
   const isGraphics = log.protocol === "spice-graphics";
-  const protocolLabel = isGraphics ? "SPICE (VGA)" : "Terminal";
+  const protocolLabel = protocolLabelFor(log.protocol);
 
   return (
     <TableRow className="hover:bg-muted/50">

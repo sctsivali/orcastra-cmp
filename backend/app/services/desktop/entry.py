@@ -8,7 +8,7 @@ dict, which is the same contract the rest of that vocabulary keeps.
 import logging
 import time
 from dataclasses import asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
 
@@ -107,23 +107,32 @@ def _provider(inst: Any) -> DesktopProvider:
     return GuestExecProvider(inst)
 
 
-def _report_for(inst: Any, target: Target, *, refresh: bool = False) -> ProbeReport:
+def _report_for(
+    inst: Any, target: Target, *, refresh: bool = False
+) -> Tuple[ProbeReport, bool]:
+    """The probe for this guest, and whether this call established the session.
+
+    The second value is what lets the router write one session row per session rather than one per
+    action. A tenant reading their session list wants to see that an agent connected to a guest,
+    not four hundred rows saying it moved the mouse.
+    """
     if not refresh:
         cached = session_store.load(target)
         if cached is not None:
-            return cached
+            return cached, False
     report = _provider(inst).probe(target, agent=_agent_present(inst))
     session_store.store(target, report)
-    return report
+    return report, True
 
 
 def desktop_probe(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """What this guest can do, and what is missing when it cannot."""
     _require_enabled()
     target = _target(params, inst)
-    report = _report_for(inst, target, refresh=bool(params.get("refresh")))
+    report, started = _report_for(inst, target, refresh=bool(params.get("refresh")))
     payload = asdict(report)
     payload["session_id"] = session_store.session_id(target)
+    payload["session_started"] = started
     payload["provider"] = _provider(inst).name
     return payload
 
@@ -157,7 +166,7 @@ def desktop_action(inst: Any, params: Dict[str, Any], operation: str = "desktop_
         time.sleep(action.duration)
         return {"ok": True, "action": "wait", "waited_seconds": action.duration}
 
-    report = _report_for(inst, target)
+    report, started = _report_for(inst, target)
     if not report.ready:
         return {
             "ok": False,
@@ -197,6 +206,7 @@ def desktop_action(inst: Any, params: Dict[str, Any], operation: str = "desktop_
         "ok": result.ok,
         "action": result.action,
         "session_id": session_store.session_id(target),
+        "session_started": started,
     }
     if result.display is not None:
         payload["display"] = asdict(result.display)

@@ -3809,6 +3809,30 @@ async def proxy_operation(
                 target_organization_slug=_guest_org_slug,
             )
 
+            # One session row per session, not one per action. A tenant reading their session list
+            # wants to see that an agent connected to a guest, not four hundred rows saying it
+            # moved the mouse. `session_started` is set by the desktop entry point on the call
+            # that actually established it.
+            if result_data.get("session_started") and operation.startswith("desktop_"):
+                from app.services.session_audit import fire_and_forget_connect
+                from app.services.session_models import SessionProtocol
+
+                fire_and_forget_connect(
+                    session_id=str(result_data.get("session_id") or ""),
+                    instance_name=str(request.params.get("name", "")),
+                    host=request.cluster_id,
+                    project=request.project or "default",
+                    protocol=SessionProtocol.MCP_DESKTOP.value,
+                    # important: no fabricated person. The columns are nullable precisely so that
+                    # an agent session is not given a human identity it does not have, which a
+                    # reader could not tell from a real one afterwards.
+                    user_id=None,
+                    user_email=None,
+                    user_role="integration",
+                    target_organization_id=_guest_org_id,
+                    target_org_slug=_guest_org_slug,
+                )
+
         # An accepted-but-unfinished operation carries its id at the top level too, so a
         # caller does not have to know it is nested in data.
         operation_id = (

@@ -470,3 +470,64 @@ def test_the_consent_route_exists_and_is_the_organizations_own() -> None:
     source = inspect.getsource(desktop_policy)
     assert "user_has_access" in source, "any partner could set another organization's consent"
     assert "check_read_only_mode" in source, "consent can be changed in a read-only deployment"
+
+
+# ── the tenant can see the session, not only the audit ─────────────────────────────────────────
+
+def test_an_agent_session_has_a_protocol_of_its_own() -> None:
+    """The enum had exactly two members, both describing a human at a browser, and the Sessions
+    page labelled anything else as a terminal. Reading machine activity as a person's session is
+    worse than reading it as unknown."""
+    from app.services.session_models import SessionProtocol
+
+    assert SessionProtocol.MCP_DESKTOP.value == "mcp-desktop"
+    assert SessionProtocol.MCP_DESKTOP not in (
+        SessionProtocol.TERMINAL,
+        SessionProtocol.GRAPHICS,
+    )
+
+
+def test_a_session_row_can_exist_without_a_person() -> None:
+    """An agent driving a desktop has no human to name. Writing one anyway would fabricate an
+    identity into the table a tenant reads to see who reached their instances, and a fabricated
+    actor is indistinguishable from a real one afterwards."""
+    from app.models.db_models import SessionAuditLog
+
+    columns = SessionAuditLog.__table__.columns
+    assert columns["user_id"].nullable is True
+    assert columns["user_email"].nullable is True
+
+
+def test_one_session_row_per_session_not_per_action() -> None:
+    """A tenant wants to see that an agent connected to a guest, not four hundred rows saying it
+    moved the mouse."""
+    import ast
+    import inspect
+
+    from app.routers import integrations
+    from app.services.desktop import entry
+
+    handler = ast.unparse(
+        ast.parse(inspect.getsource(integrations.proxy_operation).lstrip())
+    )
+    assert "fire_and_forget_connect" in handler, "no session row is ever written for an agent"
+    assert "session_started" in handler, (
+        "the session row is written unconditionally, so every action produces one"
+    )
+    # And the flag has to come from the place that knows, which is the cache.
+    assert "session_started" in inspect.getsource(entry.desktop_action)
+    assert "-> Tuple[ProbeReport, bool]" in inspect.getsource(entry._report_for)
+
+
+def test_no_person_is_invented_for_an_agent_session() -> None:
+    import ast
+    import inspect
+
+    from app.routers import integrations
+
+    handler = ast.unparse(
+        ast.parse(inspect.getsource(integrations.proxy_operation).lstrip())
+    )
+    assert "user_id=None" in handler and "user_email=None" in handler, (
+        "an agent session is given a human identity it does not have"
+    )

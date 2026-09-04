@@ -597,11 +597,16 @@ class SessionAuditLog(Base):
     instance_name = Column(String(200), nullable=False, index=True)
     host = Column(String(200), nullable=False)
     project = Column(String(100), nullable=False, default="default")
-    protocol = Column(String(50), nullable=False, comment="websocket-terminal | spice-graphics")
+    protocol = Column(String(50), nullable=False, comment="websocket-terminal | spice-graphics | mcp-desktop")
     
     # User context
-    user_id = Column(String(200), nullable=False, index=True, comment="User ID from auth provider")
-    user_email = Column(String(200), nullable=False, index=True)
+    # Nullable because an agent driving a desktop through an API key has no human to name.
+    # Writing one anyway would fabricate an identity into the table a tenant reads to see who
+    # reached their instances, and a fabricated actor is indistinguishable from a real one
+    # afterwards. The protocol says what kind of session it was; the activity index carries which
+    # key it was.
+    user_id = Column(String(200), nullable=True, index=True, comment="User ID from auth provider")
+    user_email = Column(String(200), nullable=True, index=True)
     user_role = Column(String(100), nullable=False, default="unknown")
 
     # Compliance / accountability context: which tenant org owns the accessed cluster,
