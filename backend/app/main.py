@@ -348,8 +348,14 @@ async def lifespan(app: FastAPI):
     
     yield
 
-    await _mcp_stack.aclose()
-    
+    # note: guarded, because this runs BEFORE the rest of shutdown. An exception escaping here
+    # would skip the database close and the background collectors below, turning one subsystem's
+    # failure into a dirty shutdown of every other. Same rule the audit paths already follow.
+    try:
+        await _mcp_stack.aclose()
+    except Exception as mcp_stop_err:
+        logger.warning(f"MCP session manager did not stop cleanly: {mcp_stop_err}")
+
     # Shutdown
     logger.info("Shutting down Orcastra CMP API...")
     
