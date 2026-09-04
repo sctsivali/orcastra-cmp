@@ -188,6 +188,14 @@ jobs:
       - name: Semantic colour and contrast
         run: node scripts/checks/check-semantic-colour.mjs .
 
+      # The default sidebar and accent are written down in five places, and they came apart:
+      # the CSS accent hex said #8b5cf6 while its own HSL triplet said #7c3bed, so the app
+      # painted one purple before hydration and another after, and the contrast guard above
+      # scored the colour the browser stops using. This holds the copies equal, converts each
+      # hex to check its own triplet, and measures the shipped pair.
+      - name: Personalization defaults
+        run: node scripts/checks/check-personalization-defaults.mjs .
+
       # An em dash joined the two halves of the stop dialog's warning, and the same character
       # was in 83 other places across the console, the API layer and the README. tsc and
       # eslint do not read English, so nothing saw it. Advisory for now: it reports and exits

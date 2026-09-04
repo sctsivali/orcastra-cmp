@@ -120,7 +120,12 @@ function FlyoutGroup({ group, ctx }: { group: NavGroup; ctx: NavRenderContext })
           {badge > 0 && (
             <span
               aria-hidden="true"
-              className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary px-1 text-xs font-semibold leading-none text-primary-foreground"
+              // `sidebar-count-solid`, not `sidebar-count`: this one sits on an icon with no
+              // label beside it, so it is the one chip on the rail whose job is to be noticed.
+              // The class also exempts it from the sidebar text overrides, which would
+              // otherwise repaint its foreground to the ground colour and leave it unreadable
+              // on its own accent fill.
+              className="absolute -top-1 -right-1 flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-xs font-semibold leading-none sidebar-count-solid"
             >
               {badge}
             </span>

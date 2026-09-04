@@ -97,7 +97,13 @@ export function Sidebar({ className }: SidebarProps) {
           !sidebarOpen && !isCollapsed && "md:w-64",
           className
         )}
-        style={useCustomBg ? { backgroundColor: settings.colors.sidebarBgColor || "#ffffff" } : undefined}
+        // note: no inline backgroundColor here. `.sidebar-custom-bg` in app/globals.css paints
+        // the ground with an !important declaration, and an important author rule beats a
+        // normal inline style outright, so this element's `style` never reached the screen. It
+        // read as a fallback for a missing CSS variable and was not one: an unresolvable var()
+        // makes the important declaration invalid at computed-value time, which computes to
+        // `transparent` rather than deferring to the loser of the cascade. The real fallback is
+        // the second argument to var() in that rule.
       >
         <div className="flex flex-col h-full overflow-hidden overscroll-contain">
           {/* Header: logo + collapse/close */}

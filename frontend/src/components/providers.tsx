@@ -12,6 +12,7 @@ import { RouteIntentProvider } from "./navigation/route-intent";
 import { APIError } from "@/types";
 import { POLL_MS } from "@/lib/query-config";
 import { onTokenRefreshed } from "@/lib/api";
+import type { PersonalizationSettings } from "@/types/personalization";
 
 /**
  * Refetches queries that errored under an expired token once the access token
@@ -94,7 +95,16 @@ function getQueryClient() {
   }
 }
 
-export function Providers({ children }: { children: React.ReactNode }) {
+export function Providers({
+  children,
+  initialPersonalization,
+}: {
+  children: React.ReactNode;
+  // Read from the hint cookie by the root layout, which is the only server component in this
+  // tree, and handed down so the server and the browser render the same sidebar on the first
+  // pass. See the note on PersonalizationProvider's initialSettings prop.
+  initialPersonalization?: PersonalizationSettings | null;
+}) {
   const queryClient = getQueryClient();
 
   return (
@@ -102,7 +112,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <QueryInvalidationBridge />
         <StorageCleanupProvider>
-          <PersonalizationProvider>
+          <PersonalizationProvider initialSettings={initialPersonalization}>
             <ThemeProvider>
               <TooltipProvider delayDuration={150} skipDelayDuration={100}>
                 <NavigationProgressProvider>

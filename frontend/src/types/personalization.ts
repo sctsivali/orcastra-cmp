@@ -52,7 +52,7 @@ export interface ColorSettings {
 
 // Available accent color presets
 export const COLOR_PRESETS: ColorPreset[] = [
-  { name: "Violet", value: "#8b5cf6" },
+  { name: "Violet", value: "#8467e4" },
   { name: "Purple", value: "#a855f7" },
   { name: "Blue", value: "#3b82f6" },
   { name: "Indigo", value: "#6366f1" },
@@ -69,6 +69,11 @@ export const COLOR_PRESETS: ColorPreset[] = [
 // Visual theme presets (like image 5) - sidebar bg + accent combinations
 // Text colors are explicitly set to ensure readability in both light/dark modes
 export const THEME_PRESETS: ThemePreset[] = [
+  // First, and identical to DEFAULT_PERSONALIZATION.colors. personalization-settings.tsx marks
+  // a preset active by matching all three values, so without this entry a fresh account shows
+  // no preset selected at all and there is no way back to the shipped look short of typing
+  // three hexes.
+  { name: "Orcastra", accentColor: "#8467e4", sidebarBgColor: "#321f6f", sidebarTextColor: "#f8fafc" },
   { name: "Classic Light", accentColor: "#8b5cf6", sidebarBgColor: "#ffffff", sidebarTextColor: "#1e293b" },
   { name: "Ocean", accentColor: "#06b6d4", sidebarBgColor: "#f0fdfa", sidebarTextColor: "#134e4a" },
   { name: "Forest", accentColor: "#22c55e", sidebarBgColor: "#f0fdf4", sidebarTextColor: "#14532d" },
@@ -87,6 +92,9 @@ export const SIDEBAR_BG_PRESETS: ColorPreset[] = [
   { name: "Soft Green", value: "#f0fdf4" },
   { name: "Soft Orange", value: "#fff7ed" },
   { name: "Soft Pink", value: "#fdf2f8" },
+  // The shipped default. First of the dark grounds because it is the one an operator returns
+  // to, and present at all because the picker marks a swatch selected by exact value match.
+  { name: "Orcastra Violet", value: "#321f6f" },
   // Matches the dark theme's own ground, so an operator who wants the sidebar to sit flush
   // with the page has a preset for it rather than having to type the value.
   { name: "Orcastra Dark", value: "#14111c" },
@@ -126,13 +134,21 @@ export const DEFAULT_PERSONALIZATION: PersonalizationSettings = {
     tagline: "Operations center for managing virtualized infrastructure and containers across distributed clusters. Streamline resource management with real-time monitoring and automation.",
     footerText: "© {YEAR} ORCASTRA",
   },
+  // important: these five colour values are one of five copies of the same defaults. The others
+  // are the CSS seeds in app/globals.css, the runtime fallbacks in
+  // components/personalization-provider.tsx, the picker fallbacks in
+  // components/personalization-settings.tsx, and get_default_settings() in the backend's
+  // routers/user_preferences.py, which is what a user with no stored row receives.
+  // scripts/checks/check-personalization-defaults.mjs fails the build when they disagree,
+  // because the copies drifting is not hypothetical: the CSS accent hex and its own HSL
+  // triplet described two different purples for as long as personalization has shipped.
   colors: {
-    accentColor: "#8b5cf6",       // Default violet (unified accent)
-    sidebarBgColor: "#ffffff",    // Default white sidebar (only used when useCustomSidebarBg is true)
-    sidebarTextColor: "#1e293b",  // Default dark text for white sidebar
+    accentColor: "#8467e4",       // 254 70% 65%, the sidebar ground's hue
+    sidebarBgColor: "#321f6f",    // 254 56% 28%
+    sidebarTextColor: "#f8fafc",  // what autoTextColor derives for a ground this dark
     sidebarLogoColor: "auto",     // Auto = follows sidebar background brightness
     useCustomAccent: false,
-    useCustomSidebarBg: false,    // When false, sidebar uses system theme colors
+    useCustomSidebarBg: true,     // The product ships a coloured sidebar; false falls back to bg-card
     useCustomSidebarText: false,
     autoTextColor: true,          // Auto-calculate text color by default
   },

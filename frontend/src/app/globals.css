@@ -19,7 +19,11 @@
     --card-foreground: 222 47% 11%;
     --popover: 0 0% 98%;
     --popover-foreground: 222 47% 11%;
-    --primary: 262.1 83.3% 57.8%;
+    /* note: reached only when the unlayered personalization binding below is invalid at
+       computed-value time. It names the shipped accent so the last resort is the product
+       colour rather than a third purple nobody chose. Kept in sync by
+       scripts/checks/check-personalization-defaults.mjs. */
+    --primary: 254 70% 65%;
     --primary-foreground: 0 0% 100%;
     --secondary: 220 13% 91%;
     --secondary-foreground: 222 47% 11%;
@@ -70,7 +74,7 @@
     --status-unknown-foreground: 0 0% 100%;
     --border: 220 13% 87%;
     --input: 220 13% 87%;
-    --ring: 262.1 83.3% 57.8%;
+    --ring: 254 70% 65%;
     --radius: 0.75rem;
     color-scheme: light;
 
@@ -95,17 +99,36 @@
        than as prose. Same value as TERMINAL_THEME.green, and the drift check holds them equal. */
     --terminal-accent: 88.8 50.5% 61.2%;
 
-    /* Personalization defaults - unified accent color */
-    --personalization-accent: #8b5cf6;
-    --personalization-accent-h: 262;
-    --personalization-accent-s: 83%;
-    --personalization-accent-l: 58%;
-    --personalization-sidebar-bg: #ffffff;
-    --personalization-sidebar-bg-h: 0;
-    --personalization-sidebar-bg-s: 0%;
-    --personalization-sidebar-bg-l: 100%;
-    --personalization-sidebar-text: #0f172a;
-    --personalization-sidebar-muted: rgba(15,23,42,0.5);
+    /* Personalization defaults. These are the values an operator sees before any preference
+       loads: the pre-paint script at app/layout.tsx returns early when the hint cookie is
+       absent, so a first visit paints from here and from nowhere else.
+
+       important: each hex and its own -h/-s/-l triplet must describe the SAME colour. They did
+       not until now. --personalization-accent read #8b5cf6 while its triplet read 262 83% 58%,
+       which is #7c3bed, so the app painted one purple before hydration and a different one
+       after, and scripts/checks/check-semantic-colour.mjs scored the triplet and therefore
+       recorded contrast numbers for a colour the browser stops using. Two values for one
+       colour cannot be held in sync by reading them, so
+       scripts/checks/check-personalization-defaults.mjs converts each hex and fails the build
+       if the triplet disagrees, here and in every other copy of these defaults.
+
+       #8467e4 is 254 70% 65%: the sidebar ground's own hue, at the relative luminance where a
+       single accent serving both themes is equally far from AA on a light and a dark surface.
+       Moving it darker buys the light surfaces and loses the dark ones by the same amount. */
+    --personalization-accent: #8467e4;
+    --personalization-accent-h: 254;
+    --personalization-accent-s: 70%;
+    --personalization-accent-l: 65%;
+    --personalization-sidebar-bg: #321f6f;
+    --personalization-sidebar-bg-h: 254;
+    --personalization-sidebar-bg-s: 56%;
+    --personalization-sidebar-bg-l: 28%;
+    /* Auto-derived from the ground by the provider, which picks #f8fafc below 0.5 luminance.
+       #321f6f measures 0.028, so these are what that derivation produces: 12.86:1 for the
+       text and 5.54:1 for the muted tier. Written out rather than computed here because the
+       pre-paint script has no ground to derive from until the cookie exists. */
+    --personalization-sidebar-text: #f8fafc;
+    --personalization-sidebar-muted: rgba(248,250,252,0.6);
   }
 
   /* The dark ground is 256.4 24.4% 8.8%, which is exactly #14111c: a purple-tinted near-black
@@ -180,15 +203,28 @@
   --ring: var(--personalization-accent-h) var(--personalization-accent-s) var(--personalization-accent-l);
 }
 
-/* Sidebar active state uses accent color - higher specificity for full override */
+/* The sidebar's own colour rules.
+   ------------------------------------------------------------------------------------------
+   Every var() below carries a fallback, and that is load-bearing rather than tidy. These are
+   !important declarations, so they win the cascade outright; if the variable they name is ever
+   unset the declaration becomes invalid at computed-value time and the property computes to
+   its initial value. For a background that is `transparent`, which paints the sidebar as a
+   hole over the page rather than falling back to the inline style on the aside, because the
+   inline style already lost the cascade. The fallbacks are the shipped defaults, so a missing
+   or malformed personalization cookie degrades to the product colours instead of to nothing. */
+
+/* Active item, default branch. This is what the bg-card sidebar uses, and it is also what the
+   collapsed rail's flyout uses: those rows render in a Radix portal outside the aside, on
+   bg-popover, so they are deliberately not reached by the .sidebar-custom-bg rules below. The
+   accent measures 3.99:1 against the light popover and 4.18:1 against the dark one, clear of
+   the 3:1 floor WCAG 1.4.11 sets for a non-text graphic. */
 .sidebar-active,
 .sidebar-active:hover {
-  background-color: var(--personalization-accent) !important;
+  background-color: var(--personalization-accent, #8467e4) !important;
   color: white !important;
 }
 
-/* All text inside active sidebar item should be white */
-.sidebar-active span,
+.sidebar-active span:not(.sidebar-count):not(.sidebar-count-solid),
 .sidebar-active svg,
 .sidebar-active p {
   color: white !important;
@@ -196,33 +232,61 @@
 
 /* Sidebar with custom background - apply text colors to all descendants */
 .sidebar-custom-bg {
-  background-color: var(--personalization-sidebar-bg) !important;
-  color: var(--personalization-sidebar-text) !important;
+  background-color: var(--personalization-sidebar-bg, #321f6f) !important;
+  color: var(--personalization-sidebar-text, #f8fafc) !important;
+}
+
+/* Active item, custom-ground branch. The pill inverts rather than taking the accent, because
+   the accent cannot do both jobs on a dark ground: standing 3:1 clear of the sidebar and
+   carrying 4.5:1 text are contradictory requirements for one mid-tone colour, and they cross
+   at almost exactly the same luminance. Deriving the pill from the sidebar's own pair instead
+   of naming a colour makes it self-correcting: on #321f6f it resolves to #eae8f9 at 11.15:1
+   both against the ground and under its own text, and on a white sidebar the same expression
+   resolves to #2a304f with white text at 12.85:1.
+
+   important: :hover is written out rather than left to the unscoped rule above. That rule's
+   `.sidebar-active:hover` is already (0,2,0), the same specificity this selector would have on
+   its own, so which one wins would come down to source order. On touch, :hover sticks after a
+   tap, so losing that race is a permanently wrong pill rather than a flicker. */
+.sidebar-custom-bg .sidebar-active,
+.sidebar-custom-bg .sidebar-active:hover {
+  background-color: color-mix(
+    in srgb,
+    var(--personalization-sidebar-text, #f8fafc) 88%,
+    var(--personalization-accent, #8467e4)
+  ) !important;
+  color: var(--personalization-sidebar-bg, #321f6f) !important;
+}
+
+.sidebar-custom-bg .sidebar-active span:not(.sidebar-count):not(.sidebar-count-solid),
+.sidebar-custom-bg .sidebar-active svg,
+.sidebar-custom-bg .sidebar-active p {
+  color: var(--personalization-sidebar-bg, #321f6f) !important;
 }
 
 /* Apply text color to all text elements in sidebar (not buttons/links - handled separately) */
-.sidebar-custom-bg span:not(.sidebar-active span),
+.sidebar-custom-bg span:not(.sidebar-active span):not(.sidebar-count):not(.sidebar-count-solid),
 .sidebar-custom-bg p {
-  color: var(--personalization-sidebar-text) !important;
+  color: var(--personalization-sidebar-text, #f8fafc) !important;
 }
 
 /* Override muted text in sidebar */
 .sidebar-custom-bg .text-muted-foreground {
-  color: var(--personalization-sidebar-muted) !important;
+  color: var(--personalization-sidebar-muted, rgba(248,250,252,0.6)) !important;
 }
 
 /* Sidebar menu item - ghost variant text color (non-active) */
 .sidebar-custom-bg button:not(.sidebar-active):not(:hover),
 .sidebar-custom-bg a:not(.sidebar-active):not(:hover) {
-  color: var(--personalization-sidebar-text) !important;
+  color: var(--personalization-sidebar-text, #f8fafc) !important;
   background-color: transparent !important;
 }
 
 /* Sidebar menu item hover states - subtle overlay effect */
 .sidebar-custom-bg button:not(.sidebar-active):hover,
 .sidebar-custom-bg a:not(.sidebar-active):hover {
-  background-color: color-mix(in srgb, var(--personalization-sidebar-text) 10%, transparent) !important;
-  color: var(--personalization-sidebar-text) !important;
+  background-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 10%, transparent) !important;
+  color: var(--personalization-sidebar-text, #f8fafc) !important;
 }
 
 /* Icons inside sidebar buttons should inherit parent color */
@@ -231,35 +295,62 @@
   color: inherit !important;
 }
 
-/* Explicit sidebar text classes (for manual usage) */
-.sidebar-custom-bg .sidebar-text {
-  color: var(--personalization-sidebar-text) !important;
+/* Count chips in the sidebar tree. One rule for every context because it mixes currentColor:
+   the chip takes whatever colour its row already established, which is the sidebar text on the
+   ground, the pill's foreground inside an active item, and --foreground in the bg-card branch.
+   It therefore cannot fall out of contrast at a sidebar colour nobody has picked yet. On
+   #321f6f it resolves to #564688 under #f8fafc, 7.64:1. What it replaced was
+   bg-blue-500/20 under text-blue-500, which measured 3.66:1 on that ground and was the
+   tint-under-same-hue-text shape scripts/checks/check-semantic-colour.mjs exists to ban. */
+.sidebar-count {
+  background-color: color-mix(in srgb, currentColor 18%, transparent) !important;
+  color: inherit !important;
 }
 
-.sidebar-custom-bg .sidebar-text-muted {
-  color: var(--personalization-sidebar-muted) !important;
+/* The one chip that is not subordinate: the open-session count on the collapsed rail, whose
+   whole job is to be noticed on an icon with no label beside it. It stays a solid accent fill
+   and keeps its own foreground, which the sidebar text override would otherwise repaint. */
+.sidebar-count-solid {
+  background-color: var(--personalization-accent, #8467e4) !important;
+  color: hsl(var(--primary-foreground)) !important;
+}
+
+/* Inside a selected row it stops being solid, because the row is already the loudest thing on
+   the rail and an accent chip on an accent pill is the same colour twice. Falling back to the
+   subordinate treatment keeps it readable in both branches: currentColor is white on the
+   default accent pill and the sidebar ground on the inverted one. */
+.sidebar-active .sidebar-count-solid {
+  background-color: color-mix(in srgb, currentColor 22%, transparent) !important;
+  color: inherit !important;
 }
 
 /* Border styling in sidebar - subtle and thin */
 .sidebar-custom-bg .border-border {
-  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 15%, transparent) !important;
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 15%, transparent) !important;
+}
+
+/* The scrollbar thumb on the nav is a background, not a border, so the .border-border rule
+   above never reached it. Left on --border it is #2d2938 against #321f6f in dark, which is a
+   scrollbar an operator cannot see on a list that scrolls. */
+.sidebar-custom-bg .bg-border {
+  background-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 30%, transparent) !important;
 }
 
 /* Submenu left border - keep thin */
 .sidebar-custom-bg .border-l-2 {
   border-left-width: 1px !important;
-  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 20%, transparent) !important;
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 20%, transparent) !important;
 }
 
 /* Top/bottom borders in sidebar - keep thin */
 .sidebar-custom-bg .border-t,
 .sidebar-custom-bg .border-b {
-  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 12%, transparent) !important;
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 12%, transparent) !important;
 }
 
 /* Right border (sidebar edge) */
 .sidebar-custom-bg.border-r {
-  border-color: color-mix(in srgb, var(--personalization-sidebar-text) 10%, transparent) !important;
+  border-color: color-mix(in srgb, var(--personalization-sidebar-text, #f8fafc) 10%, transparent) !important;
 }
 
 @layer base {
@@ -374,11 +465,6 @@ tbody tr {
 
 .animate-pulse-dot {
   animation: pulse-dot 2s ease-in-out infinite;
-}
-
-/* Sidebar transitions */
-.sidebar-transition {
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* Mobile optimizations */

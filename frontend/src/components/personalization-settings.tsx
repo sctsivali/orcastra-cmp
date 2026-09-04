@@ -10,7 +10,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { COLOR_PRESETS, THEME_PRESETS, SIDEBAR_BG_PRESETS } from "@/types/personalization";
+import {
+  COLOR_PRESETS,
+  THEME_PRESETS,
+  SIDEBAR_BG_PRESETS,
+  DEFAULT_PERSONALIZATION,
+} from "@/types/personalization";
+
+// The picker fills an empty field with the shipped default, so it has to read the same
+// object everything else does. Retyping the hexes here is how a picker ends up offering to
+// "reset" a colour to a value the product no longer ships.
+const DEFAULTS = DEFAULT_PERSONALIZATION.colors;
 import {
   ImageIcon,
   Upload,
@@ -420,7 +430,10 @@ function PreviewDialog({ children }: { children: React.ReactNode }) {
                 <Badge variant="secondary" className="mb-2">Preview</Badge>
                 <h2 className="text-2xl font-bold mb-2">
                   Welcome to{" "}
-                  <span className="bg-gradient-to-r from-violet-600 to-purple-600 bg-clip-text text-transparent">
+                  {/* The real hero in app/page.tsx paints this in the accent, so the preview
+                      has to as well. It carried a fixed violet-to-purple gradient, which meant
+                      changing the accent moved the page and left its own preview behind. */}
+                  <span style={{ color: settings.colors.accentColor || DEFAULTS.accentColor }}>
                     {settings.branding.appName}
                   </span>
                 </h2>
@@ -830,19 +843,19 @@ export function PersonalizationSettings() {
                         <Label className="text-xs text-muted-foreground">Custom</Label>
                         <input
                           type="color"
-                          value={settings.colors.accentColor || "#8b5cf6"}
+                          value={settings.colors.accentColor || DEFAULTS.accentColor}
                           onChange={(e) => updateColors({ accentColor: e.target.value, useCustomAccent: true })}
                           className="w-10 h-8 rounded cursor-pointer border-0 p-0"
                         />
                         <Input
-                          value={settings.colors.accentColor || "#8b5cf6"}
+                          value={settings.colors.accentColor || DEFAULTS.accentColor}
                           onChange={(e) => {
                             const val = e.target.value;
                             if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
                               updateColors({ accentColor: val, useCustomAccent: true });
                             }
                           }}
-                          placeholder="#8b5cf6"
+                          placeholder={DEFAULTS.accentColor}
                           className="w-28 font-mono text-sm"
                           maxLength={7}
                         />
@@ -900,19 +913,19 @@ export function PersonalizationSettings() {
                           <Label className="text-xs text-muted-foreground">Custom</Label>
                           <input
                             type="color"
-                            value={settings.colors.sidebarBgColor || "#ffffff"}
+                            value={settings.colors.sidebarBgColor || DEFAULTS.sidebarBgColor}
                             onChange={(e) => updateColors({ sidebarBgColor: e.target.value, useCustomSidebarBg: true, autoTextColor: true })}
                             className="w-10 h-8 rounded cursor-pointer border-0 p-0"
                           />
                           <Input
-                            value={settings.colors.sidebarBgColor || "#ffffff"}
+                            value={settings.colors.sidebarBgColor || DEFAULTS.sidebarBgColor}
                             onChange={(e) => {
                               const val = e.target.value;
                               if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
                                 updateColors({ sidebarBgColor: val, useCustomSidebarBg: true, autoTextColor: true });
                               }
                             }}
-                            placeholder="#ffffff"
+                            placeholder={DEFAULTS.sidebarBgColor}
                             className="w-28 font-mono text-sm"
                             maxLength={7}
                           />
@@ -1032,11 +1045,11 @@ export function PersonalizationSettings() {
                               <Label className="text-xs text-muted-foreground">Presets</Label>
                               <div className="flex flex-wrap gap-2">
                                 {[
-                                  { name: "Dark (Default)", value: "#1e293b" },
+                                  { name: "Dark", value: "#1e293b" },
                                   { name: "Black", value: "#0f172a" },
                                   { name: "Slate", value: "#334155" },
                                   { name: "Gray", value: "#4b5563" },
-                                  { name: "White", value: "#f8fafc" },
+                                  { name: "White (Default)", value: "#f8fafc" },
                                   { name: "Light", value: "#e2e8f0" },
                                   { name: "Indigo", value: "#e0e7ff" },
                                   { name: "Cyan", value: "#cffafe" },
@@ -1066,19 +1079,19 @@ export function PersonalizationSettings() {
                               <Label className="text-xs text-muted-foreground">Custom</Label>
                               <input
                                 type="color"
-                                value={settings.colors.sidebarTextColor || "#1e293b"}
+                                value={settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor}
                                 onChange={(e) => updateColors({ sidebarTextColor: e.target.value, useCustomSidebarText: true, autoTextColor: false })}
                                 className="w-10 h-8 rounded cursor-pointer border-0 p-0"
                               />
                               <Input
-                                value={settings.colors.sidebarTextColor || "#1e293b"}
+                                value={settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor}
                                 onChange={(e) => {
                                   const val = e.target.value;
                                   if (/^#[0-9A-Fa-f]{0,6}$/.test(val)) {
                                     updateColors({ sidebarTextColor: val, useCustomSidebarText: true, autoTextColor: false });
                                   }
                                 }}
-                                placeholder="#1e293b"
+                                placeholder={DEFAULTS.sidebarTextColor}
                                 className="w-28 font-mono text-sm"
                                 maxLength={7}
                               />
@@ -1095,25 +1108,25 @@ export function PersonalizationSettings() {
                         <div 
                           className="p-4 rounded-md flex items-center gap-3"
                           style={{ 
-                            backgroundColor: settings.colors.sidebarBgColor || "#ffffff",
+                            backgroundColor: settings.colors.sidebarBgColor || DEFAULTS.sidebarBgColor,
                           }}
                         >
                           <div 
                             className="w-8 h-8 rounded-md flex items-center justify-center"
-                            style={{ backgroundColor: settings.colors.accentColor || "#8b5cf6" }}
+                            style={{ backgroundColor: settings.colors.accentColor || DEFAULTS.accentColor }}
                           >
                             <Settings className="h-4 w-4 text-white" />
                           </div>
                           <div>
                             <p 
                               className="text-sm font-medium"
-                              style={{ color: settings.colors.sidebarTextColor || "#1e293b" }}
+                              style={{ color: settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor }}
                             >
                               Settings
                             </p>
                             <p 
                               className="text-xs opacity-60"
-                              style={{ color: settings.colors.sidebarTextColor || "#1e293b" }}
+                              style={{ color: settings.colors.sidebarTextColor || DEFAULTS.sidebarTextColor }}
                             >
                               Personalization
                             </p>

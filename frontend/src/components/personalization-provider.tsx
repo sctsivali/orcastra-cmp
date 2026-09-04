@@ -30,6 +30,11 @@ import {
   DEFAULT_PERSONALIZATION,
 } from "@/types/personalization";
 import { Role, resolveRoles } from "@/types/rbac";
+import {
+  PERSONALIZATION_COOKIE,
+  parsePersonalizationHint,
+  toPersonalizationHint,
+} from "@/lib/personalization-cookie";
 import { toast } from "@/hooks/use-toast";
 
 // API configuration - use relative URLs (Next.js rewrites proxy to backend)
@@ -40,8 +45,21 @@ const API_RETRY_DELAY_MS = 500;
 // Org preference polling interval (ms) for cross-session sync
 const ORG_PREF_POLL_INTERVAL_MS = 45_000;
 
-// Cookie name for personalization hint (visual CSS values for FOUC prevention)
-const PERSONALIZATION_COOKIE = "orcastra-personalization";
+// The two sidebar text pairs autoTextColor picks between, and the alpha tiers that go with
+// them. Named because app/globals.css seeds the same values for the pre-paint path and
+// scripts/checks/check-personalization-defaults.mjs holds the two copies equal; a literal
+// buried in a branch is how they drifted apart before.
+const SIDEBAR_TEXT_ON_DARK = "#f8fafc";
+const SIDEBAR_TEXT_ON_LIGHT = "#1e293b";
+const SIDEBAR_MUTED_ON_DARK = "rgba(248,250,252,0.6)";
+const SIDEBAR_MUTED_ON_LIGHT = "rgba(30,41,59,0.5)";
+
+/** The muted tier that belongs with a given sidebar text colour. */
+function mutedForText(textColor: string): string {
+  const hsl = hexToHSL(textColor);
+  if (!hsl) return SIDEBAR_MUTED_ON_DARK;
+  return hsl.l < 50 ? SIDEBAR_MUTED_ON_LIGHT : SIDEBAR_MUTED_ON_DARK;
+}
 
 // Create context (exported for OrgPersonalizationSettings wrapper)
 export const PersonalizationContext = React.createContext<PersonalizationContextType | undefined>(
@@ -58,19 +76,7 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 function setPersonalizationCookie(settings: PersonalizationSettings) {
   if (typeof document === "undefined") return;
   try {
-    const hint = {
-      ac: settings.colors.accentColor,
-      sb: settings.colors.sidebarBgColor,
-      st: settings.colors.sidebarTextColor,
-      uca: settings.colors.useCustomAccent,
-      usb: settings.colors.useCustomSidebarBg,
-      ust: settings.colors.useCustomSidebarText,
-      atc: settings.colors.autoTextColor,
-      slc: settings.colors.sidebarLogoColor,
-      an: settings.branding.appName,
-      th: settings.theme,
-    };
-    const encoded = encodeURIComponent(JSON.stringify(hint));
+    const encoded = encodeURIComponent(JSON.stringify(toPersonalizationHint(settings)));
     document.cookie = `${PERSONALIZATION_COOKIE}=${encoded};path=/;max-age=${365 * 24 * 60 * 60};SameSite=Lax`;
   } catch {
     // cookie write failed - degrade gracefully
@@ -83,32 +89,8 @@ function setPersonalizationCookie(settings: PersonalizationSettings) {
  */
 function readPersonalizationCookie(): PersonalizationSettings | null {
   if (typeof document === "undefined") return null;
-  try {
-    const match = document.cookie.match(new RegExp(`${PERSONALIZATION_COOKIE}=([^;]+)`));
-    if (!match) return null;
-    const hint = JSON.parse(decodeURIComponent(match[1]));
-    return {
-      ...DEFAULT_PERSONALIZATION,
-      colors: {
-        ...DEFAULT_PERSONALIZATION.colors,
-        accentColor: hint.ac ?? DEFAULT_PERSONALIZATION.colors.accentColor,
-        sidebarBgColor: hint.sb ?? DEFAULT_PERSONALIZATION.colors.sidebarBgColor,
-        sidebarTextColor: hint.st ?? DEFAULT_PERSONALIZATION.colors.sidebarTextColor,
-        useCustomAccent: hint.uca ?? DEFAULT_PERSONALIZATION.colors.useCustomAccent,
-        useCustomSidebarBg: hint.usb ?? DEFAULT_PERSONALIZATION.colors.useCustomSidebarBg,
-        useCustomSidebarText: hint.ust ?? DEFAULT_PERSONALIZATION.colors.useCustomSidebarText,
-        autoTextColor: hint.atc ?? DEFAULT_PERSONALIZATION.colors.autoTextColor,
-        sidebarLogoColor: hint.slc ?? DEFAULT_PERSONALIZATION.colors.sidebarLogoColor,
-      },
-      branding: {
-        ...DEFAULT_PERSONALIZATION.branding,
-        appName: hint.an ?? DEFAULT_PERSONALIZATION.branding.appName,
-      },
-      theme: hint.th ?? DEFAULT_PERSONALIZATION.theme,
-    };
-  } catch {
-    return null;
-  }
+  const match = document.cookie.match(new RegExp(`${PERSONALIZATION_COOKIE}=([^;]+)`));
+  return parsePersonalizationHint(match?.[1]);
 }
 
 /**
@@ -144,16 +126,38 @@ function mergeWithDefaults(data: Partial<PersonalizationSettings>): Personalizat
   };
 }
 
-export function PersonalizationProvider({ children }: { children: React.ReactNode }) {
+export function PersonalizationProvider({
+  children,
+  initialSettings,
+}: {
+  children: React.ReactNode;
+  // Parsed from the hint cookie by the root layout, which is a server component and can read
+  // it. Without this the server always renders DEFAULT_PERSONALIZATION while the browser's
+  // first pass renders the operator's stored colours, so the aside's className and inline
+  // style disagree between the two and React reconciles them one tick after paint. That is
+  // visible as the sidebar changing colour on every navigation for anyone whose settings are
+  // not the shipped default. suppressHydrationWarning on <html> does not reach it.
+  initialSettings?: PersonalizationSettings | null;
+}) {
   const { data: session, status } = useSession();
   // note: next-auth builds a fresh session object on every refresh, so depending on
   // `session` itself tears down and rebuilds the org-pref timer and listener below
   // on each one. The token is the only part those effects actually read.
   const sessionAccessToken = (session as any)?.accessToken as string | undefined;
+  // note: the server-provided value is read FIRST and the document.cookie read is the
+  // fallback, not the other way round. Both resolve to the same thing on the client, but only
+  // the prop exists during the server render, and the two initialisers below must agree.
+  // Lazily, because a useRef argument is evaluated on every render and this provider wraps the
+  // whole app: the eager form ran a cookie regex and a JSON.parse on each one.
+  const seededRef = React.useRef<PersonalizationSettings | null>(null);
+  if (seededRef.current === null) {
+    seededRef.current = initialSettings ?? readPersonalizationCookie() ?? DEFAULT_PERSONALIZATION;
+  }
+  // The value, not the ref: useRef<T>(T | null) resolves to React's readonly RefObject overload,
+  // and settingsRef below has to stay writable.
+  const seeded: PersonalizationSettings = seededRef.current;
   // Initialize from cookie hint for instant render (prevents FOUC for colors/branding)
-  const [settings, setSettings] = React.useState<PersonalizationSettings>(
-    () => readPersonalizationCookie() ?? DEFAULT_PERSONALIZATION
-  );
+  const [settings, setSettings] = React.useState<PersonalizationSettings>(() => seeded);
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
   
@@ -163,9 +167,7 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSettingsRef = React.useRef<PersonalizationSettings | null>(null);
   // Always-current settings ref (avoids stale closure in saveSettings)
-  const settingsRef = React.useRef<PersonalizationSettings>(
-    readPersonalizationCookie() ?? DEFAULT_PERSONALIZATION
-  );
+  const settingsRef = React.useRef<PersonalizationSettings>(seeded);
   // Undo/Redo stacks
   const undoStackRef = React.useRef<PersonalizationSettings[]>([]);
   const redoStackRef = React.useRef<PersonalizationSettings[]>([]);
@@ -740,8 +742,9 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     if (typeof document === "undefined") return;
     
     const root = document.documentElement;
-    const accentColor = settings.colors.accentColor || "#8b5cf6";
-    const sidebarBgColor = settings.colors.sidebarBgColor || "#ffffff";
+    const accentColor = settings.colors.accentColor || DEFAULT_PERSONALIZATION.colors.accentColor;
+    const sidebarBgColor =
+      settings.colors.sidebarBgColor || DEFAULT_PERSONALIZATION.colors.sidebarBgColor;
     
     // Set accent color (used for buttons and sidebar active state)
     root.style.setProperty("--personalization-accent", accentColor);
@@ -758,23 +761,19 @@ export function PersonalizationProvider({ children }: { children: React.ReactNod
     }
     
     // Determine text color based on background brightness
-    let textColor = settings.colors.sidebarTextColor || "#1e293b";
-    let mutedTextColor = "rgba(15,23,42,0.5)";
-    
+    let textColor =
+      settings.colors.sidebarTextColor || DEFAULT_PERSONALIZATION.colors.sidebarTextColor;
+
     if (settings.colors.autoTextColor !== false && !settings.colors.useCustomSidebarText) {
       if (sidebarBgHSL) {
-        const bgLuminance = calculateRelativeLuminance(sidebarBgColor);
-        const isDarkBg = bgLuminance < 0.5;
-        textColor = isDarkBg ? "#f8fafc" : "#1e293b";
-        mutedTextColor = isDarkBg ? "rgba(248,250,252,0.6)" : "rgba(30,41,59,0.5)";
-      }
-    } else {
-      const textHSL = hexToHSL(textColor);
-      if (textHSL) {
-        const isDarkText = textHSL.l < 50;
-        mutedTextColor = isDarkText ? "rgba(30,41,59,0.5)" : "rgba(248,250,252,0.6)";
+        const isDarkBg = calculateRelativeLuminance(sidebarBgColor) < 0.5;
+        textColor = isDarkBg ? SIDEBAR_TEXT_ON_DARK : SIDEBAR_TEXT_ON_LIGHT;
       }
     }
+    // note: derived from whichever text colour won above, in every branch. It used to be
+    // initialised to the light-ground alpha and only corrected inside the two branches, so an
+    // unparseable sidebar colour left near-white text sitting under a near-black muted tier.
+    const mutedTextColor = mutedForText(textColor);
     
     root.style.setProperty("--personalization-sidebar-text", textColor);
     root.style.setProperty("--personalization-sidebar-muted", mutedTextColor);
@@ -891,7 +890,9 @@ export function useCurrentLogo(theme: "light" | "dark" | "system") {
     
     // Auto mode
     if (settings.colors.useCustomSidebarBg) {
-      const bgLuminance = calculateRelativeLuminance(settings.colors.sidebarBgColor || "#ffffff");
+      const bgLuminance = calculateRelativeLuminance(
+        settings.colors.sidebarBgColor || DEFAULT_PERSONALIZATION.colors.sidebarBgColor,
+      );
       const isDarkBg = bgLuminance < 0.5;
       if (isDarkBg) {
         return settings.logo.darkModeLogo || "/orca-logo-white.png";

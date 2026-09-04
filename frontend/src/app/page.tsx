@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCounterAnimation } from "@/hooks/use-counter-animation";
 import { usePersonalization } from "@/components/personalization-provider";
+import { DEFAULT_PERSONALIZATION } from "@/types/personalization";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useAllProjects, useInstances, useNodesStatus } from "@/hooks/use-lxd";
 
@@ -105,8 +106,8 @@ export default function HomePage() {
         <div className="space-y-4">
           <h1 className="text-5xl md:text-6xl font-bold tracking-tight">
             Welcome to{" "}
-            <span style={{ color: settings.colors.accentColor || "#8b5cf6" }}>
-              {settings.branding.appName || "Orcastra"}
+            <span style={{ color: settings.colors.accentColor || DEFAULT_PERSONALIZATION.colors.accentColor }}>
+              {settings.branding.appName || DEFAULT_PERSONALIZATION.branding.appName}
             </span>
           </h1>
           <p className="text-xl text-muted-foreground max-w-3xl mx-auto">

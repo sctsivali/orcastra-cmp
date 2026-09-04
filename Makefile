@@ -296,6 +296,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-dialog-affordances.mjs
 	@echo "$(COLOR_GREEN)Checking semantic colour...$(COLOR_RESET)"
 	@node scripts/checks/check-semantic-colour.mjs
+	@echo "$(COLOR_GREEN)Checking personalization defaults...$(COLOR_RESET)"
+	@node scripts/checks/check-personalization-defaults.mjs
 	@echo "$(COLOR_GREEN)Checking the terminal theme...$(COLOR_RESET)"
 	@node scripts/checks/check-terminal-theme.mjs
 	@echo "$(COLOR_GREEN)Checking prose typography...$(COLOR_RESET)"

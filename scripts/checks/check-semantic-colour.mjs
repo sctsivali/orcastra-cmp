@@ -74,13 +74,13 @@ const DEAD = new Set(['components/vm-table.tsx', 'components/tag-manager-legacy.
 // The tint-plus-saturated-text pairing everywhere outside the cleared tree. This is what stops
 // the pattern spreading into the surfaces the Cluster submenu change deliberately left alone.
 // Ratchet: may fall, never rise.
-const TINT_PAIR_BASELINE = 28;
+const TINT_PAIR_BASELINE = 26;
 
 // A <Badge> naming its own foreground colour at the call site. Badge exists so a chip's colour
 // is one decision in one file, and a className override is how the same semantic ends up in
 // two shades in two files.
 // Ratchet: may fall, never rise.
-const BADGE_OVERRIDE_BASELINE = 11;
+const BADGE_OVERRIDE_BASELINE = 9;
 
 // --- counted blind spots ----------------------------------------------------------------
 //
@@ -140,14 +140,37 @@ const KNOWN_CONTRAST_FAILURES = new Map([
   // decision rather than a badge one, and that decision was taken: --muted-foreground moved
   // from 47% to 42% so it clears AA on --card, --background and --muted alike. Retired rather
   // than relaxed, which is why the entry is gone instead of renumbered.
-  // --primary is the user-configurable personalization accent and the picker has no contrast
-  // clamp, so this is a product decision before it is a CSS one.
-  // 3.07, not the 3.51 recorded before: the dark ground moved from 240 10% 3.9% to #14111c and
-  // --card gained the elevation step dark mode had been missing, so the surface this is measured
-  // against is lighter while the accent did not move. The pair was already carried, and it is
-  // carried for the same reason. A contrast clamp on the accent picker retires it; lightening
-  // --primary to reach 4.5:1 here does not, because the operator can set any colour afterwards.
-  ['button#link#dark', 3.07],
+  // --- the --primary family -----------------------------------------------------------
+  //
+  // Five entries, and four of them are new here without anything on screen having got worse.
+  // They were invisible rather than absent. globals.css seeded --personalization-accent as
+  // #8b5cf6 while its own -h/-s/-l triplet read 262 83% 58%, which is #7c3bed, and the reader
+  // below takes the triplet. So this file scored #7c3bed: a colour the browser paints only
+  // until React mounts and then discards. #8b5cf6, the one an operator actually looks at,
+  // measured 4.23 for the solid pairs and 3.85 for the light link the whole time. Making the
+  // seed self-consistent is what surfaced them; scripts/checks/check-personalization-defaults.mjs
+  // is what stops the two halves separating again.
+  //
+  // The accent is now #8467e4, the sidebar ground's own hue at the luminance where one value
+  // serving both themes is equidistant from AA on a light and a dark surface. Every number
+  // below moves by less than 0.1 against what shipped before it.
+  //
+  // All five are carried for the reason the link variant always was: --primary is the
+  // user-configurable personalization accent and the picker has no contrast clamp, so any
+  // value chosen here is one an operator can overwrite the same afternoon. Darkening the token
+  // does not retire them, and it cannot: white-on-accent wants a dark accent, accent-on-dark
+  // wants a light one, and the two requirements cross. What retires them is splitting the
+  // brand hex into roles, a solid fill and a separately clamped text colour, the way Radix
+  // Colors separates step 9 from step 11. That is a token-system change across ~35 call sites
+  // and belongs in its own pass, recorded in documentation/ui/personalization-defaults.md.
+  ['badge#default#light', 4.17],
+  ['badge#default#dark', 4.17],
+  ['button#default#light', 4.17],
+  ['button#default#dark', 4.17],
+  ['button#link#light', 3.78],
+  // 4.18, not the 3.07 recorded before, and the difference is the seed defect above rather
+  // than a change in what an operator sees: #8b5cf6 measured 4.11 here.
+  ['button#link#dark', 4.18],
 ]);
 
 // ---------------------------------------------------------------------------------------

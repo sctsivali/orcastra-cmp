@@ -7,6 +7,10 @@ import { Providers } from "@/components/providers";
 import { LayoutProvider } from "@/components/layout-provider";
 import { MainLayout } from "@/components/main-layout";
 import { Toaster } from "@/components/ui/toaster";
+import {
+  PERSONALIZATION_COOKIE,
+  parsePersonalizationHint,
+} from "@/lib/personalization-cookie";
 
 export const metadata: Metadata = {
   title: "Orcastra CMP",
@@ -53,6 +57,16 @@ const themeInitScript = `
 
 // inline script to prevent personalization flash (FOUC) on page load
 // reads compact cookie with visual CSS values and applies them before paint
+//
+// Returning early on a missing cookie is deliberate: with no hint to apply, the seeds in
+// globals.css are already the shipped defaults and touching anything here would only risk
+// writing something worse.
+//
+// important: the accent is written twice, as a hex AND as the h/s/l triplet that
+// globals.css binds --primary and --ring to. Writing only the hex left every Button, Badge,
+// switch, checkbox and focus ring on the seed accent until React mounted, so an operator with
+// a custom accent watched the whole app change colour one tick after paint. The triplet is
+// what the stylesheet actually reads.
 const personalizationInitScript = `
 (function(){
   try {
@@ -60,19 +74,48 @@ const personalizationInitScript = `
     if (!m) return;
     var h = JSON.parse(decodeURIComponent(m[1]));
     var r = document.documentElement;
-    if (h.ac) r.style.setProperty('--personalization-accent', h.ac);
+    var rgb = function(x){
+      if (typeof x !== 'string') return null;
+      var v = x.replace('#','');
+      if (!/^[0-9a-fA-F]{6}$/.test(v)) return null;
+      return [parseInt(v.substr(0,2),16)/255, parseInt(v.substr(2,2),16)/255, parseInt(v.substr(4,2),16)/255];
+    };
+    // Same rounding as hexToHSL in components/personalization-provider.tsx, so the pre-paint
+    // value and the hydrated value are identical rather than merely close.
+    var hsl = function(c){
+      var mx = Math.max(c[0],c[1],c[2]), mn = Math.min(c[0],c[1],c[2]), l = (mx+mn)/2, hh = 0, ss = 0;
+      if (mx !== mn) {
+        var d = mx-mn;
+        ss = l > 0.5 ? d/(2-mx-mn) : d/(mx+mn);
+        if (mx === c[0]) hh = ((c[1]-c[2])/d + (c[1] < c[2] ? 6 : 0))/6;
+        else if (mx === c[1]) hh = ((c[2]-c[0])/d + 2)/6;
+        else hh = ((c[0]-c[1])/d + 4)/6;
+      }
+      return [Math.round(hh*360), Math.round(ss*100), Math.round(l*100)];
+    };
+    var lum = function(c){
+      var f = function(v){ return v <= 0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); };
+      return 0.2126*f(c[0]) + 0.7152*f(c[1]) + 0.0722*f(c[2]);
+    };
+    if (h.ac) {
+      r.style.setProperty('--personalization-accent', h.ac);
+      var ac = rgb(h.ac);
+      if (ac) {
+        var a = hsl(ac);
+        r.style.setProperty('--personalization-accent-h', String(a[0]));
+        r.style.setProperty('--personalization-accent-s', a[1] + '%');
+        r.style.setProperty('--personalization-accent-l', a[2] + '%');
+      }
+    }
     if (h.sb) r.style.setProperty('--personalization-sidebar-bg', h.sb);
-    if (h.st) r.style.setProperty('--personalization-sidebar-text', h.st);
-    // compute muted text color from sidebar text
     if (h.st) {
-      var hex = h.st.replace('#','');
-      if (hex.length === 6) {
-        var rl = parseInt(hex.substr(0,2),16)/255;
-        var gl = parseInt(hex.substr(2,2),16)/255;
-        var bl = parseInt(hex.substr(4,2),16)/255;
-        var lum = 0.2126*(rl<=0.03928?rl/12.92:Math.pow((rl+0.055)/1.055,2.4))+0.7152*(gl<=0.03928?gl/12.92:Math.pow((gl+0.055)/1.055,2.4))+0.0722*(bl<=0.03928?bl/12.92:Math.pow((bl+0.055)/1.055,2.4));
-        var muted = lum > 0.5 ? 'rgba(248,250,252,0.6)' : 'rgba(30,41,59,0.5)';
-        r.style.setProperty('--personalization-sidebar-muted', muted);
+      r.style.setProperty('--personalization-sidebar-text', h.st);
+      var st = rgb(h.st);
+      if (st) {
+        r.style.setProperty(
+          '--personalization-sidebar-muted',
+          lum(st) > 0.5 ? 'rgba(248,250,252,0.6)' : 'rgba(30,41,59,0.5)'
+        );
       }
     }
   } catch(e) {}
@@ -88,6 +131,14 @@ export default async function RootLayout({
   // margin are correct in the first byte of HTML. Absent cookie means expanded.
   const cookieStore = await cookies();
   const sidebarCollapsed = cookieStore.get("orcastra-sidebar-collapsed")?.value === "true";
+  // Same reasoning one property further: the sidebar's colour has to be right in the first
+  // byte too. The pre-paint script below can set the CSS variables from this cookie, but it
+  // cannot decide whether the aside carries `sidebar-custom-bg` at all, because that is a
+  // className React owns. Reading the hint here is what keeps the server render and the
+  // browser's first render describing the same sidebar.
+  const initialPersonalization = parsePersonalizationHint(
+    cookieStore.get(PERSONALIZATION_COOKIE)?.value,
+  );
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -104,7 +155,7 @@ export default async function RootLayout({
       <body
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased min-h-screen bg-background`}
       >
-        <Providers>
+        <Providers initialPersonalization={initialPersonalization}>
           <LayoutProvider initialCollapsed={sidebarCollapsed}>
             <MainLayout>{children}</MainLayout>
             <Toaster />

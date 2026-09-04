@@ -3,6 +3,14 @@
 import { Terminal, Monitor, Box, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+
+// note: the two count chips carry `sidebar-count` rather than a colour of their own.
+// They used to be bg-blue-500/20 under text-blue-500 and bg-green-500/20 under
+// text-green-500, which is the tint-under-same-hue-text shape
+// scripts/checks/check-semantic-colour.mjs bans, and the blue one measured 3.66:1 on the
+// shipped sidebar ground. The rule in app/globals.css mixes currentColor, so a chip is
+// legible at whatever sidebar colour an operator picks instead of at one we tested. The
+// labels next to them already say which is which, so no meaning moves with the colour.
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,7 +59,7 @@ export function TerminalMenuItem({ indent }: SessionMenuProps) {
           Terminals
           <Badge
             variant="secondary"
-            className="ml-auto h-5 min-w-5 px-1.5 text-xs bg-blue-500/20 text-blue-500"
+            className="ml-auto h-5 min-w-5 px-1.5 text-xs sidebar-count"
           >
             {totalCount}
           </Badge>
@@ -122,7 +130,7 @@ export function ConsoleMenuItem({ indent }: SessionMenuProps) {
           Consoles
           <Badge
             variant="secondary"
-            className="ml-auto h-5 min-w-5 px-1.5 text-xs bg-green-500/20 text-green-500"
+            className="ml-auto h-5 min-w-5 px-1.5 text-xs sidebar-count"
           >
             {totalCount}
           </Badge>

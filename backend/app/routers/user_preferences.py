@@ -59,14 +59,25 @@ class BrandingSettings(BaseModel):
     footerText: str = "© {YEAR} ORCASTRA"
 
 
+# important: these values are the product defaults, and they must match
+# frontend/src/types/personalization.ts, the CSS seeds in frontend/src/app/globals.css and
+# get_default_settings() below. This is the copy a user with no stored row actually receives,
+# so a drift here is not a styling nit: the API hands out one colour while the stylesheet
+# paints another until the row is written. scripts/checks/check-personalization-defaults.mjs
+# reads this file and fails the build when the copies disagree.
+DEFAULT_ACCENT_COLOR = "#8467e4"
+DEFAULT_SIDEBAR_BG_COLOR = "#321f6f"
+DEFAULT_SIDEBAR_TEXT_COLOR = "#f8fafc"
+
+
 class ColorSettings(BaseModel):
     """Color/theme settings."""
-    accentColor: str = "#8b5cf6"
-    sidebarBgColor: str = "#ffffff"
-    sidebarTextColor: str = "#1e293b"
+    accentColor: str = DEFAULT_ACCENT_COLOR
+    sidebarBgColor: str = DEFAULT_SIDEBAR_BG_COLOR
+    sidebarTextColor: str = DEFAULT_SIDEBAR_TEXT_COLOR
     sidebarLogoColor: str = "auto"
     useCustomAccent: bool = False
-    useCustomSidebarBg: bool = False
+    useCustomSidebarBg: bool = True
     useCustomSidebarText: bool = False
     autoTextColor: bool = True
 
@@ -123,12 +134,12 @@ def get_default_settings() -> Dict[str, Any]:
             "footerText": "© {YEAR} ORCASTRA",
         },
         "colors": {
-            "accentColor": "#8b5cf6",
-            "sidebarBgColor": "#ffffff",
-            "sidebarTextColor": "#1e293b",
+            "accentColor": DEFAULT_ACCENT_COLOR,
+            "sidebarBgColor": DEFAULT_SIDEBAR_BG_COLOR,
+            "sidebarTextColor": DEFAULT_SIDEBAR_TEXT_COLOR,
             "sidebarLogoColor": "auto",
             "useCustomAccent": False,
-            "useCustomSidebarBg": False,
+            "useCustomSidebarBg": True,
             "useCustomSidebarText": False,
             "autoTextColor": True,
         },
