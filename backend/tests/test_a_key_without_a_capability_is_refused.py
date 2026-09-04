@@ -28,7 +28,7 @@ from app.core.api_key_capabilities import (
     granted_capabilities,
     has_capability,
 )
-from app.routers.integrations import require_capability
+from app.routers.integrations import require_capability, require_explicit_capability
 
 
 def _key(capabilities: Optional[List[str]] = None, *, legacy: bool = False) -> Dict[str, Any]:
@@ -37,6 +37,25 @@ def _key(capabilities: Optional[List[str]] = None, *, legacy: bool = False) -> D
     if not legacy:
         key["capabilities"] = capabilities if capabilities is not None else []
     return key
+
+
+# What the `orcahub` preset must contain, spelled out by hand.
+#
+# important: a literal, NOT `set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES`, which is how the
+# production code computes it. The assertion below used to be written that way, comparing the
+# code's own expression against itself, so it passed for any new vocabulary entry. The test meant
+# to stop a new capability silently widening the one integration in production was green in
+# precisely the case it existed to catch, and doing the wrong thing looked correct.
+#
+# Spelled out, a new capability fails here until somebody decides which side of the line it goes
+# on. That failure is the feature.
+ORCAHUB_PRESET = {
+    "inventory.read",
+    "lxd.proxy",
+    "storage.upload",
+    "org.sync",
+    "tenant.provision",
+}
 
 
 # ── the grandfather rule ───────────────────────────────────────────────────────────────────────
@@ -123,7 +142,7 @@ def test_orcahub_keeps_every_capability_except_reaching_inside_a_guest() -> None
     guest. Widening into those would grant the production integration a power nobody chose for
     it, on the deploy that introduced them.
     """
-    assert default_capabilities_for("orcahub") == set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES
+    assert default_capabilities_for("orcahub") == ORCAHUB_PRESET
     assert GUEST_ACCESS_CAPABILITIES, "the exclusion is meaningless if the set is empty"
 
 
@@ -157,7 +176,7 @@ def test_a_preset_default_is_a_copy() -> None:
     """Callers sort and mutate this; handing out the module's own set would corrupt the table."""
     first = default_capabilities_for("orcahub")
     first.clear()
-    assert default_capabilities_for("orcahub") == set(CAPABILITIES) - GUEST_ACCESS_CAPABILITIES
+    assert default_capabilities_for("orcahub") == ORCAHUB_PRESET
 
 
 # ── nothing may silently promote a scoped key back to legacy ───────────────────────────────────
@@ -287,3 +306,61 @@ def test_every_write_in_sync_data_is_named_by_a_capability_guard() -> None:
         f"sync_data calls {sorted(unlisted)}, which this test does not know about. Decide which "
         f"capability covers it and add it here."
     )
+
+
+# ── every capability is placed on purpose ──────────────────────────────────────────────────────
+
+def test_every_capability_is_either_preset_or_deliberately_withheld() -> None:
+    """A new capability has to be assigned a side, and this is what forces that.
+
+    The two sets partition the vocabulary: whatever `orcahub` gets, plus whatever is withheld from
+    every preset. A name in neither is a capability somebody added without deciding whether the
+    production integration and 17 legacy keys should receive it, and the default answer the code
+    gives is yes.
+    """
+    assert set(CAPABILITIES) == ORCAHUB_PRESET | GUEST_ACCESS_CAPABILITIES, (
+        "a capability is in neither ORCAHUB_PRESET nor GUEST_ACCESS_CAPABILITIES: "
+        f"{sorted(set(CAPABILITIES) - (ORCAHUB_PRESET | GUEST_ACCESS_CAPABILITIES))}"
+    )
+
+
+def test_the_two_sides_do_not_overlap() -> None:
+    assert not (ORCAHUB_PRESET & GUEST_ACCESS_CAPABILITIES)
+
+
+# ── the gate that does not grandfather ─────────────────────────────────────────────────────────
+
+def test_the_explicit_dependency_refuses_a_legacy_key() -> None:
+    """The whole point. A legacy key satisfies `require_capability` and must not satisfy this.
+
+    `granted_capabilities` returns None for a key issued before the field existed, and
+    `has_capability` reads None as everything. That keeps older integrations working, and it is
+    the wrong answer for a power that did not exist when the key was issued.
+    """
+    legacy = _key(legacy=True)
+
+    # The inheriting gate lets it through, which is the behaviour being contrasted, not a bug.
+    assert asyncio.run(require_capability("instance.exec")(api_key=legacy)) is legacy
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(require_explicit_capability("instance.exec")(api_key=legacy))
+    assert exc.value.status_code == 403
+    assert "instance.exec" in str(exc.value.detail)
+
+
+def test_the_explicit_dependency_accepts_a_key_that_was_granted_it() -> None:
+    key = _key(["instance.exec"])
+    assert asyncio.run(require_explicit_capability("instance.exec")(api_key=key)) is key
+
+
+def test_the_explicit_dependency_still_refuses_a_scoped_key_without_it() -> None:
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(require_explicit_capability("instance.exec")(api_key=_key(["inventory.read"])))
+    assert exc.value.status_code == 403
+
+
+def test_the_two_gates_are_named_apart() -> None:
+    """A traceback and an OpenAPI dump have to say which gate ran, or a review cannot tell whether
+    a never-inherited capability was wired to the inheriting variant by mistake."""
+    assert require_capability("instance.exec").__name__ == "require_instance_exec"
+    assert require_explicit_capability("instance.exec").__name__ == "require_explicit_instance_exec"

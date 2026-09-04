@@ -1701,6 +1701,30 @@ def require_capability(capability: str):
     return _dep
 
 
+def require_explicit_capability(capability: str):
+    """Like ``require_capability``, but a key issued before capabilities existed does NOT satisfy it.
+
+    important: the difference is the grandfather rule, and it is the whole reason this exists.
+    ``require_capability`` routes to ``assert_capability``, which reads a missing ``capabilities``
+    field as "unrestricted" so older integrations keep working. That is the right answer for a
+    power that existed when the key was issued. It is the wrong answer for one that did not: 17 of
+    the 22 keys in this deployment are legacy, so gating a new guest-reaching power with the
+    inheriting variant hands it to most of the fleet with nobody deciding it.
+
+    The guest-access path already had to solve this, and solved it by calling
+    ``assert_explicit_capability`` a second time inside the handler after the gate had run. That
+    works and is easy to forget, which is what this factory is for: a capability in
+    ``GUEST_ACCESS_CAPABILITIES`` gets the right semantics from the dependency alone.
+    """
+    async def _dep(api_key: Dict[str, Any] = Depends(validate_api_key)) -> Dict[str, Any]:
+        assert_explicit_capability(api_key, capability)
+        return api_key
+
+    _dep.__name__ = f"require_explicit_{capability.replace('.', '_')}"
+    _dep.__qualname__ = _dep.__name__
+    return _dep
+
+
 # ============================================
 # API Endpoints - Management (Internal)
 # ============================================
