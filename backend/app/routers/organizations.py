@@ -69,6 +69,12 @@ class OrgResponse(BaseModel):
     is_active: bool
     member_count: int = 0
     cluster_count: int = 0
+    # Whether the CALLER belongs to this organization. An Admin's list is every active
+    # organization, and until now nothing in the payload told those apart from the caller's own,
+    # so the branding editor could not warn before writing to a customer's organization. Free to
+    # compute: Organization.members is lazy="selectin", so member_count already walks the same
+    # collection. Defaults false so an older client sees the conservative answer.
+    is_member: bool = False
 
     class Config:
         from_attributes = True
@@ -126,8 +132,9 @@ def _get_user_role(user: AuthenticatedUser) -> str:
     return get_highest_role(roles).value
 
 
-def _org_to_response(org) -> OrgResponse:
+def _org_to_response(org, caller_email: Optional[str] = None) -> OrgResponse:
     """Convert ORM Organization to response model."""
+    members = org.members or []
     return OrgResponse(
         id=org.id,
         name=org.name,
@@ -135,8 +142,14 @@ def _org_to_response(org) -> OrgResponse:
         description=org.description,
         created_by=org.created_by,
         is_active=org.is_active,
-        member_count=len(org.members) if org.members else 0,
+        member_count=len(members),
         cluster_count=len(org.clusters) if org.clusters else 0,
+        is_member=bool(
+            caller_email
+            and any(
+                (m.user_email or "").lower() == caller_email.lower() for m in members
+            )
+        ),
     )
 
 
@@ -153,7 +166,7 @@ async def list_organizations(
     svc = OrganizationService(db)
     role = _get_user_role(user)
     orgs = await svc.list_organizations(user_email=user.email, user_role=role)
-    return [_org_to_response(org) for org in orgs]
+    return [_org_to_response(org, user.email) for org in orgs]
 
 
 @router.get("/my-preferences", response_model=OrgPreferencesResponse)
@@ -212,7 +225,7 @@ async def get_organization(
     org = await svc.get_organization(org_id)
     if not org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    return _org_to_response(org)
+    return _org_to_response(org, user.email)
 
 
 @router.post("/", response_model=OrgResponse, status_code=status.HTTP_201_CREATED)
@@ -228,7 +241,7 @@ async def create_organization(
         description=body.description,
         created_by=user.email,
     )
-    return _org_to_response(org)
+    return _org_to_response(org, user.email)
 
 
 @router.patch("/{org_id}", response_model=OrgResponse)
@@ -248,7 +261,7 @@ async def update_organization(
     org = await svc.update_organization(org_id, name=body.name, description=body.description)
     if not org:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Organization not found")
-    return _org_to_response(org)
+    return _org_to_response(org, user.email)
 
 
 @router.delete("/{org_id}", status_code=status.HTTP_204_NO_CONTENT)

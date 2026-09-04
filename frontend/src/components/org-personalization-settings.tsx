@@ -29,7 +29,8 @@ import { api } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Building2, AlertCircle } from "lucide-react";
+import { Building2, AlertCircle, ShieldAlert } from "lucide-react";
+import { cn } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -58,7 +59,10 @@ export function OrgPersonalizationSettings() {
   // access global personalization context so we can refresh after saving
   const globalPersonalization = usePersonalization();
   const [orgId, setOrgId] = React.useState<string | null>(null);
-  const [orgs, setOrgs] = React.useState<{ id: string; name: string }[]>([]);
+  // ids are coerced to strings the moment they enter this component. OrgResponse.id is an int,
+  // and a raw number in this state is what made the Select below render its placeholder while an
+  // organization was in fact selected: Radix matches by value, and 122 is not "122".
+  const [orgs, setOrgs] = React.useState<{ id: string; name: string; isMember: boolean }[]>([]);
   const [settings, setSettings] = React.useState<PersonalizationSettingsType>(
     DEFAULT_PERSONALIZATION,
   );
@@ -90,7 +94,19 @@ export function OrgPersonalizationSettings() {
     const init = async () => {
       setIsLoading(true);
       try {
-        const orgList = await api.organizations.list();
+        // important: BOTH, and the second one is the whole point. The list is ordered by name and
+        // for an Admin it is every active organization, so "the first one" is whichever customer
+        // sorts alphabetically first. The sidebar resolves its organization differently, through
+        // _get_primary_org_id, which is the caller's earliest membership. Two rules for "your
+        // organization" that usually agree and silently do not for anyone who can see more than
+        // one: the editor wrote to ALIMRUGI while the operator watched Sivali Cloud Technology,
+        // so every change looked like it reverted, and a customer's branding was overwritten by
+        // someone who never chose it. Seeding the selection from the same endpoint the sidebar
+        // reads is what makes "what you edit" and "what you see" the same thing by construction.
+        const [orgList, mine] = await Promise.all([
+          api.organizations.list(),
+          api.organizations.getMyOrgPreferences().catch(() => null),
+        ]);
         if (cancelled) return;
 
         if (!orgList || orgList.length === 0) {
@@ -99,13 +115,19 @@ export function OrgPersonalizationSettings() {
           return;
         }
 
-        setOrgs(orgList.map((o) => ({ id: o.id, name: o.name })));
+        const list = orgList.map((o) => ({
+          id: String(o.id),
+          name: o.name,
+          isMember: o.is_member === true,
+        }));
+        setOrgs(list);
 
-        // auto-select first org
-        const firstId = orgList[0].id;
-        setOrgId(firstId);
+        const primary = mine?.organization_id ? String(mine.organization_id) : null;
+        const target =
+          primary && list.some((o) => o.id === primary) ? primary : list[0].id;
+        setOrgId(target);
 
-        await loadPreferences(firstId);
+        await loadPreferences(target);
       } catch {
         toast({
           title: "Failed to load organizations",
@@ -390,6 +412,11 @@ export function OrgPersonalizationSettings() {
     );
   }
 
+  const selectedOrg = orgs.find((o) => o.id === orgId);
+  // An Admin's list is every active organization, so "selected" and "yours" are different
+  // questions. is_member is the server's answer to the second one.
+  const foreignOrg = selectedOrg !== undefined && !selectedOrg.isMember;
+
   return (
     <div className="space-y-4">
       {/* Org selector (if multiple orgs) */}
@@ -421,14 +448,35 @@ export function OrgPersonalizationSettings() {
         </Card>
       )}
 
-      {/* Info banner */}
-      <div className="flex items-center gap-2 rounded-md border px-4 py-3 text-sm text-muted-foreground bg-muted/40">
-        <Building2 className="h-4 w-4 shrink-0" />
+      {/* Which organization every control below writes to.
+          Sticky on purpose. This is the only thing standing between an operator and rewriting a
+          customer's branding, and the controls that do the writing are a scroll away, which is
+          exactly how an operator came to change ALIMRUGI's colours while watching their own.
+          Offset by the app header, which is sticky at h-14 on mobile and h-16 from md. */}
+      <div
+        className={cn(
+          "sticky top-14 md:top-16 z-20 flex items-start gap-2 rounded-md border px-4 py-3 text-sm",
+          foreignOrg
+            ? "border-warning bg-warning/10 text-foreground"
+            : "bg-muted/40 text-muted-foreground",
+        )}
+      >
+        {foreignOrg ? (
+          <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5 text-warning" aria-hidden="true" />
+        ) : (
+          <Building2 className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
+        )}
         <span>
           Changes here apply to <strong>all users</strong> in{" "}
           <Badge variant="outline" className="mx-1">
-            {orgs.find((o) => o.id === orgId)?.name ?? "this organization"}
+            {selectedOrg?.name ?? "this organization"}
           </Badge>
+          {foreignOrg ? (
+            <>
+              . You are not a member of this organization, so this is someone else&apos;s
+              branding and not the one your own sidebar shows.
+            </>
+          ) : null}
         </span>
       </div>
 

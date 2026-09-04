@@ -196,6 +196,13 @@ jobs:
       - name: Personalization defaults
         run: node scripts/checks/check-personalization-defaults.mjs .
 
+      # The branding editor auto-selected the alphabetically first organization while the sidebar
+      # read the caller's earliest membership, so an operator edited a customer's branding while
+      # watching their own and every change looked like it reverted. No QA account has the shape
+      # that reproduces it, so the browser spec would go green through the same regression.
+      - name: Organization branding target
+        run: node scripts/checks/check-org-branding-target.mjs .
+
       # An em dash joined the two halves of the stop dialog's warning, and the same character
       # was in 83 other places across the console, the API layer and the README. tsc and
       # eslint do not read English, so nothing saw it. Advisory for now: it reports and exits

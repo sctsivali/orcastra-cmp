@@ -2031,7 +2031,13 @@ export interface ClusterLocationUpdateResponse {
 // ── Organization types ──
 
 export interface Organization {
-  id: string;
+  // important: a number on the wire. OrgResponse.id is an int, and this said `string` for as
+  // long as the type has existed, which is not a cosmetic lie: it let
+  // components/org-personalization-settings.tsx hold the raw value in a `string` state and hand
+  // it to a Radix Select, where it never matched the `String(id)` on any SelectItem, so the
+  // picker rendered its placeholder while an organization was in fact selected. Coerce with
+  // String() at any UI boundary that compares by value.
+  id: number;
   name: string;
   slug: string;
   description: string | null;
@@ -2041,6 +2047,9 @@ export interface Organization {
   updated_at: string;
   member_count: number;
   cluster_count: number;
+  // Whether the CALLER belongs to this organization. An Admin's list is every active
+  // organization, so this is what separates "yours" from "a customer's".
+  is_member: boolean;
 }
 
 /** Organization synced from external app (OrcaHub) */
