@@ -215,22 +215,36 @@ def test_an_unknown_tool_is_refused_rather_than_run_ungated(mcp_app, monkeypatch
 
 # ── the ratchet: every registered tool is priced ───────────────────────────────────────────────
 
-def _registered_tool_names(app) -> List[str]:
+def _registered_tool_names(*, admin: bool = False, guest: bool = False) -> List[str]:
     import anyio
 
     from app.mcp.server import build_mcp_server
 
-    mcp = build_mcp_server(Settings())
-    tools = anyio.run(mcp.list_tools)
-    return [tool.name for tool in tools]
+    mcp = build_mcp_server(
+        Settings(MCP_ADMIN_TOOLS_ENABLED=admin, MCP_GUEST_TOOLS_ENABLED=guest)
+    )
+    return [tool.name for tool in anyio.run(mcp.list_tools)]
 
 
-def test_every_registered_tool_declares_a_capability() -> None:
+@pytest.mark.parametrize(("admin", "guest"), [(False, False), (True, False), (False, True), (True, True)])
+def test_every_registered_tool_declares_a_capability(admin: bool, guest: bool) -> None:
     """The MCP analogue of the REST ratchet. A tool without a contract row would authenticate and
     then run with no capability check at all, which is exactly the defect that ratchet exists for.
+
+    Parametrized over the tier flags because the default build registers neither the admin nor the
+    guest tier, so checking only the default would leave the eleven most sensitive tools uncovered
+    by the test written to cover them.
     """
-    missing = sorted(set(_registered_tool_names(None)) - set(TOOL_CONTRACT))
+    missing = sorted(set(_registered_tool_names(admin=admin, guest=guest)) - set(TOOL_CONTRACT))
     assert not missing, f"these tools are registered with no contract row, so they run ungated: {missing}"
+
+
+def test_the_sensitive_tiers_are_absent_until_they_are_enabled() -> None:
+    default = set(_registered_tool_names())
+    assert "lxd_delete_project" not in default
+    assert "lxd_exec_instance" not in default
+    full = set(_registered_tool_names(admin=True, guest=True))
+    assert {"lxd_delete_project", "lxd_exec_instance", "lxd_read_file", "lxd_write_file"} <= full
 
 
 def test_no_contract_row_prices_an_operation_that_does_not_exist() -> None:
@@ -272,3 +286,82 @@ def test_the_raw_proxy_is_not_exposed_as_a_tool() -> None:
     """`/raw-proxy` is an arbitrary-method arbitrary-path escape hatch. Handing it to a model
     re-creates the ungated generic tool with no schema at all."""
     assert not [name for name in TOOL_CONTRACT if "raw" in name.lower()]
+
+
+# ── the guest tier is never inherited ──────────────────────────────────────────────────────────
+
+@pytest.fixture
+def mcp_app_full(monkeypatch):
+    """The app with every tier registered, so the guest tools are reachable to be refused."""
+    monkeypatch.setenv("MCP_ENABLED", "true")
+    monkeypatch.setenv("MCP_ADMIN_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("MCP_GUEST_TOOLS_ENABLED", "true")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    import app.main as main
+
+    app = main.create_app()
+    yield app
+    get_settings.cache_clear()
+
+
+@pytest.mark.parametrize("tool", ["lxd_exec_instance", "lxd_read_file", "lxd_write_file"])
+def test_a_legacy_key_is_refused_every_guest_tool(mcp_app_full, monkeypatch, tool: str) -> None:
+    """A legacy key reads as unrestricted everywhere else, and must not here.
+
+    `granted_capabilities` returns None for a key issued before the field existed and
+    `has_capability` reads None as everything, which is what keeps older integrations working. 17
+    of the 22 keys in this deployment are in that state, so the inheriting gate on a guest tool
+    would hand root-in-guest to most of the fleet with nobody deciding it.
+    """
+    _authenticated_as(
+        monkeypatch,
+        _key(legacy=True, clusters=[{"cluster_id": "nuc2", "permissions": ["admin"]}]),
+    )
+    arguments = {"cluster_id": "nuc2", "name": "vm-a"}
+    if tool == "lxd_exec_instance":
+        arguments["command"] = ["id"]
+    else:
+        arguments["path"] = "/etc/hostname"
+    if tool == "lxd_write_file":
+        arguments["content"] = "x"
+
+    with TestClient(mcp_app_full) as client:
+        _initialize(client)
+        response = _rpc(client, "tools/call", {"name": tool, "arguments": arguments})
+    body = json.dumps(response.json())
+    assert "error" in response.json(), f"{tool} ran for a legacy key"
+    assert "never" in body or "capability" in body, (
+        f"the refusal does not explain that the capability is never inherited: {body[:200]}"
+    )
+
+
+def test_a_legacy_key_is_not_shown_the_guest_tools(mcp_app_full, monkeypatch) -> None:
+    _authenticated_as(
+        monkeypatch,
+        _key(legacy=True, clusters=[{"cluster_id": "nuc2", "permissions": ["admin"]}]),
+    )
+    with TestClient(mcp_app_full) as client:
+        _initialize(client)
+        names = _tool_names(_rpc(client, "tools/list"))
+    assert "lxd_exec_instance" not in names
+    assert "lxd_read_file" not in names
+    # It still sees the rest, because legacy DOES inherit the powers that existed at issue time.
+    assert "lxd_delete_project" in names
+
+
+def test_a_key_granted_exec_does_not_thereby_get_files(mcp_app_full, monkeypatch) -> None:
+    """Holding one guest capability does not imply the other. A health check that runs a command
+    has no reason to read files."""
+    _authenticated_as(
+        monkeypatch,
+        _key(["lxd.proxy", "instance.exec"],
+             clusters=[{"cluster_id": "nuc2", "permissions": ["admin"]}]),
+    )
+    with TestClient(mcp_app_full) as client:
+        _initialize(client)
+        names = _tool_names(_rpc(client, "tools/list"))
+    assert "lxd_exec_instance" in names
+    assert "lxd_read_file" not in names
+    assert "lxd_write_file" not in names

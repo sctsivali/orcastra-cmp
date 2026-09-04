@@ -12,7 +12,7 @@ from mcp.server.mcpserver import MCPServer
 
 from app.core.config import Settings
 
-from . import tools_inventory, tools_read
+from . import tools_admin, tools_guest, tools_inventory, tools_read, tools_write
 from .auth import ApiKeyMiddleware
 
 logger = logging.getLogger(__name__)
@@ -44,6 +44,15 @@ def build_mcp_server(settings: Settings) -> MCPServer:
 
     tools_inventory.register(mcp)
     tools_read.register(mcp)
+    tools_write.register(mcp)
 
-    logger.info("MCP server built: inventory and read tiers registered")
+    registered = ["inventory", "read", "write"]
+    if settings.mcp_admin_tools_enabled:
+        tools_admin.register(mcp)
+        registered.append("admin")
+    if settings.mcp_guest_tools_enabled:
+        tools_guest.register(mcp)
+        registered.append("guest")
+
+    logger.info("MCP server built: %s tiers registered", ", ".join(registered))
     return mcp
