@@ -25,12 +25,28 @@ from .guest_exec import exec_instance
 from .guest_files import get_file, put_file
 from .instance_view import instance_detail, instance_summary, status_name
 from ..desktop.entry import desktop_action, desktop_probe
-from .proxy import EXEC_TIMEOUT, PROXY_OP_TIMEOUT
+from ..desktop.runtime import (
+    DESKTOP_ACTION_TIMEOUT,
+    DESKTOP_MAX_IN_FLIGHT,
+    DESKTOP_PROBE_TIMEOUT,
+    DESKTOP_SCREENSHOT_TIMEOUT,
+    desktop_executor,
+)
+from .proxy import (
+    EXEC_MAX_IN_FLIGHT,
+    EXEC_TIMEOUT,
+    PROXY_MAX_IN_FLIGHT,
+    PROXY_OP_TIMEOUT,
+    exec_executor,
+    proxy_executor,
+)
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "CLUSTER_WIDE_OPERATIONS",
+    "operation_pool",
+    "operation_timeout",
     "GUEST_ACCESS_OPERATIONS",
     "PROXY_ERROR_CODES",
     "PROXY_OPERATION_LEVELS",
@@ -244,6 +260,42 @@ def _serialize_operation(operation: Any) -> Dict[str, Any]:
     return payload
 
 
+# Which pool and which budget an operation runs under.
+#
+# important: three tiers, not two. Selecting on GUEST_ACCESS_OPERATIONS alone put every desktop
+# action on `exec_executor`, which has four workers, and `services/desktop/runtime.py` argues at
+# length that this must not happen: "a screenshot loop at even a modest rate would fill all four
+# and take the ordinary exec_instance of every other integration down with it". The desktop pool
+# was built and never used, so that starvation was reachable. It is now the pool desktop runs on.
+#
+# The budgets differ within the desktop tier too. A click that takes fifteen seconds means the
+# guest is wedged; a capture legitimately needs longer because it encodes and ships megabytes.
+_DESKTOP_BUDGETS: Dict[str, float] = {
+    "desktop_probe": DESKTOP_PROBE_TIMEOUT,
+    "desktop_view": DESKTOP_SCREENSHOT_TIMEOUT,
+    "desktop_input": DESKTOP_ACTION_TIMEOUT,
+    "desktop_clipboard": DESKTOP_ACTION_TIMEOUT,
+}
+
+
+def operation_timeout(operation: str) -> float:
+    """The response budget for one operation, whichever tier it belongs to."""
+    if operation in _DESKTOP_BUDGETS:
+        return _DESKTOP_BUDGETS[operation]
+    if operation in GUEST_ACCESS_OPERATIONS:
+        return EXEC_TIMEOUT
+    return PROXY_OP_TIMEOUT
+
+
+def operation_pool(operation: str) -> Tuple[Any, int]:
+    """The executor and in-flight cap for one operation."""
+    if operation in _DESKTOP_BUDGETS:
+        return desktop_executor, DESKTOP_MAX_IN_FLIGHT
+    if operation in GUEST_ACCESS_OPERATIONS:
+        return exec_executor, EXEC_MAX_IN_FLIGHT
+    return proxy_executor, PROXY_MAX_IN_FLIGHT
+
+
 def _client_for(lxd_service: Any, cluster_id: str, project: str, operation: str) -> Any:
     """The pooled client, replaced by a project-scoped one where the work needs it.
 
@@ -281,7 +333,9 @@ def _client_for(lxd_service: Any, cluster_id: str, project: str, operation: str)
     # integrations towards `"wait": false`, which returns in about a second and holds nothing.
     # The window is derived from whichever budget bounds this call, so the budget is always the
     # binding limit and the timeout arrives on the path that can explain it.
-    budget = EXEC_TIMEOUT if operation in GUEST_ACCESS_OPERATIONS else PROXY_OP_TIMEOUT
+    # Derived from the same selector the router spends, so the window cannot be sized for a
+    # budget the call is not actually given.
+    budget = operation_timeout(operation)
     scoped = lxd_service.connection_manager.get_project_client(
         cluster_id, project or "default", timeout=(3, int(budget) + 5)
     )

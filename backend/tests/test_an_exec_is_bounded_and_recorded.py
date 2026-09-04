@@ -415,16 +415,12 @@ def test_a_runaway_exec_cannot_take_the_shared_proxy_pool() -> None:
 
     assert exec_executor is not proxy_executor
 
-    tree = ast.parse(ROUTER.read_text())
-    handler = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "proxy_operation"
-    )
-    assert any(
-        isinstance(node, ast.Name) and node.id == "exec_executor" for node in ast.walk(handler)
-    ), "exec still runs on the pool shared with every other read on this router"
+    from app.services.lxd.proxy_operations import operation_pool
+
+    # Behavioural rather than structural: the choice moved into `operation_pool`, and asserting on
+    # the name appearing in the handler stopped saying anything about which operations get it.
+    assert operation_pool("exec_instance")[0] is exec_executor
+    assert operation_pool("list_instances")[0] is proxy_executor
 
 
 def test_the_timeout_path_exec_actually_takes_is_the_one_that_records_it() -> None:
@@ -492,87 +488,76 @@ def test_the_timeout_message_states_the_budget_that_actually_bound_the_call() ->
     assert "wait" in create_message, "create does have one, and it is the right advice there"
 
 
-def test_every_guest_operation_shares_the_exec_pool_and_the_exec_budget() -> None:
-    """The pool selection reads as an exec special case and is really the guest-access case.
+def test_each_tier_runs_on_its_own_pool() -> None:
+    """Three tiers, and the desktop one is the reason this is not a two-way choice.
 
-    `exec_executor` exists because run_blocking frees the caller and not the thread, so a runaway
-    guest call holds a worker until its own socket timeout fires. On the shared proxy pool the
-    blast radius of that is every read, every raw-proxy call and every fan-out on this router.
-    Selecting the pool by the name `exec_instance` meant each new guest-reaching operation
-    silently got the shared pool instead, which is the pool the comment above it says it must not
-    use. `_client_for` already derives its socket window from the same set, so a mismatch here
-    would also give the guest call a budget its socket window was not sized for.
+    `services/desktop/runtime.py` argues that desktop must never borrow `exec_executor`, because
+    "a screenshot loop at even a modest rate would fill all four and take the ordinary
+    exec_instance of every other integration down with it". Selecting on GUEST_ACCESS_OPERATIONS
+    alone did exactly that, and the desktop pool it built was never used, so the starvation the
+    module was written to prevent was reachable.
     """
+    from app.services.desktop.runtime import DESKTOP_MAX_IN_FLIGHT, desktop_executor
+    from app.services.lxd.proxy import (
+        EXEC_MAX_IN_FLIGHT,
+        PROXY_MAX_IN_FLIGHT,
+        exec_executor,
+        proxy_executor,
+    )
+    from app.services.lxd.proxy_operations import operation_pool
+
+    assert len({id(desktop_executor), id(exec_executor), id(proxy_executor)}) == 3
+
+    for operation in ("desktop_probe", "desktop_view", "desktop_input", "desktop_clipboard"):
+        pool, in_flight = operation_pool(operation)
+        assert pool is desktop_executor, f"{operation} borrows another tier's pool"
+        assert in_flight == DESKTOP_MAX_IN_FLIGHT
+
+    for operation in ("exec_instance", "get_file", "put_file"):
+        pool, in_flight = operation_pool(operation)
+        assert pool is exec_executor, f"{operation} is not on the guest pool"
+        assert in_flight == EXEC_MAX_IN_FLIGHT
+
+    pool, in_flight = operation_pool("list_instances")
+    assert pool is proxy_executor and in_flight == PROXY_MAX_IN_FLIGHT
+
+
+def test_a_click_is_not_given_a_captures_budget() -> None:
+    """A click that takes fifteen seconds means the guest is wedged. A capture legitimately needs
+    longer because it encodes and ships megabytes, so one number for both would either cut
+    captures short or let a wedged guest hold a worker twice as long as it should."""
+    from app.services.desktop.runtime import DESKTOP_ACTION_TIMEOUT, DESKTOP_SCREENSHOT_TIMEOUT
+    from app.services.lxd.proxy import EXEC_TIMEOUT, PROXY_OP_TIMEOUT
+    from app.services.lxd.proxy_operations import operation_timeout
+
+    assert operation_timeout("desktop_input") == DESKTOP_ACTION_TIMEOUT
+    assert operation_timeout("desktop_view") == DESKTOP_SCREENSHOT_TIMEOUT
+    assert operation_timeout("desktop_input") < operation_timeout("desktop_view")
+    assert operation_timeout("exec_instance") == EXEC_TIMEOUT
+    assert operation_timeout("list_instances") == PROXY_OP_TIMEOUT
+
+
+def test_the_socket_window_is_derived_from_the_budget_actually_spent() -> None:
+    """`_client_for` sized its window from a two-way choice while the router spent a three-way
+    one, so a desktop call could be budgeted at one number and cut off by a window sized for
+    another."""
+    import inspect
+
+    from app.services.lxd import proxy_operations
+
+    source = inspect.getsource(proxy_operations._client_for)
+    assert "operation_timeout(operation)" in source, (
+        "the socket window restates a budget instead of deriving it, so the two can disagree"
+    )
+
+
+def test_the_router_selects_the_pool_rather_than_naming_one() -> None:
     handler = next(
         node
         for node in ast.walk(ast.parse(ROUTER.read_text()))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "proxy_operation"
     )
-    call = next(
-        node
-        for node in ast.walk(handler)
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "id", None) == "run_blocking"
-    )
-    selectors = {
-        keyword.arg: ast.unparse(keyword.value)
-        for keyword in call.keywords
-        if keyword.arg in ("timeout", "executor", "max_in_flight")
-    }
-    assert set(selectors) == {"timeout", "executor", "max_in_flight"}
-    for name, rendered in selectors.items():
-        assert "GUEST_ACCESS_OPERATIONS" in rendered, (
-            f"run_blocking's {name} still selects on a single operation name, so an operation "
-            f"added to GUEST_ACCESS_OPERATIONS does not get the exec pool or the exec budget: "
-            f"{rendered}"
-        )
-
-
-# ── the transport that does not drop frames ────────────────────────────────────────────────────
-
-def test_an_exec_without_stdin_uses_the_recorded_transport() -> None:
-    """pylxd's streaming exec loses output above roughly 12 KiB, silently.
-
-    Measured against LXD 5.21.7 on a live cluster: 12000 bytes asked for returned 12000, 16000
-    returned 0, and 16384 returned 8192, every one with exit_code 0 and `truncated` FALSE. The
-    cause is a race in pylxd's `execute`: after `finish_soon()`, the first frame to arrive marks
-    the socket finished and the manager stops, so frames still in flight are dropped. A caller is
-    told the command succeeded and handed a short or empty result.
-    """
-    import ast
-    import inspect
-
-    from app.services.lxd import guest_exec
-
-    source = inspect.getsource(guest_exec.exec_instance)
-    assert "_exec_recorded" in source, "exec no longer routes to the transport that keeps its output"
-    tree = ast.parse(source.lstrip())
-    # The recorded call must come before the streaming one, or the default is still the lossy path.
-    rendered = ast.unparse(tree)
-    assert rendered.index("_exec_recorded") < rendered.index("inst.execute")
-
-
-def test_stdin_keeps_the_streaming_path_and_says_so() -> None:
-    """LXD refuses `wait-for-websocket` together with `record-output`, and stdin needs the
-    websocket, so that combination cannot use the safe transport. The response names which path
-    ran rather than leaving the residual limit invisible."""
-    import inspect
-
-    from app.services.lxd import guest_exec
-
-    source = inspect.getsource(guest_exec.exec_instance)
-    assert '"transport": "streaming"' in source
-    assert '"transport": "recorded"' in inspect.getsource(guest_exec._exec_recorded)
-
-
-def test_the_recorded_transport_removes_the_log_it_created() -> None:
-    """The log is written on the LXD host, not in the guest, and nothing else expires it."""
-    import inspect
-
-    from app.services.lxd import guest_output
-
-    source = inspect.getsource(guest_output.run_recorded)
-    assert "_discard_log" in source
-    # In a finally, so a failed read still cleans up.
-    assert source.index("finally:") < source.index("_discard_log")
+    rendered = ast.unparse(handler)
+    assert "operation_pool(operation)" in rendered
+    assert "operation_timeout(operation)" in rendered

@@ -27,7 +27,6 @@ from app.services.lxd.proxy import (
     API_KEY_CACHE_TTL,
     LAST_USED_WRITE_INTERVAL,
     PROXY_CONNECT_TIMEOUT,
-    EXEC_MAX_IN_FLIGHT,
     EXEC_TIMEOUT,
     PROXY_MAX_IN_FLIGHT,
     PROXY_OP_TIMEOUT,
@@ -35,7 +34,6 @@ from app.services.lxd.proxy import (
     SYNC_CLUSTER_TIMEOUT,
     VALIDATE_KEY_TIMEOUT,
     auth_executor,
-    exec_executor,
     proxy_executor,
     raw_request,
     socket_timeout_for,
@@ -46,6 +44,8 @@ from app.services.lxd.lazy_client import connect_or_get_client
 from app.services.lxd.proxy_operations import (
     CLUSTER_WIDE_OPERATIONS,
     GUEST_ACCESS_OPERATIONS,
+    operation_pool,
+    operation_timeout,
     PROXY_OPERATION_LEVELS,
     PROXY_WAIT_OPERATIONS,
     classify_proxy_error,
@@ -3515,6 +3515,7 @@ async def proxy_operation(
         # Every branch below is a blocking pylxd call, and the waiting ones poll an LXD
         # operation to completion. Inline on the loop that is the same failure mode as the
         # raw proxy, with a longer tail.
+        _operation_executor, _operation_in_flight = operation_pool(operation)
         try:
             result_data = await run_blocking(
                 execute_proxy_operation,
@@ -3528,25 +3529,16 @@ async def proxy_operation(
                 # its own budget rather than the operation one. A command that needs longer is a
                 # job.
                 #
-                # important: keyed on membership of GUEST_ACCESS_OPERATIONS, not on the name
-                # `exec_instance`. These three read as an exec special case and are really the
-                # guest-access case, so every operation added to that set inherited the proxy
-                # pool and the proxy budget instead, which is the pool this comment explains it
-                # must not use. `_client_for` already derives its socket window from the same
-                # set, so the two halves now agree.
-                timeout=EXEC_TIMEOUT if operation in GUEST_ACCESS_OPERATIONS else PROXY_OP_TIMEOUT,
+                # important: THREE tiers, chosen by `operation_pool` beside the vocabulary rather
+                # than by a condition here. Written as a two-way choice on GUEST_ACCESS_OPERATIONS
+                # it put every desktop action on exec's four workers, which is exactly the
+                # starvation the desktop pool was built to prevent, and that pool was then never
+                # used. `_client_for` derives its socket window from the same selector, so the
+                # budget and the window cannot disagree.
+                timeout=operation_timeout(operation),
                 label=f"proxy_operation[{operation} {request.cluster_id}]",
-                # note: a runaway guest call holds its worker until it ends, because run_blocking
-                # frees the caller and not the thread. Its own pool means the blast radius of
-                # that is other guest calls rather than every read on this router.
-                executor=(
-                    exec_executor if operation in GUEST_ACCESS_OPERATIONS else proxy_executor
-                ),
-                max_in_flight=(
-                    EXEC_MAX_IN_FLIGHT
-                    if operation in GUEST_ACCESS_OPERATIONS
-                    else PROXY_MAX_IN_FLIGHT
-                ),
+                executor=_operation_executor,
+                max_in_flight=_operation_in_flight,
             )
             health.clear(request.cluster_id)
         except BlockingTimeout as timeout_error:
