@@ -305,3 +305,116 @@ def test_a_key_grant_can_be_serialized_back() -> None:
     payload = _to_response(grant)
     assert payload.api_key_id == "oak_abc"
     assert payload.admin_email is None
+
+
+# ── the gate is reached, which is the whole point ──────────────────────────────────────────────
+
+def test_a_desktop_action_passes_through_the_gate() -> None:
+    """The finding that produced this file's second half.
+
+    Consent, the key grant and the budgets were all written, tested against stubs, documented as
+    live gates in three places, and called by nothing. Every test above passes whether or not any
+    request path reaches them, which is exactly how a dead gate stays green. This one asserts the
+    handler calls it.
+    """
+    import ast
+    import inspect
+
+    from app.routers import integrations
+
+    handler = ast.parse(inspect.getsource(integrations.proxy_operation).lstrip())
+    rendered = ast.unparse(handler)
+    assert "_assert_desktop_allowed" in rendered, (
+        "proxy_operation does not call the desktop gate, so consent, the grant and the budgets "
+        "are decorative"
+    )
+
+
+def _calls(tree, name: str) -> bool:
+    """Whether `name` is actually CALLED here, rather than merely spelled somewhere.
+
+    important: each of these guards is imported inside the function body, so
+    `"get_consent" in source` is satisfied by the import line alone. Proven by ablation: replacing
+    the call with `consent = None` left every string assertion green. The same trap is documented
+    on the shared cluster-scope ratchet, which had passed on ten routers for a property it was
+    only checking by spelling.
+    """
+    import ast
+
+    return any(
+        isinstance(node, ast.Call)
+        and (getattr(node.func, "id", None) == name or getattr(node.func, "attr", None) == name)
+        for node in ast.walk(tree)
+    )
+
+
+def test_the_gate_consults_all_three_controls() -> None:
+    """Naming the function is not enough: it has to do the three things it exists for."""
+    import ast
+    import inspect
+
+    from app.routers import integrations
+
+    tree = ast.parse(inspect.getsource(integrations._assert_desktop_allowed).lstrip())
+    assert _calls(tree, "get_consent"), "the organization's consent is not read"
+    assert _calls(tree, "get_active_key_grant"), "the key's grant is not read"
+    assert _calls(tree, "consume"), "the per-target budget is not spent"
+    assert _calls(tree, "cluster_fingerprint"), (
+        "the grant is not checked against the cluster's current registration, so a re-registered "
+        "cluster of the same name inherits it"
+    )
+
+    # And each answer has to be acted on, not merely fetched.
+    rendered = ast.unparse(tree)
+    assert "may_view" in rendered, "consent is read and its answer discarded"
+    assert "may_input" in rendered, "input consent is never distinguished from view consent"
+    assert "grant is None" in rendered, "the grant is looked up and its absence ignored"
+
+
+def test_the_capability_is_refused_before_the_grant_is_looked_up() -> None:
+    """A key that was never granted the capability should hear that, not that it lacks a grant.
+    The order also keeps a Vault and database round trip off the path of an obvious refusal."""
+    import inspect
+
+    source = inspect.getsource(
+        __import__("app.routers.integrations", fromlist=["x"]).proxy_operation
+    )
+    assert source.index("assert_explicit_capability") < source.index("_assert_desktop_allowed")
+
+
+def test_input_fails_closed_when_the_budget_store_is_unreachable() -> None:
+    """Every other limiter here fails open, and `_shared_allow` explains why. That reasoning
+    covers reads and uploads. It does not cover typing into a customer's desktop."""
+    import inspect
+
+    from app.routers import integrations
+    from app.services.desktop import budget
+
+    gate = inspect.getsource(integrations._assert_desktop_allowed)
+    assert 'fail_closed=capability == "desktop.input"' in gate
+
+    consumed = inspect.getsource(budget.consume)
+    assert "fail_closed" in consumed and "return False" in consumed
+
+
+def test_a_capture_spends_the_action_budget_too() -> None:
+    """Otherwise a screenshot loop dodges the action ceiling by never doing anything else."""
+    import inspect
+
+    from app.services.desktop import budget
+
+    source = inspect.getsource(budget.consume)
+    assert 'checks = [("actions"' in source
+    assert 'checks.append(("captures"' in source
+
+
+def test_the_budget_is_keyed_per_guest_not_per_key() -> None:
+    """One runaway agent on one guest must not starve another guest the same key is legitimately
+    driving, and raising the per-key limit elsewhere must not silently widen this."""
+    from app.services.desktop.budget import bucket_key
+
+    a = bucket_key("actions", "oak_x", "nuc2", "default", "vm-a")
+    b = bucket_key("actions", "oak_x", "nuc2", "default", "vm-b")
+    c = bucket_key("actions", "oak_x", "pandora", "default", "vm-a")
+    assert len({a, b, c}) == 3
+    assert bucket_key("captures", "oak_x", "nuc2", "default", "vm-a") != a

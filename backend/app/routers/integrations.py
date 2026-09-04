@@ -2568,6 +2568,119 @@ _PROXY_AUDIT_ACTIONS: Dict[Optional[str], str] = {
 }
 
 
+async def _assert_desktop_allowed(
+    api_key: Dict[str, Any],
+    request: "ProxyRequest",
+    operation: str,
+    capability: str,
+) -> None:
+    """Everything a desktop action needs beyond the capability and the cluster grant.
+
+    The capability says what the INTEGRATION may attempt. This adds the three things the
+    capability cannot express: whether the organization owning the screen agreed at all, whether
+    a human has authorised this particular key for a bounded time, and whether the key has
+    already done enough of this in the last minute.
+
+    important: it lives here rather than in `services/desktop/entry.py` because it needs the
+    database and the owning organization, and `entry.desktop_action` runs on a worker thread
+    through `run_blocking`. `proxy_operation` takes no session either, so this opens its own,
+    which is what `routers/console.py` already does for the break-glass check on the human path.
+
+    Every refusal is audited. A key attempting a screen it was never authorised for is the signal
+    worth alerting on, and it is invisible if only the successful calls are written.
+    """
+    from app.core.database import async_session_maker
+    from app.core.org_scope import resolve_cluster_org
+    from app.services import break_glass_service
+    from app.services.desktop import budget as desktop_budget
+    from app.services.desktop_policy import get_consent
+
+    key_id = str(api_key.get("id") or "")
+    instance = str((request.params or {}).get("name") or "")
+
+    def _refuse(status: int, detail: str, refused: str, headers=None) -> None:
+        _audit_key_action(
+            api_key,
+            action=_guest_audit_action(operation),
+            target_id=instance,
+            cluster_id=request.cluster_id,
+            project=request.project,
+            result="failure",
+            details={
+                "operation": operation,
+                **_guest_audit_details(operation, request.params or {}),
+                "refused": refused,
+            },
+            external_user_email=request.external_user_email,
+            error_message=refused,
+        )
+        raise HTTPException(status_code=status, detail=detail, headers=headers)
+
+    async with async_session_maker() as db:
+        _org_id, _org_slug = await resolve_cluster_org(request.cluster_id, db)
+
+        consent = await get_consent(db, _org_id)
+        if not consent.may_view:
+            _refuse(
+                403,
+                (
+                    "The organization that owns this cluster has not enabled desktop control. "
+                    "Screen contents leaving for a model is a decision that belongs to the "
+                    "organization rather than to the integration, so an administrator of that "
+                    "organization has to turn it on first."
+                ),
+                "organization_has_not_consented",
+            )
+        if capability == "desktop.input" and not consent.may_input:
+            _refuse(
+                403,
+                (
+                    "This organization allows an agent to see its screens and not to type into "
+                    "them. Watching and touching are separate consents."
+                ),
+                "organization_has_not_allowed_input",
+            )
+
+        # The pinned certificate is passed so a grant issued against a different registration of
+        # the same cluster id is refused rather than inherited.
+        fingerprint = await break_glass_service.cluster_fingerprint(request.cluster_id)
+        grant = await break_glass_service.get_active_key_grant(
+            db, key_id, request.cluster_id, fingerprint=fingerprint
+        )
+        if grant is None:
+            _refuse(
+                403,
+                (
+                    "This key holds no live break-glass grant for this cluster. An unattended "
+                    "caller reaches a customer's desktop through a grant that names a reason, "
+                    "expires, and can be revoked, which is the same bar a human is held to. "
+                    "Request one with POST /api/v1/break-glass/grants."
+                ),
+                "no_active_grant",
+            )
+
+    allowed, retry_after = desktop_budget.consume(
+        key_id=key_id,
+        cluster_id=request.cluster_id,
+        project=request.project,
+        instance=instance,
+        capture=operation in ("desktop_view", "desktop_probe"),
+        # Input fails closed when the budget store cannot answer. Every other limiter here fails
+        # open on purpose, and that reasoning does not carry to typing into somebody's desktop.
+        fail_closed=capability == "desktop.input",
+    )
+    if not allowed:
+        _refuse(
+            429,
+            (
+                f"This key has spent its desktop budget for {instance} on {request.cluster_id}. "
+                "The budget is per instance, so other guests are unaffected."
+            ),
+            "desktop_budget_exhausted",
+            headers={"Retry-After": str(retry_after or 60)},
+        )
+
+
 def _guest_audit_action(operation: str) -> str:
     """The audit action for a guest-reaching operation.
 
@@ -3483,6 +3596,12 @@ async def proxy_operation(
                     error_message=str(refusal.detail),
                 )
                 raise
+
+            if guest_capability.startswith("desktop."):
+                # important: AFTER the capability check, so a key that was never granted the
+                # capability is refused for that reason rather than for a missing grant, and
+                # BEFORE any work reaches the cluster.
+                await _assert_desktop_allowed(api_key, request, operation, guest_capability)
 
         # important: authorising request.project binds the ambient project, not the target. These
         # operations name their target in params, and a project is not bounded by a project, so a
