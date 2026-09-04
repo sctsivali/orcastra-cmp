@@ -95,7 +95,7 @@ function TrayItem({
       onDrop={(e) => onDrop(e, terminal.id)}
       className={cn(
         "relative group flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-all",
-        "bg-[#1f2335] hover:bg-[#292e42] border border-[#292e42] hover:border-blue-500/50",
+        "bg-terminal-raised hover:bg-terminal-border border border-terminal-border hover:border-blue-500/50",
         // Always add padding for buttons on mobile
         (showButtons || isMobile) && "pr-20",
         isDragging && "opacity-50 scale-95",
@@ -259,7 +259,7 @@ export function TerminalTray() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-2 text-[10px] gap-1 bg-[#1a1b26] border-[#292e42] text-gray-300 hover:bg-green-500/20 hover:border-green-500/50 hover:text-green-400"
+                    className="h-7 px-2 text-[10px] gap-1 bg-terminal border-terminal-border text-gray-300 hover:bg-green-500/20 hover:border-green-500/50 hover:text-green-400"
                     onClick={() => restoreAllTerminals()}
                   >
                     <Layers className="h-3 w-3" />
@@ -275,7 +275,7 @@ export function TerminalTray() {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-7 px-2 text-[10px] gap-1 bg-[#1a1b26] border-[#292e42] text-gray-300 hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400"
+                    className="h-7 px-2 text-[10px] gap-1 bg-terminal border-terminal-border text-gray-300 hover:bg-red-500/20 hover:border-red-500/50 hover:text-red-400"
                     onClick={() => closeAllTerminals()}
                   >
                     <XCircle className="h-3 w-3" />
@@ -303,8 +303,8 @@ export function TerminalTray() {
           variant="outline"
           size="sm"
           className={cn(
-            "gap-2 bg-[#1a1b26] border-[#292e42] text-gray-200",
-            "hover:bg-[#292e42] hover:border-blue-500/50 hover:text-white",
+            "gap-2 bg-terminal border-terminal-border text-gray-200",
+            "hover:bg-terminal-border hover:border-blue-500/50 hover:text-white",
             "min-h-[44px] min-w-[44px] touch-manipulation",
             minimizedTerminals.length > 0 && "animate-pulse-slow"
           )}

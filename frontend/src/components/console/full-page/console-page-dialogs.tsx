@@ -56,7 +56,7 @@ export function ConsolePageDialogs({
   return (
     <>
       <AlertDialog open={confirmDialog.open} onOpenChange={onConfirmOpenChange}>
-        <AlertDialogContent className="bg-[#1a1b26] border-[#292e42]">
+        <AlertDialogContent className="bg-terminal border-terminal-border">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-gray-200">{confirmDialog.title}</AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">{confirmDialog.description}</AlertDialogDescription>
@@ -74,7 +74,7 @@ export function ConsolePageDialogs({
       </AlertDialog>
 
       <AlertDialog open={sessionConflict.show}>
-        <AlertDialogContent className="bg-[#1a1b26] border-[#292e42] max-w-lg">
+        <AlertDialogContent className="bg-terminal border-terminal-border max-w-lg">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-yellow-400">Active Console Session Detected</AlertDialogTitle>
             <AlertDialogDescription className="text-gray-300">

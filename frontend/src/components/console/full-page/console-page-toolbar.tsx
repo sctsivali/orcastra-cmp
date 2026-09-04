@@ -227,11 +227,11 @@ export function ConsolePageToolbar({
             </TooltipTrigger>
             <TooltipContent>BIOS Boot Keys</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end" className="w-56 bg-[#1f2335] border-[#292e42]">
+          <DropdownMenuContent align="end" className="w-56 bg-terminal-raised border-terminal-border">
             <DropdownMenuLabel className="text-xs text-gray-400">Spam key to enter BIOS/Boot Menu</DropdownMenuLabel>
-            <DropdownMenuSeparator className="bg-[#292e42]" />
+            <DropdownMenuSeparator className="bg-terminal-border" />
             {biosKeys.map((bios) => (
-              <DropdownMenuItem key={bios.key} onClick={() => onBiosSpam(bios.key, bios.keyCode)} disabled={biosSpamming} className="text-gray-200 focus:bg-[#292e42] focus:text-white">
+              <DropdownMenuItem key={bios.key} onClick={() => onBiosSpam(bios.key, bios.keyCode)} disabled={biosSpamming} className="text-gray-200 focus:bg-terminal-border focus:text-white">
                 <div className="flex items-center justify-between w-full">
                   <span className="font-mono font-medium">{bios.label}</span>
                   <span className="text-xs text-gray-500">{bios.description}</span>

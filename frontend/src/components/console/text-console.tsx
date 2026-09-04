@@ -80,7 +80,7 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
   return (
     <div
       ref={terminalRef}
-      className="w-full h-full min-h-[300px] bg-[#1a1b26]"
+      className="w-full h-full min-h-[300px] bg-terminal"
       style={{ padding: "4px" }}
     />
   );

@@ -72,7 +72,7 @@ export const TerminalInstance = forwardRef<TerminalInstanceHandle, TerminalInsta
   return (
     <div
       ref={terminalRef}
-      className="w-full h-full bg-[#1a1b26] rounded-b-lg overflow-hidden"
+      className="w-full h-full bg-terminal rounded-b-lg overflow-hidden"
       onClick={session.focus}
     />
   );

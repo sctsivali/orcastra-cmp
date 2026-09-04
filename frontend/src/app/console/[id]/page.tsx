@@ -69,7 +69,7 @@ const TEXT_SPECIAL_KEYS: Record<string, string> = {
 
 function ConsoleLoading() {
   return (
-    <div className="flex items-center justify-center h-screen bg-[#1a1b26]">
+    <div className="flex items-center justify-center h-screen bg-terminal">
       <div className="flex flex-col items-center gap-4">
         <Spinner className="h-8 w-8 text-blue-400" />
         <span className="text-gray-400">Loading console...</span>
@@ -319,9 +319,9 @@ function ConsoleContent() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-[#1a1b26]">
+    <div className="flex flex-col h-screen bg-terminal">
       {/* Header */}
-      <div className="flex items-center justify-between h-12 px-4 bg-[#16161e] border-b border-[#292e42]">
+      <div className="flex items-center justify-between h-12 px-4 bg-terminal-deep border-b border-terminal-border">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400 hover:text-white" onClick={() => window.close()}>
             <ArrowLeft className="h-4 w-4" />
@@ -338,7 +338,7 @@ function ConsoleContent() {
 
         {isVM && (
           <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ConsoleType)}>
-            <TabsList className="h-8 bg-[#1f2335]">
+            <TabsList className="h-8 bg-terminal-raised">
               <TabsTrigger value="graphics" className="h-6 px-3 text-xs gap-1.5">
                 <Monitor className="h-3.5 w-3.5" /> Graphics
               </TabsTrigger>
@@ -397,7 +397,7 @@ function ConsoleContent() {
 
       {/* Search bar (text mode only) */}
       {showSearch && activeTab === "text" && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-[#1f2335] border-b border-[#292e42]">
+        <div className="flex items-center gap-2 px-4 py-2 bg-terminal-raised border-b border-terminal-border">
           <Search className="h-4 w-4 text-gray-400" />
           <input
             type="text"
@@ -424,7 +424,7 @@ function ConsoleContent() {
 
           <div className="flex-1 overflow-hidden relative">
             {!sessionCheckComplete && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#1a1b26] z-20">
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-terminal z-20">
                 <Spinner className="h-8 w-8 text-blue-400 mb-4" />
                 <p className="text-gray-400">Checking for active sessions...</p>
               </div>

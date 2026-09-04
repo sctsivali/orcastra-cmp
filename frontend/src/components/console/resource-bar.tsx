@@ -338,7 +338,7 @@ export function ConsoleResourceBar({
   return (
     <div
       className={cn(
-        "bg-[#16161e] border-t border-[#292e42] transition-all duration-200 ease-in-out select-none",
+        "bg-terminal-deep border-t border-terminal-border transition-all duration-200 ease-in-out select-none",
         "flex flex-col"
       )}
       style={{ height: expanded ? expandedHeight : 40, minHeight: 40 }}
@@ -346,7 +346,7 @@ export function ConsoleResourceBar({
       {/* ====== Compact Bar (always visible) ====== */}
       <div
         className={cn(
-          "flex items-center h-10 min-h-[40px] gap-3 cursor-pointer hover:bg-[#1f2335]/60",
+          "flex items-center h-10 min-h-[40px] gap-3 cursor-pointer hover:bg-terminal-raised/60",
           compact ? "px-2" : "px-3"
         )}
         onClick={toggleExpanded}
@@ -374,7 +374,7 @@ export function ConsoleResourceBar({
           </span>
         </div>
 
-        <div className="h-3 w-px bg-[#292e42]" />
+        <div className="h-3 w-px bg-terminal-border" />
 
         {/* Duration */}
         <div className="flex items-center gap-1 text-xs text-gray-400">
@@ -382,7 +382,7 @@ export function ConsoleResourceBar({
           <span className="font-mono">{formatDuration(displayDuration)}</span>
         </div>
 
-        <div className="h-3 w-px bg-[#292e42]" />
+        <div className="h-3 w-px bg-terminal-border" />
 
         {/* CPU (only when metrics available) */}
         {instanceMetrics && (
@@ -397,7 +397,7 @@ export function ConsoleResourceBar({
               </span>
             </div>
 
-            <div className="h-3 w-px bg-[#292e42]" />
+            <div className="h-3 w-px bg-terminal-border" />
 
             {/* RAM */}
             <div className="flex items-center gap-1 text-xs">
@@ -410,7 +410,7 @@ export function ConsoleResourceBar({
               </span>
             </div>
 
-            <div className="h-3 w-px bg-[#292e42]" />
+            <div className="h-3 w-px bg-terminal-border" />
           </>
         )}
 
@@ -437,7 +437,7 @@ export function ConsoleResourceBar({
             <h4 className="text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
               Connection Info
             </h4>
-            <div className="space-y-1.5 bg-[#1a1b26] rounded-lg p-3">
+            <div className="space-y-1.5 bg-terminal rounded-lg p-3">
               <InfoRow label="Status" value={statusLabel} valueClass={statusColor} />
               <InfoRow
                 label="Duration"
@@ -450,7 +450,7 @@ export function ConsoleResourceBar({
                 value={sessionId ? `${sessionId.slice(0, 12)}...` : "-"}
                 mono
               />
-              <div className="border-t border-[#292e42] my-1.5 pt-1.5">
+              <div className="border-t border-terminal-border my-1.5 pt-1.5">
                 <InfoRow
                   label="Download"
                   value={`${formatRate(dlRate)} (${formatBytes(dlTotal)} total)`}
@@ -470,7 +470,7 @@ export function ConsoleResourceBar({
             <h4 className="text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
               User Info
             </h4>
-            <div className="space-y-1.5 bg-[#1a1b26] rounded-lg p-3">
+            <div className="space-y-1.5 bg-terminal rounded-lg p-3">
               <InfoRow label="Email" value={displayEmail || "—"} />
               <InfoRow label="Role" value={displayRole} />
               <InfoRow label="Instance" value={instanceName} mono />
@@ -484,7 +484,7 @@ export function ConsoleResourceBar({
             <h4 className="text-gray-400 font-semibold uppercase tracking-wider text-[10px]">
               Instance Resources
             </h4>
-            <div className="space-y-2 bg-[#1a1b26] rounded-lg p-3">
+            <div className="space-y-2 bg-terminal rounded-lg p-3">
               {metricsLoading ? (
                 <div className="flex items-center justify-center py-4 text-gray-500">
                   <Spinner className="h-4 w-4 mr-2" />
@@ -611,7 +611,7 @@ function ProgressBar({
 }) {
   const clamped = Math.min(Math.max(value, 0), 100);
   return (
-    <div className="w-full bg-[#292e42] rounded-full h-1.5 overflow-hidden">
+    <div className="w-full bg-terminal-border rounded-full h-1.5 overflow-hidden">
       <div
         className={cn("h-full rounded-full transition-all duration-300", color)}
         style={{ width: `${clamped}%` }}

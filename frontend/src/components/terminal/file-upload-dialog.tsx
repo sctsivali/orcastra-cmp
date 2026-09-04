@@ -281,7 +281,7 @@ export function FileUploadDialog({
 
   return (
     <Dialog open={open} onOpenChange={isUploading ? undefined : onOpenChange}>
-      <DialogContent className="sm:max-w-lg bg-[#1a1b26] border-[#292e42] text-gray-200 space-y-4">
+      <DialogContent className="sm:max-w-lg bg-terminal border-terminal-border text-gray-200 space-y-4">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-gray-100">
             <Upload className="h-5 w-5 text-blue-400" />
@@ -300,7 +300,7 @@ export function FileUploadDialog({
             <Input
               value={destDir}
               onChange={(e) => handleDestDirChange(e.target.value)}
-              className="bg-[#16161e] border-[#292e42] text-gray-200 text-sm h-8"
+              className="bg-terminal-deep border-terminal-border text-gray-200 text-sm h-8"
               placeholder="/root/"
               disabled={isUploading}
             />
@@ -313,7 +313,7 @@ export function FileUploadDialog({
             "border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer",
             isDragOver
               ? "border-blue-400 bg-blue-500/10"
-              : "border-[#292e42] hover:border-gray-500",
+              : "border-terminal-border hover:border-gray-500",
             isUploading && "pointer-events-none opacity-50"
           )}
           onDragOver={handleDragOver}
@@ -341,7 +341,7 @@ export function FileUploadDialog({
             {entries.map((entry, idx) => (
               <div
                 key={`${entry.file.name}-${idx}`}
-                className="flex items-center gap-2 px-3 py-2 rounded bg-[#16161e] border border-[#292e42]"
+                className="flex items-center gap-2 px-3 py-2 rounded bg-terminal-deep border border-terminal-border"
               >
                 {/* Status icon */}
                 {entry.status === "uploading" && (

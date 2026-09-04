@@ -37,6 +37,20 @@
     --input: 220 13% 87%;
     --ring: 262.1 83.3% 57.8%;
     --radius: 0.75rem;
+    color-scheme: light;
+
+    /* Terminal and console chrome. Declared here and never in .dark on purpose: this surface does
+       not follow the theme, it paints its own fixed dark device chrome in both themes. The hex
+       twin of these values lives in src/lib/xterm-setup.ts, because xterm paints into a canvas
+       and cannot resolve a CSS variable. Stored as HSL triplets rather than hex so Tailwind's
+       <alpha-value> still works, which components/console/resource-bar.tsx relies on.
+       Retinted from Tokyo Night onto the page's hue: at #1a1b26 the terminal panel separated from
+       a #14111c page by 1.09:1 and clashed blue against purple. The ANSI 16 are deliberately NOT
+       in here. They are terminal content an operator reads as meaning, not chrome. */
+    --terminal-bg: 256.4 24.4% 8.8%;
+    --terminal-deep: 255 22.2% 7.1%;
+    --terminal-raised: 257.6 24.6% 13.5%;
+    --terminal-border: 256.8 24.3% 20.2%;
     
     /* Personalization defaults - unified accent color */
     --personalization-accent: #8b5cf6;
@@ -51,30 +65,51 @@
     --personalization-sidebar-muted: rgba(15,23,42,0.5);
   }
 
+  /* The dark ground is 256.4 24.4% 8.8%, which is exactly #14111c: a purple-tinted near-black
+     sitting in the same hue family as the product primary at 262.1 rather than the stock zinc
+     240. Every sibling below was re-derived onto that family rather than left on 240, because the
+     new ground is lighter than the 3.9% it replaced and a token that keeps its old lightness
+     loses separation against it. Two numbers drove the ladder: --border must hold the 1.34:1
+     separation it had against the old page (19% gives 1.32), and --muted-foreground must not
+     regress on either surface it lands on. Kept at 64.9% it would have fallen to 7.06 on the page
+     and 5.51 on --muted, from 7.77 and 5.81. At 68% it measures 7.78 and 5.90. */
   .dark {
-    --background: 240 10% 3.9%;
+    --background: 256.4 24.4% 8.8%;
     --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
+    /* important: one step above --background, not equal to it. Dark used to paint card, popover
+       and page the same value, so a Card was a hole rather than a surface, while light mode has
+       always elevated. 12% measures 1.07:1 against the page, the same elevation light ships. */
+    --card: 258.5 21.3% 12%;
     --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
+    --popover: 258.5 21.3% 12%;
     --popover-foreground: 0 0% 98%;
-    --primary: 263.4 70% 50.4%;
+    /* note: --primary and --ring are deliberately absent here. The personalization block below
+       sets both on a bare :root OUTSIDE @layer base, and an unlayered rule beats a layered one,
+       so a value declared here could never win. */
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 3.7% 15.9%;
+    --secondary: 256 15.5% 19%;
     --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
+    --muted: 256 15.5% 19%;
+    --muted-foreground: 257.6 10.4% 68%;
+    --accent: 256 15.5% 19%;
     --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
+    /* important: bright, with a near-black foreground. At 0 62.8% 30.6% this measured 1.74:1
+       against --card and 1.86:1 against the page, under the 3:1 floor WCAG 1.4.11 sets for a
+       non-text graphic, so a destructive icon or a text-destructive word was close to invisible
+       in dark. At 0 84% 62% it measures 4.84:1 on --card and 5.18:1 under its own foreground, so
+       it clears the 4.5:1 text floor in both roles a destructive token plays. A white label on
+       the brighter value would measure 3.60:1, which trades one failure for another. */
+    --destructive: 0 84% 62%;
+    --destructive-foreground: 256.4 24.4% 8.8%;
     --success: 142 69% 29%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 40%;
     --warning-foreground: 0 0% 100%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
-    --ring: 263.4 70% 50.4%;
+    --border: 256 15.5% 19%;
+    --input: 256 15.5% 19%;
+    /* Native UI the stylesheet cannot reach: the Firefox scrollbar, date and colour pickers, and
+       default form control chrome. Without this they render light under .dark. */
+    color-scheme: dark;
   }
 }
 

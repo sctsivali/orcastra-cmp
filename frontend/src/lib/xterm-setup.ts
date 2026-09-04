@@ -17,12 +17,25 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import "@xterm/xterm/css/xterm.css";
 
 // Tokyo Night palette shared by all terminals.
+/**
+ * Chrome surfaces. important: these are the hex twin of the --terminal-* tokens in
+ * src/app/globals.css. xterm paints into a canvas and takes hex strings, so it cannot resolve a
+ * CSS variable the way the surrounding Tailwind chrome does, which is why the palette exists in
+ * both places. Change one and change the other.
+ */
+export const TERMINAL_SURFACE = {
+  bg: "#14111c",
+  deep: "#100e16",
+  raised: "#1f1a2b",
+  border: "#2e2740",
+} as const;
+
 export const ORCASTRA_TERMINAL_THEME: ITheme = {
-  background: "#1a1b26",
+  background: TERMINAL_SURFACE.bg,
   foreground: "#a9b1d6",
   cursor: "#c0caf5",
-  cursorAccent: "#1a1b26",
-  selectionBackground: "#33467c",
+  cursorAccent: TERMINAL_SURFACE.bg,
+  selectionBackground: "#4b357e",
   selectionForeground: "#c0caf5",
   black: "#32344a",
   red: "#f7768e",

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { cookies } from "next/headers";
 import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
@@ -20,6 +20,17 @@ export const metadata: Metadata = {
     shortcut: "/favicon.ico",
     apple: "/favicon.ico",
   },
+};
+
+// The colour the browser paints its own chrome with: the mobile address bar, the pull-to-refresh
+// overshoot and the PWA splash. Without it those stay the UA default and frame a #14111c page in
+// white. Keyed to the OS preference rather than the stored theme because the browser reads this
+// before any of our script runs; the values are the two --background tokens in globals.css.
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f3f4f6" },
+    { media: "(prefers-color-scheme: dark)", color: "#14111c" },
+  ],
 };
 
 // inline script to prevent theme flash (FOUC) on page load

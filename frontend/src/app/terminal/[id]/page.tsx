@@ -60,7 +60,7 @@ type OperationType = "start" | "stop" | "restart";
 // Loading fallback
 function TerminalLoading() {
   return (
-    <div className="flex items-center justify-center h-screen bg-[#1a1b26]">
+    <div className="flex items-center justify-center h-screen bg-terminal">
       <div className="flex flex-col items-center gap-4">
         <Spinner className="h-8 w-8 text-blue-400" />
         <span className="text-gray-400">Loading terminal...</span>
@@ -294,9 +294,9 @@ function TerminalContent() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-[#1a1b26]">
+    <div className="flex flex-col h-screen bg-terminal">
       {/* Header */}
-      <div className="flex items-center justify-between h-12 px-4 bg-[#16161e] border-b border-[#292e42]">
+      <div className="flex items-center justify-between h-12 px-4 bg-terminal-deep border-b border-terminal-border">
         <div className="flex items-center gap-3 min-w-0">
           <Button
             variant="ghost"
@@ -421,7 +421,7 @@ function TerminalContent() {
 
       {/* Confirmation Dialog */}
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}>
-        <AlertDialogContent className="bg-[#1a1b26] border-[#292e42]">
+        <AlertDialogContent className="bg-terminal border-terminal-border">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-gray-200">{confirmDialog.title}</AlertDialogTitle>
             <AlertDialogDescription className="text-gray-400">{confirmDialog.description}</AlertDialogDescription>
@@ -443,7 +443,7 @@ function TerminalContent() {
 
       {/* Search bar */}
       {showSearch && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-[#1f2335] border-b border-[#292e42]">
+        <div className="flex items-center gap-2 px-4 py-2 bg-terminal-raised border-b border-terminal-border">
           <Search className="h-4 w-4 text-gray-400" />
           <input
             type="text"
