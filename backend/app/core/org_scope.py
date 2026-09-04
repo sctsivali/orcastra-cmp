@@ -442,6 +442,28 @@ async def resolve_cluster_org(
     return (row[0], row[1])
 
 
+async def resolve_cluster_orgs(
+    host: str,
+    db: AsyncSession,
+) -> list[tuple[int, str]]:
+    """EVERY organization bound to a cluster, lowest id first.
+
+    important: `resolve_cluster_org` answers "which one org do we attribute this to" and takes the
+    lowest id, which is fine for a label and wrong for a permission. A cluster can carry more than
+    one binding, and one does on this deployment today, so a rule that consults a single row is
+    asking one tenant a question about another tenant's guests.
+    """
+    from app.models.db_models import Organization, OrganizationCluster
+
+    stmt = (
+        select(Organization.id, Organization.slug)
+        .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
+        .where(OrganizationCluster.cluster_id == host)
+        .order_by(Organization.id)
+    )
+    return [(row[0], row[1]) for row in (await db.execute(stmt)).all()]
+
+
 async def reconcile_personal_clusters(
     db: AsyncSession,
     user_email: str,

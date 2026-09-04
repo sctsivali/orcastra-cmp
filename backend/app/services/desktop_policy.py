@@ -24,7 +24,7 @@ from app.models.db_models import DesktopControlPolicy
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DesktopConsent", "get_consent", "set_consent"]
+__all__ = ["DesktopConsent", "get_consent", "consent_for_cluster", "set_consent"]
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,39 @@ async def get_consent(db: AsyncSession, organization_id: Optional[int]) -> Deskt
     if row is None:
         return DENIED
     return DesktopConsent(enabled=bool(row.enabled), allow_input=bool(row.allow_input))
+
+
+async def consent_for_cluster(db: AsyncSession, cluster_id: str) -> tuple[DesktopConsent, Optional[str]]:
+    """What EVERY organization sharing this cluster permits, and the first that does not.
+
+    important: the intersection, not one organization's row. A cluster can be bound to more than
+    one organization, and one on this deployment is: nuc2 carries both a provider org and a
+    partner's. Asking only the lowest-id binding, which is what `resolve_cluster_org` answers and
+    what this gate first shipped with, means one tenant's yes authorises capturing another
+    tenant's screens. Neither tenant can tell whose guest is whose from the cluster alone, so the
+    only honest rule is that all of them have to agree.
+
+    Failing closed twice over: an unbound cluster has nobody who could have consented, and a
+    single dissenting organization is enough to refuse.
+    """
+    from app.core.org_scope import resolve_cluster_orgs
+
+    orgs = await resolve_cluster_orgs(cluster_id, db)
+    if not orgs:
+        return DENIED, None
+
+    view = True
+    inputs = True
+    dissenting: Optional[str] = None
+    for org_id, slug in orgs:
+        consent = await get_consent(db, org_id)
+        if not consent.may_view and dissenting is None:
+            dissenting = slug
+        view = view and consent.may_view
+        inputs = inputs and consent.may_input
+        if not inputs and dissenting is None and not consent.may_input:
+            dissenting = slug
+    return DesktopConsent(enabled=view, allow_input=view and inputs), dissenting
 
 
 async def set_consent(

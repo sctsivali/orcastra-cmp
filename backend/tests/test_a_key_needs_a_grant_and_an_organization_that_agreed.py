@@ -17,11 +17,19 @@ so the two consents are kept apart and both are required.
 from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 
 from app.models.db_models import BreakGlassGrant, DesktopControlPolicy
-from app.services.desktop_policy import DENIED, DesktopConsent, get_consent, set_consent
+from app.services.desktop_policy import (
+    DENIED,
+    DesktopConsent,
+    consent_for_cluster,
+    get_consent,
+    set_consent,
+)
 
 
 def _now() -> datetime:
@@ -174,6 +182,87 @@ async def test_the_first_decision_creates_the_row() -> None:
     assert len(session.added) == 1
     assert session.added[0].organization_id == 9
     assert session.commits == 1
+
+
+# ── a shared cluster needs every tenant on it to agree ─────────────────────────────────────────
+
+class _MultiOrgSession:
+    """Answers `resolve_cluster_orgs` with `orgs`, then a policy row per organization."""
+
+    def __init__(self, orgs, rows) -> None:
+        self._orgs = orgs
+        self._rows = rows
+        self._first = True
+
+    async def execute(self, _stmt):
+        if self._first:
+            self._first = False
+            return _Rows(self._orgs)
+        return _Scalar(self._rows.pop(0) if self._rows else None)
+
+
+class _Rows:
+    def __init__(self, rows) -> None:
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _Scalar:
+    def __init__(self, row) -> None:
+        self._row = row
+
+    def scalar_one_or_none(self):
+        return self._row
+
+
+def _row(enabled: bool, allow_input: bool):
+    return SimpleNamespace(enabled=enabled, allow_input=allow_input)
+
+
+@pytest.mark.asyncio
+async def test_one_tenant_cannot_consent_on_behalf_of_another_sharing_the_cluster() -> None:
+    """The intersection, not the lowest-id binding.
+
+    `resolve_cluster_org` returns one organization because it answers "who is this attributed
+    to", and the gate first shipped reading its policy row. On this deployment nuc2 is bound to
+    both a provider organization and a partner's, so that rule let one tenant's yes authorise
+    capturing the other tenant's screens. Nothing about a guest says which tenant it belongs to,
+    so agreement from all of them is the only rule that cannot disclose the wrong desktop.
+    """
+    consent, dissenting = await consent_for_cluster(
+        _MultiOrgSession([(6, "provider"), (122, "partner")], [_row(True, True), _row(False, False)]),
+        "nuc2",
+    )
+    assert not consent.may_view
+    assert dissenting == "partner", "the refusal must name who still has to agree"
+
+
+@pytest.mark.asyncio
+async def test_a_shared_cluster_where_everyone_agreed_is_allowed() -> None:
+    consent, dissenting = await consent_for_cluster(
+        _MultiOrgSession([(6, "provider"), (122, "partner")], [_row(True, True), _row(True, True)]),
+        "nuc2",
+    )
+    assert consent.may_view and consent.may_input
+    assert dissenting is None
+
+
+@pytest.mark.asyncio
+async def test_input_needs_every_tenant_to_have_allowed_it_separately() -> None:
+    consent, _ = await consent_for_cluster(
+        _MultiOrgSession([(6, "provider"), (122, "partner")], [_row(True, True), _row(True, False)]),
+        "nuc2",
+    )
+    assert consent.may_view, "viewing is agreed by both"
+    assert not consent.may_input, "one of them did not agree to typing"
+
+
+@pytest.mark.asyncio
+async def test_a_cluster_bound_to_nobody_is_still_refused() -> None:
+    consent, dissenting = await consent_for_cluster(_MultiOrgSession([], []), "orphan")
+    assert consent == DENIED and dissenting is None
 
 
 def test_the_policy_is_not_stored_in_the_personalization_blob() -> None:
@@ -356,7 +445,16 @@ def test_the_gate_consults_all_three_controls() -> None:
     from app.routers import integrations
 
     tree = ast.parse(inspect.getsource(integrations._assert_desktop_allowed).lstrip())
-    assert _calls(tree, "get_consent"), "the organization's consent is not read"
+    # important: `consent_for_cluster`, not `get_consent`. The single-organization form answers
+    # for whichever binding has the lowest id, and a cluster on this deployment carries two, so
+    # using it here is the bug that let one tenant consent for another tenant's screens.
+    assert _calls(tree, "consent_for_cluster"), (
+        "the gate does not consult every organization sharing the cluster"
+    )
+    assert not _calls(tree, "get_consent"), (
+        "the gate reads one organization's row directly, which answers for the wrong tenant on a "
+        "shared cluster"
+    )
     assert _calls(tree, "get_active_key_grant"), "the key's grant is not read"
     assert _calls(tree, "consume"), "the per-target budget is not spent"
     assert _calls(tree, "cluster_fingerprint"), (

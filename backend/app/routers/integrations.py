@@ -2593,7 +2593,7 @@ async def _assert_desktop_allowed(
     from app.core.org_scope import resolve_cluster_org
     from app.services import break_glass_service
     from app.services.desktop import budget as desktop_budget
-    from app.services.desktop_policy import get_consent
+    from app.services.desktop_policy import consent_for_cluster
 
     key_id = str(api_key.get("id") or "")
     instance = str((request.params or {}).get("name") or "")
@@ -2624,15 +2624,19 @@ async def _assert_desktop_allowed(
     async with async_session_maker() as db:
         org = await resolve_cluster_org(request.cluster_id, db)
 
-        consent = await get_consent(db, org[0])
+        # important: EVERY organization sharing the cluster, not the one it is attributed to. A
+        # cluster can carry more than one binding and one here does, so consulting a single row
+        # would let one tenant's yes authorise capturing another tenant's screens.
+        consent, dissenting = await consent_for_cluster(db, request.cluster_id)
+        named = f" ({dissenting})" if dissenting else ""
         if not consent.may_view:
             _refuse(
                 403,
                 (
-                    "The organization that owns this cluster has not enabled desktop control. "
-                    "Screen contents leaving for a model is a decision that belongs to the "
-                    "organization rather than to the integration, so an administrator of that "
-                    "organization has to turn it on first."
+                    f"An organization sharing this cluster{named} has not enabled desktop "
+                    "control. Screen contents leaving for a model is a decision that belongs to "
+                    "the organization rather than to the integration, so an administrator of "
+                    "every organization on this cluster has to turn it on first."
                 ),
                 "organization_has_not_consented",
             )
@@ -2640,8 +2644,9 @@ async def _assert_desktop_allowed(
             _refuse(
                 403,
                 (
-                    "This organization allows an agent to see its screens and not to type into "
-                    "them. Watching and touching are separate consents."
+                    f"An organization sharing this cluster{named} allows an agent to see its "
+                    "screens and not to type into them. Watching and touching are separate "
+                    "consents."
                 ),
                 "organization_has_not_allowed_input",
             )
