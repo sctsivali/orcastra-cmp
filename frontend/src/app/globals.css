@@ -44,10 +44,13 @@
        state and warning severity, which run the same urgency ladder. Separate from
        --success/--warning/--destructive because those are tuned as backgrounds carrying their
        own foreground, while a status dot is a bare graphic measured against the surface behind
-       it. --destructive in dark measures 1.99:1 on --popover, under the 3:1 floor WCAG 1.4.11
-       sets for a non-text graphic, which is why six files hand-rolled bg-red-500 instead of
-       using the token. Every pair below was measured: worst is 4.52:1, so they are also safe if
-       one ever colours a word.
+       it. The separation earned its keep: --destructive in dark used to measure 1.99:1 on
+       --popover, under the 3:1 floor WCAG 1.4.11 sets for a non-text graphic, which is why six
+       files hand-rolled bg-red-500 instead of using the token. That gap is now closed, and it was
+       closed by giving --destructive the same treatment these tokens already had rather than by
+       merging them: a status is reachability, and destructive is an action you cannot undo.
+       Every pair below was measured: worst is 4.52:1, so they are also safe if one ever colours
+       a word.
 
        The -foreground pairs carry a solid chip, which is the treatment the Cluster submenu
        uses for a Status cell. Measured against their own token, light then dark: online
@@ -127,7 +130,10 @@
     --card-foreground: 0 0% 98%;
     --popover: 258.5 21.3% 12%;
     --popover-foreground: 0 0% 98%;
-    --primary: 263.4 70% 50.4%;
+    /* note: --primary and --ring are deliberately absent here. The personalization block below
+       sets both on a bare :root OUTSIDE @layer base, and an unlayered rule beats a layered one,
+       so a value declared here could never win. This block used to carry 263.4 70% 50.4% for
+       both, which read as a dark-mode decision and was dead the day personalization shipped. */
     --primary-foreground: 0 0% 100%;
     --secondary: 256 15.5% 19%;
     --secondary-foreground: 0 0% 98%;
@@ -135,8 +141,16 @@
     --muted-foreground: 257.6 10.4% 68%;
     --accent: 256 15.5% 19%;
     --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
+    /* important: bright, with a near-black foreground, which is the treatment --status-offline
+       already uses two blocks down. At 0 62.8% 30.6% this measured 1.74:1 against --card and
+       1.86:1 against the page, under the 3:1 floor WCAG 1.4.11 sets for a non-text graphic, so a
+       destructive icon or a text-destructive word was close to invisible in dark. That is the
+       documented reason six files hand-rolled bg-red-500 rather than use the token. At 0 84% 62%
+       it measures 4.84:1 on --card and 5.18:1 under its own foreground, so it clears the 4.5:1
+       text floor in both roles. The value is deliberately identical to --status-offline: one red
+       means one thing, and the alternative is two shades of "bad" in one product. */
+    --destructive: 0 84% 62%;
+    --destructive-foreground: 256.4 24.4% 8.8%;
     --success: 142 69% 29%;
     --success-foreground: 0 0% 100%;
     --warning: 38 92% 40%;
@@ -153,7 +167,6 @@
     --status-unknown-foreground: 256.4 24.4% 8.8%;
     --border: 256 15.5% 19%;
     --input: 256 15.5% 19%;
-    --ring: 263.4 70% 50.4%;
     /* Native UI the stylesheet cannot reach: the Firefox scrollbar the -webkit- rules below never
        themed, date and colour pickers, and the default form control chrome. Without this they all
        render light under .dark, which is how a dark page ends up with a white date picker. */
