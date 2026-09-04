@@ -3478,16 +3478,28 @@ async def proxy_operation(
                 request.params or {},
                 request.project,
                 request.wait,
-                # note: exec holds a worker for as long as the command runs, so it gets its own
-                # budget rather than the operation one. A command that needs longer is a job.
-                timeout=EXEC_TIMEOUT if operation == "exec_instance" else PROXY_OP_TIMEOUT,
+                # note: a guest-reaching call holds a worker for as long as it runs, so it gets
+                # its own budget rather than the operation one. A command that needs longer is a
+                # job.
+                #
+                # important: keyed on membership of GUEST_ACCESS_OPERATIONS, not on the name
+                # `exec_instance`. These three read as an exec special case and are really the
+                # guest-access case, so every operation added to that set inherited the proxy
+                # pool and the proxy budget instead, which is the pool this comment explains it
+                # must not use. `_client_for` already derives its socket window from the same
+                # set, so the two halves now agree.
+                timeout=EXEC_TIMEOUT if operation in GUEST_ACCESS_OPERATIONS else PROXY_OP_TIMEOUT,
                 label=f"proxy_operation[{operation} {request.cluster_id}]",
-                # note: a runaway exec holds its worker until the command ends, because
-                # run_blocking frees the caller and not the thread. Its own pool means the blast
-                # radius of that is other execs rather than every read on this router.
-                executor=exec_executor if operation == "exec_instance" else proxy_executor,
+                # note: a runaway guest call holds its worker until it ends, because run_blocking
+                # frees the caller and not the thread. Its own pool means the blast radius of
+                # that is other guest calls rather than every read on this router.
+                executor=(
+                    exec_executor if operation in GUEST_ACCESS_OPERATIONS else proxy_executor
+                ),
                 max_in_flight=(
-                    EXEC_MAX_IN_FLIGHT if operation == "exec_instance" else PROXY_MAX_IN_FLIGHT
+                    EXEC_MAX_IN_FLIGHT
+                    if operation in GUEST_ACCESS_OPERATIONS
+                    else PROXY_MAX_IN_FLIGHT
                 ),
             )
             health.clear(request.cluster_id)
@@ -3498,26 +3510,37 @@ async def proxy_operation(
             # first. `exec_instance` is also not in PROXY_WAIT_OPERATIONS, so without this it fell
             # through to record_failure and tripped the process-wide breaker: one integration's
             # slow command would make the cluster read as offline for every other caller.
-            if operation == "exec_instance":
+            if operation in GUEST_ACCESS_OPERATIONS:
+                _timed_out_capability = GUEST_ACCESS_OPERATIONS[operation]
                 _audit_key_action(
                     api_key,
-                    action="integration.instance.exec",
+                    action=_PROXY_AUDIT_ACTIONS[_timed_out_capability],
                     target_id=str(request.params.get("name", "")),
                     cluster_id=request.cluster_id,
                     project=request.project,
                     result="failure",
                     details={
-                        "command": request.params.get("command"),
-                        "cwd": request.params.get("cwd"),
-                        "run_as_user": request.params.get("user"),
+                        "operation": operation,
+                        # note: an exec is described by its argv, a file call by its path.
+                        # Recording both shapes unconditionally would put a null in every record
+                        # and tell a reader nothing about which call this was.
+                        **(
+                            {
+                                "command": request.params.get("command"),
+                                "cwd": request.params.get("cwd"),
+                                "run_as_user": request.params.get("user"),
+                            }
+                            if operation == "exec_instance"
+                            else {"path": request.params.get("path")}
+                        ),
                         "outcome": "timeout",
                     },
                     external_user_email=request.external_user_email,
                     error_message="timeout",
                 )
                 logger.warning(
-                    "Exec timeout: %s on %s after %ss",
-                    request.params.get("name"), request.cluster_id, EXEC_TIMEOUT,
+                    "Guest access timeout: %s %s on %s after %ss",
+                    operation, request.params.get("name"), request.cluster_id, EXEC_TIMEOUT,
                 )
                 return ProxyResponse(
                     success=False,

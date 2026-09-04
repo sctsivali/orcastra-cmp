@@ -415,18 +415,25 @@ def test_the_timeout_path_exec_actually_takes_is_the_one_that_records_it() -> No
         if h.type is not None and "BlockingTimeout" in ast.unparse(h.type)
     )
     body = ast.unparse(blocking_timeout)
-    assert "exec_instance" in body, "the exec timeout falls through to the generic timeout reply"
-    assert "_audit_key_action" in body, "a timed-out exec leaves no record of having run"
+    assert "GUEST_ACCESS_OPERATIONS" in body, (
+        "the guest-access timeout falls through to the generic timeout reply"
+    )
+    assert "_audit_key_action" in body, "a timed-out guest call leaves no record of having run"
     assert "_still_running_message" in body, "the caller is told only that it timed out"
 
-    # And it must return before record_failure, or one slow command condemns the cluster.
-    exec_branch = next(
+    # important: keyed on the SET, not on the name `exec_instance`, which is what this assertion
+    # used to look for. Exec was the first operation to reach inside a guest and for a while the
+    # only one, so a branch written for it read as the guest-access branch and was not. Adding
+    # get_file and put_file to GUEST_ACCESS_OPERATIONS would have left them on the generic path
+    # this whole test exists to keep guest calls off: no audit record, no "still running", and a
+    # record_failure that condemns the cluster for every other caller.
+    guest_branch = next(
         node
         for node in ast.walk(blocking_timeout)
-        if isinstance(node, ast.If) and "exec_instance" in ast.unparse(node.test)
+        if isinstance(node, ast.If) and "GUEST_ACCESS_OPERATIONS" in ast.unparse(node.test)
     )
-    assert any(isinstance(n, ast.Return) for n in ast.walk(exec_branch)), (
-        "the exec branch falls through to health.record_failure and trips the breaker"
+    assert any(isinstance(n, ast.Return) for n in ast.walk(guest_branch)), (
+        "the guest-access branch falls through to health.record_failure and trips the breaker"
     )
 
 
@@ -449,3 +456,40 @@ def test_the_timeout_message_states_the_budget_that_actually_bound_the_call() ->
     create_message = _still_running_message("create_instance", "nuc2")
     assert f"{PROXY_OP_TIMEOUT:g}s" in create_message
     assert "wait" in create_message, "create does have one, and it is the right advice there"
+
+
+def test_every_guest_operation_shares_the_exec_pool_and_the_exec_budget() -> None:
+    """The pool selection reads as an exec special case and is really the guest-access case.
+
+    `exec_executor` exists because run_blocking frees the caller and not the thread, so a runaway
+    guest call holds a worker until its own socket timeout fires. On the shared proxy pool the
+    blast radius of that is every read, every raw-proxy call and every fan-out on this router.
+    Selecting the pool by the name `exec_instance` meant each new guest-reaching operation
+    silently got the shared pool instead, which is the pool the comment above it says it must not
+    use. `_client_for` already derives its socket window from the same set, so a mismatch here
+    would also give the guest call a budget its socket window was not sized for.
+    """
+    handler = next(
+        node
+        for node in ast.walk(ast.parse(ROUTER.read_text()))
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "proxy_operation"
+    )
+    call = next(
+        node
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Call)
+        and getattr(node.func, "id", None) == "run_blocking"
+    )
+    selectors = {
+        keyword.arg: ast.unparse(keyword.value)
+        for keyword in call.keywords
+        if keyword.arg in ("timeout", "executor", "max_in_flight")
+    }
+    assert set(selectors) == {"timeout", "executor", "max_in_flight"}
+    for name, rendered in selectors.items():
+        assert "GUEST_ACCESS_OPERATIONS" in rendered, (
+            f"run_blocking's {name} still selects on a single operation name, so an operation "
+            f"added to GUEST_ACCESS_OPERATIONS does not get the exec pool or the exec budget: "
+            f"{rendered}"
+        )

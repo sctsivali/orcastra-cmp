@@ -104,6 +104,27 @@ exec_executor = ThreadPoolExecutor(
 # worse for the audit record. It is not a file upload; that is what instance.files is for.
 EXEC_STDIN_LIMIT = _env_int("ORCASTRA_EXEC_STDIN_LIMIT", 64 * 1024)
 
+# File transfer inside a guest. Shares the exec pool and the exec timeout, because it is the same
+# kind of act against the same guest and splitting the budget would only mean two ways to hold a
+# worker.
+#
+# important: the read cap is enforced as chunks ARRIVE, for the same reason exec's is. pylxd's
+# FilesManager.get is `return response.content`, which buffers the whole body with no bound
+# (pylxd/models/instance.py), so `get_file` on /dev/zero or a 40 GiB image would grow a worker's
+# memory until it died. The bounded reader in guest_files.py is why this surface does not call it.
+#
+# Larger than EXEC_OUTPUT_LIMIT because a file has a legitimate reason to be big and a command's
+# stdout usually does not. Still bounded, and the response says when it truncated.
+FILE_READ_LIMIT = _env_int("ORCASTRA_FILE_READ_LIMIT", 4 * 1024 * 1024)
+
+# What a caller may push in. Bounded separately from the read: a write is caller-chosen in a way a
+# read is not, and this whole payload sits in the request body and then in the worker's memory.
+FILE_WRITE_LIMIT = _env_int("ORCASTRA_FILE_WRITE_LIMIT", 4 * 1024 * 1024)
+
+# Chunk size for the bounded read. Small enough that the cap is honoured promptly on a huge file,
+# large enough not to make a normal file a thousand round trips through the iterator.
+FILE_CHUNK_BYTES = _env_int("ORCASTRA_FILE_CHUNK_BYTES", 64 * 1024)
+
 # Per-cluster budget for the OrcaHub sync fan-out. Applied per cluster, and the clusters run
 # concurrently, so total wall clock is the slowest cluster rather than the sum.
 SYNC_CLUSTER_TIMEOUT = _env_float("ORCASTRA_SYNC_CLUSTER_TIMEOUT", 20.0)

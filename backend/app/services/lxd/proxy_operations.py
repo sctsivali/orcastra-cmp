@@ -22,6 +22,7 @@ from fastapi import HTTPException
 
 from .availability import require_client
 from .guest_exec import exec_instance
+from .guest_files import get_file, put_file
 from .instance_view import instance_detail, instance_summary, status_name
 from .proxy import EXEC_TIMEOUT, PROXY_OP_TIMEOUT
 
@@ -58,10 +59,15 @@ PROXY_OPERATION_LEVELS: Dict[str, str] = {
     "list_profiles": "read",
     "list_snapshots": "read",
     "get_operation": "read",
+    # Reading a path inside a guest. Priced `read` because that is what it does to the cluster,
+    # and because the contract test refuses to let anything named `get_` cost more. The level is
+    # not what bounds it: instance.files is, and no preset seeds that.
+    "get_file": "read",
     # Reaching inside a guest. Priced `write` because it changes the instance's state, but the
     # level is not what bounds it: GUEST_ACCESS_OPERATIONS below demands an explicit capability
     # on top, which no application-type preset seeds and no legacy key inherits.
     "exec_instance": "write",
+    "put_file": "write",
     # Writes: changing an instance that already exists, or creating one.
     "create_instance": "write",
     "update_instance": "write",
@@ -99,6 +105,11 @@ CLUSTER_WIDE_OPERATIONS: FrozenSet[str] = frozenset({
 # operation costs before it may run.
 GUEST_ACCESS_OPERATIONS: Dict[str, str] = {
     "exec_instance": "instance.exec",
+    # Separate from instance.exec on purpose, and the vocabulary already says why: holding one
+    # does not imply the other. A health check that runs a command has no reason to read files,
+    # and a backup that reads files has no reason to run anything.
+    "get_file": "instance.files",
+    "put_file": "instance.files",
 }
 
 # Operations that poll an LXD operation to completion. They need a wider read window than the
@@ -284,6 +295,11 @@ _REQUIRED_PARAMS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "delete_snapshot": (("name", "Instance name"), ("snapshot_name", "Snapshot name")),
     "get_operation": (("operation_id", "Operation id"),),
     "exec_instance": (("name", "Instance name"), ("command", "Command")),
+    # note: the branches validate `path` themselves in guest_files, which does more than a
+    # presence check. The rows are still here because this table is the up-front gate: without
+    # them a request missing a path pays for a connection before being told about its own body.
+    "get_file": (("name", "Instance name"), ("path", "File path")),
+    "put_file": (("name", "Instance name"), ("path", "File path")),
     "create_network": (("name", "Network name"),),
     "delete_network": (("name", "Network name"),),
     "delete_storage_pool": (("name", "Storage pool name"),),
@@ -446,6 +462,12 @@ def execute_proxy_operation(
 
     if operation == "exec_instance":
         return exec_instance(instance(), params)
+
+    if operation == "get_file":
+        return get_file(instance(), params)
+
+    if operation == "put_file":
+        return put_file(instance(), params)
 
     if operation == "create_snapshot":
         # note: validate before the lookup. Reversed, a request missing snapshot_name spent a
