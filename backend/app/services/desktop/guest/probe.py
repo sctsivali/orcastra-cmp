@@ -81,6 +81,24 @@ fi
 xdotool getdisplaygeometry 2>/dev/null | tr ' ' 'x' | sed "s/^/geom=/"
 xdotool getdisplaygeometry >/dev/null 2>&1 && echo "subcmd=getdisplaygeometry"
 printf '' | xdotool type --file - >/dev/null 2>&1 && echo "subcmd=type_file"
+
+# important: the same discovery for Wayland, which had none. A wlroots guest was reported ready
+# with grim and wtype, and then every capture failed with "XDG_RUNTIME_DIR is invalid or not set",
+# because a Wayland client finds its compositor through those two variables and an LXD exec
+# inherits neither. The socket was already being listed here; nothing turned it into an
+# environment.
+if [ -z "$WAYLAND_DISPLAY" ]; then
+  for w in /run/user/*/wayland-[0-9]*; do
+    [ -e "$w" ] || continue
+    XDG_RUNTIME_DIR=$(dirname "$w")
+    WAYLAND_DISPLAY=$(basename "$w")
+    export XDG_RUNTIME_DIR WAYLAND_DISPLAY
+    break
+  done
+fi
+[ -n "$WAYLAND_DISPLAY" ] && echo "probe_wayland_display=$WAYLAND_DISPLAY"
+[ -n "$XDG_RUNTIME_DIR" ] && echo "probe_runtime_dir=$XDG_RUNTIME_DIR"
+wlr-randr 2>/dev/null | awk '/current/ {print $1; exit}' | sed "s/^/wlgeom=/"
 echo "ORCA_END"
 """
 
@@ -221,6 +239,14 @@ def build_report(stdout: str, *, agent: bool) -> ProbeReport:
     displays = fields.get("xsocket") or []
     if session_type == "x11" and displays:
         environment["DISPLAY"] = displays[0]
+    if session_type.startswith("wayland"):
+        # Both, or neither is any use: a Wayland client resolves its socket as
+        # $XDG_RUNTIME_DIR/$WAYLAND_DISPLAY and an exec session inherits no session environment.
+        runtime_dir = (fields.get("probe_runtime_dir") or [None])[0]
+        wayland_display = (fields.get("probe_wayland_display") or [None])[0]
+        if runtime_dir and wayland_display:
+            environment["XDG_RUNTIME_DIR"] = runtime_dir
+            environment["WAYLAND_DISPLAY"] = wayland_display
 
     # important: the display is established HERE, not on the first capture. A coordinate is
     # measured against the screenshot, and the screenshot is downscaled whenever the guest runs
@@ -229,6 +255,11 @@ def build_report(stdout: str, *, agent: bool) -> ProbeReport:
     # to where the caller meant, silently, with the action reporting success.
     geometry: Optional[Display] = None
     raw_geometry = (fields.get("geom") or [None])[0]
+    if raw_geometry is None and session_type.startswith("wayland"):
+        # wlr-randr is the generic wlroots equivalent of `xdotool getdisplaygeometry`. Absent, the
+        # scale is established from the first capture instead, which is the pre-existing
+        # behaviour rather than a new hole.
+        raw_geometry = (fields.get("wlgeom") or [None])[0]
     if raw_geometry and "x" in raw_geometry:
         try:
             guest_width, guest_height = (int(part) for part in raw_geometry.split("x", 1))

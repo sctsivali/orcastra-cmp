@@ -199,6 +199,12 @@ def scroll_chain(
     return argv
 
 
+# How long wtype waits before its first keystroke. The virtual-keyboard protocol has no
+# acknowledgement, so this is the only lever, and losing a leading character silently is worse
+# than a slower keystroke.
+WTYPE_SETTLE_MS = 150
+
+
 def clipboard_read_chain(session_type: str) -> List[str]:
     """Read the clipboard, trying each tool in turn rather than requiring a particular one.
 
@@ -242,7 +248,13 @@ def type_chain(session_type: str, tool: str, *, use_stdin: bool, text: str) -> L
             return ["xdotool", "type", "--clearmodifiers", "--delay", "12", "--file", "-"]
         return ["xdotool", "type", "--clearmodifiers", "--delay", "12", "--", text]
     if tool == "wtype":
-        return ["wtype", "--", text]
+        # important: -s before anything is typed, or the FIRST characters are lost. wtype binds a
+        # virtual keyboard through the Wayland protocol and starts typing immediately, and a
+        # compositor that has not finished processing the keymap drops what arrives first.
+        # Measured on sway: "echo ..." reached the shell as "cho ...", the action reported
+        # success, and the guest ran a different command from the one that was asked for. That is
+        # the worst shape a defect can take on this surface, because a caller cannot see it.
+        return ["wtype", "-s", str(WTYPE_SETTLE_MS), "-d", "12", "--", text]
     if tool == "ydotool":
         return ["ydotool", "type", "--key-delay", "12", "--", text]
     raise ValueError(f"no type chain for {tool!r}")
@@ -256,7 +268,7 @@ def key_chain(session_type: str, tool: str, key: str, modifiers: List[str], repe
             argv += ["--repeat", str(repeat), "--delay", "40"]
         return [*argv, "--", combination]
     if tool == "wtype":
-        argv: List[str] = ["wtype"]
+        argv: List[str] = ["wtype", "-s", str(WTYPE_SETTLE_MS)]
         for modifier in modifiers:
             argv += ["-M", modifier]
         argv += ["-k", key]

@@ -453,9 +453,9 @@ def test_a_screenshot_comes_back_as_an_image_not_as_text() -> None:
     the 1280x800 target is sized for. On a real desktop rather than an empty test one the same
     frame is hundreds of thousands of text tokens.
     """
-    from app.mcp.errors import promote_image
+    from app.mcp.errors import _promote_image
 
-    promoted = promote_image(_capture_result())
+    promoted = _promote_image(_capture_result())
     kinds = [c.type for c in promoted.content]
     assert "image" in kinds, f"a capture must carry an image content block, got {kinds}"
 
@@ -469,9 +469,9 @@ def test_a_screenshot_comes_back_as_an_image_not_as_text() -> None:
 def test_the_frame_is_not_sent_twice() -> None:
     """It was in the text block and in the structured payload, so every capture crossed the wire
     twice. The metadata a programmatic caller needs stays; only the bytes move."""
-    from app.mcp.errors import promote_image
+    from app.mcp.errors import _promote_image
 
-    promoted = promote_image(_capture_result("QUJDREVG"))
+    promoted = _promote_image(_capture_result("QUJDREVG"))
     text = "".join(c.text for c in promoted.content if c.type == "text")
     assert "QUJDREVG" not in text, "the base64 is still duplicated in the text block"
 
@@ -482,18 +482,63 @@ def test_the_frame_is_not_sent_twice() -> None:
 
 
 def test_a_refusal_is_passed_through_untouched() -> None:
-    from app.mcp.errors import promote_image, tool_error
+    from app.mcp.errors import _promote_image, tool_error
 
     refusal = tool_error("nope", error_code="forbidden")
-    assert promote_image(refusal) is refusal
+    assert _promote_image(refusal) is refusal
 
 
 def test_a_result_with_no_frame_is_unchanged() -> None:
     """cursor_position and the input actions share the operation and carry no image."""
-    from app.mcp.errors import promote_image, tool_result
+    from app.mcp.errors import _promote_image, tool_result
 
     plain = tool_result({"data": {"ok": True, "action": "cursor_position"}})
-    assert promote_image(plain) is plain
+    assert _promote_image(plain) is plain
+
+
+def test_a_failed_desktop_action_is_reported_as_a_failure() -> None:
+    """The action reports its own outcome in data.ok, separately from whether the operation ran.
+
+    A wlroots capture that failed inside the guest came back with isError false and a payload
+    saying ok false, so a model was told the screenshot succeeded and handed no image.
+    """
+    from app.mcp.errors import desktop_result, tool_result
+
+    failed = desktop_result(tool_result({"data": {
+        "ok": False, "action": "screenshot", "error_code": "desktop_capture_failed",
+        "detail": "XDG_RUNTIME_DIR is invalid or not set in the environment",
+    }}))
+    assert failed.is_error, "a failed capture must reach the model as an error"
+    text = "".join(c.text for c in failed.content if c.type == "text")
+    assert "XDG_RUNTIME_DIR" in text, "the detail an operator can act on must survive"
+    assert "desktop_capture_failed" in text
+
+
+def test_a_successful_action_still_carries_its_payload() -> None:
+    from app.mcp.errors import desktop_result
+
+    ok = desktop_result(_capture_result("QUJD"))
+    assert not ok.is_error
+    assert "image" in [c.type for c in ok.content]
+
+
+def test_every_desktop_tool_reports_the_action_outcome() -> None:
+    """A desktop tool returning call_proxy raw reports a failed action as a success."""
+    import ast
+    import inspect
+
+    from app.mcp import tools_desktop
+
+    tree = ast.parse(inspect.getsource(tools_desktop))
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or not node.name.startswith("desktop_"):
+            continue
+        rendered = ast.unparse(node)
+        if "call_proxy" not in rendered:
+            continue
+        assert "desktop_result" in rendered, (
+            f"{node.name} returns the proxy result raw, so a failed action reads as a success"
+        )
 
 
 def test_every_capture_tool_promotes_its_frame() -> None:
@@ -511,6 +556,38 @@ def test_every_capture_tool_promotes_its_frame() -> None:
         rendered = ast.unparse(node)
         if '"action": "screenshot"' not in rendered and '"action": "zoom"' not in rendered:
             continue
-        assert "promote_image" in rendered, (
+        assert "desktop_result" in rendered, (
             f"{node.name} captures a frame and does not promote it to an image block"
         )
+
+
+# ── the Wayland input path drops leading characters without a settle ───────────────────────────
+
+def test_wtype_waits_before_its_first_keystroke() -> None:
+    """Measured on sway: "echo ..." reached the shell as "cho ...".
+
+    wtype binds a virtual keyboard through the Wayland protocol and starts typing immediately.
+    The protocol has no acknowledgement that the compositor processed the keymap, so whatever
+    arrives first is dropped. The action still reports success, so the guest runs a different
+    command from the one that was asked for and nothing on the calling side can tell. A leading
+    character lost from a password or a destructive command is the same defect with teeth.
+    """
+    from app.services.desktop.guest.chains import WTYPE_SETTLE_MS, key_chain, type_chain
+
+    typed = type_chain("wayland-wlroots", "wtype", use_stdin=False, text="echo hello")
+    assert "-s" in typed, "wtype types with no settle, so the first characters are lost"
+    assert typed[typed.index("-s") + 1] == str(WTYPE_SETTLE_MS)
+    assert typed.index("-s") < typed.index("--"), "the settle must come before the text"
+    assert "-d" in typed, "no inter-keystroke delay, which drops characters under load"
+
+    pressed = key_chain("wayland-wlroots", "wtype", "Return", [], 1)
+    assert "-s" in pressed, "a single key press binds the same virtual keyboard and races the same"
+
+
+def test_the_text_is_still_the_last_argument_after_the_separator() -> None:
+    """The settle must not push the text where a leading dash could be read as an option."""
+    from app.services.desktop.guest.chains import type_chain
+
+    typed = type_chain("wayland-wlroots", "wtype", use_stdin=False, text="-rf /")
+    assert typed[-1] == "-rf /"
+    assert typed[-2] == "--"

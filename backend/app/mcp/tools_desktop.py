@@ -18,7 +18,7 @@ from mcp.types import CallToolResult, ToolAnnotations
 from pydantic import Field
 
 from .dispatch import call_proxy
-from .errors import promote_image
+from .errors import desktop_result
 
 __all__ = ["register"]
 
@@ -53,10 +53,10 @@ def register(mcp: MCPServer) -> None:
         project: Project = "default",
         refresh: Annotated[bool, Field(default=False, description="Re-probe rather than reuse the cached answer.")] = False,
     ) -> CallToolResult:
-        return await call_proxy(
+        return desktop_result(await call_proxy(
             "desktop_probe", cluster_id, project=project,
             params={"name": name, "refresh": refresh},
-        )
+        ))
 
     @mcp.tool(
         name="desktop_screenshot",
@@ -77,7 +77,7 @@ def register(mcp: MCPServer) -> None:
         # important: promoted to an image content block. Left as the proxy returns it the frame
         # travels as base64 inside the JSON text, which is not an image to any client and is
         # charged as text rather than in visual tokens.
-        return promote_image(await call_proxy(
+        return desktop_result(await call_proxy(
             "desktop_view", cluster_id, project=project,
             params={"name": name, "action": "screenshot", "settle_ms": settle_ms},
         ))
@@ -100,7 +100,7 @@ def register(mcp: MCPServer) -> None:
         ],
         project: Project = "default",
     ) -> CallToolResult:
-        return promote_image(await call_proxy(
+        return desktop_result(await call_proxy(
             "desktop_view", cluster_id, project=project,
             params={"name": name, "action": "zoom", "region": region},
         ))
@@ -116,10 +116,10 @@ def register(mcp: MCPServer) -> None:
     async def desktop_cursor_position(
         cluster_id: Cluster, name: InstanceName, project: Project = "default"
     ) -> CallToolResult:
-        return await call_proxy(
+        return desktop_result(await call_proxy(
             "desktop_view", cluster_id, project=project,
             params={"name": name, "action": "cursor_position"},
-        )
+        ))
 
     @mcp.tool(
         name="desktop_control",
@@ -167,7 +167,9 @@ def register(mcp: MCPServer) -> None:
         ):
             if value is not None:
                 params[field] = value
-        return await call_proxy("desktop_input", cluster_id, project=project, params=params)
+        return desktop_result(
+            await call_proxy("desktop_input", cluster_id, project=project, params=params)
+        )
 
     @mcp.tool(
         name="desktop_read_clipboard",
@@ -180,7 +182,7 @@ def register(mcp: MCPServer) -> None:
     async def desktop_read_clipboard(
         cluster_id: Cluster, name: InstanceName, project: Project = "default"
     ) -> CallToolResult:
-        return await call_proxy(
+        return desktop_result(await call_proxy(
             "desktop_clipboard", cluster_id, project=project,
             params={"name": name, "action": "clipboard_read"},
-        )
+        ))

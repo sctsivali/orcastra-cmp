@@ -26,7 +26,7 @@ from mcp.types import CallToolResult, ImageContent, TextContent
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "promote_image",
+    "desktop_result",
     "tool_error",
     "tool_result",
 ]
@@ -60,7 +60,7 @@ def tool_result(payload: Dict[str, Any]) -> CallToolResult:
     )
 
 
-def promote_image(result: CallToolResult) -> CallToolResult:
+def _promote_image(result: CallToolResult) -> CallToolResult:
     """Move a captured frame out of the JSON text and into a real image content block.
 
     important: without this a screenshot never reaches the model as an image. The capture came
@@ -103,3 +103,25 @@ def promote_image(result: CallToolResult) -> CallToolResult:
         structured_content=trimmed,
         is_error=False,
     )
+
+
+def desktop_result(result: CallToolResult) -> CallToolResult:
+    """A desktop payload, with a failed action rendered as a failure and a frame as an image.
+
+    important: a desktop action reports its own outcome in `data.ok`, separately from whether the
+    proxy operation ran. The operation running is what `call_proxy` sees, so a capture that failed
+    inside the guest came back with `isError` false and a payload saying `ok: false`. A model
+    reads the flag before it reads the payload, so it was told the screenshot succeeded and then
+    handed no image. Measured on a wlroots guest whose capture failed for a missing environment
+    variable: the tool call was a success and the screen was never seen.
+    """
+    if result.is_error:
+        return result
+    payload = result.structured_content or {}
+    data = payload.get("data")
+    if isinstance(data, dict) and data.get("ok") is False:
+        detail = data.get("detail") or data.get("error") or "the desktop action failed"
+        action = data.get("action")
+        where = f"{action}: " if action else ""
+        return tool_error(f"{where}{detail}", error_code=data.get("error_code"))
+    return _promote_image(result)
