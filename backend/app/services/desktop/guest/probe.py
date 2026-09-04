@@ -17,6 +17,7 @@ import shlex
 from typing import Dict, List, Optional
 
 from ..protocol import Display, ProbeReport
+from ..runtime import DESKTOP_TARGET_HEIGHT, DESKTOP_TARGET_WIDTH
 from .chains import CAPTURE_TOOLS, INPUT_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,21 @@ done
 [ -e /dev/uinput ] && echo "uinput=present"
 [ -w /dev/uinput ] && echo "uinput_writable=yes"
 
+# important: DISPLAY first. Both tests below invoke xdotool, which cannot connect without one, so
+# running them before the display is known made every guest report "unsupported" for reasons that
+# had nothing to do with the xdotool build. Observed live: a guest where `getdisplaygeometry` and
+# `type --file` both work reported neither, and the second of those silently downgrades typing to
+# argv, where the guest's process table exposes whatever was typed.
+if [ -z "$DISPLAY" ]; then
+  for sock in /tmp/.X11-unix/X*; do
+    [ -e "$sock" ] || continue
+    DISPLAY=":$(basename "$sock" | tr -d 'X')"
+    export DISPLAY
+    break
+  done
+fi
+[ -n "$DISPLAY" ] && echo "probe_display=$DISPLAY"
+xdotool getdisplaygeometry 2>/dev/null | tr ' ' 'x' | sed "s/^/geom=/"
 xdotool getdisplaygeometry >/dev/null 2>&1 && echo "subcmd=getdisplaygeometry"
 printf '' | xdotool type --file - >/dev/null 2>&1 && echo "subcmd=type_file"
 echo "ORCA_END"
@@ -206,7 +222,31 @@ def build_report(stdout: str, *, agent: bool) -> ProbeReport:
     if session_type == "x11" and displays:
         environment["DISPLAY"] = displays[0]
 
+    # important: the display is established HERE, not on the first capture. A coordinate is
+    # measured against the screenshot, and the screenshot is downscaled whenever the guest runs
+    # larger than the target, so a click issued before any screenshot would otherwise be sent at
+    # scale 1.0 and land at the wrong pixel. On a 1920x1080 desktop that is two thirds of the way
+    # to where the caller meant, silently, with the action reporting success.
     geometry: Optional[Display] = None
+    raw_geometry = (fields.get("geom") or [None])[0]
+    if raw_geometry and "x" in raw_geometry:
+        try:
+            guest_width, guest_height = (int(part) for part in raw_geometry.split("x", 1))
+        except ValueError:
+            guest_width = guest_height = 0
+        if guest_width > 0 and guest_height > 0:
+            # The capture chain resizes to fit inside the target box while preserving aspect, so
+            # the scale is whichever axis binds. Never above 1: a small display is captured as-is
+            # rather than enlarged.
+            scale = min(
+                1.0, DESKTOP_TARGET_WIDTH / guest_width, DESKTOP_TARGET_HEIGHT / guest_height
+            )
+            geometry = Display(
+                width=int(guest_width * scale),
+                height=int(guest_height * scale),
+                scale=scale,
+            )
+
     return ProbeReport(
         ready=not missing,
         agent=True,

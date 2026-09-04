@@ -57,9 +57,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# Off until an operator turns it on. A power that photographs and types into a customer's desktop
-# should not arrive as a side effect of upgrading.
-DESKTOP_CONTROL_ENABLED = _env_bool("ORCASTRA_DESKTOP_CONTROL_ENABLED", False)
+# On, with an off switch kept for an operator who wants one.
+#
+# important: this is NOT the consent boundary and must not be read as one. Four things stand
+# between an agent and a customer's screen, and none of them is a deployment flag: the desktop.*
+# capability, which no application type seeds and no key issued before capabilities existed
+# inherits; the per-cluster grant; the project allow-list; and the owning organization's own row
+# in desktop_control_policy, which defaults to refusing and is the tenant's decision rather than
+# the deployment's. A flag in front of those is a fifth lock on a door that already has four, and
+# the risk of one is that it gets mistaken for the lock that matters.
+DESKTOP_CONTROL_ENABLED = _env_bool("ORCASTRA_DESKTOP_CONTROL_ENABLED", True)
 
 # ── budgets ────────────────────────────────────────────────────────────────────────────────────
 # A click that takes 15s means the guest is wedged, and waiting longer only holds the worker.

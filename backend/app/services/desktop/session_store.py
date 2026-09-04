@@ -46,13 +46,36 @@ def session_id(target: Target) -> str:
     return hashlib.sha256(target.key.encode("utf-8")).hexdigest()[:16]
 
 
+# Warned about once per process rather than per call, so a Redis outage is visible in the log
+# without a click loop filling it.
+_warned_local_only = False
+
+
 def _redis() -> Optional[Any]:
+    """The shared client, or None once, loudly.
+
+    important: the attribute is `redis_client`. An earlier spelling of this read `redis`, and
+    because `getattr` was given a default it returned None on every call, silently and forever.
+    The feature kept working in testing because a single worker answered both the probe and the
+    action, and it would have failed in production roughly three times in four with nothing in any
+    log to say why. A silent degrade to per-worker state is the exact defect this module was
+    written to avoid, so the fallback now announces itself.
+    """
+    global _warned_local_only
     try:
         from app.core.cache import get_cache_manager
 
-        return getattr(get_cache_manager(), "redis", None)
+        client = getattr(get_cache_manager(), "redis_client", None)
     except Exception:  # noqa: BLE001 - a cache is never allowed to break the feature
-        return None
+        client = None
+    if client is None and not _warned_local_only:
+        _warned_local_only = True
+        logger.warning(
+            "Desktop sessions have no shared cache and are falling back to per-worker memory. "
+            "With more than one worker a probe and an action can land on different workers, so "
+            "expect repeated re-probes and a display scale that resets."
+        )
+    return client
 
 
 def _fresh(entry: Dict[str, Any]) -> bool:

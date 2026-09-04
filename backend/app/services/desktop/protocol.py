@@ -61,6 +61,20 @@ class Display:
             return x, y
         return int(round(x / self.scale)), int(round(y / self.scale))
 
+    def to_screenshot(self, x: int, y: int) -> tuple[int, int]:
+        """A guest coordinate in screenshot pixels: the inverse, and it must exist.
+
+        important: anything READ from the guest comes back in guest pixels, and everything the
+        model sends is in screenshot pixels. Reporting one in the other's units is a bug that only
+        appears when the two differ, so it survives every test on a display that happens to match
+        the target. Measured on a 1920x1080 guest: a pointer moved to screenshot (400,300) landed
+        correctly at guest (600,450) and was then reported back as (600,450), which the model would
+        read as the pointer having moved somewhere it did not.
+        """
+        if self.scale in (0, 1.0):
+            return x, y
+        return int(round(x * self.scale)), int(round(y * self.scale))
+
 
 @dataclass(frozen=True)
 class Action:

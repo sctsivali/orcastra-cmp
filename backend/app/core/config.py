@@ -163,10 +163,17 @@ class Settings(BaseSettings):
     )
 
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
-    # A second door onto the same integration API keys, so turning it on is a decision rather than
-    # something a deploy inherits. Settings are lru_cache'd, so all four need a restart.
+    # On, with an off switch kept for an operator who wants one.
+    #
+    # important: none of these four is the security boundary, and reading them as one would be a
+    # mistake. The endpoint refuses any request without a valid integration API key, and
+    # `tools/list` is already narrowed per key, so a key lacking a capability never sees the tools
+    # that cost it. What actually stands in the way is the capability itself (explicit, never
+    # inherited by a legacy key), the per-cluster grant, the project allow-list, and for the
+    # desktop family the owning organization's own consent row. These flags decide what is offered,
+    # not what is permitted. Settings are lru_cache'd, so a change needs a restart.
     mcp_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MCP_ENABLED",
         description="Serve the MCP endpoint at {api_prefix}/mcp, authenticated by integration API keys."
     )
@@ -176,19 +183,19 @@ class Settings(BaseSettings):
         description="Comma-separated Host values the MCP endpoint accepts (DNS-rebinding protection). Empty disables the check, which is correct behind a proxy that already pins Host."
     )
     mcp_admin_tools_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MCP_ADMIN_TOOLS_ENABLED",
-        description="Register the destructive tools (delete instance and snapshot, create and delete networks, storage pools and projects). A key's own grant still decides whether they run; this decides whether a model is ever shown them."
+        description="Offer the destructive tools (delete instance and snapshot, create and delete networks, storage pools and projects). A key's grant decides whether they run AND whether they are listed, so this is an operator's off switch rather than the boundary."
     )
     mcp_desktop_tools_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MCP_DESKTOP_TOOLS_ENABLED",
-        description="Register the tools that see and drive a guest's graphical session. Each costs a capability of its own that no application type seeds, the owning organization must also have consented, and ORCASTRA_DESKTOP_CONTROL_ENABLED must be set."
+        description="Offer the tools that see and drive a guest's graphical session. Each costs a capability of its own that no application type seeds and no legacy key inherits, and the organization owning the cluster must separately have consented in desktop_control_policy."
     )
     mcp_guest_tools_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="MCP_GUEST_TOOLS_ENABLED",
-        description="Register the tools that reach inside a guest (exec, read and write files). They run as root unless a user is named and cost a capability no application type seeds."
+        description="Offer the tools that reach inside a guest (exec, read and write files). They run as root unless a user is named and cost a capability no application type seeds."
     )
 
     # Offboarding: remove OrganizationMember rows for orgs present in a sync push whose email is

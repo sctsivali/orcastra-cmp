@@ -20,11 +20,13 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.lxd.guest_exec import _BoundedStream
+from app.services.lxd.guest_output import run_recorded
 
 from ..image_header import read_geometry, within_model_limits
 from ..protocol import Action, ActionResult, Display, ProbeReport, Target
 from ..runtime import (
     DESKTOP_IMAGE_SOFT_LIMIT,
+    DESKTOP_SCREENSHOT_TIMEOUT,
     DESKTOP_MAX_LONG_EDGE,
     DESKTOP_MAX_VISUAL_TOKENS,
     DESKTOP_STDERR_LIMIT,
@@ -54,6 +56,31 @@ class GuestExecProvider:
         self._instance = instance
 
     # ── running one command inside the guest ───────────────────────────────────────────────────
+
+    def _run_recorded(
+        self,
+        argv: List[str],
+        *,
+        stdout_limit: int,
+        environment: Optional[Dict[str, str]] = None,
+        user: Optional[int] = None,
+        timeout: float = 30.0,
+    ) -> Tuple[str, str, int, bool]:
+        """For output the streaming path cannot deliver intact.
+
+        important: a screenshot is always tens to hundreds of kilobytes, which is well past the
+        point where pylxd's `execute` starts dropping frames without saying so. `guest_output`
+        explains the race and the measurements. Nothing is written inside the guest either way:
+        LXD records to a file on its own host, which is then read and deleted there.
+        """
+        return run_recorded(
+            self._instance,
+            argv,
+            stdout_limit=stdout_limit,
+            environment=environment or None,
+            user=user,
+            timeout=timeout,
+        )
 
     def _run(
         self,
@@ -115,8 +142,11 @@ class GuestExecProvider:
             height=DESKTOP_TARGET_HEIGHT,
             jpeg_threshold=DESKTOP_IMAGE_SOFT_LIMIT,
         )
-        stdout, stderr, exit_code, truncated = self._run(
-            argv, stdout_limit=DESKTOP_STDOUT_LIMIT, environment=report.environment or None
+        stdout, stderr, exit_code, truncated = self._run_recorded(
+            argv,
+            stdout_limit=DESKTOP_STDOUT_LIMIT,
+            environment=report.environment or None,
+            timeout=DESKTOP_SCREENSHOT_TIMEOUT,
         )
         if truncated:
             # Inverting exec's contract deliberately. A truncated command output is a reported
@@ -191,7 +221,12 @@ class GuestExecProvider:
                 ok=False, action="cursor_position", error_code="desktop_action_failed",
                 detail=(stderr.strip() or "could not read the pointer position")[:400],
             )
-        return ActionResult(ok=True, action="cursor_position", cursor=(int(x.group(1)), int(y.group(1))))
+        # Back into screenshot pixels, the units every coordinate on this surface is in.
+        display = report.display or Display(width=DESKTOP_TARGET_WIDTH, height=DESKTOP_TARGET_HEIGHT)
+        reported = display.to_screenshot(int(x.group(1)), int(y.group(1)))
+        return ActionResult(
+            ok=True, action="cursor_position", cursor=reported, display=display
+        )
 
     def _clipboard_read(self, report: ProbeReport) -> ActionResult:
         try:
@@ -200,8 +235,11 @@ class GuestExecProvider:
             return ActionResult(
                 ok=False, action="clipboard_read", error_code="desktop_unsupported", detail=str(exc)
             )
-        stdout, stderr, exit_code, truncated = self._run(
-            argv, stdout_limit=DESKTOP_STDERR_LIMIT, environment=report.environment or None
+        # Recorded too: a clipboard holding a pasted document is exactly the size that goes
+        # missing on the streaming path, and losing half of it silently would be worse than
+        # failing.
+        stdout, stderr, exit_code, truncated = self._run_recorded(
+            argv, stdout_limit=DESKTOP_STDOUT_LIMIT, environment=report.environment or None
         )
         if exit_code != 0:
             return ActionResult(

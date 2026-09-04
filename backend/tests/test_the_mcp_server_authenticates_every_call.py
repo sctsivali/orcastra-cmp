@@ -89,8 +89,15 @@ def _initialize(client: TestClient) -> None:
 
 # ── the endpoint exists only when it is turned on ──────────────────────────────────────────────
 
-def test_the_endpoint_is_absent_until_it_is_enabled(monkeypatch) -> None:
-    """A second door onto the production API keys should be a decision, not a deploy side effect."""
+def test_the_endpoint_is_served_by_default(monkeypatch) -> None:
+    """On by default, because the flag was never the boundary.
+
+    The endpoint refuses every request without a valid integration key, and tools/list is narrowed
+    per key, so a key lacking a capability never sees the tools that cost it. What stands in the
+    way is the capability, the per-cluster grant, the project allow-list, and for the desktop
+    family the owning organization's consent. A flag in front of those adds no safety and invites
+    being mistaken for the lock that matters.
+    """
     monkeypatch.delenv("MCP_ENABLED", raising=False)
     from app.core.config import get_settings
 
@@ -99,7 +106,33 @@ def test_the_endpoint_is_absent_until_it_is_enabled(monkeypatch) -> None:
 
     app = main.create_app()
     get_settings.cache_clear()
+    assert [r for r in app.router.routes if getattr(r, "path", "") == "/api/v1/mcp"]
+
+
+def test_the_flag_still_turns_it_off(monkeypatch) -> None:
+    """An operator who wants the door gone can still remove it."""
+    monkeypatch.setenv("MCP_ENABLED", "false")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    import app.main as main
+
+    app = main.create_app()
+    get_settings.cache_clear()
     assert not [r for r in app.router.routes if getattr(r, "path", "") == "/api/v1/mcp"]
+
+
+def test_the_sensitive_tiers_are_offered_but_still_gated(monkeypatch) -> None:
+    """The tier flags decide what is OFFERED. Whether a key may use it is decided elsewhere, and
+    the tests below prove a key without the capability is refused and shown nothing."""
+    monkeypatch.delenv("MCP_DESKTOP_TOOLS_ENABLED", raising=False)
+    monkeypatch.delenv("MCP_GUEST_TOOLS_ENABLED", raising=False)
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    settings = get_settings()
+    get_settings.cache_clear()
+    assert settings.mcp_desktop_tools_enabled and settings.mcp_guest_tools_enabled
 
 
 def test_the_endpoint_is_mounted_when_enabled(mcp_app) -> None:

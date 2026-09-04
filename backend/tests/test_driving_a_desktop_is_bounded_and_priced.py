@@ -344,9 +344,38 @@ def test_a_session_id_is_derived_so_it_grants_nothing() -> None:
     assert session_id(target) != session_id(Target("pandora", "default", "vm-a"))
 
 
+def test_a_guest_coordinate_comes_back_in_screenshot_pixels() -> None:
+    """The inverse has to exist, and only differs when the display is downscaled, which is why a
+    missing one survives every test on a guest that happens to match the target.
+
+    Measured live on a 1920x1080 guest: a pointer moved to screenshot (400,300) landed correctly
+    at guest (600,450) and was then reported back as (600,450), which a model reads as the pointer
+    having moved somewhere it did not ask for.
+    """
+    display = Display(width=1280, height=720, scale=2 / 3)
+    guest = display.to_guest(400, 300)
+    assert guest == (600, 450)
+    assert display.to_screenshot(*guest) == (400, 300)
+
+
 def test_a_downscaled_capture_still_clicks_the_right_pixel() -> None:
     """The model works in screenshot pixels and is never told about scale, so the conversion has
     to happen on this side or every click lands proportionally wrong."""
     display = Display(width=1280, height=800, scale=0.5)
     assert display.to_guest(640, 400) == (1280, 800)
     assert Display(width=1280, height=800, scale=1.0).to_guest(640, 400) == (640, 400)
+
+
+def test_the_subcommand_tests_run_with_a_display() -> None:
+    """Found live: a guest where both subcommands work reported neither.
+
+    xdotool cannot connect without DISPLAY, so testing `getdisplaygeometry` and `type --file`
+    before the display is discovered makes every guest look like an old xdotool build. The second
+    one matters: without `--file`, typed text falls back to argv, where the guest's process table
+    exposes it to every other user on that machine.
+    """
+    from app.services.desktop.guest.probe import PROBE_SCRIPT
+
+    display_setup = PROBE_SCRIPT.index("export DISPLAY")
+    assert display_setup < PROBE_SCRIPT.index("xdotool getdisplaygeometry")
+    assert display_setup < PROBE_SCRIPT.index("xdotool type --file")

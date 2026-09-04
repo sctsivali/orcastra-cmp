@@ -85,13 +85,25 @@ def capture_chain(
         geometry = 'xdotool getdisplaygeometry 2>/dev/null | sed "s/^/ORCA_GEOM /" >&2;'
         if tool in ("import", "magick"):
             binary = "import" if tool == "import" else "magick import"
-            # PNG first: a desktop is text and flat colour, where PNG wins and JPEG artifacts hurt
-            # readability most. JPEG only when the PNG turns out too large to ship.
+            # important: the resize is a SEPARATE stage, piped, rather than an option on `import`.
+            # `import -resize WxH` is accepted and silently ignored by ImageMagick 6 (measured on
+            # 6.9.12-98: a 1920x1080 root window came back 1920x1080), which does not fail, it just
+            # hands back an image too large for the model to accept. Piping through the converter
+            # resizes correctly on both 6 and 7.
+            #
+            # `magick` on 7, `convert` on 6, chosen in the guest because that is where the answer
+            # is. PNG first: a desktop is text and flat colour, where PNG wins and JPEG artifacts
+            # hurt readability most. JPEG only when the PNG turns out too large to ship.
+            resizer = (
+                'if command -v magick >/dev/null 2>&1; then RS=magick; else RS=convert; fi;'
+            )
             return _shell(
-                f'{geometry} '
-                f'p=$({binary} -window root -silent -resize {width}x{height} png:- | base64 -w 0); '
+                f'{geometry} {resizer} '
+                f'p=$({binary} -window root -silent png:- '
+                f'| $RS - -resize {width}x{height} png:- | base64 -w 0); '
                 f'if [ ${{#p}} -gt {jpeg_threshold} ]; then '
-                f'{binary} -window root -silent -resize {width}x{height} -quality 85 jpg:- '
+                f'{binary} -window root -silent png:- '
+                f'| $RS - -resize {width}x{height} -quality 85 jpg:- '
                 f'| base64 -w 0; echo "ORCA_FMT jpeg" >&2; '
                 f'else printf %s "$p"; echo "ORCA_FMT png" >&2; fi'
             )
