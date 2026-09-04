@@ -105,8 +105,15 @@ def test_whoami_authenticates_with_the_headers_everything_else_uses() -> None:
     assert getattr(default, "dependency", None) is integrations.validate_api_key
 
 
-def test_whoami_reports_only_what_the_presented_key_already_holds() -> None:
-    """It is exempt from the capability rule, so it must not become a way to learn anything new."""
+def test_whoami_reports_the_key_and_this_deployments_own_build_and_nothing_else() -> None:
+    """It is exempt from the capability rule, so what it may report has to be bounded here.
+
+    Two things, and they are different in kind. The key's own attributes, which the caller already
+    holds. And this deployment's build identity, which the caller does not hold but which is
+    self-reported, says nothing about any other tenant, and is the answer to "which build am I
+    talking to" that an integrator otherwise has to ask a human for. Everything else - another key,
+    the key store, the database - stays out.
+    """
     source = inspect.getsource(integrations.whoami)
     tree = ast.parse(source.lstrip())
     reads = {
@@ -114,6 +121,9 @@ def test_whoami_reports_only_what_the_presented_key_already_holds() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
     }
+    assert any("build_identity" in call for call in reads), (
+        "whoami is expected to name the build that answered; if that moved, this bound moved with it"
+    )
     for forbidden in ("get_api_key_from_vault", "list_api_keys_from_vault", "db.execute"):
         assert not any(forbidden in call for call in reads), (
             f"whoami reaches for {forbidden}; it must answer purely from the validated key"

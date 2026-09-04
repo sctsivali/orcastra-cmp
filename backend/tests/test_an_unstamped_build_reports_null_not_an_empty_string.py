@@ -53,20 +53,20 @@ def test_a_stamped_build_is_reported_verbatim(monkeypatch):
     }
 
 
-def test_the_version_endpoint_can_hold_a_null_provenance():
+def test_the_version_endpoint_can_hold_a_null_provenance() -> None:
     """The model must accept what an unstamped build produces, or the fix trades one fault for a 500."""
     info = VersionInfo(app_version="", api_version="", build_date=None, build_commit=None, environment="production")
     assert info.build_date is None
     assert info.build_commit is None
 
 
-def test_api_version_is_declared_so_the_environment_reaches_the_response():
+def test_api_version_is_declared_so_the_environment_reaches_the_response() -> None:
     """Compose passes API_VERSION and .env.example documents it. Before it was declared,
     `extra = ignore` dropped it and both endpoints answered without the field."""
     assert Settings(API_VERSION="9.9.9").api_version == "9.9.9"
 
 
-def test_both_system_endpoints_carry_the_api_version():
+def test_both_system_endpoints_carry_the_api_version() -> None:
     """The frontend types it as a required string on each of them."""
     assert "api_version" in VersionInfo.model_fields
     assert "api_version" in SystemSettings.model_fields

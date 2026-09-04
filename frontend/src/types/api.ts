@@ -1036,6 +1036,8 @@ export interface ClusterDeleteResponse {
 // Version Information
 export interface VersionInfo {
   app_version: string;
+  /** The API contract version, not the build. Always sent; the backend types it as a required str. */
+  api_version: string;
   build_date?: string | null;
   build_commit?: string | null;
   environment: string;
@@ -1043,6 +1045,7 @@ export interface VersionInfo {
 
 export interface SystemSettings {
   read_only_mode: boolean;
+  api_version: string;
   debug: boolean;
 }
 

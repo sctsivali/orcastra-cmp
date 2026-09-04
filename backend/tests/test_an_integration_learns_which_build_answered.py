@@ -14,18 +14,30 @@ key-id oracle, so the identity is credential-gated even though the route takes n
 important: self-reported. It says which build this deployment believes it is running. It is not
 evidence the deployment is genuine, and no caller should treat it as such.
 
-Hermetic: the handler is awaited directly with a fake validated key, so no Vault, no database and no
-network are touched.
+The handlers are awaited directly. `whoami` takes the validated key its dependency would have
+produced; `/validate` runs for real with only Vault replaced, so the secret check and every refusal
+branch are the shipped ones. No database and no network are touched.
 """
 import asyncio
+import hashlib
+import hmac
 import sys
 from pathlib import Path
 from typing import Any, Dict
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core import build_identity  # noqa: E402
-from app.routers.integrations import APIKeyValidateResponse, ServerIdentity, whoami  # noqa: E402
+from app.routers import integrations  # noqa: E402
+from app.routers.integrations import (  # noqa: E402
+    APIKeyValidateRequest,
+    APIKeyValidateResponse,
+    ServerIdentity,
+    validate_api_key_endpoint,
+    whoami,
+)
 
 
 def _key() -> Dict[str, Any]:
@@ -43,7 +55,7 @@ def _whoami() -> APIKeyValidateResponse:
     return asyncio.run(whoami(api_key=_key()))
 
 
-def test_whoami_names_the_build_that_answered():
+def test_whoami_names_the_build_that_answered() -> None:
     server = _whoami().server
     assert server is not None, "a validated key must learn which build answered it"
     assert server.version == build_identity.version()
@@ -51,7 +63,7 @@ def test_whoami_names_the_build_that_answered():
     assert server.built_at == build_identity.built_at()
 
 
-def test_whoami_still_describes_the_key_itself():
+def test_whoami_still_describes_the_key_itself() -> None:
     """The field is additive. What the endpoint already answered must be untouched."""
     response = _whoami()
     assert response.valid is True
@@ -59,29 +71,90 @@ def test_whoami_still_describes_the_key_itself():
     assert response.capabilities == ["inventory.read"]
 
 
-def test_a_refusal_names_no_build():
-    """Every `/validate` failure branch constructs the model without a server, so it stays null.
+def _validate(
+    monkeypatch: pytest.MonkeyPatch, metadata: Dict[str, Any], *, secret: str
+) -> APIKeyValidateResponse:
+    """Drive the real `/validate` handler with a fake Vault behind it.
 
-    This is what keeps the identity behind the credential: a caller who cannot authenticate gets the
-    same uniform refusal it always got, carrying nothing about the deployment.
+    Only Vault is replaced. The secret comparison, the revoked/inactive/expiry branches and the
+    response construction are the shipped ones, which is the whole point: this test has to fail if
+    somebody adds the server block to a refusal branch.
     """
-    for refusal in (
-        APIKeyValidateResponse(valid=False, error="Invalid API key or secret"),
-        APIKeyValidateResponse(valid=False, error="API key revoked"),
-        APIKeyValidateResponse(valid=False, error="API key not active"),
-        APIKeyValidateResponse(valid=False, error="API key expired"),
-        APIKeyValidateResponse(valid=False, error="Rate limit exceeded for this API key"),
-        APIKeyValidateResponse(valid=False, error="Validation failed"),
-    ):
-        assert refusal.server is None, refusal
+    # The hashing key is read from the environment on every call, and a missing one is a 500 rather
+    # than a refusal, so it has to be set before the hash is computed as well as before the handler
+    # verifies against it.
+    monkeypatch.setenv("SECRET_KEY", "test-secret-key-for-hmac-only")
+    stored_hash = hmac.new(
+        integrations._get_hmac_key(), b"oas_the_real_secret", hashlib.sha256
+    ).hexdigest()
+
+    monkeypatch.setattr(integrations, "get_vault_integrations_client", lambda: object())
+    monkeypatch.setattr(
+        integrations,
+        "get_api_key_from_vault",
+        lambda _client, _key_id: (metadata, stored_hash),
+    )
+    return asyncio.run(
+        validate_api_key_endpoint(
+            APIKeyValidateRequest(api_key_id="oak_test", api_key_secret=secret)
+        )
+    )
 
 
-def test_the_block_carries_all_three_fields_and_no_more():
+ACTIVE = {"is_revoked": False, "is_active": True, "expires_at": None, "app_name": "orcahub"}
+
+
+@pytest.mark.parametrize(
+    "metadata, secret, expected_error",
+    [
+        (ACTIVE, "oas_the_wrong_secret", "Invalid API key or secret"),
+        ({**ACTIVE, "is_revoked": True}, "oas_the_real_secret", "API key revoked"),
+        ({**ACTIVE, "is_active": False}, "oas_the_real_secret", "API key not active"),
+        (
+            {**ACTIVE, "expires_at": "2020-01-01T00:00:00+00:00"},
+            "oas_the_real_secret",
+            "API key expired",
+        ),
+    ],
+)
+def test_a_refusal_names_no_build(
+    monkeypatch: pytest.MonkeyPatch,
+    metadata: Dict[str, Any],
+    secret: str,
+    expected_error: str,
+) -> None:
+    """A caller who cannot authenticate learns nothing about the deployment.
+
+    This is what keeps the identity behind the credential. It drives the handler rather than
+    constructing the response model, because a model built by hand carries the field's default and
+    would stay green no matter what the handler did.
+    """
+    response = _validate(monkeypatch, metadata, secret=secret)
+
+    assert response.valid is False
+    assert response.error == expected_error
+    assert response.server is None, "a refusal must carry no build identity"
+    assert "server" not in response.model_dump(exclude_none=True)
+
+
+def test_the_success_branch_is_the_one_that_names_the_build(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of the same claim: the gate is the secret, not the endpoint."""
+    response = _validate(monkeypatch, ACTIVE, secret="oas_the_real_secret")
+
+    assert response.valid is True
+    assert response.server is not None
+    assert response.server.version == build_identity.version()
+    assert response.server.commit == build_identity.commit()
+
+
+def test_the_block_carries_all_three_fields_and_no_more() -> None:
     """A reader on the other side keys on these names. Adding to them is a contract change."""
     assert set(ServerIdentity().model_dump()) == {"version", "commit", "built_at"}
 
 
-def test_an_unstamped_build_is_null_rather_than_absent():
+def test_an_unstamped_build_is_null_rather_than_absent() -> None:
     """The field is always present on an authenticated response, so a reader never has to guess
     whether a missing key means an old build or an unstamped one."""
     dumped = APIKeyValidateResponse(valid=True, server=ServerIdentity()).model_dump()

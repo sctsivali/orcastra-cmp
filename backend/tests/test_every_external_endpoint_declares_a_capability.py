@@ -27,15 +27,16 @@ EXEMPT = {
     (
         "integrations.py",
         "validate_api_key_endpoint",
-    ): "the credential oracle a caller uses before it has done anything; it grants no access "
-       "and only reports what the presented key already carries",
+    ): "the credential oracle a caller uses before it has done anything. It grants no access and "
+       "reports what the presented key carries plus this deployment's build identity, which is "
+       "self-reported, gated on the secret verifying, and null on every refusal",
     (
         "integrations.py",
         "whoami",
-    ): "the same answer as /validate, through the usual headers rather than a body. It grants "
-       "no access and reports only what the presented key already holds, so requiring a "
-       "capability would make the one call that diagnoses a key fail for keys that need "
-       "diagnosing",
+    ): "the same answer as /validate, through the usual headers rather than a body. It grants no "
+       "access and reports what the presented key holds plus this deployment's build identity, so "
+       "requiring a capability would make the one call that diagnoses a key fail for exactly the "
+       "keys that need diagnosing",
     (
         "image_uploads.py",
         "options_upload",

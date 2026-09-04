@@ -652,9 +652,13 @@ Ensure your client certificates are properly configured.
         """Root endpoint with API information."""
         # note: the build commit and date name the exact source an unauthenticated caller is
         # talking to. The version stays because clients and the footer read it.
+        #
+        # Through the helper, not `settings.app_version` directly: reading the setting raw answered
+        # the empty string on an unstamped build while `/health` answered null for the same build,
+        # which is exactly the drift a single reader exists to prevent.
         response = {
             "name": settings.api_title,
-            "version": settings.app_version,
+            **build_identity.public(),
             "health": "/health",
         }
         if is_debug:
