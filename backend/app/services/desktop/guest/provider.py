@@ -305,10 +305,14 @@ class GuestExecProvider:
                 session, tool, action.direction, action.amount, coordinate=point
             ), None
         if action.name == "type":
-            # important: only when the probe actually proved `--file` works. Falling back to argv
-            # is correct but not free: argv is visible in the guest's process table to every user
-            # on that machine, and the first thing an agent types at a login prompt is a password.
-            use_stdin = tool == "xdotool" and report.supports_type_file
+            # important: argv is visible in the guest's process table to every user on that
+            # machine, and the first thing an agent types at a login prompt is a password. So
+            # stdin wherever the tool supports it: xdotool only when the probe actually proved
+            # `--file` works, and wtype unconditionally, which accepts a trailing "-".
+            #
+            # ydotool is the remaining argv path. It is the last-resort injector, chosen only when
+            # wtype is absent, and it has no stdin form.
+            use_stdin = tool == "wtype" or (tool == "xdotool" and report.supports_type_file)
             argv = chains.type_chain(session, tool, use_stdin=use_stdin, text=action.text)
             return argv, (action.text if use_stdin else None)
         if action.name == "key":

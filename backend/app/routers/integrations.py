@@ -2601,7 +2601,9 @@ async def _assert_desktop_allowed(
     # screen was reached even when it is refused before anything else happens.
     org: Tuple[Optional[int], Optional[str]] = (None, None)
 
-    def _refuse(status: int, detail: str, refused: str, headers=None) -> None:
+    def _refuse(
+        status: int, detail: str, refused: str, headers=None, dissenting: Optional[str] = None
+    ) -> None:
         _audit_key_action(
             api_key,
             action=_guest_audit_action(operation),
@@ -2613,6 +2615,8 @@ async def _assert_desktop_allowed(
                 "operation": operation,
                 **_guest_audit_details(operation, request.params or {}),
                 "refused": refused,
+                # Only ever here, never in the response. See the comment on the consent check.
+                **({"dissenting_organization": dissenting} if dissenting else {}),
             },
             external_user_email=request.external_user_email,
             error_message=refused,
@@ -2628,27 +2632,32 @@ async def _assert_desktop_allowed(
         # cluster can carry more than one binding and one here does, so consulting a single row
         # would let one tenant's yes authorise capturing another tenant's screens.
         consent, dissenting = await consent_for_cluster(db, request.cluster_id)
-        named = f" ({dissenting})" if dissenting else ""
+        # important: `dissenting` is recorded and NOT returned. It names a co-tenant of a shared
+        # cluster, and this refusal is reachable by any key holding the capability, before the
+        # grant is checked. Putting it in the message would tell a caller with no authorisation
+        # at all which other organizations share the cluster and what each has consented to. The
+        # operator reading the audit already knows who their co-tenants are.
         if not consent.may_view:
             _refuse(
                 403,
                 (
-                    f"An organization sharing this cluster{named} has not enabled desktop "
-                    "control. Screen contents leaving for a model is a decision that belongs to "
-                    "the organization rather than to the integration, so an administrator of "
-                    "every organization on this cluster has to turn it on first."
+                    "An organization sharing this cluster has not enabled desktop control. "
+                    "Screen contents leaving for a model is a decision that belongs to the "
+                    "organization rather than to the integration, so an administrator of every "
+                    "organization on this cluster has to turn it on first."
                 ),
                 "organization_has_not_consented",
+                dissenting=dissenting,
             )
         if capability == "desktop.input" and not consent.may_input:
             _refuse(
                 403,
                 (
-                    f"An organization sharing this cluster{named} allows an agent to see its "
-                    "screens and not to type into them. Watching and touching are separate "
-                    "consents."
+                    "An organization sharing this cluster allows an agent to see its screens and "
+                    "not to type into them. Watching and touching are separate consents."
                 ),
                 "organization_has_not_allowed_input",
+                dissenting=dissenting,
             )
 
         # The pinned certificate is passed so a grant issued against a different registration of
@@ -3537,6 +3546,17 @@ async def proxy_operation(
     _: None = Depends(check_read_only_mode),
 ):
     """Proxy an LXD operation for external application."""
+    # important: assigned BEFORE the try, because the outer exception handler reads them. They
+    # used to be set inside it, after the permission checks, so any non-HTTPException raised
+    # before that point turned into an UnboundLocalError: a 500 with no audit record, on the one
+    # path whose whole job is to record what a key did. A malformed stored grant is enough.
+    #
+    # The owning organization is resolved once for every audit record this call may write. One
+    # indexed lookup against a path already budgeted in tens of seconds, and without it the record
+    # cannot be attributed to the tenant whose guest was reached.
+    _guest_org_id: Optional[int] = None
+    _guest_org_slug: Optional[str] = None
+
     try:
         # Check cluster permission
         cluster_permissions = {
@@ -3594,11 +3614,6 @@ async def proxy_operation(
             guest_capability = config_reaches_inside(
                 (request.params or {}).get("config"), (request.params or {}).get("devices")
             )
-        # The owning organization, resolved once for every audit record this call may write.
-        # One indexed lookup against a path already budgeted in tens of seconds, and without it
-        # the record cannot be attributed to the tenant whose guest was reached.
-        _guest_org_id: Optional[int] = None
-        _guest_org_slug: Optional[str] = None
         if guest_capability:
             from app.core.database import async_session_maker as _org_session
             from app.core.org_scope import resolve_cluster_org as _resolve_org

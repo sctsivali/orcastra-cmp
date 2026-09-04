@@ -591,3 +591,17 @@ def test_the_text_is_still_the_last_argument_after_the_separator() -> None:
     typed = type_chain("wayland-wlroots", "wtype", use_stdin=False, text="-rf /")
     assert typed[-1] == "-rf /"
     assert typed[-2] == "--"
+
+
+def test_typed_text_stays_out_of_argv_on_wayland_too() -> None:
+    """The module claimed argv was avoided and it was avoided only for xdotool.
+
+    Every Wayland guest had whatever an agent typed sitting in its process table, readable by any
+    local user in that guest, which is the exact exposure the xdotool branch exists to prevent.
+    """
+    from app.services.desktop.guest.chains import type_chain
+
+    argv = type_chain("wayland-wlroots", "wtype", use_stdin=True, text="hunter2")
+    assert "hunter2" not in argv, "the typed text is still in argv on the Wayland path"
+    assert argv[-1] == "-", "wtype reads the text from stdin with a trailing dash"
+    assert "-s" in argv, "the settle must survive the stdin form"

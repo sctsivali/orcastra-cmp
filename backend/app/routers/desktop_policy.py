@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
+from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_tenant
 from app.core.rbac import get_highest_role, resolve_roles
 from app.services.activity_logger import get_activity_logger
 from app.services.desktop_policy import get_consent, set_consent
@@ -52,6 +52,12 @@ async def _assert_member(
 ) -> None:
     """The organization's own people decide this, and an admin acting for them.
 
+    important: any member, including a Tenant. These routes required Partner or above, which meant
+    the organization whose screens are at stake could not give or withdraw its own consent unless
+    it happened to hold Partner. Since an Admin is the only role that can also issue the key
+    grant, both halves of a control this module describes as belonging to two different people
+    collapsed into one actor. Membership is the boundary here; the tier is not.
+
     note: 404 rather than 403 for a non-member, matching the rest of the org surface. Whether an
     organization exists is not something a stranger should learn from the difference.
     """
@@ -68,7 +74,7 @@ async def _assert_member(
 )
 async def read_policy(
     org_id: int,
-    user: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_tenant()),
     db: AsyncSession = Depends(get_db),
 ) -> DesktopControlPolicyResponse:
     await _assert_member(org_id, user, db)
@@ -87,7 +93,7 @@ async def read_policy(
 async def set_policy(
     org_id: int,
     body: DesktopControlPolicyRequest,
-    user: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_tenant()),
     db: AsyncSession = Depends(get_db),
 ) -> DesktopControlPolicyResponse:
     await _assert_member(org_id, user, db)

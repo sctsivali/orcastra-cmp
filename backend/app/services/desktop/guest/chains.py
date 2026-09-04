@@ -254,6 +254,14 @@ def type_chain(session_type: str, tool: str, *, use_stdin: bool, text: str) -> L
         # Measured on sway: "echo ..." reached the shell as "cho ...", the action reported
         # success, and the guest ran a different command from the one that was asked for. That is
         # the worst shape a defect can take on this surface, because a caller cannot see it.
+        #
+        # important: a trailing "-" reads the text from stdin. The module docstring claimed argv
+        # was avoided, and it was only avoided for xdotool: every Wayland guest had whatever an
+        # agent typed sitting in its process table, readable by any local user, which is exactly
+        # the exposure the xdotool branch exists to prevent. wtype accepts stdin, verified against
+        # the installed build on a sway guest.
+        if use_stdin:
+            return ["wtype", "-s", str(WTYPE_SETTLE_MS), "-d", "12", "-"]
         return ["wtype", "-s", str(WTYPE_SETTLE_MS), "-d", "12", "--", text]
     if tool == "ydotool":
         return ["ydotool", "type", "--key-delay", "12", "--", text]
