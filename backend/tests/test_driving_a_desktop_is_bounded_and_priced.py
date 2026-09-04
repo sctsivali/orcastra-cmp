@@ -379,3 +379,42 @@ def test_the_subcommand_tests_run_with_a_display() -> None:
     display_setup = PROBE_SCRIPT.index("export DISPLAY")
     assert display_setup < PROBE_SCRIPT.index("xdotool getdisplaygeometry")
     assert display_setup < PROBE_SCRIPT.index("xdotool type --file")
+
+
+# ── the audit map must not be able to take the request down ────────────────────────────────────
+
+@pytest.mark.parametrize(
+    "operation", ["desktop_probe", "desktop_view", "desktop_input", "desktop_clipboard"]
+)
+def test_every_desktop_operation_has_an_audit_name(operation: str) -> None:
+    """`_PROXY_AUDIT_ACTIONS` was subscripted bare with the operation's capability, and held only
+    the exec pair, so every desktop operation raised KeyError on two live paths.
+
+    The timeout site is reachable through MCP: desktop operations are in GUEST_ACCESS_OPERATIONS,
+    so the branch is taken and the KeyError escapes, losing both the audit record and the "may
+    still be running" message. The refusal site is REST-only and its KeyError is swallowed by the
+    outer handler, so a refused desktop attempt returned a generic error and left no trace at all.
+    """
+    from app.routers.integrations import _guest_audit_action
+
+    name = _guest_audit_action(operation)
+    assert isinstance(name, str) and name.startswith("integration."), operation
+    # Distinct per capability, so an alert can tell looking from typing.
+    assert name != _guest_audit_action("exec_instance")
+
+
+def test_an_unknown_guest_operation_degrades_rather_than_raising() -> None:
+    """A capability added to GUEST_ACCESS_OPERATIONS without an audit name must not 500."""
+    from app.routers.integrations import _guest_audit_action
+
+    assert _guest_audit_action("not_an_operation") == "integration.proxy.request"
+
+
+def test_looking_typing_and_the_clipboard_are_audited_apart() -> None:
+    from app.routers.integrations import _guest_audit_action
+
+    names = {
+        _guest_audit_action(op)
+        for op in ("desktop_view", "desktop_input", "desktop_clipboard")
+    }
+    assert len(names) == 3, f"desktop actions share an audit name: {names}"

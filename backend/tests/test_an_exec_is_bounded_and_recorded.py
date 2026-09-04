@@ -198,11 +198,23 @@ def test_exec_has_a_budget_of_its_own() -> None:
     assert uses_it, "the exec branch takes the ordinary operation budget, so its own is decorative"
 
 
-def test_the_audit_records_the_command_and_never_the_output() -> None:
-    """An audit index that stored exec output would become a copy of every secret anyone read.
+def test_the_audit_describes_the_request_and_never_the_result() -> None:
+    """An audit index that stored guest output would become a copy of every secret anyone read.
 
-    Byte counts and the exit code carry the forensic value without the liability.
+    Sizes and the exit code carry the forensic value without the liability. Asserted against
+    `_guest_audit_details`, which is where the shape now lives: it was a literal dict inside one
+    branch, written for exec, and a successful desktop action consequently produced no record at
+    all on this route.
     """
+    import inspect
+
+    from app.routers import integrations
+
+    source = inspect.getsource(integrations._guest_audit_details)
+    assert '"command"' in source, "the audit no longer records the argv an exec ran"
+    assert '"path"' in source, "a file call is not described by its path"
+
+    # No audit call anywhere in the handler may put guest output in the record.
     tree = ast.parse(ROUTER.read_text())
     handler = next(
         node
@@ -210,19 +222,30 @@ def test_the_audit_records_the_command_and_never_the_output() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "proxy_operation"
     )
-    call = next(
-        node
-        for node in ast.walk(handler)
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "id", None) == "_audit_key_action"
-    )
-    details = next(kw.value for kw in call.keywords if kw.arg == "details")
-    recorded = {key.value for key in details.keys if isinstance(key, ast.Constant)}
-    assert {"command", "exit_code"} <= recorded, f"the audit omits the command: {recorded}"
-    assert "stdout" not in recorded and "stderr" not in recorded, (
-        f"the audit stores guest output: {recorded}"
-    )
-    assert {"stdout_bytes", "stderr_bytes"} <= recorded
+    for call in ast.walk(handler):
+        if not (isinstance(call, ast.Call) and getattr(call.func, "id", None) == "_audit_key_action"):
+            continue
+        details = next((kw.value for kw in call.keywords if kw.arg == "details"), None)
+        if details is None or not isinstance(details, ast.Dict):
+            continue
+        recorded = {k.value for k in details.keys if isinstance(k, ast.Constant)}
+        assert "stdout" not in recorded and "stderr" not in recorded, (
+            f"the audit stores guest output: {recorded}"
+        )
+
+
+def test_typed_text_is_recorded_by_length_and_never_by_value() -> None:
+    """Desktop input goes through the same audit as exec, and the first thing an agent types at a
+    login prompt is a password. The exec path already argues this for command output."""
+    import inspect
+
+    from app.routers import integrations
+
+    source = inspect.getsource(integrations._guest_audit_details)
+    assert "text_length" in source, "typed text is not reduced to a length"
+    assert 'params.get("text")' in source
+    # The value itself must never be handed to the record.
+    assert '"text": text' not in source and '"text": params' not in source
 
 
 def test_the_actor_is_the_key_not_a_field_the_caller_supplies() -> None:
@@ -266,10 +289,14 @@ def test_a_timed_out_exec_says_the_command_survived_and_names_no_host() -> None:
     branches = [
         node
         for node in ast.walk(handler)
-        if isinstance(node, ast.If) and "exec_instance" in ast.unparse(node.test)
+        if isinstance(node, ast.If) and "GUEST_ACCESS_OPERATIONS" in ast.unparse(node.test)
         and "timeout" in ast.unparse(node.test)
     ]
-    assert branches, "a timed-out exec returns the transport's own message verbatim"
+    assert branches, (
+        "a timed-out guest call returns the transport's own message verbatim. Keyed on the SET, "
+        "because written for `exec_instance` alone it left every other guest-reaching operation "
+        "returning the raw urllib3 string with the LXD host's address in it."
+    )
     body = ast.unparse(branches[0])
     assert "still" in body and "running" in body, "the caller is not told the command survived"
     assert "str(e)" not in body, "the raw transport message, and the host in it, still reaches the caller"
@@ -288,24 +315,26 @@ def test_an_exec_is_recorded_whether_it_finished_or_not() -> None:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == "proxy_operation"
     )
-    exec_audits = [
+    guest_audits = [
         node
         for node in ast.walk(handler)
         if isinstance(node, ast.Call)
         and getattr(node.func, "id", None) == "_audit_key_action"
         and any(
-            isinstance(kw.value, ast.Constant)
-            and kw.value.value == "integration.instance.exec"
+            isinstance(kw.value, ast.Call)
+            and getattr(kw.value.func, "id", None) == "_guest_audit_action"
             for kw in node.keywords
         )
     ]
-    assert len(exec_audits) >= 2, (
-        "only the successful exec path writes an audit record, so a timed-out or failed command "
-        "leaves no trace of having run"
+    # Refusal, BlockingTimeout, success, and the generic exception path. Fewer than four means one
+    # of those outcomes leaves no trace.
+    assert len(guest_audits) >= 4, (
+        "a guest-reaching call is not audited on every outcome, so a refused, timed-out or failed "
+        f"one leaves no trace of having run: found {len(guest_audits)}"
     )
     outcomes = {
         kw.value.value
-        for call in exec_audits
+        for call in guest_audits
         for kw in call.keywords
         if kw.arg == "result" and isinstance(kw.value, ast.Constant)
     }

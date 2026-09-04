@@ -94,6 +94,12 @@ ACTION_CATEGORIES = {
     # collapsed.
     "integration.instance.exec": EventCategory.ADMIN,
     "integration.instance.files": EventCategory.ADMIN,
+    # Seeing and driving a guest's graphical session. Three names rather than one so an alert can
+    # tell an agent looking at a screen from an agent typing into it: they are different events to
+    # whoever reviews them, and only one of them can change anything.
+    "integration.instance.desktop_view": EventCategory.ADMIN,
+    "integration.instance.desktop_input": EventCategory.ADMIN,
+    "integration.instance.desktop_clipboard": EventCategory.ADMIN,
     "integration.proxy.request": EventCategory.ADMIN,
     # A destructive proxy call removes the same resource the dashboard's own endpoint would, so
     # it is named for the act rather than for the transport. Without these it landed under
@@ -158,6 +164,9 @@ HIGH_SEVERITY_ACTIONS = {
     "console.session.create",
     "integration.instance.exec",
     "integration.instance.files",
+    "integration.instance.desktop_view",
+    "integration.instance.desktop_input",
+    "integration.instance.desktop_clipboard",
     "integration.image.delete",
     "integration.instance.delete",
     "integration.network.delete",

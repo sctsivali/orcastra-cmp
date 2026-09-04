@@ -2560,7 +2560,53 @@ async def _integration_hardware_totals(
 _PROXY_AUDIT_ACTIONS: Dict[Optional[str], str] = {
     "instance.exec": "integration.instance.exec",
     "instance.files": "integration.instance.files",
+    # Named per capability rather than one "desktop" action, so an alert can tell an agent
+    # looking at a screen from an agent typing into it. They are different events to a reviewer.
+    "desktop.view": "integration.instance.desktop_view",
+    "desktop.input": "integration.instance.desktop_input",
+    "desktop.clipboard": "integration.instance.desktop_clipboard",
 }
+
+
+def _guest_audit_action(operation: str) -> str:
+    """The audit action for a guest-reaching operation.
+
+    important: `.get`, not `[]`. This table was subscripted bare with the operation's capability
+    at two sites, and it held only the exec pair, so every desktop operation raised KeyError: a
+    refusal returned a generic error with no record of the refused attempt, and a timeout lost
+    both its audit row and its "may still be running" message. A missing entry must degrade to a
+    generic name, never take the request down.
+    """
+    return _PROXY_AUDIT_ACTIONS.get(
+        GUEST_ACCESS_OPERATIONS.get(operation), "integration.proxy.request"
+    )
+
+
+def _guest_audit_details(operation: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    """What is worth recording about a guest-reaching call, and nothing that is not.
+
+    An exec is described by its argv, a file call by its path, and a desktop action by what it
+    did and where. Recording every shape unconditionally would put nulls in every record and tell
+    a reader nothing about which call this was.
+
+    important: typed text is recorded by LENGTH only. The exec path already argues this for
+    command output, and typed text is the same liability with a sharper edge: the first thing an
+    agent types at a login prompt is a password.
+    """
+    if operation == "exec_instance":
+        return {
+            "command": params.get("command"),
+            "cwd": params.get("cwd"),
+            "run_as_user": params.get("user"),
+        }
+    if operation in ("get_file", "put_file"):
+        return {"path": params.get("path")}
+    text = params.get("text")
+    return {
+        "desktop_action": params.get("action"),
+        "coordinate": params.get("coordinate"),
+        "text_length": len(text) if isinstance(text, str) else None,
+    }
 
 
 def _proxy_audit_action(method: str, path: str) -> str:
@@ -3423,14 +3469,14 @@ async def proxy_operation(
                 # it is invisible if only the successful calls are written.
                 _audit_key_action(
                     api_key,
-                    action=_PROXY_AUDIT_ACTIONS[guest_capability],
+                    action=_guest_audit_action(operation),
                     target_id=str(request.params.get("name", "")),
                     cluster_id=request.cluster_id,
                     project=request.project,
                     result="failure",
                     details={
                         "operation": operation,
-                        "command": request.params.get("command"),
+                        **_guest_audit_details(operation, request.params or {}),
                         "refused": "capability_not_granted",
                     },
                     external_user_email=request.external_user_email,
@@ -3511,28 +3557,16 @@ async def proxy_operation(
             # through to record_failure and tripped the process-wide breaker: one integration's
             # slow command would make the cluster read as offline for every other caller.
             if operation in GUEST_ACCESS_OPERATIONS:
-                _timed_out_capability = GUEST_ACCESS_OPERATIONS[operation]
                 _audit_key_action(
                     api_key,
-                    action=_PROXY_AUDIT_ACTIONS[_timed_out_capability],
+                    action=_guest_audit_action(operation),
                     target_id=str(request.params.get("name", "")),
                     cluster_id=request.cluster_id,
                     project=request.project,
                     result="failure",
                     details={
                         "operation": operation,
-                        # note: an exec is described by its argv, a file call by its path.
-                        # Recording both shapes unconditionally would put a null in every record
-                        # and tell a reader nothing about which call this was.
-                        **(
-                            {
-                                "command": request.params.get("command"),
-                                "cwd": request.params.get("cwd"),
-                                "run_as_user": request.params.get("user"),
-                            }
-                            if operation == "exec_instance"
-                            else {"path": request.params.get("path")}
-                        ),
+                        **_guest_audit_details(operation, request.params or {}),
                         "outcome": "timeout",
                     },
                     external_user_email=request.external_user_email,
@@ -3595,23 +3629,27 @@ async def proxy_operation(
                     if isinstance(row, dict) and row.get("name") in allowed
                 ]
 
-        if operation == "exec_instance" and isinstance(result_data, dict):
-            # important: the command is recorded, the OUTPUT is not. Output is whatever the
-            # caller chose to read out of the guest, so an audit index that stored it would
-            # become a copy of every secret anyone ever cat-ed. Byte counts and the exit code
-            # carry the forensic value without the liability.
+        if operation in GUEST_ACCESS_OPERATIONS and isinstance(result_data, dict):
+            # important: keyed on the guest-access SET, not on the name `exec_instance`. Written
+            # for exec and left that way, it meant a successful desktop action produced no audit
+            # record at all on this route, which is the one record a tenant would look for.
+            #
+            # What is recorded and what is not: the request is described, the RESULT is not.
+            # Output is whatever the caller chose to read out of the guest, so an audit index that
+            # stored it would become a copy of every secret anyone ever cat-ed. Sizes and the exit
+            # code carry the forensic value without the liability, and the same rule sends typed
+            # text through as a length.
             _audit_key_action(
                 api_key,
-                action="integration.instance.exec",
+                action=_guest_audit_action(operation),
                 target_id=str(request.params.get("name", "")),
                 cluster_id=request.cluster_id,
                 project=request.project,
                 result="success",
                 details={
-                    "command": result_data.get("command"),
+                    "operation": operation,
+                    **_guest_audit_details(operation, request.params or {}),
                     "exit_code": result_data.get("exit_code"),
-                    "cwd": request.params.get("cwd"),
-                    "run_as_user": request.params.get("user"),
                     "stdout_bytes": len(result_data.get("stdout") or ""),
                     "stderr_bytes": len(result_data.get("stderr") or ""),
                     "truncated": result_data.get("truncated"),
@@ -3635,27 +3673,26 @@ async def proxy_operation(
     except Exception as e:
         logger.error(f"Error in proxy operation: {e}", exc_info=True)
         error_code = classify_proxy_error(e)
-        if request.operation == "exec_instance":
-            # important: a command that outlived the budget still ran. Auditing only the calls
-            # that answered in time would leave the longest-running commands, which are the ones
+        if request.operation in GUEST_ACCESS_OPERATIONS:
+            # important: a call that outlived the budget still reached the guest. Auditing only
+            # the ones that answered in time would leave the longest-running, which are the ones
             # most worth reviewing, out of the record entirely.
             _audit_key_action(
                 api_key,
-                action="integration.instance.exec",
+                action=_guest_audit_action(request.operation),
                 target_id=str(request.params.get("name", "")),
                 cluster_id=request.cluster_id,
                 project=request.project,
                 result="failure",
                 details={
-                    "command": request.params.get("command"),
-                    "cwd": request.params.get("cwd"),
-                    "run_as_user": request.params.get("user"),
+                    "operation": request.operation,
+                    **_guest_audit_details(request.operation, request.params or {}),
                     "outcome": error_code,
                 },
                 external_user_email=request.external_user_email,
                 error_message=error_code,
             )
-        if request.operation == "exec_instance" and error_code == "timeout":
+        if request.operation in GUEST_ACCESS_OPERATIONS and error_code == "timeout":
             # important: a socket read can still expire before the budget on the pooled path, and
             # the underlying message is a urllib3 string naming the LXD host's address, which is
             # infrastructure an integration has no business learning from a timeout.
