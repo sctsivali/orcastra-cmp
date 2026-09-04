@@ -5,6 +5,7 @@ CRUD for organizations, members, and cluster bindings.
 Scoped by RBAC: Admin sees all, Partner sees own, Tenant sees assigned.
 """
 
+import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -26,6 +27,8 @@ from app.services.organization_preferences import (
     get_user_org_preferences_version,
     reset_org_preferences_to_defaults,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/organizations",
@@ -488,6 +491,21 @@ async def update_org_preferences(
         select(OrganizationPreferences).where(OrganizationPreferences.organization_id == org_id)
     )
     prefs = result.scalar_one_or_none()
+
+    # important: an Admin passes user_has_access for every organization, which is the break-glass
+    # posture this deployment wants. It is also how a customer's branding got rewritten by an
+    # operator who never chose that organization: the editor defaulted to the alphabetically first
+    # one, the write succeeded, and updated_by was the only trace it left. Break-glass is allowed
+    # here and it is not allowed to be quiet, so a write by somebody who does not belong to the
+    # organization is recorded at WARNING, which reaches OpenSearch through Fluent Bit.
+    members = [(m.user_email or "").lower() for m in (await svc.get_organization(org_id)).members or []]
+    if (user.email or "").lower() not in members:
+        logger.warning(
+            "Cross-organization branding write: %s is not a member of organization %s and is "
+            "replacing its personalization settings",
+            user.email,
+            org_id,
+        )
 
     if prefs:
         prefs.settings = body.settings

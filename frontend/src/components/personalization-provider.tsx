@@ -166,6 +166,21 @@ export function PersonalizationProvider({
   // Debounce ref for save operations
   const saveTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSettingsRef = React.useRef<PersonalizationSettings | null>(null);
+  // What the personal user_preferences row actually holds, and whether this session's colours come
+  // from an organization. updateTheme needs both: for a Partner or Tenant the personal row is a
+  // theme carrier, not a copy of what is on screen.
+  const personalRowRef = React.useRef<PersonalizationSettings | null>(null);
+  const orgBackedRef = React.useRef(false);
+  // When the operator last changed something locally.
+  //
+  // important: loadSettings below is async, and it used to setSettings unconditionally when its
+  // response arrived. A click landing between the fetch starting and finishing was therefore
+  // overwritten by the value the server still held: the change painted, stuck for a moment, and
+  // reverted. That is the same symptom as the organization-targeting defect and a completely
+  // different cause, which is why it survived that fix and showed up as an intermittent theme
+  // failure. Compared against the load's own start time rather than a boolean, so a slow response
+  // from an EARLIER load cannot suppress a later one.
+  const lastLocalEditRef = React.useRef(0);
   // Always-current settings ref (avoids stale closure in saveSettings)
   const settingsRef = React.useRef<PersonalizationSettings>(seeded);
   // Undo/Redo stacks
@@ -357,6 +372,15 @@ export function PersonalizationProvider({
         setIsLoading(false);
         return;
       }
+
+      // Everything this load writes goes through here. A response is only authoritative if the
+      // operator has not changed anything since the request went out; otherwise it is a stale
+      // answer to a question that has moved on, and applying it reads as the edit reverting.
+      const startedAt = Date.now();
+      const applyLoaded = (next: PersonalizationSettings) => {
+        if (lastLocalEditRef.current > startedAt) return;
+        setSettings(next);
+      };
       
       const token = (session as any)?.accessToken;
 
@@ -365,10 +389,13 @@ export function PersonalizationProvider({
       const roles = resolveRoles(groups);
       const isAdminOnly = roles.includes(Role.ADMIN) && !roles.includes(Role.PARTNER);
 
+      orgBackedRef.current = !isAdminOnly;
+
       if (isAdminOnly) {
         // Admin (system-level): personal user preferences
         const apiSettings = await fetchFromAPI(userId, userEmail, token);
-        setSettings(apiSettings ?? DEFAULT_PERSONALIZATION);
+        applyLoaded(apiSettings ?? DEFAULT_PERSONALIZATION);
+        personalRowRef.current = apiSettings ?? null;
       } else {
         // Partner / Tenant: org branding + personal theme
         // Org prefs drive logo, colors, background, branding
@@ -379,10 +406,17 @@ export function PersonalizationProvider({
         ]);
         const base = orgSettings ?? DEFAULT_PERSONALIZATION;
         const personalTheme = personalSettings?.lastModified ? personalSettings.theme : undefined;
-        setSettings({
+        applyLoaded({
           ...base,
           theme: personalTheme ?? base.theme,
         });
+        // important: kept separately from `settings`. For these roles `settings` is the
+        // ORGANIZATION's branding with a personal theme laid over it, and it is the right thing
+        // to render. It is the wrong thing to save: updateTheme used to write all of it to the
+        // personal row, so changing the theme stamped the organization's colours into a row that
+        // is only ever read for `theme`. Harmless on screen, and it made the table lie about what
+        // an operator had chosen, which is the evidence anybody debugging this reaches for first.
+        personalRowRef.current = personalSettings;
       }
       
       setIsLoading(false);
@@ -433,6 +467,7 @@ export function PersonalizationProvider({
       setCanRedo(false);
     }
     isUndoRedoRef.current = false;
+    lastLocalEditRef.current = Date.now();
     setSettings(updatedSettings);
 
     // Clear any pending save timer
@@ -500,12 +535,64 @@ export function PersonalizationProvider({
     });
   }, [settings, saveSettings]);
 
-  const updateTheme = React.useCallback((theme: ThemePreference) => {
-    saveSettings({
-      ...settings,
+  /**
+   * Persist a theme choice into the personal row and nothing else.
+   *
+   * For a Partner or Tenant `settings` is the ORGANIZATION's branding with a personal theme laid
+   * over it. Rendering that is correct; saving it is not. updateTheme used to hand the whole
+   * merged object to saveSettings, so picking Dark stamped the organization's colours into a row
+   * that is only ever read for `theme`. It never showed on screen, and it made the table say the
+   * operator had chosen colours they had never seen a picker for, which is exactly the evidence
+   * somebody debugging a colour problem reaches for first.
+   */
+  const persistPersonalTheme = React.useCallback(async (theme: ThemePreference) => {
+    const userId = session?.user?.id;
+    if (!userId) {
+      toast({
+        title: "Cannot save settings",
+        description: "Please sign in to save your personalization settings.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const personal: PersonalizationSettings = {
+      ...(personalRowRef.current ?? DEFAULT_PERSONALIZATION),
       theme,
-    });
-  }, [settings, saveSettings]);
+      // important: the loader honours a personal theme only when the row carries a lastModified,
+      // which is how "never chose a theme" is told apart from "chose System". Dropping it here
+      // would make the choice survive the session and vanish on the next load.
+      lastModified: new Date().toISOString(),
+    };
+    personalRowRef.current = personal;
+    lastLocalEditRef.current = Date.now();
+    setIsSaving(true);
+    const ok = await saveToAPI(userId, session?.user?.email ?? undefined, personal, sessionAccessToken);
+    setIsSaving(false);
+    if (!ok) {
+      toast({
+        title: "Failed to save settings",
+        description: "Your changes could not be saved. Please try again.",
+        variant: "destructive",
+      });
+    }
+  }, [session?.user?.id, session?.user?.email, sessionAccessToken, saveToAPI]);
+
+  const updateTheme = React.useCallback((theme: ThemePreference) => {
+    if (!orgBackedRef.current) {
+      // Admin without Partner: `settings` IS the personal row, so saving all of it is right, and
+      // the theme belongs on the branding undo stack with everything else on that path.
+      saveSettings({
+        ...settings,
+        theme,
+      });
+      return;
+    }
+    // Render the organization's branding under the new theme, persist only the theme. Not pushed
+    // onto the undo stack on purpose: that stack is the branding editor's, and undoing a colour
+    // edit should not flip the operator's theme back.
+    setSettings((prev) => ({ ...prev, theme }));
+    void persistPersonalTheme(theme);
+  }, [settings, saveSettings, persistPersonalTheme]);
 
   const resetToDefaults = React.useCallback(async () => {
     const userId = session?.user?.id;
@@ -521,7 +608,11 @@ export function PersonalizationProvider({
     setCanRedo(false);
 
     // Reset UI immediately
+    lastLocalEditRef.current = Date.now();
     setSettings(DEFAULT_PERSONALIZATION);
+    // The row is about to be deleted, so the next theme save must not rebuild it from a stale
+    // copy of what it used to hold.
+    personalRowRef.current = null;
     
     if (userId) {
       const success = await deleteFromAPI(userId, userEmail, (session as any)?.accessToken);

@@ -99,3 +99,46 @@ def test_the_two_orderings_that_caused_this_are_still_different():
         "the sidebar's organization is the earliest membership; the editor's default has to track "
         "this function, not the list above"
     )
+
+
+def test_a_cross_organization_branding_write_is_recorded():
+    """Break-glass is allowed here. It is not allowed to be quiet.
+
+    `require_partner()` plus `user_has_access` lets an Admin write any organization's
+    preferences, which is the posture this deployment wants. It is also how a customer's branding
+    was rewritten by an operator who had never chosen that organization, and `updated_by` was the
+    only trace it left: a column nobody reads until they already suspect something.
+
+    Asserted structurally rather than by driving the endpoint, because reproducing it live means
+    writing to an organization the caller does not belong to, which is the act this exists to
+    discourage.
+    """
+    import ast
+    import inspect
+
+    from app.routers import organizations as module
+
+    source = inspect.getsource(module)
+    tree = ast.parse(source)
+    fn = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+        and n.name == "update_org_preferences"
+    )
+    body = ast.dump(fn)
+
+    assert "logger" in body and "warning" in body, (
+        "update_org_preferences must log a warning when the caller does not belong to the "
+        "organization it is about to rewrite"
+    )
+    assert "members" in body, (
+        "the warning has to be guarded by an actual membership test, not emitted for every write"
+    )
+
+    # The record has to precede the mutation, or a failure between the two loses it.
+    tail = source.split("async def update_org_preferences")[1]
+    warn_at = tail.find("logger.warning")
+    write_at = tail.find("prefs.settings = body.settings")
+    assert warn_at != -1 and write_at != -1
+    assert warn_at < write_at, "log the cross-organization write before performing it"
