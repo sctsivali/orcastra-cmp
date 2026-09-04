@@ -24,6 +24,7 @@ from .availability import require_client
 from .guest_exec import exec_instance
 from .guest_files import get_file, put_file
 from .instance_view import instance_detail, instance_summary, status_name
+from ..desktop.entry import desktop_action, desktop_probe
 from .proxy import EXEC_TIMEOUT, PROXY_OP_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -63,11 +64,19 @@ PROXY_OPERATION_LEVELS: Dict[str, str] = {
     # and because the contract test refuses to let anything named `get_` cost more. The level is
     # not what bounds it: instance.files is, and no preset seeds that.
     "get_file": "read",
+    # Seeing and driving a guest's graphical session. Four operations rather than one, because
+    # GUEST_ACCESS_OPERATIONS below maps an operation to exactly ONE capability: a single
+    # `desktop_action` whose real cost varied with its arguments would be gated at whatever that
+    # map named, and a caller granted only desktop.view could ask it to type.
+    "desktop_probe": "read",
+    "desktop_view": "read",
+    "desktop_clipboard": "read",
     # Reaching inside a guest. Priced `write` because it changes the instance's state, but the
     # level is not what bounds it: GUEST_ACCESS_OPERATIONS below demands an explicit capability
     # on top, which no application-type preset seeds and no legacy key inherits.
     "exec_instance": "write",
     "put_file": "write",
+    "desktop_input": "write",
     # Writes: changing an instance that already exists, or creating one.
     "create_instance": "write",
     "update_instance": "write",
@@ -110,6 +119,14 @@ GUEST_ACCESS_OPERATIONS: Dict[str, str] = {
     # and a backup that reads files has no reason to run anything.
     "get_file": "instance.files",
     "put_file": "instance.files",
+    # The desktop family. `desktop.input` is a LARGER power than instance.exec rather than a
+    # sibling of it: exec runs in a fresh non-interactive context, while typing into a logged-in
+    # session inherits that session's authenticated browser, unlocked keyring, live ssh-agent and
+    # already-validated sudo timestamp.
+    "desktop_probe": "desktop.view",
+    "desktop_view": "desktop.view",
+    "desktop_input": "desktop.input",
+    "desktop_clipboard": "desktop.clipboard",
 }
 
 # Operations that poll an LXD operation to completion. They need a wider read window than the
@@ -300,6 +317,10 @@ _REQUIRED_PARAMS: Dict[str, Tuple[Tuple[str, str], ...]] = {
     # them a request missing a path pays for a connection before being told about its own body.
     "get_file": (("name", "Instance name"), ("path", "File path")),
     "put_file": (("name", "Instance name"), ("path", "File path")),
+    "desktop_probe": (("name", "Instance name"),),
+    "desktop_view": (("name", "Instance name"), ("action", "Desktop action")),
+    "desktop_input": (("name", "Instance name"), ("action", "Desktop action")),
+    "desktop_clipboard": (("name", "Instance name"), ("action", "Desktop action")),
     "create_network": (("name", "Network name"),),
     "delete_network": (("name", "Network name"),),
     "delete_storage_pool": (("name", "Storage pool name"),),
@@ -468,6 +489,22 @@ def execute_proxy_operation(
 
     if operation == "put_file":
         return put_file(instance(), params)
+
+    # note: the operation names are spelled out in the tests below rather than checked against a
+    # module-level set. `test_the_price_list_and_the_dispatcher_name_the_same_operations` reads
+    # them off the string constants in each branch's condition, so a set membership test is
+    # invisible to it and the operation reads as priced-but-unimplemented.
+    #
+    # The target triple is not caller-supplied on this path: cluster and project come from the
+    # request the router already authorized, so a params field cannot redirect the action at a
+    # different guest than the one the permission check was made against.
+    if operation == "desktop_probe":
+        return desktop_probe(instance(), {**params, "cluster_id": cluster_id, "project": project})
+
+    if operation in ("desktop_view", "desktop_input", "desktop_clipboard"):
+        return desktop_action(
+            instance(), {**params, "cluster_id": cluster_id, "project": project}, operation
+        )
 
     if operation == "create_snapshot":
         # note: validate before the lookup. Reversed, a request missing snapshot_name spent a

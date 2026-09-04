@@ -114,6 +114,15 @@ TOOL_CONTRACT: Dict[str, ToolRequirement] = {
     "lxd_read_file": _proxy("get_file", read_only=True),
     "lxd_write_file": _proxy("put_file"),
 
+    # ── the guest's graphical session ──────────────────────────────────────────────────────────
+    # Split along the capability boundaries rather than by convenience: a host allow-rule and an
+    # operator's grant both have to be able to tell "look at this screen" from "type into it".
+    "desktop_probe": _proxy("desktop_probe", read_only=True),
+    "desktop_screenshot": _proxy("desktop_view", read_only=True),
+    "desktop_cursor_position": _proxy("desktop_view", read_only=True),
+    "desktop_control": _proxy("desktop_input"),
+    "desktop_read_clipboard": _proxy("desktop_clipboard", read_only=True),
+
     # ── admin: destruction, and infrastructure no project contains ─────────────────────────────
     "lxd_delete_instance": _proxy("delete_instance"),
     "lxd_delete_snapshot": _proxy("delete_snapshot"),

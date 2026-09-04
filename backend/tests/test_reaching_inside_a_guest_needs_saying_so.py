@@ -76,11 +76,41 @@ def _key(capabilities=None, *, legacy: bool = False):
 # ── the vocabulary ─────────────────────────────────────────────────────────────────────────
 
 
-def test_both_guest_capabilities_exist_and_are_described() -> None:
-    """The dialog and the integrator doc both render these sentences."""
-    assert GUEST_ACCESS_CAPABILITIES == {"instance.exec", "instance.files"}
+def test_every_guest_capability_exists_and_is_described() -> None:
+    """The dialog and the integrator doc both render these sentences.
+
+    Spelled out as a literal so that adding a guest-reaching power is a deliberate edit here as
+    well as in the vocabulary. That is the point of the assertion rather than an inconvenience:
+    when the desktop family was added, this is the test that failed and made somebody state which
+    side of the never-inherited line it belonged on.
+    """
+    assert GUEST_ACCESS_CAPABILITIES == {
+        "instance.exec",
+        "instance.files",
+        "desktop.view",
+        "desktop.input",
+        "desktop.clipboard",
+    }
     for capability in GUEST_ACCESS_CAPABILITIES:
         assert CAPABILITIES.get(capability), f"{capability} has no operator-facing description"
+
+
+def test_the_desktop_family_is_split_rather_than_one_capability() -> None:
+    """Watching, touching and reading the clipboard are three different consents.
+
+    A kiosk monitor that may look at a screen has not thereby been allowed to type into it, and
+    neither implies the right to read whatever the user last copied, which is the highest-yield
+    exfiltration primitive on the surface.
+    """
+    assert {"desktop.view", "desktop.input", "desktop.clipboard"} <= set(CAPABILITIES)
+
+
+def test_typing_is_described_as_more_than_reaching_inside() -> None:
+    """`instance.exec` runs in a fresh non-interactive context. Typing into a logged-in session
+    inherits an authenticated browser, an unlocked keyring, a live ssh-agent and a validated sudo
+    timestamp, so the operator-facing sentence must not read the same as exec's."""
+    assert ELEVATED_REASONS["desktop.input"] != ELEVATED_REASONS["instance.exec"]
+    assert "logged-in" in ELEVATED_REASONS["desktop.input"]
 
 
 def test_they_are_marked_elevated_with_their_own_reason() -> None:

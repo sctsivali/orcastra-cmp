@@ -180,6 +180,11 @@ class Settings(BaseSettings):
         alias="MCP_ADMIN_TOOLS_ENABLED",
         description="Register the destructive tools (delete instance and snapshot, create and delete networks, storage pools and projects). A key's own grant still decides whether they run; this decides whether a model is ever shown them."
     )
+    mcp_desktop_tools_enabled: bool = Field(
+        default=False,
+        alias="MCP_DESKTOP_TOOLS_ENABLED",
+        description="Register the tools that see and drive a guest's graphical session. Each costs a capability of its own that no application type seeds, the owning organization must also have consented, and ORCASTRA_DESKTOP_CONTROL_ENABLED must be set."
+    )
     mcp_guest_tools_enabled: bool = Field(
         default=False,
         alias="MCP_GUEST_TOOLS_ENABLED",

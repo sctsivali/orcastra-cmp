@@ -38,6 +38,9 @@ CAPABILITIES: Dict[str, str] = {
     "tenant.provision": "Create and revoke tenant access policies",
     "instance.exec": "Run commands inside an instance, as root unless a user is named",
     "instance.files": "Read and write files inside an instance",
+    "desktop.view": "Capture the screen of an instance's graphical session",
+    "desktop.input": "Move the mouse and type into an instance's graphical session",
+    "desktop.clipboard": "Read the clipboard of an instance's graphical session",
 }
 
 # Reaching INSIDE a guest, rather than managing it from outside.
@@ -49,7 +52,18 @@ CAPABILITIES: Dict[str, str] = {
 # `has_capability` reads as everything; 17 of the 22 keys in this deployment are in that state, so
 # without the second, shipping this grants root-in-guest to most of the fleet with nobody deciding
 # it. A power that did not exist when a key was issued cannot already have been granted to it.
-GUEST_ACCESS_CAPABILITIES = frozenset({"instance.exec", "instance.files"})
+GUEST_ACCESS_CAPABILITIES = frozenset({
+    "instance.exec",
+    "instance.files",
+    # The desktop family belongs here for the same reason and one stronger. `desktop.input` is not
+    # merely another way to reach inside a guest, it is a LARGER power than `instance.exec`:
+    # exec runs in a fresh non-interactive context, while typing into a logged-in session inherits
+    # that session's authenticated browser, unlocked keyring, live ssh-agent and already-validated
+    # sudo timestamp. Pricing it as an equal of exec would understate it.
+    "desktop.view",
+    "desktop.input",
+    "desktop.clipboard",
+})
 
 # What each application type gets when the caller does not name capabilities itself. These are
 # defaults, not a ceiling: the operator may tick any capability for any type.
@@ -89,6 +103,12 @@ ELEVATED_REASONS: Dict[str, str] = {
     "tenant.provision": "Writes access control",
     "instance.exec": "Reaches inside the guest",
     "instance.files": "Reaches inside the guest",
+    "desktop.view": "Photographs the user's screen",
+    # important: not "Reaches inside the guest". That sentence is true of exec and files and
+    # undersells this one, which acts AS the logged-in user with everything their session already
+    # has unlocked. An operator reading the create dialog has to be told the difference.
+    "desktop.input": "Acts as the logged-in desktop user",
+    "desktop.clipboard": "Reads whatever the user last copied",
 }
 
 
