@@ -21,7 +21,7 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ImageGeometry", "read_geometry", "visual_tokens", "within_model_limits"]
+__all__ = ["ImageGeometry", "read_geometry", "within_model_limits"]
 
 _PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 # SOF markers that carry dimensions. SOF4 (0xC4) is a Huffman table and SOF8/SOFC are not frames,
@@ -54,10 +54,10 @@ class ImageGeometry(tuple):
 
     @property
     def visual_tokens(self) -> int:
-        return visual_tokens(self.width, self.height)
+        return _visual_tokens(self.width, self.height)
 
 
-def visual_tokens(width: int, height: int) -> int:
+def _visual_tokens(width: int, height: int) -> int:
     """What a model spends to read an image of this size.
 
     The published formula is ceil(w/28) * ceil(h/28). Stated here rather than approximated,

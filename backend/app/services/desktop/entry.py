@@ -14,7 +14,7 @@ from fastapi import HTTPException
 
 from .actions import CAPTURE_ACTIONS, CLIPBOARD_ACTIONS, INPUT_ACTIONS, build_action
 from .guest.provider import GuestExecProvider
-from .protocol import ActionResult, ProbeReport, Target
+from .protocol import ActionResult, DesktopProvider, ProbeReport, Target
 from .runtime import DESKTOP_CONTROL_ENABLED
 from . import session_store
 
@@ -22,10 +22,8 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "OPERATION_CAPABILITY",
-    "capability_for_action",
-    "desktop_action",
+        "desktop_action",
     "desktop_probe",
-    "end_session",
 ]
 
 # One proxy operation per capability, rather than one `desktop_action` operation covering all of
@@ -52,7 +50,7 @@ _FAMILY_CAPABILITY = (
 )
 
 
-def capability_for_action(name: str) -> Optional[str]:
+def _capability_for_action(name: str) -> Optional[str]:
     """The capability this action costs, or None for one that costs nothing.
 
     `wait` is the only member of the last group: it never reaches the guest, so it neither reads
@@ -99,12 +97,22 @@ def _agent_present(inst: Any) -> bool:
     return processes != -1
 
 
+def _provider(inst: Any) -> DesktopProvider:
+    """The provider for this guest.
+
+    One function rather than a constructor call at each site, because it is the seam a second
+    provider arrives through. A framebuffer provider for guests that cannot run capture tooling
+    is the documented gap, and it becomes a branch here rather than an edit at every call.
+    """
+    return GuestExecProvider(inst)
+
+
 def _report_for(inst: Any, target: Target, *, refresh: bool = False) -> ProbeReport:
     if not refresh:
         cached = session_store.load(target)
         if cached is not None:
             return cached
-    report = GuestExecProvider(inst).probe(target, agent=_agent_present(inst))
+    report = _provider(inst).probe(target, agent=_agent_present(inst))
     session_store.store(target, report)
     return report
 
@@ -116,13 +124,13 @@ def desktop_probe(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     report = _report_for(inst, target, refresh=bool(params.get("refresh")))
     payload = asdict(report)
     payload["session_id"] = session_store.session_id(target)
-    payload["provider"] = GuestExecProvider.name
+    payload["provider"] = _provider(inst).name
     return payload
 
 
 def _assert_action_matches(operation: str, action_name: str) -> None:
     """The action a caller asked for must be one this operation is priced for."""
-    required = capability_for_action(action_name)
+    required = _capability_for_action(action_name)
     if required is None:
         return
     allowed = OPERATION_CAPABILITY.get(operation)
@@ -173,7 +181,7 @@ def desktop_action(inst: Any, params: Dict[str, Any], operation: str = "desktop_
                 "display": asdict(report.display),
             }
 
-    result: ActionResult = GuestExecProvider(inst).perform(target, action, report)
+    result: ActionResult = _provider(inst).perform(target, action, report)
 
     # A capture that observed a different geometry updates the cached session, so the next
     # coordinate is measured against what is on screen now.
@@ -206,10 +214,3 @@ def desktop_action(inst: Any, params: Dict[str, Any], operation: str = "desktop_
         }
     payload.update(result.extra)
     return payload
-
-
-def end_session(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Drop the cached probe. Cleanup rather than a control: the next call re-probes."""
-    target = _target(params, inst)
-    session_store.forget(target)
-    return {"ok": True, "action": "end_session", "session_id": session_store.session_id(target)}

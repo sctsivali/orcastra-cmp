@@ -18,12 +18,12 @@ from .runtime import DESKTOP_ACTIONS_PER_MINUTE, DESKTOP_SCREENSHOTS_PER_MINUTE
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["consume", "bucket_key"]
+__all__ = ["consume", "_bucket_key"]
 
 _WINDOW_SECONDS = 60
 
 
-def bucket_key(kind: str, key_id: str, cluster_id: str, project: str, instance: str) -> str:
+def _bucket_key(kind: str, key_id: str, cluster_id: str, project: str, instance: str) -> str:
     return f"desktop:{kind}:{key_id}:{cluster_id}:{project}:{instance}"
 
 
@@ -54,7 +54,7 @@ def consume(
 
     for kind, limit in checks:
         allowed = _shared_allow(
-            bucket_key(kind, key_id, cluster_id, project, instance), limit, _WINDOW_SECONDS
+            _bucket_key(kind, key_id, cluster_id, project, instance), limit, _WINDOW_SECONDS
         )
         if allowed is None:
             if fail_closed:

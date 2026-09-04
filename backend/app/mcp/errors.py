@@ -22,16 +22,10 @@ from mcp.types import INVALID_PARAMS, CallToolResult, TextContent
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "AUTH_STATUSES",
     "tool_error",
     "tool_result",
     "to_mcp_error",
 ]
-
-# Statuses that mean the credential itself is wrong rather than the request. These reach the
-# caller as a protocol failure, because no amount of the model rewording its arguments fixes them.
-AUTH_STATUSES = frozenset({401, 403, 429})
-
 
 def tool_error(message: str, *, error_code: Optional[str] = None) -> CallToolResult:
     """A failure the model should read and act on.

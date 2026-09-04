@@ -411,7 +411,7 @@ def test_a_capture_spends_the_action_budget_too() -> None:
 def test_the_budget_is_keyed_per_guest_not_per_key() -> None:
     """One runaway agent on one guest must not starve another guest the same key is legitimately
     driving, and raising the per-key limit elsewhere must not silently widen this."""
-    from app.services.desktop.budget import bucket_key
+    from app.services.desktop.budget import _bucket_key as bucket_key
 
     a = bucket_key("actions", "oak_x", "nuc2", "default", "vm-a")
     b = bucket_key("actions", "oak_x", "nuc2", "default", "vm-b")

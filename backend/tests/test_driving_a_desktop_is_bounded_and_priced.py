@@ -31,11 +31,11 @@ from app.services.desktop.actions import (
     INPUT_ACTIONS,
     build_action,
 )
-from app.services.desktop.entry import OPERATION_CAPABILITY, capability_for_action
+from app.services.desktop.entry import OPERATION_CAPABILITY, _capability_for_action as capability_for_action
 from app.services.desktop.guest import chains
 from app.services.desktop.guest.keys import split_combination
 from app.services.desktop.guest.probe import build_report
-from app.services.desktop.image_header import read_geometry, visual_tokens, within_model_limits
+from app.services.desktop.image_header import read_geometry, within_model_limits
 from app.services.desktop.protocol import Display, Target
 from app.services.desktop.runtime import (
     DESKTOP_MAX_LONG_EDGE,
@@ -86,8 +86,8 @@ def test_a_truncated_png_is_refused_rather_than_half_read() -> None:
 def test_the_token_formula_is_the_published_one() -> None:
     """ceil(w/28) * ceil(h/28). Stated rather than approximated, because the refusal it feeds has
     to be right at the boundary rather than merely close."""
-    assert visual_tokens(1280, 800) == 46 * 29 == 1334
-    assert visual_tokens(1920, 1080) == 69 * 39 == 2691
+    assert read_geometry(_png(1280, 800)).visual_tokens == 46 * 29 == 1334
+    assert read_geometry(_png(1920, 1080)).visual_tokens == 69 * 39 == 2691
 
 
 def test_the_house_target_fits_the_tier_every_model_accepts() -> None:

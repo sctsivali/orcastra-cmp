@@ -119,6 +119,7 @@ TOOL_CONTRACT: Dict[str, ToolRequirement] = {
     # operator's grant both have to be able to tell "look at this screen" from "type into it".
     "desktop_probe": _proxy("desktop_probe", read_only=True),
     "desktop_screenshot": _proxy("desktop_view", read_only=True),
+    "desktop_zoom": _proxy("desktop_view", read_only=True),
     "desktop_cursor_position": _proxy("desktop_view", read_only=True),
     "desktop_control": _proxy("desktop_input"),
     "desktop_read_clipboard": _proxy("desktop_clipboard", read_only=True),

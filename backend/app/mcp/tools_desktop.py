@@ -79,6 +79,29 @@ def register(mcp: MCPServer) -> None:
         )
 
     @mcp.tool(
+        name="desktop_zoom",
+        annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=False),
+        description=(
+            "Capture one region of the guest's screen at full resolution, for reading small text "
+            "a downscaled screenshot loses. The region is [x0, y0, x1, y1] in the SAME screenshot "
+            "pixels as desktop_screenshot, and the coordinates you use afterwards stay in that "
+            "space: zooming does not change the coordinate system." + _UNTRUSTED
+        ),
+    )
+    async def desktop_zoom(
+        cluster_id: Cluster,
+        name: InstanceName,
+        region: Annotated[
+            List[int], Field(description="[x0, y0, x1, y1] in screenshot pixels.")
+        ],
+        project: Project = "default",
+    ) -> CallToolResult:
+        return await call_proxy(
+            "desktop_view", cluster_id, project=project,
+            params={"name": name, "action": "zoom", "region": region},
+        )
+
+    @mcp.tool(
         name="desktop_cursor_position",
         annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True),
         description=(

@@ -116,3 +116,69 @@ def test_the_exempt_list_stays_honest() -> None:
     known = {(filename, node.name) for filename, node in _api_key_handlers()}
     for entry in EXEMPT:
         assert entry in known, f"EXEMPT names {entry}, which is not a routed API-key handler"
+
+
+# ── the MCP surface, which this file could not see ─────────────────────────────────────────────
+
+def test_every_mcp_tool_funnels_through_a_gate() -> None:
+    """This ratchet walks `app/routers/` and requires a `router.` decorator, so `app/mcp/` was
+    invisible to it and so was `test_cluster_scope_ratchet.py`.
+
+    That matters because every MCP tool takes a caller-supplied `cluster_id`, which is exactly
+    what the scope ratchet exists to police. Today they are protected transitively: `call_proxy`
+    and `run_inventory` funnel into `proxy_operation`, which does its own per-cluster check. But
+    that is a property of the current implementation rather than of any test, and a tool that
+    reached a service directly would inherit no coverage from either file.
+
+    So: a tool handler either goes through one of the two dispatchers, or it is listed here with
+    a reason.
+    """
+    import ast
+    from pathlib import Path
+
+    mcp_dir = Path(__file__).resolve().parents[1] / "app" / "mcp"
+    dispatchers = {"call_proxy", "run_inventory"}
+    # Tools that legitimately answer without touching a cluster.
+    exempt = {
+        # Reports what the key itself holds. Reads no cluster, so there is nothing to scope.
+        "orcastra_whoami": "reads the credential, not a cluster",
+    }
+
+    ungated = []
+    for file in sorted(mcp_dir.glob("tools_*.py")):
+        tree = ast.parse(file.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            decorated = any(
+                "mcp.tool" in ast.unparse(decorator) for decorator in node.decorator_list
+            )
+            if not decorated or node.name in exempt:
+                continue
+            called = {
+                getattr(call.func, "id", None) or getattr(call.func, "attr", None)
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+            }
+            if not (called & dispatchers):
+                ungated.append(f"{file.name}::{node.name}")
+
+    assert not ungated, (
+        "these MCP tools do not funnel through call_proxy or run_inventory, so they are covered "
+        "by neither this ratchet nor the cluster-scope one:\n  " + "\n  ".join(ungated)
+    )
+
+
+def test_the_mcp_dispatchers_still_enforce() -> None:
+    """The funnel above is only worth anything while the thing it funnels into checks."""
+    import ast
+    import inspect
+
+    from app.mcp import dispatch
+
+    source = ast.unparse(ast.parse(inspect.getsource(dispatch.call_proxy).lstrip()))
+    assert "assert_capability" in source, "call_proxy no longer checks the endpoint capability"
+    assert "check_read_only_mode" in source, (
+        "call_proxy no longer honours read-only mode, which the Depends default would have "
+        "supplied had the handler been called through FastAPI"
+    )

@@ -32,7 +32,7 @@ from .runtime import DESKTOP_SESSION_MAX_AGE, DESKTOP_SESSION_TTL
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["session_id", "load", "store", "forget"]
+__all__ = ["session_id", "load", "store"]
 
 _HASH_KEY = "orcastra:desktop:sessions"
 
@@ -137,15 +137,3 @@ def store(target: Target, report: ProbeReport) -> str:
         except Exception:  # noqa: BLE001
             logger.debug("Desktop session cache write skipped for %s", target.key)
     return key
-
-
-def forget(target: Target) -> None:
-    """End a session. Cleanup, never a security control: a re-probe re-establishes it."""
-    key = session_id(target)
-    _local.pop(key, None)
-    client = _redis()
-    if client is not None:
-        try:
-            client.hdel(_HASH_KEY, key)
-        except Exception:  # noqa: BLE001
-            pass
