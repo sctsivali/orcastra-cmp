@@ -162,6 +162,30 @@ class Settings(BaseSettings):
         description="Enforce per-project tenant ACL (operate/console) on power and console routes, not just cluster access."
     )
 
+    # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
+    # A second door onto the same integration API keys, so turning it on is a decision rather than
+    # something a deploy inherits. Settings are lru_cache'd, so all four need a restart.
+    mcp_enabled: bool = Field(
+        default=False,
+        alias="MCP_ENABLED",
+        description="Serve the MCP endpoint at {api_prefix}/mcp, authenticated by integration API keys."
+    )
+    mcp_allowed_hosts: str = Field(
+        default="",
+        alias="MCP_ALLOWED_HOSTS",
+        description="Comma-separated Host values the MCP endpoint accepts (DNS-rebinding protection). Empty disables the check, which is correct behind a proxy that already pins Host."
+    )
+    mcp_admin_tools_enabled: bool = Field(
+        default=False,
+        alias="MCP_ADMIN_TOOLS_ENABLED",
+        description="Register the destructive tools (delete instance and snapshot, create and delete networks, storage pools and projects). A key's own grant still decides whether they run; this decides whether a model is ever shown them."
+    )
+    mcp_guest_tools_enabled: bool = Field(
+        default=False,
+        alias="MCP_GUEST_TOOLS_ENABLED",
+        description="Register the tools that reach inside a guest (exec, read and write files). They run as root unless a user is named and cost a capability no application type seeds."
+    )
+
     # Offboarding: remove OrganizationMember rows for orgs present in a sync push whose email is
     # no longer in OrcaHub's pushed roster (OrcaHub is the source of truth and never sends an
     # explicit member-remove). Default OFF because it is DESTRUCTIVE: it revokes org-scope access

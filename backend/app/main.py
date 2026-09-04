@@ -4,7 +4,7 @@ Main FastAPI application entry point.
 """
 
 import logging
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
@@ -332,9 +332,23 @@ async def lifespan(app: FastAPI):
     except Exception as tag_err:
         logger.warning(f"Could not initialize tag categories: {tag_err}")
     
+    # important: the MCP session manager's task group is created by run(), and Starlette does not
+    # propagate lifespan into a mounted sub-app, which is how the SDK would normally start it.
+    # Without this every MCP request raises "Task group is not initialized".
+    _mcp_stack = AsyncExitStack()
+    _mcp_manager = getattr(app.state, "mcp_session_manager", None)
+    if _mcp_manager is not None:
+        try:
+            await _mcp_stack.enter_async_context(_mcp_manager.run())
+            logger.info("MCP session manager started")
+        except Exception as mcp_err:
+            logger.error(f"MCP session manager failed to start: {mcp_err}")
+
     logger.info("Orcastra CMP API started successfully")
     
     yield
+
+    await _mcp_stack.aclose()
     
     # Shutdown
     logger.info("Shutting down Orcastra CMP API...")
@@ -508,6 +522,18 @@ Ensure your client certificates are properly configured.
     from app.routers.integrations import router as integrations_router, external_router as integrations_external_router
     app.include_router(integrations_router, prefix=settings.api_prefix)
     app.include_router(integrations_external_router, prefix=settings.api_prefix)
+
+    # MCP server. Same credential as external_router, different protocol. Appended to the raw
+    # router rather than include_router'd because the endpoint is an ASGI callable, not an
+    # APIRoute, and mounting it as a sub-app would cost a 307 on every JSON-RPC POST.
+    if settings.mcp_enabled:
+        from app.mcp import build_mcp_route
+        _mcp_route, _mcp_manager = build_mcp_route(settings)
+        app.state.mcp_session_manager = _mcp_manager
+        app.router.routes.append(_mcp_route)
+        logger.info("MCP server mounted at %s/mcp", settings.api_prefix)
+    else:
+        app.state.mcp_session_manager = None
 
     from app.routers.image_uploads import router as image_uploads_router
     app.include_router(image_uploads_router, prefix=settings.api_prefix)
