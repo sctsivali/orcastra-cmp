@@ -28,7 +28,7 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
 from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws, verify_cluster_access
-from app.services.console_service import get_console_service
+from app.services.console_service import get_console_service, public_session_info
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.services.session_models import new_session_id
@@ -488,7 +488,7 @@ async def create_console_session(
         target_organization_slug=_target_org_slug,
     )
     
-    return ConsoleSessionResponse(success=True, session=session_info)
+    return ConsoleSessionResponse(success=True, session=public_session_info(session_info))
 
 
 @router.get(

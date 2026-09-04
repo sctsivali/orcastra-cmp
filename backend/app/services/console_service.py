@@ -134,6 +134,39 @@ class AttachedISO:
         }
 
 
+# What a console session may tell a caller outside this process.
+#
+# important: an allow-list, and the omissions are the whole point. create_console_session returns
+# the LXD operation's per-fd secrets in `ws_url` and `control_url`, plus the cluster's own
+# `endpoint`. Those three together are a bearer credential for a raw LXD console channel: a holder
+# reaches the guest outside this proxy, outside session tracking, outside the kill paths, and
+# outside watch_grant_while_open, which is the same disclosure the terminal twin of this endpoint
+# was deleted for rather than fixed (see routers/terminal.py). The fields a caller legitimately
+# needs are not the ones that leak, so this returns those and nothing else.
+#
+# An allow-list rather than a deny-list because the two fail in opposite directions: a field added
+# to session_info later is missing here, which a caller notices, rather than disclosed here, which
+# nobody notices.
+#
+# note: operation_id stays. On its own it is not a credential - LXD refuses the websocket without
+# the matching per-fd secret - and it is what /console/{name}/active-sessions and the kill paths
+# are keyed on, so a caller needs it to manage the session it just created.
+_PUBLIC_SESSION_FIELDS = (
+    "operation_id",
+    "instance_name",
+    "host",
+    "project",
+    "console_type",
+    "width",
+    "height",
+)
+
+
+def public_session_info(session_info: Dict[str, Any]) -> Dict[str, Any]:
+    """The console session as a caller outside this process may see it."""
+    return {name: session_info[name] for name in _PUBLIC_SESSION_FIELDS if name in session_info}
+
+
 class ConsoleService:
     """
     Service for managing console access to LXD instances.
