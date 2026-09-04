@@ -10,21 +10,24 @@ it retries blindly instead of reporting something a human can fix.
 The rule of thumb: if the answer is "your credential is wrong", the caller's operator has to fix
 it and the model cannot, so it belongs on the protocol channel. If the answer is "this key may not
 do that to that cluster" or "the cluster is down", the model should read it, stop, and say so.
+
+There used to be a third helper here rendering an HTTPException as a protocol error, and the
+capability gate used it. That put an authorization refusal on the channel this module's own rule
+reserves for credential failures, so whether a model could read why it was refused depended on
+which check caught it first. A credential failure is now an HTTP status from the transport
+endpoint, which is the channel a client acts on, and nothing renders one as a protocol error.
 """
 
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import HTTPException
-from mcp.shared.exceptions import MCPError
-from mcp.types import INVALID_PARAMS, CallToolResult, TextContent
+from mcp.types import CallToolResult, TextContent
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "tool_error",
     "tool_result",
-    "to_mcp_error",
 ]
 
 def tool_error(message: str, *, error_code: Optional[str] = None) -> CallToolResult:
@@ -54,20 +57,3 @@ def tool_result(payload: Dict[str, Any]) -> CallToolResult:
         structured_content=payload,
         is_error=False,
     )
-
-
-def to_mcp_error(exc: HTTPException) -> MCPError:
-    """Render a credential failure as a protocol error.
-
-    The detail is preserved verbatim where it is a string, because the messages this surface
-    already produces were written for exactly this audience. `assert_cluster_permission` says
-    which level the key holds and points at whoami; `assert_explicit_capability` says the
-    capability is never inherited and has to be granted deliberately. Replacing those with
-    "forbidden" would throw away the only part a caller can act on.
-    """
-    detail = exc.detail
-    if isinstance(detail, dict):
-        message = str(detail.get("message") or detail.get("error") or detail)
-    else:
-        message = str(detail)
-    return MCPError(code=INVALID_PARAMS, message=message, data={"http_status": exc.status_code})

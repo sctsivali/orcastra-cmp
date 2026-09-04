@@ -17,7 +17,9 @@
 """
 
 import logging
-from typing import Any, Tuple
+from typing import Any, Dict, Optional, Tuple
+
+from fastapi import HTTPException
 
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.responses import JSONResponse
@@ -26,6 +28,7 @@ from starlette.routing import Route
 from app.core.config import Settings
 
 from .auth import credentials_from_headers
+from .scope import SCOPE_API_KEY
 from .server import build_mcp_server
 
 logger = logging.getLogger(__name__)
@@ -83,28 +86,81 @@ class _McpEndpoint:
             )(scope, receive, send)
             return
 
-        # A cheap presence check only, so a misconfigured client gets a real HTTP 401 with a
-        # WWW-Authenticate header rather than a JSON-RPC error it may not surface. The credential
-        # is VERIFIED once, in the middleware, so this costs no extra Vault round trip.
         headers = {
             key.decode("latin-1").lower(): value.decode("latin-1")
             for key, value in scope.get("headers", [])
         }
         key_id, secret = credentials_from_headers(headers)
         if not key_id or not secret:
-            await JSONResponse(
-                {
-                    "detail": (
-                        "missing API key. Send X-API-Key-ID and X-API-Key-Secret headers, or "
-                        "Authorization: Bearer <key-id>:<key-secret>."
-                    )
-                },
-                status_code=401,
-                headers={"WWW-Authenticate": 'Bearer realm="orcastra-mcp"'},
-            )(scope, receive, send)
+            await self._refuse(
+                scope,
+                receive,
+                send,
+                401,
+                (
+                    "missing API key. Send X-API-Key-ID and X-API-Key-Secret headers, or "
+                    "Authorization: Bearer <key-id>:<key-secret>."
+                ),
+            )
             return
 
+        # important: the credential is VERIFIED here, at the transport boundary, rather than
+        # inside the message loop. This used to be a presence check only, and the two
+        # consequences were both live:
+        #
+        # 1. A wrong, revoked, expired or deleted key was answered HTTP 200 carrying a JSON-RPC
+        #    error. A client cannot tell that from a tool that failed, so it retries a dead
+        #    credential instead of telling the operator to fix it, and revoking a key stopped
+        #    being an unambiguous signal. The authorization spec calls for 401 here, and this
+        #    deployment's own documentation already claimed it.
+        # 2. `initialize` and `ping` were exempt from authentication entirely, so anyone who
+        #    could reach the port received the server instructions and the full capability
+        #    advertisement without a valid key, on a path that consumed no per-key budget.
+        #
+        # A credential failure is an HTTP status; an AUTHORIZATION failure stays a tool result,
+        # because that is the one a model can act on. That split is the whole reason this is
+        # here and the capability gate is not.
+        try:
+            api_key = await self._authenticate(key_id, secret)
+        except HTTPException as exc:
+            # note: the key id is logged, never the secret, matching the REST surface.
+            logger.warning("MCP authentication failed for key %s: %s", key_id, exc.status_code)
+            await self._refuse(
+                scope, receive, send, exc.status_code, exc.detail, dict(exc.headers or {})
+            )
+            return
+
+        # Read back by ApiKeyMiddleware. The SDK builds its Request from this very scope
+        # (`streamable_http.handle_request`), so this is the message loop's view of the same
+        # dictionary, and the key is validated exactly once per HTTP request. Spending the
+        # per-key budget twice would silently halve every integration's allowance.
+        scope[SCOPE_API_KEY] = api_key
+
         await self._manager.handle_request(scope, receive, send)
+
+    @staticmethod
+    async def _authenticate(key_id: str, secret: str) -> Any:
+        # Imported here because `app.routers.integrations` imports this package's server at
+        # module scope, and at build time that circle is not yet closed.
+        from app.routers.integrations import validate_api_key
+
+        return await validate_api_key(x_api_key_id=key_id, x_api_key_secret=secret)
+
+    @staticmethod
+    async def _refuse(
+        scope: Any,
+        receive: Any,
+        send: Any,
+        status: int,
+        detail: Any,
+        headers: Optional[Dict[str, str]] = None,
+    ) -> None:
+        out = dict(headers or {})
+        if status == 401:
+            out.setdefault("WWW-Authenticate", 'Bearer realm="orcastra-mcp"')
+        await JSONResponse({"detail": detail}, status_code=status, headers=out)(
+            scope, receive, send
+        )
 
 
 def build_mcp_route(settings: Settings) -> Tuple[Route, Any]:

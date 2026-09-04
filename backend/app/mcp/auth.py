@@ -26,7 +26,7 @@ from typing import Any, Dict, Optional, Tuple
 from fastapi import HTTPException
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.shared.exceptions import MCPError
-from mcp.types import INVALID_PARAMS, METHOD_NOT_FOUND
+from mcp.types import INVALID_PARAMS, METHOD_NOT_FOUND, CallToolResult
 
 from app.core.api_key_capabilities import (
     assert_capability,
@@ -37,7 +37,8 @@ from app.core.api_key_capabilities import (
 from app.core.api_key_permissions import PERMISSION_LEVELS, granted_level
 
 from .contract import requirement_for
-from .errors import to_mcp_error
+from .errors import tool_error
+from .scope import SCOPE_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,13 @@ __all__ = ["ApiKeyMiddleware", "current_api_key", "credentials_from_headers"]
 # argument, because a tool argument is model-supplied and this must not be.
 _CURRENT_KEY: ContextVar[Optional[Dict[str, Any]]] = ContextVar("mcp_current_api_key", default=None)
 
-# Handled before a credential exists, or carrying none of their own. `initialize` is the handshake
-# and the SDK processes it inline; refusing it before the client has been told what this server
-# wants would make the failure unreadable. Notifications carry no request id and expect no reply.
-_UNAUTHENTICATED_METHODS = frozenset({"initialize", "ping"})
+# Notifications carry no request id and expect no reply, so there is no channel to refuse them
+# on. They are still authenticated: the endpoint verifies the credential before the manager sees
+# the message, so one that reaches here has already passed.
+#
+# `initialize` and `ping` used to be listed here as exempt as well, which meant an unauthenticated
+# caller received the server instructions and the whole capability advertisement. Authentication
+# now happens at the transport boundary for every method, so there is nothing to exempt.
 
 
 def current_api_key() -> Dict[str, Any]:
@@ -129,13 +133,22 @@ def _may_see(api_key: Dict[str, Any], tool_name: str) -> bool:
     return True
 
 
-def _enforce_tool_call(ctx: ServerRequestContext[Any, Any], api_key: Dict[str, Any]) -> None:
-    """The gate, before the handler runs.
+def _enforce_tool_call(
+    ctx: ServerRequestContext[Any, Any], api_key: Dict[str, Any]
+) -> Optional[CallToolResult]:
+    """The gate, before the handler runs. Returns a refusal to send back, or None to proceed.
 
     The per-cluster level and the project allow-list are NOT checked here. They are checked by the
     handler this dispatches into, against the cluster named in the arguments, which is the only
     place that knows which cluster it is. Duplicating them here would be a second implementation
     of a rule that already has one.
+
+    important: a capability refusal takes the TOOL channel, not the protocol one. `errors.py`
+    states the rule ("this key may not do that" is something the model should read, stop on, and
+    report) and `dispatch.py` already follows it for the per-cluster 403. This site raised a
+    protocol error for the same class of answer, so whether a model could see why it was refused
+    depended on which of the two checks caught it first. An unknown tool stays a protocol error,
+    because that one really is malformed rather than refused.
     """
     params = ctx.params or {}
     tool_name = params.get("name")
@@ -166,7 +179,8 @@ def _enforce_tool_call(ctx: ServerRequestContext[Any, Any], api_key: Dict[str, A
             "MCP refused %s for key %s: %s",
             tool_name, api_key.get("id", "unknown"), exc.detail,
         )
-        raise to_mcp_error(exc) from None
+        return tool_error(str(exc.detail), error_code="forbidden")
+    return None
 
 
 class ApiKeyMiddleware:
@@ -175,27 +189,13 @@ class ApiKeyMiddleware:
     async def __call__(
         self, ctx: ServerRequestContext[Any, Any], call_next: CallNext
     ) -> HandlerResult:
-        if ctx.request_id is None or ctx.method in _UNAUTHENTICATED_METHODS:
-            return await call_next(ctx)
-
-        api_key = await self._authenticate(ctx)
-        token = _CURRENT_KEY.set(api_key)
-        try:
-            if ctx.method == "tools/call":
-                _enforce_tool_call(ctx, api_key)
-            result = await call_next(ctx)
-            if ctx.method == "tools/list":
-                result = self._narrow_tool_list(result, api_key)
-            return result
-        finally:
-            _CURRENT_KEY.reset(token)
-
-    async def _authenticate(self, ctx: ServerRequestContext[Any, Any]) -> Dict[str, Any]:
-        # The transport attaches the HTTP request to every message, so the credential is available
-        # on tools/call and not only at handshake. That is what lets this server run stateless.
-        request = getattr(ctx, "request", None)
-        key_id, secret = credentials_from_headers(getattr(request, "headers", None))
-        if not key_id or not secret:
+        api_key = self._authenticated_key(ctx)
+        if api_key is None:
+            # Unreachable through the mounted route, which authenticates first. Fail closed for
+            # anything else driving this server: an unauthenticated message is refused rather
+            # than served, except a notification, which has no reply channel to refuse on.
+            if ctx.request_id is None:
+                return await call_next(ctx)
             raise MCPError(
                 code=INVALID_PARAMS,
                 message=(
@@ -204,15 +204,34 @@ class ApiKeyMiddleware:
                 ),
             )
 
-        from app.routers.integrations import validate_api_key
-
+        token = _CURRENT_KEY.set(api_key)
         try:
-            return await validate_api_key(x_api_key_id=key_id, x_api_key_secret=secret)
-        except HTTPException as exc:
-            # note: the key id is logged and the secret never is, matching the REST surface. A
-            # denial on this router is the only trace a key-authenticated caller leaves.
-            logger.warning("MCP authentication failed for key %s: %s", key_id, exc.status_code)
-            raise to_mcp_error(exc) from None
+            if ctx.method == "tools/call":
+                refusal = _enforce_tool_call(ctx, api_key)
+                if refusal is not None:
+                    return refusal
+            result = await call_next(ctx)
+            if ctx.method == "tools/list":
+                result = self._narrow_tool_list(result, api_key)
+            return result
+        finally:
+            _CURRENT_KEY.reset(token)
+
+    @staticmethod
+    def _authenticated_key(ctx: ServerRequestContext[Any, Any]) -> Optional[Dict[str, Any]]:
+        """The key the endpoint already verified for this HTTP request.
+
+        important: this READS a result rather than producing one. `validate_api_key` spends the
+        per-key budget, so validating again here would charge every integration twice for one
+        call and halve its documented allowance. The transport attaches the HTTP request to every
+        message, which is what lets one verification cover a stateless server.
+        """
+        request = getattr(ctx, "request", None)
+        scope = getattr(request, "scope", None)
+        if not isinstance(scope, dict):
+            return None
+        api_key = scope.get(SCOPE_API_KEY)
+        return api_key if isinstance(api_key, dict) else None
 
     @staticmethod
     def _narrow_tool_list(result: Any, api_key: Dict[str, Any]) -> Any:

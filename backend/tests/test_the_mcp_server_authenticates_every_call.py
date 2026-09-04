@@ -11,6 +11,8 @@ no coverage at all. This file is the MCP half of that ratchet, plus the behaviou
 import json
 from typing import Any, Dict, List, Optional
 
+import asyncio
+
 import pytest
 from fastapi import HTTPException
 from starlette.testclient import TestClient
@@ -164,13 +166,76 @@ def test_the_bearer_spelling_is_accepted(mcp_app, monkeypatch) -> None:
     assert response.status_code == 200
 
 
-def test_a_rejected_credential_does_not_reach_the_tool_layer(mcp_app, monkeypatch) -> None:
+@pytest.mark.parametrize("method", ["tools/list", "initialize", "ping"])
+def test_a_rejected_credential_is_refused_over_http_on_every_method(
+    mcp_app, monkeypatch, method: str
+) -> None:
+    """A wrong, revoked, expired or deleted key is 401, not a 200 carrying a protocol error.
+
+    This test previously asserted the opposite, and the opposite was live. The endpoint checked
+    only that credential headers were PRESENT and left verification to the message loop, whose
+    single channel is a JSON-RPC error inside a 200. Two consequences, both measured against the
+    running deployment before the fix:
+
+    A client cannot distinguish that from a tool that failed, so it retries a dead credential
+    rather than telling its operator to fix the key, and revoking a key stops being an
+    unambiguous signal. Revocation is a security control, so its signal has to be legible.
+
+    And `initialize` and `ping` were exempt from authentication altogether, so anyone who could
+    reach the port received the server instructions and the whole capability advertisement with
+    no valid key at all, on a path that spent no per-key budget. That is why this is
+    parametrized over the handshake methods rather than testing `tools/list` alone.
+    """
     _authenticated_as(monkeypatch, None)
     with TestClient(mcp_app) as client:
+        response = _rpc(client, method)
+    assert response.status_code == 401, response.text
+    assert response.headers.get("www-authenticate", "").startswith("Bearer")
+    assert "tools" not in response.text and "instructions" not in response.text
+
+
+def test_the_credential_is_verified_once_per_request(mcp_app, monkeypatch) -> None:
+    """`validate_api_key` spends the per-key budget, so verifying again in the middleware would
+    charge every integration twice for one call and halve its documented allowance. The endpoint
+    verifies and leaves the result on the ASGI scope; the middleware reads it."""
+    calls: List[str] = []
+    real = _key(["inventory.read", "lxd.proxy"])
+
+    async def _counting(x_api_key_id: str = "", x_api_key_secret: str = "", **_: object):
+        calls.append(x_api_key_id)
+        return real
+
+    import app.routers.integrations as integrations
+
+    monkeypatch.setattr(integrations, "validate_api_key", _counting)
+    with TestClient(mcp_app) as client:
         _initialize(client)
+        assert len(calls) == 1, "the handshake verified the credential more than once"
+        calls.clear()
         response = _rpc(client, "tools/list")
     assert response.status_code == 200
-    assert "error" in response.json(), "an invalid key still got a tool list"
+    assert len(calls) == 1, f"one tools/list verified the credential {len(calls)} times"
+
+
+def test_an_unauthenticated_message_reaching_the_middleware_is_refused(monkeypatch) -> None:
+    """The endpoint authenticates first, so the middleware never sees an unverified message
+    through the mounted route. It still fails closed rather than serving one, because a gate
+    that relies on its caller is the defect class this package keeps finding."""
+    from mcp.shared.exceptions import MCPError
+
+    from app.mcp.auth import ApiKeyMiddleware
+
+    class _Ctx:
+        method = "tools/list"
+        request_id = 1
+        params: dict = {}
+        request = None
+
+    async def _next(_ctx):  # pragma: no cover - reaching this is the failure
+        raise AssertionError("an unauthenticated message reached the handler")
+
+    with pytest.raises(MCPError):
+        asyncio.run(ApiKeyMiddleware()(_Ctx(), _next))
 
 
 # ── the verbs this server does not serve ───────────────────────────────────────────────────────
@@ -224,6 +289,24 @@ def test_a_key_with_an_empty_grant_is_shown_no_proxy_tools(mcp_app, monkeypatch)
 
 # ── calling a tool the key may not use ─────────────────────────────────────────────────────────
 
+def _refusal_text(response) -> str:
+    """The refusal, from the channel a capability refusal is supposed to take.
+
+    important: an `isError` tool result, NOT a JSON-RPC error. `app/mcp/errors.py` states the
+    rule and `dispatch.py` already followed it for the per-cluster 403, while the capability gate
+    raised a protocol error for the same class of answer. A protocol error reads to a model as
+    "the server broke", so it retries instead of reporting the one thing a human could fix. These
+    tests asserted the protocol shape and so held the inconsistency in place.
+    """
+    body = response.json()
+    assert "error" not in body, (
+        f"a capability refusal must not take the protocol channel: {json.dumps(body)[:300]}"
+    )
+    result = body["result"]
+    assert result.get("isError") is True, f"not refused: {json.dumps(body)[:300]}"
+    return json.dumps(result)
+
+
 def test_a_tool_call_without_the_capability_is_refused(mcp_app, monkeypatch) -> None:
     _authenticated_as(monkeypatch, _key(["inventory.read"]))
     with TestClient(mcp_app) as client:
@@ -231,9 +314,8 @@ def test_a_tool_call_without_the_capability_is_refused(mcp_app, monkeypatch) -> 
         response = _rpc(client, "tools/call", {
             "name": "lxd_list_instances", "arguments": {"cluster_id": "nuc2"}
         })
-    body = response.json()
-    assert "error" in body
-    assert "lxd.proxy" in json.dumps(body), (
+    text = _refusal_text(response)
+    assert "lxd.proxy" in text, (
         "the refusal does not name the capability, so a caller cannot act on it"
     )
 
@@ -363,10 +445,9 @@ def test_a_legacy_key_is_refused_every_guest_tool(mcp_app_full, monkeypatch, too
     with TestClient(mcp_app_full) as client:
         _initialize(client)
         response = _rpc(client, "tools/call", {"name": tool, "arguments": arguments})
-    body = json.dumps(response.json())
-    assert "error" in response.json(), f"{tool} ran for a legacy key"
-    assert "never" in body or "capability" in body, (
-        f"the refusal does not explain that the capability is never inherited: {body[:200]}"
+    text = _refusal_text(response)
+    assert "never" in text or "capability" in text, (
+        f"the refusal does not explain that the capability is never inherited: {text[:200]}"
     )
 
 
