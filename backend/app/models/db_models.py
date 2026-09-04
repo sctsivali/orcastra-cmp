@@ -4,7 +4,7 @@ SQLAlchemy ORM models for PostgreSQL.
 """
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, Column, String, Text, DateTime, Index, Integer, BigInteger, Boolean, ForeignKey, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import relationship
 from app.core.database import Base
@@ -656,8 +656,29 @@ class BreakGlassGrant(Base):
     __tablename__ = "break_glass_grants"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    admin_email = Column(String(255), nullable=False, index=True, comment="grantee who may use it")
+    # Exactly one principal per grant, enforced by ck_bgg_one_principal below.
+    #
+    # important: admin_email became nullable when API keys became grantable. A key has no human
+    # behind it, so it cannot be squeezed into an email column, and encoding one as `key:<id>`
+    # would make every existing query silently match the wrong kind of principal. Widening the
+    # column and adding the check keeps both shapes explicit.
+    admin_email = Column(String(255), nullable=True, index=True, comment="grantee who may use it")
+    api_key_id = Column(
+        String(255), nullable=True, index=True,
+        comment="integration key this grant authorizes, when the grantee is not a person",
+    )
     cluster_id = Column(String(255), nullable=False, index=True, comment="enforced scope == LXD host key")
+    # The cluster's pinned server-certificate fingerprint when the grant was issued.
+    #
+    # important: cluster_id is a free-text Vault key with no foreign key anywhere, so a cluster
+    # that is deleted and re-registered under a different owner matches an old grant by string.
+    # For a console session that is a disclosure; for desktop control it is hands on a stranger's
+    # keyboard. Comparing the fingerprint at enforcement time is what makes the grant die with the
+    # registration it was issued against, since a re-registration cannot reproduce the key pair.
+    cluster_fingerprint = Column(
+        String(128), nullable=True,
+        comment="pinned server cert fingerprint at issue; refuses a re-registered cluster",
+    )
     # denormalized for the tenant-visible trail; nullable so an unbound cluster still grants
     target_organization_id = Column(
         Integer, ForeignKey("organizations.id", ondelete="SET NULL"), nullable=True
@@ -679,12 +700,75 @@ class BreakGlassGrant(Base):
     __table_args__ = (
         # hot enforcement lookup: active grant for (admin, cluster)
         Index("ix_bgg_active_lookup", "admin_email", "cluster_id", "status", "expires_at"),
+        Index("ix_bgg_key_lookup", "api_key_id", "cluster_id", "status", "expires_at"),
         Index("ix_bgg_org", "target_organization_id"),
         Index("ix_bgg_created", "created_at"),
+        # A grant with neither principal authorizes nobody and would be dead data; one with both
+        # would be ambiguous about who it covers, and the enforcement query would match on either.
+        CheckConstraint(
+            "(admin_email IS NOT NULL AND api_key_id IS NULL) "
+            "OR (admin_email IS NULL AND api_key_id IS NOT NULL)",
+            name="ck_bgg_one_principal",
+        ),
     )
 
     def __repr__(self) -> str:
-        return f"<BreakGlassGrant(admin={self.admin_email}, cluster={self.cluster_id}, status={self.status})>"
+        principal = self.admin_email or f"key:{self.api_key_id}"
+        return f"<BreakGlassGrant(grantee={principal}, cluster={self.cluster_id}, status={self.status})>"
+
+
+class DesktopControlPolicy(Base):
+    """Whether an organization permits an AI agent to see and drive its guests' desktops.
+
+    A capability on a key says what the INTEGRATION may attempt. This says whether the
+    organization that owns the cluster consents to it at all, and the two are different consents
+    given by different people: a partner issues the key, the organization owns the screen. Screen
+    contents leave the deployment for a third-party model, which is a disclosure to a
+    sub-processor rather than an ordinary API call, so it is not something an integrator can
+    decide alone.
+
+    important: its own table, NOT a field in OrganizationPreferences.settings. That column is a
+    personalization JSONB blob written by the branding editor, and this repository has already
+    shipped bugs where one code path overwrote another's keys in it. A security consent silently
+    cleared by somebody saving a logo is a defect class this project has paid for once already.
+    """
+    __tablename__ = "desktop_control_policy"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    # A real foreign key with a cascade, unlike cluster_id elsewhere in this file: an organization
+    # that is deleted takes its consent with it rather than leaving a row that a later
+    # organization reusing the id would inherit.
+    organization_id = Column(
+        Integer,
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    # Default off. Consent is given, never assumed, and an absent row means the same as false so
+    # an organization that has never been asked is not treated as having agreed.
+    enabled = Column(Boolean, nullable=False, default=False, server_default="false")
+    # Whether input may be injected, as opposed to only capturing the screen. Separate because
+    # watching and touching are different consents: a support desk that may look at a stuck screen
+    # has not thereby been allowed to type into it.
+    allow_input = Column(Boolean, nullable=False, default=False, server_default="false")
+
+    updated_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    updated_at = Column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    organization = relationship("Organization", backref="desktop_control_policy", uselist=False)
+
+    def __repr__(self) -> str:
+        return (
+            f"<DesktopControlPolicy(org={self.organization_id}, enabled={self.enabled}, "
+            f"allow_input={self.allow_input})>"
+        )
 
 
 # ============================================

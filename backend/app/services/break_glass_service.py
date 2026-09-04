@@ -13,7 +13,7 @@ a grant is live iff ``revoked_at IS NULL AND expires_at > now()`` (status is adv
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import HTTPException
 from sqlalchemy import select, and_
@@ -42,15 +42,21 @@ def effective_status(grant: BreakGlassGrant) -> str:
     return grant.status
 
 
-async def get_active_grant(
-    db: AsyncSession, admin_email: str, cluster_id: str
+async def _active_grant_for(
+    db: AsyncSession, principal_column: Any, principal: str, cluster_id: str
 ) -> Optional[BreakGlassGrant]:
-    """The live grant (if any) authorizing admin_email to reach cluster_id."""
+    """The live grant for one principal on one cluster, whichever kind of principal it is.
+
+    One query rather than two near-copies, because the liveness predicate is the load-bearing part
+    and a second spelling of it is a second thing to get wrong. Authoritative liveness is
+    ``revoked_at IS NULL AND expires_at > now()``; `status` stays advisory so a lazy expiry sweep
+    never widens access.
+    """
     stmt = (
         select(BreakGlassGrant)
         .where(
             and_(
-                BreakGlassGrant.admin_email == admin_email,
+                principal_column == principal,
                 BreakGlassGrant.cluster_id == cluster_id,
                 BreakGlassGrant.revoked_at.is_(None),
                 BreakGlassGrant.expires_at > _now(),
@@ -60,6 +66,40 @@ async def get_active_grant(
         .limit(1)
     )
     return (await db.execute(stmt)).scalar_one_or_none()
+
+
+async def get_active_grant(
+    db: AsyncSession, admin_email: str, cluster_id: str
+) -> Optional[BreakGlassGrant]:
+    """The live grant (if any) authorizing admin_email to reach cluster_id."""
+    return await _active_grant_for(db, BreakGlassGrant.admin_email, admin_email, cluster_id)
+
+
+async def get_active_key_grant(
+    db: AsyncSession, api_key_id: str, cluster_id: str, *, fingerprint: Optional[str] = None
+) -> Optional[BreakGlassGrant]:
+    """The live grant (if any) authorizing an INTEGRATION KEY to reach cluster_id.
+
+    A key has no human behind it, so the grant is what supplies the reason, the expiry and the
+    revocation that an unattended caller cannot otherwise be held to.
+
+    important: when the caller can supply the cluster's current server-certificate fingerprint,
+    a grant that recorded a different one is refused. `cluster_id` is a free-text Vault key with
+    no foreign key, so a cluster deleted and re-registered under another owner matches an old
+    grant by string alone. A grant issued before that column existed has no fingerprint and is
+    not subjected to the check, because it never made the promise.
+    """
+    grant = await _active_grant_for(db, BreakGlassGrant.api_key_id, api_key_id, cluster_id)
+    if grant is None:
+        return None
+    if fingerprint and grant.cluster_fingerprint and grant.cluster_fingerprint != fingerprint:
+        logger.warning(
+            "Refusing break-glass grant %s for key %s on %s: the cluster's certificate no longer "
+            "matches the one the grant was issued against, so this is a different registration",
+            grant.id, api_key_id, cluster_id,
+        )
+        return None
+    return grant
 
 
 async def _effective_owned(user: AuthenticatedUser, db: AsyncSession) -> set[str]:
