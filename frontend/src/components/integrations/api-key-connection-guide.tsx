@@ -74,15 +74,18 @@ export function ApiKeyConnectionGuide({
         `ORCASTRA_API_KEY_ID=${id}`,
         `ORCASTRA_API_KEY_SECRET=${secret}`,
       ].join("\n"),
+      // note: a REMOTE http entry, not a spawned binary. This used to emit
+      // `command: "orcastra-mcp"`, which was a program that never existed, so every operator who
+      // followed it got "spawn orcastra-mcp ENOENT". Orcastra serves MCP itself, at this URL.
       mcp: JSON.stringify(
         {
           mcpServers: {
             orcastra: {
-              command: "orcastra-mcp",
-              env: {
-                ORCASTRA_API_URL: base,
-                ORCASTRA_API_KEY_ID: id,
-                ORCASTRA_API_KEY_SECRET: secret,
+              type: "http",
+              url: `${base}/api/v1/mcp`,
+              headers: {
+                "X-API-Key-ID": id,
+                "X-API-Key-Secret": secret,
               },
             },
           },
@@ -90,6 +93,11 @@ export function ApiKeyConnectionGuide({
         null,
         2,
       ),
+      mcpCli: [
+        `claude mcp add --transport http orcastra ${base}/api/v1/mcp \\`,
+        `  --header "X-API-Key-ID: ${id}" \\`,
+        `  --header "X-API-Key-Secret: ${secret}"`,
+      ].join("\n"),
       http: [
         `GET ${base}/api/v1/integrations/instances HTTP/1.1`,
         `X-API-Key-ID: ${id}`,
@@ -230,13 +238,24 @@ export function ApiKeyConnectionGuide({
             label="For a harness or a container"
           />
         </TabsContent>
-        <TabsContent value="mcp" className="mt-3">
+        <TabsContent value="mcp" className="mt-3 space-y-3">
+          <CodeBlock
+            value={shown.mcpCli}
+            copyValue={real.mcpCli}
+            copyLabel="claude mcp add command"
+            label="Adds this server to Claude Code. The quickest way to connect."
+          />
           <CodeBlock
             value={shown.mcp}
             copyValue={real.mcp}
             copyLabel="MCP configuration"
-            label="For an MCP client config file"
+            label="The same thing as a config file entry, for a client that wants one"
           />
+          <p className="text-xs text-muted-foreground">
+            Orcastra serves MCP itself, so there is nothing to install. Clients that can
+            send headers, such as Claude Code and Cursor, connect with the key above.
+            Connectors added through the claude.ai web interface cannot send headers yet.
+          </p>
         </TabsContent>
         <TabsContent value="http" className="mt-3">
           <CodeBlock
