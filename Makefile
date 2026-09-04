@@ -222,9 +222,26 @@ install-all: install-backend install-frontend ## Install all dependencies locall
 # a specific interpreter, ex; PYTEST=.venv/bin/pytest make test-backend
 PYTEST ?= python3 -m pytest
 
-test-backend: ## Run backend tests (host)
+# important: the suite runs with every variable this Makefile sourced from .env UNSET, which is
+# what "hermetic" above was always supposed to mean and did not.
+#
+# `include .env` plus `export` near the top of this file hands every value in .env to every
+# recipe's environment, verbatim. Docker Compose strips the quotes around a value; GNU make does
+# not. So a perfectly ordinary API_PREFIX="/api/v1" reached pydantic-settings as the nine
+# characters "/api/v1 WITH the quotes, app/main.py builds the app at import time, and FastAPI's
+# include_router asserts a prefix starts with "/". Two tests that import create_app failed to
+# COLLECT, which reads as a broken test file rather than as a broken environment. CI has no .env,
+# so CI stayed green and only the machine doing the work saw it.
+#
+# Unsetting the names rather than fixing the one that bit: any other quoted value is the same
+# defect waiting, and a test suite that reads the developer's deployment settings is not a test
+# suite. Names only; the values never leave .env.
+ENV_NAMES := $(shell sed -n 's/^[[:space:]]*\([A-Za-z_][A-Za-z0-9_]*\)[[:space:]]*=.*/\1/p' .env 2>/dev/null | sort -u)
+ENV_SCRUB := $(if $(ENV_NAMES),env $(foreach v,$(ENV_NAMES),-u $(v)),)
+
+test-backend: ## Run backend tests (host, in a scrubbed environment)
 	@echo "$(COLOR_GREEN)Running backend tests...$(COLOR_RESET)"
-	@cd backend && $(PYTEST)
+	@cd backend && $(ENV_SCRUB) $(PYTEST)
 
 # The deployed image, which is what this target is meant to exercise. Falls back to the
 # APP_VERSION tag when nothing is running.
