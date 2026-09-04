@@ -178,19 +178,70 @@ async def enforce_sensitive_access(
     )
 
 
+async def cluster_fingerprint(cluster_id: str) -> Optional[str]:
+    """The cluster's pinned server-certificate fingerprint, or None when nothing is pinned.
+
+    Recorded on a key grant so the grant dies with the registration it was issued against.
+    `cluster_id` is a free-text Vault key with no foreign key anywhere in this schema, so a
+    cluster deleted and re-registered under a different owner matches an old grant by string
+    alone. A re-registration cannot reproduce the key pair, so the fingerprint is what tells the
+    two apart.
+
+    None rather than a raise when Vault is unreachable or nothing is pinned: a grant that records
+    no fingerprint is simply not subjected to the check, which is the same rule applied to grants
+    issued before the column existed. Refusing to issue a grant because a pin is missing would
+    make an unrelated Vault problem look like an authorisation failure.
+    """
+    try:
+        from app.core.config import get_settings
+        from app.core.vault_client import get_vault_client
+        from app.services.lxd_certs.pinning import FINGERPRINT_FIELD
+
+        settings = get_settings()
+        if not (settings.vault_enabled and settings.vault_token):
+            return None
+        client = get_vault_client(settings.vault_addr, settings.vault_token)
+        metadata = await asyncio.to_thread(
+            client.vault_read, f"{settings.vault_clusters_path}/{cluster_id}/metadata"
+        )
+        return (metadata or {}).get(FINGERPRINT_FIELD)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read the certificate pin for %s: %s", cluster_id, exc)
+        return None
+
+
 async def create_grant(
     db: AsyncSession,
     *,
-    admin_email: str,
+    created_by: str,
+    admin_email: Optional[str] = None,
+    api_key_id: Optional[str] = None,
     cluster_id: str,
     reason: str,
     ticket_ref: Optional[str] = None,
     duration_minutes: Optional[int] = None,
+    cluster_fingerprint: Optional[str] = None,
 ) -> BreakGlassGrant:
-    """Create a time-boxed grant. Reason is mandatory; duration is clamped to [1, max]."""
+    """Create a time-boxed grant for a person or for an integration key.
+
+    Reason is mandatory; duration is clamped to [1, max].
+
+    important: `created_by` is now separate from the grantee. For a human self-grant the two are
+    the same email and nothing changes. For a key grant they must not be: the key is what the
+    grant authorises, and the human who issued it is who answers for it. Collapsing them, which
+    is what the previous signature did by using `admin_email` for both, would leave a key grant
+    with no accountable person on it.
+    """
     settings = get_settings()
     if not reason or not reason.strip():
         raise HTTPException(status_code=400, detail="A justification (reason) is required.")
+    if bool(admin_email) == bool(api_key_id):
+        # Mirrors ck_bgg_one_principal, refused here so the caller gets a 400 naming the field
+        # rather than an IntegrityError surfaced as a 500.
+        raise HTTPException(
+            status_code=400,
+            detail="A grant names exactly one grantee: either admin_email or api_key_id.",
+        )
 
     minutes = duration_minutes or settings.break_glass_default_minutes
     minutes = max(1, min(int(minutes), settings.break_glass_max_minutes))
@@ -199,13 +250,15 @@ async def create_grant(
     now = _now()
     grant = BreakGlassGrant(
         admin_email=admin_email,
+        api_key_id=api_key_id,
         cluster_id=cluster_id,
+        cluster_fingerprint=cluster_fingerprint,
         target_organization_id=org_id,
         target_org_slug=org_slug,
         reason=reason.strip(),
         ticket_ref=(ticket_ref.strip() if ticket_ref and ticket_ref.strip() else None),
         status="active",
-        created_by=admin_email,
+        created_by=created_by,
         created_at=now,
         expires_at=now + timedelta(minutes=minutes),
     )
@@ -213,8 +266,8 @@ async def create_grant(
     await db.commit()
     await db.refresh(grant)
     logger.info(
-        f"Break-glass grant {grant.id} created: {admin_email} -> cluster {cluster_id} "
-        f"(org {org_id}) for {minutes}m"
+        "Break-glass grant %s created by %s for %s -> cluster %s (org %s) for %sm",
+        grant.id, created_by, admin_email or f"key:{api_key_id}", cluster_id, org_id, minutes,
     )
     return grant
 

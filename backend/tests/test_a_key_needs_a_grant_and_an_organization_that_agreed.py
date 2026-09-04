@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 
 import pytest
+from fastapi import HTTPException
 
 from app.models.db_models import BreakGlassGrant, DesktopControlPolicy
 from app.services.desktop_policy import DENIED, DesktopConsent, get_consent, set_consent
@@ -188,3 +189,119 @@ def test_the_policy_is_not_stored_in_the_personalization_blob() -> None:
     # organization reusing the id would inherit.
     foreign_keys = list(columns["organization_id"].foreign_keys)
     assert foreign_keys and foreign_keys[0].ondelete == "CASCADE"
+
+
+# ── a grant that names a key can actually be created ───────────────────────────────────────────
+
+class _GrantSession(_Session):
+    """Enough AsyncSession for create_grant: it adds, commits and refreshes."""
+
+    async def refresh(self, _row: Any) -> None:
+        return None
+
+
+@pytest.fixture
+def _no_org_lookup(monkeypatch):
+    """`resolve_cluster_org` is a real query. The grant's shape is what is under test here."""
+    import app.services.break_glass_service as service
+
+    async def _resolve(_cluster_id, _db):
+        return 6, "qa-org"
+
+    monkeypatch.setattr(service, "resolve_cluster_org", _resolve)
+    return service
+
+
+@pytest.mark.asyncio
+async def test_a_grant_can_name_a_key_instead_of_a_person(_no_org_lookup) -> None:
+    """Dead in both directions before this: `create_grant` had no api_key_id parameter at all, so
+    no code path could write the column the migration had already added."""
+    session = _GrantSession()
+    grant = await _no_org_lookup.create_grant(
+        session,
+        created_by="ops@sivali.co.id",
+        api_key_id="oak_abc",
+        cluster_id="nuc2",
+        reason="agent triage of a stuck desktop",
+        cluster_fingerprint="aa" * 32,
+    )
+    assert grant.api_key_id == "oak_abc"
+    assert grant.admin_email is None
+    assert grant.cluster_fingerprint == "aa" * 32
+    assert grant.reason
+
+
+@pytest.mark.asyncio
+async def test_the_human_who_issued_it_is_recorded_apart_from_the_grantee(_no_org_lookup) -> None:
+    """A key has nobody to answer for it. Collapsing the grantee and the issuer, which is what
+    using admin_email for both did, would leave a key grant with no accountable person on it."""
+    grant = await _no_org_lookup.create_grant(
+        _GrantSession(),
+        created_by="ops@sivali.co.id",
+        api_key_id="oak_abc",
+        cluster_id="nuc2",
+        reason="why",
+    )
+    assert grant.created_by == "ops@sivali.co.id"
+    assert grant.api_key_id == "oak_abc"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"admin_email": "a@b.c", "api_key_id": "oak_abc"},
+        {},
+    ],
+)
+async def test_a_grant_with_both_grantees_or_neither_is_refused(_no_org_lookup, kwargs) -> None:
+    """Mirrors ck_bgg_one_principal, refused here so the caller gets a 400 naming the field rather
+    than an IntegrityError surfaced as a 500."""
+    with pytest.raises(HTTPException) as raised:
+        await _no_org_lookup.create_grant(
+            _GrantSession(),
+            created_by="ops@sivali.co.id",
+            cluster_id="nuc2",
+            reason="why",
+            **kwargs,
+        )
+    assert raised.value.status_code == 400
+    assert "api_key_id" in str(raised.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_a_reason_is_still_mandatory_for_a_key(_no_org_lookup) -> None:
+    """The whole point of routing an unattended caller through a grant."""
+    with pytest.raises(HTTPException):
+        await _no_org_lookup.create_grant(
+            _GrantSession(),
+            created_by="ops@sivali.co.id",
+            api_key_id="oak_abc",
+            cluster_id="nuc2",
+            reason="   ",
+        )
+
+
+def test_a_key_grant_can_be_serialized_back() -> None:
+    """`GrantResponse.admin_email` was a non-Optional str, so such a row could not be returned
+    even if one existed."""
+    from app.routers.break_glass import GrantResponse, _to_response
+
+    fields = GrantResponse.model_fields
+    assert "api_key_id" in fields
+    assert not fields["admin_email"].is_required()
+
+    grant = BreakGlassGrant(
+        id=1,
+        admin_email=None,
+        api_key_id="oak_abc",
+        cluster_id="nuc2",
+        reason="why",
+        status="active",
+        created_by="ops@sivali.co.id",
+        created_at=_now(),
+        expires_at=_now() + timedelta(hours=1),
+    )
+    payload = _to_response(grant)
+    assert payload.api_key_id == "oak_abc"
+    assert payload.admin_email is None

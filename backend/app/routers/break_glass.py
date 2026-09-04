@@ -29,6 +29,16 @@ activity_logger = get_activity_logger()
 
 class GrantCreateRequest(BaseModel):
     cluster_id: str = Field(..., min_length=1, description="Target cluster (LXD host key)")
+    # note: naming a key makes this a grant FOR that integration rather than for the caller.
+    # Omitted, the caller grants themselves, which is the original behaviour.
+    api_key_id: Optional[str] = Field(
+        None,
+        max_length=255,
+        description=(
+            "Grant an integration key instead of yourself. The key still needs the capability "
+            "and the cluster grant; this is the time-boxed, revocable authorisation on top."
+        ),
+    )
     reason: str = Field(..., min_length=1, max_length=2000, description="Justification (required)")
     ticket_ref: Optional[str] = Field(None, max_length=255)
     duration_minutes: Optional[int] = Field(None, ge=1, le=1440)
@@ -36,7 +46,10 @@ class GrantCreateRequest(BaseModel):
 
 class GrantResponse(BaseModel):
     id: int
-    admin_email: str
+    # Optional because exactly one grantee is set. A key grant has no person on this field, and
+    # declaring it non-optional meant such a row could not be serialized back even if one existed.
+    admin_email: Optional[str] = None
+    api_key_id: Optional[str] = None
     cluster_id: str
     target_organization_id: Optional[int]
     target_org_slug: Optional[str]
@@ -54,6 +67,7 @@ def _to_response(g: BreakGlassGrant) -> GrantResponse:
     return GrantResponse(
         id=g.id,
         admin_email=g.admin_email,
+        api_key_id=g.api_key_id,
         cluster_id=g.cluster_id,
         target_organization_id=g.target_organization_id,
         target_org_slug=g.target_org_slug,
@@ -91,13 +105,26 @@ async def create_grant(
     user: AuthenticatedUser = Depends(require_admin()),
     db: AsyncSession = Depends(get_db),
 ):
+    # important: the cluster's current certificate fingerprint is pinned onto a key grant.
+    # `cluster_id` is a free-text Vault key with no foreign key, so a cluster deleted and
+    # re-registered under a different owner matches an old grant by string alone. For a human
+    # that is a session somebody is watching; for an unattended key it is hands on a stranger's
+    # keyboard for as long as the grant lasts.
+    fingerprint = (
+        await break_glass_service.cluster_fingerprint(body.cluster_id)
+        if body.api_key_id
+        else None
+    )
     grant = await break_glass_service.create_grant(
         db,
-        admin_email=user.email,
+        created_by=user.email,
+        admin_email=None if body.api_key_id else user.email,
+        api_key_id=body.api_key_id,
         cluster_id=body.cluster_id,
         reason=body.reason,
         ticket_ref=body.ticket_ref,
         duration_minutes=body.duration_minutes,
+        cluster_fingerprint=fingerprint,
     )
     activity_logger.log_activity(
         action="break_glass.grant.create",
@@ -106,7 +133,12 @@ async def create_grant(
         target_organization_id=grant.target_organization_id,
         target_organization_slug=grant.target_org_slug,
         result="success",
-        details={"reason": grant.reason, "expires_at": grant.expires_at.isoformat(), "grant_id": grant.id},
+        details={
+            "reason": grant.reason,
+            "expires_at": grant.expires_at.isoformat(),
+            "grant_id": grant.id,
+            "grantee": grant.admin_email or f"key:{grant.api_key_id}",
+        },
     )
     return _to_response(grant)
 
