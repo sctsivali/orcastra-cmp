@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException
 
-from .proxy import EXEC_OUTPUT_LIMIT, EXEC_STDIN_LIMIT
+from .proxy import EXEC_OUTPUT_LIMIT, EXEC_STDIN_LIMIT, EXEC_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,47 @@ def _validated_environment(params: Dict[str, Any]) -> Optional[Dict[str, str]]:
     return environment or None
 
 
+def _exec_recorded(
+    inst: Any,
+    command: List[str],
+    environment: Optional[Dict[str, str]],
+    user: Optional[int],
+    group: Optional[int],
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """The same contract, over the transport that does not drop frames."""
+    from .guest_output import run_recorded
+
+    stdout, stderr, exit_code, truncated = run_recorded(
+        inst,
+        command,
+        stdout_limit=EXEC_OUTPUT_LIMIT,
+        environment=environment,
+        user=user,
+        group=group,
+        timeout=EXEC_TIMEOUT,
+    )
+    if truncated:
+        logger.warning(
+            "exec output truncated at %s bytes on %s", EXEC_OUTPUT_LIMIT, getattr(inst, "name", "?")
+        )
+    return {
+        "name": inst.name,
+        "command": command,
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdout_bytes": len(stdout.encode("utf-8")),
+        "stderr_bytes": len(stderr.encode("utf-8")),
+        "truncated": truncated,
+        "output_limit_bytes": EXEC_OUTPUT_LIMIT,
+        # Which path ran, so a caller can tell whether it is subject to the streaming path's
+        # frame loss. cwd is not supported by the recorded form, so a request naming one falls
+        # back and says so here.
+        "transport": "recorded",
+    }
+
+
 def exec_instance(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     """Run one command inside a guest and return what it did.
 
@@ -147,6 +188,24 @@ def exec_instance(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
     user = _identity(params, "user")
     group = _identity(params, "group")
 
+    if stdin_payload is None and not params.get("cwd"):
+        # important: the default path, because the streaming one loses output. pylxd's `execute`
+        # waits for the operation to report a return code, then calls `finish_soon()`, and the
+        # first frame to arrive after that marks the socket finished and stops the manager. Frames
+        # still in flight are dropped. Measured against LXD 5.21.7: 12000 bytes asked for returned
+        # 12000, 16000 returned 0, and 16384 returned 8192, every one of them with exit_code 0 and
+        # `truncated` FALSE, so a caller was told the command succeeded and handed a short or
+        # empty result with nothing to indicate loss.
+        #
+        # `record-output` has LXD write both streams to files on its own host, which are then read
+        # with an ordinary bounded GET and deleted. No race, and still nothing written inside the
+        # guest.
+        return _exec_recorded(inst, command, environment, user, group, params)
+
+    # note: stdin keeps the streaming path because LXD refuses `wait-for-websocket` together with
+    # `record-output`, and stdin needs the websocket. The loss above therefore still applies to a
+    # call that sends stdin AND reads back more than about 12 KiB. `transport` in the response
+    # says which path ran, so that limitation is visible to a caller rather than silent.
     stdout, stderr = _BoundedStream(), _BoundedStream()
     result = inst.execute(
         command,
@@ -180,4 +239,5 @@ def exec_instance(inst: Any, params: Dict[str, Any]) -> Dict[str, Any]:
         "stderr_bytes": stderr.size,
         "truncated": truncated,
         "output_limit_bytes": EXEC_OUTPUT_LIMIT,
+        "transport": "streaming",
     }

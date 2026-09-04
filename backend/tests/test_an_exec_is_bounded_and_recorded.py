@@ -23,6 +23,11 @@ class _Result:
         self.exit_code = exit_code
 
 
+# note: these exercise the STREAMING transport, and pass `stdin` to select it. Since the frame-loss
+# fix, an exec without stdin goes through LXD's recorded output instead, so a fake that only
+# implements `execute` would no longer be reached. The properties below still matter, because
+# stdin cannot use the recorded path: LXD refuses `wait-for-websocket` together with
+# `record-output`.
 class _Instance:
     """Stands in for pylxd, and drives the handlers the way pylxd actually does.
 
@@ -73,7 +78,7 @@ def test_a_command_that_is_not_argv_is_refused(command) -> None:
 
 def test_a_shell_is_available_when_asked_for_explicitly() -> None:
     instance = _Instance(frames=[b"ok"])
-    result = exec_instance(instance, {"command": ["/bin/sh", "-c", "echo ok"]})
+    result = exec_instance(instance, {"command": ["/bin/sh", "-c", "echo ok"], "stdin": ""})
     assert instance.seen["commands"] == ["/bin/sh", "-c", "echo ok"]
     assert result["command"] == ["/bin/sh", "-c", "echo ok"], "the audit sees what ran"
 
@@ -84,7 +89,7 @@ def test_a_shell_is_available_when_asked_for_explicitly() -> None:
 def test_a_failed_command_is_a_successful_call() -> None:
     """"grep found nothing" must not be indistinguishable from "the cluster is unreachable"."""
     instance = _Instance(exit_code=1, stderr_frames=[b"no match"])
-    result = exec_instance(instance, {"command": ["grep", "x"]})
+    result = exec_instance(instance, {"command": ["grep", "x"], "stdin": ""})
     assert result["exit_code"] == 1
     assert result["stderr"] == "no match"
 
@@ -97,7 +102,7 @@ def test_output_is_capped_as_frames_arrive_not_afterwards() -> None:
     """
     frames = [b"A" * 65536] * ((EXEC_OUTPUT_LIMIT // 65536) + 8)
     instance = _Instance(frames=frames)
-    result = exec_instance(instance, {"command": ["cat", "/dev/zero"]})
+    result = exec_instance(instance, {"command": ["cat", "/dev/zero"], "stdin": ""})
     assert result["stdout_bytes"] == EXEC_OUTPUT_LIMIT
     assert len(result["stdout"].encode("utf-8")) == EXEC_OUTPUT_LIMIT
     assert result["truncated"] is True
@@ -107,13 +112,13 @@ def test_output_is_capped_as_frames_arrive_not_afterwards() -> None:
 def test_the_cap_counts_bytes_not_characters() -> None:
     """The limit is advertised in bytes; multibyte output would otherwise return several times it."""
     frames = [("\u00e9" * 32768).encode("utf-8")] * 16  # 2 bytes per character
-    result = exec_instance(_Instance(frames=frames), {"command": ["cat", "/tmp/utf8"]})
+    result = exec_instance(_Instance(frames=frames), {"command": ["cat", "/tmp/utf8"], "stdin": ""})
     assert result["stdout_bytes"] <= EXEC_OUTPUT_LIMIT
     assert len(result["stdout"].encode("utf-8")) <= EXEC_OUTPUT_LIMIT
 
 
 def test_output_within_the_cap_is_not_flagged() -> None:
-    result = exec_instance(_Instance(frames=[b"small"]), {"command": ["echo", "small"]})
+    result = exec_instance(_Instance(frames=[b"small"]), {"command": ["echo", "small"], "stdin": ""})
     assert result["stdout"] == "small"
     assert result["truncated"] is False
     assert result["stdout_bytes"] == 5
@@ -125,14 +130,14 @@ def test_binary_output_does_not_raise() -> None:
     pylxd's own decode is a bare `buffer.decode("utf-8")` with no error handler, so this only
     holds because the exec asks for `decode=False` and does the decoding itself.
     """
-    result = exec_instance(_Instance(frames=[b"\xff\xfe\x00ok"]), {"command": ["cat", "/bin/ls"]})
+    result = exec_instance(_Instance(frames=[b"\xff\xfe\x00ok"]), {"command": ["cat", "/bin/ls"], "stdin": ""})
     assert "ok" in result["stdout"]
 
 
 def test_the_exec_asks_pylxd_not_to_decode() -> None:
     """Without this the bound counts characters and a binary stream raises inside pylxd."""
     instance = _Instance(frames=[b"x"])
-    exec_instance(instance, {"command": ["true"]})
+    exec_instance(instance, {"command": ["true"], "stdin": ""})
     assert instance.seen["decode"] is False
     assert callable(instance.seen["stdout_handler"])
     assert callable(instance.seen["stderr_handler"])
@@ -493,3 +498,52 @@ def test_every_guest_operation_shares_the_exec_pool_and_the_exec_budget() -> Non
             f"added to GUEST_ACCESS_OPERATIONS does not get the exec pool or the exec budget: "
             f"{rendered}"
         )
+
+
+# ── the transport that does not drop frames ────────────────────────────────────────────────────
+
+def test_an_exec_without_stdin_uses_the_recorded_transport() -> None:
+    """pylxd's streaming exec loses output above roughly 12 KiB, silently.
+
+    Measured against LXD 5.21.7 on a live cluster: 12000 bytes asked for returned 12000, 16000
+    returned 0, and 16384 returned 8192, every one with exit_code 0 and `truncated` FALSE. The
+    cause is a race in pylxd's `execute`: after `finish_soon()`, the first frame to arrive marks
+    the socket finished and the manager stops, so frames still in flight are dropped. A caller is
+    told the command succeeded and handed a short or empty result.
+    """
+    import ast
+    import inspect
+
+    from app.services.lxd import guest_exec
+
+    source = inspect.getsource(guest_exec.exec_instance)
+    assert "_exec_recorded" in source, "exec no longer routes to the transport that keeps its output"
+    tree = ast.parse(source.lstrip())
+    # The recorded call must come before the streaming one, or the default is still the lossy path.
+    rendered = ast.unparse(tree)
+    assert rendered.index("_exec_recorded") < rendered.index("inst.execute")
+
+
+def test_stdin_keeps_the_streaming_path_and_says_so() -> None:
+    """LXD refuses `wait-for-websocket` together with `record-output`, and stdin needs the
+    websocket, so that combination cannot use the safe transport. The response names which path
+    ran rather than leaving the residual limit invisible."""
+    import inspect
+
+    from app.services.lxd import guest_exec
+
+    source = inspect.getsource(guest_exec.exec_instance)
+    assert '"transport": "streaming"' in source
+    assert '"transport": "recorded"' in inspect.getsource(guest_exec._exec_recorded)
+
+
+def test_the_recorded_transport_removes_the_log_it_created() -> None:
+    """The log is written on the LXD host, not in the guest, and nothing else expires it."""
+    import inspect
+
+    from app.services.lxd import guest_output
+
+    source = inspect.getsource(guest_output.run_recorded)
+    assert "_discard_log" in source
+    # In a finally, so a failed read still cleans up.
+    assert source.index("finally:") < source.index("_discard_log")
