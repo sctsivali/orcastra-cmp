@@ -13,6 +13,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { useConsoleStore } from "@/lib/console-store";
 import "@xterm/xterm/css/xterm.css";
+import { TERMINAL_THEME } from "@/lib/terminal-theme";
 
 interface TextConsoleProps {
   consoleId: string;
@@ -79,30 +80,7 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
       cursorStyle: "block",
       fontSize: 14,
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
-      theme: {
-        background: "#1a1b26",
-        foreground: "#a9b1d6",
-        cursor: "#c0caf5",
-        cursorAccent: "#1a1b26",
-        selectionBackground: "#33467c",
-        selectionForeground: "#c0caf5",
-        black: "#32344a",
-        red: "#f7768e",
-        green: "#9ece6a",
-        yellow: "#e0af68",
-        blue: "#7aa2f7",
-        magenta: "#ad8ee6",
-        cyan: "#449dab",
-        white: "#787c99",
-        brightBlack: "#444b6a",
-        brightRed: "#ff7a93",
-        brightGreen: "#b9f27c",
-        brightYellow: "#ff9e64",
-        brightBlue: "#7da6ff",
-        brightMagenta: "#bb9af7",
-        brightCyan: "#0db9d7",
-        brightWhite: "#acb0d0",
-      },
+      theme: TERMINAL_THEME,
       allowProposedApi: true,
       scrollback: 10000,
       convertEol: true,
@@ -343,7 +321,7 @@ export const TextConsole = forwardRef<TextConsoleHandle, TextConsoleProps>(funct
   return (
     <div
       ref={terminalRef}
-      className="w-full h-full min-h-[300px] bg-[#1a1b26]"
+      className="w-full h-full min-h-[300px] bg-terminal"
       style={{ padding: "4px" }}
     />
   );

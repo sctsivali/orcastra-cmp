@@ -52,6 +52,7 @@ import { useManualRefresh } from "@/hooks/use-manual-refresh";
 import { API_URL, getAccessToken } from "@/lib/api";
 import { ConsoleResourceBar } from "@/components/console/resource-bar";
 import "@xterm/xterm/css/xterm.css";
+import { TERMINAL_THEME } from "@/lib/terminal-theme";
 
 type TerminalStatus = "connecting" | "connected" | "disconnected" | "error";
 type InstanceStatus = "Running" | "Stopped" | "Starting" | "Stopping" | "Restarting" | "Unknown" | "Error";
@@ -63,7 +64,7 @@ import { getTerminalWsUrl } from "@/lib/ws-url";
 // Loading fallback
 function TerminalLoading() {
   return (
-    <div className="flex items-center justify-center h-screen bg-[#1a1b26]">
+    <div className="flex items-center justify-center h-screen bg-terminal">
       <div className="flex flex-col items-center gap-4">
         <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
         <span className="text-gray-400">Loading terminal...</span>
@@ -110,30 +111,7 @@ function TerminalContent() {
       cursorStyle: "block",
       fontSize: 15,
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace',
-      theme: {
-        background: "#1a1b26",
-        foreground: "#a9b1d6",
-        cursor: "#c0caf5",
-        cursorAccent: "#1a1b26",
-        selectionBackground: "#33467c",
-        selectionForeground: "#c0caf5",
-        black: "#32344a",
-        red: "#f7768e",
-        green: "#9ece6a",
-        yellow: "#e0af68",
-        blue: "#7aa2f7",
-        magenta: "#ad8ee6",
-        cyan: "#449dab",
-        white: "#787c99",
-        brightBlack: "#444b6a",
-        brightRed: "#ff7a93",
-        brightGreen: "#b9f27c",
-        brightYellow: "#ff9e64",
-        brightBlue: "#7da6ff",
-        brightMagenta: "#bb9af7",
-        brightCyan: "#0db9d7",
-        brightWhite: "#acb0d0",
-      },
+      theme: TERMINAL_THEME,
       allowProposedApi: true,
       scrollback: 50000,
       convertEol: true,
@@ -483,9 +461,9 @@ function TerminalContent() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-[#1a1b26]">
+    <div className="flex flex-col h-screen bg-terminal">
       {/* Header */}
-      <div className="flex items-center justify-between h-12 px-4 bg-[#16161e] border-b border-[#292e42]">
+      <div className="flex items-center justify-between h-12 px-4 bg-terminal-deep border-b border-terminal-border">
         {/* Left */}
         <div className="flex items-center gap-3">
           <Button
@@ -628,7 +606,7 @@ function TerminalContent() {
 
       {/* Confirmation Dialog */}
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, open }))}>
-        <AlertDialogContent className="bg-[#1a1b26] border-[#292e42]">
+        <AlertDialogContent className="bg-terminal border-terminal-border">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-gray-200">
               {confirmDialog.title}
@@ -656,7 +634,7 @@ function TerminalContent() {
 
       {/* Search bar */}
       {showSearch && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-[#1f2335] border-b border-[#292e42]">
+        <div className="flex items-center gap-2 px-4 py-2 bg-terminal-raised border-b border-terminal-border">
           <Search className="h-4 w-4 text-gray-400" />
           <input
             type="text"

@@ -57,8 +57,9 @@ const CLEARED = [
 ];
 
 // Console and terminal chrome does not follow the theme: it paints its own fixed dark surface
-// (`bg-[#1a1b26]`), so a token tuned against --card is the wrong measurement there. Counted
-// rather than ignored, so the exemption stays visible.
+// (the --terminal-* tokens, reached as bg-terminal and friends), so a token tuned against --card
+// is the wrong measurement there. Counted rather than ignored, so the exemption stays visible.
+// That palette has its own guard: scripts/checks/check-terminal-theme.mjs.
 const CHROME = [/^app\/console\//, /^app\/terminal\//, /^components\/console\//, /^components\/terminal\//];
 
 // Rendered by nothing, so nothing in them can reach an operator. Counting them would mean
@@ -141,7 +142,12 @@ const KNOWN_CONTRAST_FAILURES = new Map([
   // than relaxed, which is why the entry is gone instead of renumbered.
   // --primary is the user-configurable personalization accent and the picker has no contrast
   // clamp, so this is a product decision before it is a CSS one.
-  ['button#link#dark', 3.51],
+  // 3.07, not the 3.51 recorded before: the dark ground moved from 240 10% 3.9% to #14111c and
+  // --card gained the elevation step dark mode had been missing, so the surface this is measured
+  // against is lighter while the accent did not move. The pair was already carried, and it is
+  // carried for the same reason. A contrast clamp on the accent picker retires it; lightening
+  // --primary to reach 4.5:1 here does not, because the operator can set any colour afterwards.
+  ['button#link#dark', 3.07],
 ]);
 
 // ---------------------------------------------------------------------------------------

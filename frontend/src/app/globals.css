@@ -69,7 +69,29 @@
     --input: 220 13% 87%;
     --ring: 262.1 83.3% 57.8%;
     --radius: 0.75rem;
-    
+    color-scheme: light;
+
+    /* Terminal and console chrome. Declared here and never in .dark on purpose: this surface does
+       not follow the theme, it paints its own fixed dark device chrome in both themes, which is why
+       a token tuned against --card is the wrong measurement inside app/console and app/terminal.
+       That was already true; what changed is that the palette used to be spelled as ~70 arbitrary
+       Tailwind hex classes across eight files plus four verbatim copies of the same xterm ITheme.
+       The hex twin of these four values lives in src/lib/terminal-theme.ts, because xterm takes
+       hex strings and cannot resolve a CSS variable; scripts/checks/check-terminal-theme.mjs fails
+       the build if the two ever disagree. Stored as HSL triplets rather than hex so Tailwind's
+       <alpha-value> still works, which components/console/resource-bar.tsx relies on.
+       Retinted from Tokyo Night onto the page's hue: at #1a1b26 the terminal panel separated from
+       a #14111c page by 1.09:1 and clashed blue against purple. The ANSI 16 are deliberately NOT
+       in here. They are terminal content an operator reads as meaning, not chrome. */
+    --terminal-bg: 256.4 24.4% 8.8%;
+    --terminal-deep: 255 22.2% 7.1%;
+    --terminal-raised: 257.6 24.6% 13.5%;
+    --terminal-border: 256.8 24.3% 20.2%;
+    /* The one exception that is a content colour: components/ui/code-block.tsx paints command
+       text in the terminal's own green so a copyable command reads as terminal output rather
+       than as prose. Same value as TERMINAL_THEME.green, and the drift check holds them equal. */
+    --terminal-accent: 88.8 50.5% 61.2%;
+
     /* Personalization defaults - unified accent color */
     --personalization-accent: #8b5cf6;
     --personalization-accent-h: 262;
@@ -83,20 +105,35 @@
     --personalization-sidebar-muted: rgba(15,23,42,0.5);
   }
 
+  /* The dark ground is 256.4 24.4% 8.8%, which is exactly #14111c: a purple-tinted near-black
+     sitting in the same hue family as the product primary at 262.1 rather than the stock zinc
+     240. Every sibling below was re-derived onto that family rather than left on 240, because
+     the new ground is lighter than the 3.9% it replaced and a token that keeps its old lightness
+     loses separation against it. Two numbers drove the ladder: --border must hold the 1.34:1
+     separation it had against the old page (19% gives 1.32), and --muted-foreground must not
+     regress on either surface it lands on. Kept at 64.9% it would have fallen to 7.06 on the page
+     and 5.51 on --muted, from 7.77 and 5.81. At 68% it measures 7.78 and 5.90, so the most reused
+     colour in the console comes out level or better instead of quietly worse. */
   .dark {
-    --background: 240 10% 3.9%;
+    --background: 256.4 24.4% 8.8%;
     --foreground: 0 0% 98%;
-    --card: 240 10% 3.9%;
+    /* important: one step above --background, not equal to it. Dark used to paint card, popover
+       and page the same value, so a Card was a hole rather than a surface, while light mode has
+       always elevated (--card 0 0% 98% over --background 220 13% 96%, 1.05:1). On a tinted ground
+       that missing step reads as a bug. 12% measures 1.07:1 against the page, which is the same
+       elevation light mode already ships, and it is what the default sidebar rides on:
+       components/sidebar/sidebar.tsx falls back to bg-card when no custom colour is set. */
+    --card: 258.5 21.3% 12%;
     --card-foreground: 0 0% 98%;
-    --popover: 240 10% 3.9%;
+    --popover: 258.5 21.3% 12%;
     --popover-foreground: 0 0% 98%;
     --primary: 263.4 70% 50.4%;
     --primary-foreground: 0 0% 100%;
-    --secondary: 240 3.7% 15.9%;
+    --secondary: 256 15.5% 19%;
     --secondary-foreground: 0 0% 98%;
-    --muted: 240 3.7% 15.9%;
-    --muted-foreground: 240 5% 64.9%;
-    --accent: 240 3.7% 15.9%;
+    --muted: 256 15.5% 19%;
+    --muted-foreground: 257.6 10.4% 68%;
+    --accent: 256 15.5% 19%;
     --accent-foreground: 0 0% 98%;
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 0 0% 98%;
@@ -107,16 +144,20 @@
     /* Bright in dark mode, so a solid chip needs a near-black foreground rather than white.
        The value is --background, so the chip reads as a cut-out of the page. */
     --status-online: 142 64% 47%;
-    --status-online-foreground: 240 10% 3.9%;
+    --status-online-foreground: 256.4 24.4% 8.8%;
     --status-offline: 0 84% 62%;
-    --status-offline-foreground: 240 10% 3.9%;
+    --status-offline-foreground: 256.4 24.4% 8.8%;
     --status-pending: 38 92% 55%;
-    --status-pending-foreground: 240 10% 3.9%;
-    --status-unknown: 240 5% 65%;
-    --status-unknown-foreground: 240 10% 3.9%;
-    --border: 240 3.7% 15.9%;
-    --input: 240 3.7% 15.9%;
+    --status-pending-foreground: 256.4 24.4% 8.8%;
+    --status-unknown: 257.6 10.4% 68%;
+    --status-unknown-foreground: 256.4 24.4% 8.8%;
+    --border: 256 15.5% 19%;
+    --input: 256 15.5% 19%;
     --ring: 263.4 70% 50.4%;
+    /* Native UI the stylesheet cannot reach: the Firefox scrollbar the -webkit- rules below never
+       themed, date and colour pickers, and the default form control chrome. Without this they all
+       render light under .dark, which is how a dark page ends up with a white date picker. */
+    color-scheme: dark;
   }
 }
 

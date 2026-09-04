@@ -58,6 +58,16 @@ const config: Config = {
           DEFAULT: "hsl(var(--warning))",
           foreground: "hsl(var(--warning-foreground))",
         },
+        // Terminal and console chrome. Fixed in both themes by design, so these resolve to the
+        // same value under .dark; see the token block in globals.css. The alpha-value form is
+        // load-bearing: components/console/resource-bar.tsx paints hover:bg-terminal-raised/60.
+        terminal: {
+          DEFAULT: "hsl(var(--terminal-bg) / <alpha-value>)",
+          deep: "hsl(var(--terminal-deep) / <alpha-value>)",
+          raised: "hsl(var(--terminal-raised) / <alpha-value>)",
+          border: "hsl(var(--terminal-border) / <alpha-value>)",
+          accent: "hsl(var(--terminal-accent) / <alpha-value>)",
+        },
         // DEFAULT keeps bg-status-online and text-status-online resolving exactly as before,
         // so the existing dot and icon call sites are untouched. The foreground pair is what
         // a solid status chip writes on top of the token.

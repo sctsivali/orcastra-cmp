@@ -301,14 +301,14 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
       <div
         className={cn(
           "flex flex-col h-full rounded-lg overflow-hidden shadow-2xl border",
-          "bg-[#1a1b26] border-[#292e42]",
+          "bg-terminal border-terminal-border",
           terminal.focused && "ring-2 ring-blue-500/50",
           terminal.sticky && "ring-2 ring-amber-500/40 border-amber-500/30"
         )}
         onClick={handleFocus}
       >
         {/* Title Bar */}
-        <div className="terminal-drag-handle flex items-center justify-between h-10 px-3 bg-[#16161e] border-b border-[#292e42] select-none cursor-move">
+        <div className="terminal-drag-handle flex items-center justify-between h-10 px-3 bg-terminal-deep border-b border-terminal-border select-none cursor-move">
           {/* Left: Icon and Title */}
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <TerminalIcon className="h-4 w-4 text-blue-400 shrink-0" />
@@ -490,7 +490,7 @@ export function TerminalWindow({ terminal }: TerminalWindowProps) {
 
         {/* Search Bar (conditional) */}
         {showSearch && (
-          <div className="flex items-center gap-2 px-3 py-2 bg-[#1f2335] border-b border-[#292e42]">
+          <div className="flex items-center gap-2 px-3 py-2 bg-terminal-raised border-b border-terminal-border">
             <Search className="h-4 w-4 text-gray-400" />
             <input
               type="text"

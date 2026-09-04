@@ -87,6 +87,9 @@ export const SIDEBAR_BG_PRESETS: ColorPreset[] = [
   { name: "Soft Green", value: "#f0fdf4" },
   { name: "Soft Orange", value: "#fff7ed" },
   { name: "Soft Pink", value: "#fdf2f8" },
+  // Matches the dark theme's own ground, so an operator who wants the sidebar to sit flush
+  // with the page has a preset for it rather than having to type the value.
+  { name: "Orcastra Dark", value: "#14111c" },
   { name: "Dark Navy", value: "#1e1b4b" },
   { name: "Dark Slate", value: "#1e293b" },
   { name: "Dark Gray", value: "#18181b" },

@@ -302,7 +302,7 @@ export function InstanceOperations({
 
       {/* Confirmation Dialog */}
       <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog(prev => ({ ...prev, open }))}>
-        <AlertDialogContent className="bg-[#1a1b26] border-[#292e42]">
+        <AlertDialogContent className="bg-terminal border-terminal-border">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-gray-100">
               {confirmDialog.title}
