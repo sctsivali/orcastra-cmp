@@ -325,16 +325,39 @@ def _rewrite_key_grant(vault_client, install: ExtensionInstallation) -> None:
         get_api_key_from_vault,
     )
 
+    # important: this must fail the whole rescope rather than be skipped. The request path reads
+    # capabilities and clusters from the Vault key, not from the row, so swallowing a Vault error
+    # here committed the narrower grant to the database while the credential kept the wider one.
+    # A narrowing is a security control, and it reported success while doing nothing: the operator
+    # saw the reduced scope and the add-on kept the old reach. Raising leaves the row uncommitted,
+    # since the caller commits immediately after this returns.
     try:
         metadata, _ = get_api_key_from_vault(vault_client, install.api_key_id)
-    except Exception:
-        logger.warning("Could not read %s to narrow it", install.api_key_id)
-        return
+    except Exception as exc:
+        logger.warning("Could not read %s to rewrite its grant: %s", install.api_key_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The credential store is unavailable, so this change was not applied. "
+                "Nothing was altered. Try again once it is reachable."
+            ),
+        ) from exc
     metadata["capabilities"] = list(install.granted_capabilities or [])
     metadata["cluster_permissions"] = list(install.granted_scope or [])
-    vault_client.vault_kv_put(
-        f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{install.api_key_id}/metadata", metadata
-    )
+    try:
+        vault_client.vault_kv_put(
+            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{install.api_key_id}/metadata",
+            metadata,
+        )
+    except Exception as exc:
+        logger.warning("Could not rewrite the grant on %s: %s", install.api_key_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The credential store is unavailable, so this change was not applied. "
+                "Nothing was altered. Try again once it is reachable."
+            ),
+        ) from exc
     evict_api_key_cache(install.api_key_id)
 
 

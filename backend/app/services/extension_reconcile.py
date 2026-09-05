@@ -155,7 +155,12 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
         if key.get("is_revoked"):
             continue
 
-        revoke_install_credential(vault_client, key_id)
+        try:
+            revoke_install_credential(vault_client, key_id)
+        except Exception as exc:
+            # One unreadable key must not abandon the rest of the pass. The next tick retries it.
+            logger.warning("Reconcile could not revoke orphan %s: %s", key_id, exc)
+            continue
         revoked += 1
         activity_logger.log_activity(
             action="extension.credential.orphan_revoked",

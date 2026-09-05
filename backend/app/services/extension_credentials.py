@@ -23,6 +23,8 @@ import secrets
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
+from fastapi import HTTPException
+
 from app.core.api_key_expiry import now_utc, utc_isoformat
 from app.routers.integrations import (
     VAULT_INTEGRATIONS_PATH,
@@ -224,11 +226,25 @@ def rotate_install_credential(
 
 def _retire_key(vault_client, key_id: str, *, grace_seconds: int) -> None:
     """Shorten a key's life, or revoke it outright when no grace was asked for."""
+    # important: this must not be skipped. Rotation saves the new key first and retires the old
+    # one here, so swallowing a Vault error completed the rotation while leaving the superseded
+    # credential live to its original expiry, a year by default. Rotation is what an operator does
+    # when a credential may have leaked, so reporting success there is the worst possible answer.
+    #
+    # Raising is safe: the caller commits the row after this returns, so a failure leaves
+    # `api_key_id` pointing at the old key, which still works, and the newly written key is
+    # claimed by nothing and reclaimed by the reconcile sweep's orphan pass.
     try:
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
-    except Exception:
-        logger.warning("Could not read %s to retire it; nothing to shorten", key_id)
-        return
+    except Exception as exc:
+        logger.warning("Could not read %s to retire it: %s", key_id, exc)
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The credential store is unavailable, so the previous credential was not "
+                "retired and this change was not applied. The existing credential still works."
+            ),
+        ) from exc
 
     if grace_seconds > 0:
         metadata["expires_at"] = utc_isoformat(now_utc() + timedelta(seconds=grace_seconds))
