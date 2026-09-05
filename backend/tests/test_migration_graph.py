@@ -53,10 +53,34 @@ def _created_tables() -> set:
     return tables
 
 
+def _model_modules() -> list:
+    """Every module under app/models that declares a table.
+
+    important: this used to import `db_models` by name. A model module added beside it was
+    invisible to the parity check, so a new table could ship with no migration and the guard that
+    exists to catch exactly that would stay green. Discovering them removes the one step a person
+    has to remember.
+    """
+    import importlib
+
+    modules = []
+    for path in sorted((BACKEND_DIR / "app" / "models").glob("*.py")):
+        if path.name == "__init__.py":
+            continue
+        module = importlib.import_module(f"app.models.{path.stem}")
+        if any(
+            isinstance(getattr(module, name, None), type)
+            and hasattr(getattr(module, name), "__tablename__")
+            for name in dir(module)
+        ):
+            modules.append(path.stem)
+    return modules
+
+
 def _model_tables() -> set:
     from app.core.database import Base
-    from app.models import db_models  # noqa: F401  (registers the models on Base)
 
+    _model_modules()  # importing them is what registers the tables on Base
     return set(Base.metadata.tables)
 
 
@@ -109,6 +133,25 @@ class SchemaParityTests(unittest.TestCase):
             orphaned,
             set(),
             f"migrations create tables no model declares: {sorted(orphaned)}",
+        )
+
+
+class MetadataRegistrationTests(unittest.TestCase):
+    def test_alembic_env_imports_every_model_module(self) -> None:
+        """A module Base.metadata never sees produces no autogenerate diff and no parity failure.
+
+        `alembic/env.py` imported `db_models` by name. Adding `extension_models` beside it meant
+        its tables existed in the ORM and in a hand-written migration but were invisible to
+        autogenerate, so the next person to run it would have been offered a diff that dropped
+        them. Naming each module is fine; forgetting to is what this catches.
+        """
+        env = (BACKEND_DIR / "alembic" / "env.py").read_text()
+        missing = [m for m in _model_modules() if f"import {m}" not in env]
+        self.assertEqual(
+            missing,
+            [],
+            f"alembic/env.py does not import these model modules: {missing}. "
+            "Their tables are invisible to autogenerate.",
         )
 
 

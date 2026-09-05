@@ -20,6 +20,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import models and database configuration
 from app.core.database import Base
 from app.models import db_models
+# important: a model module Base.metadata never sees produces no autogenerate diff and no
+# schema-parity failure, so a new table would simply never exist. Every module holding
+# tables must be imported here.
+from app.models import extension_models  # noqa: F401
 
 # Alembic Config object
 config = context.config
