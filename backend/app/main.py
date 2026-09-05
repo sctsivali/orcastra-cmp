@@ -296,8 +296,28 @@ async def lifespan(app: FastAPI):
 
             start_dispatcher(async_session_maker, get_vault_integrations_client)
             logger.info("Webhook dispatcher started")
+
+            # The slow half of an installation's defence. The request path refuses a suspended or
+            # missing installation from a cached snapshot; this is what narrows a grant after the
+            # organization loses a cluster, and reclaims a credential whose row is gone. Both
+            # passes are idempotent, so every worker runs it without a leader lock.
+            from app.services.extension_reconcile import start_reconcile_sweep
+
+            start_reconcile_sweep(
+                async_session_maker,
+                get_vault_integrations_client,
+                interval=float(settings.extension_reconcile_interval_seconds),
+            )
+            logger.info(
+                "Extension reconcile sweep started (%ss)",
+                settings.extension_reconcile_interval_seconds,
+            )
     except Exception as sweep_err:
-        logger.warning(f"Could not start upload expiry sweeps: {sweep_err}")
+        # note: this block starts the upload sweeps, the webhook dispatcher and the reconcile
+        # sweep, so naming only the sweeps sent anyone debugging a dead dispatcher to the wrong
+        # subsystem. The exception is still swallowed on purpose: a background task failing to
+        # start must not stop the API from serving.
+        logger.warning(f"Could not start a background task: {sweep_err}", exc_info=True)
 
     # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
     try:

@@ -1680,6 +1680,25 @@ async def validate_api_key(
             headers={"Retry-After": "30"},
         )
 
+    # important: an add-on's credential is an ordinary key pair, so every check above passes for
+    # one whose installation was suspended minutes ago. Suspend deliberately moves the row without
+    # touching the Vault key, which means nothing above can see it. Until this existed the button
+    # reported success, wrote an audit record and changed nothing, while the webhook dispatcher
+    # (the one place that does read `install.status`) stopped delivering. That combination is the
+    # worst shape available: an operator sees events stop and concludes the add-on is contained
+    # while it still holds full REST and MCP access.
+    #
+    # Only install-issued credentials pay for this. The snapshot is cached per worker on the key's
+    # own TTL with a Redis tombstone, so the usual request costs no query, and a suspend lands on
+    # all four workers at once rather than on a timer. The session is opened lazily and acquires a
+    # connection only on a cache miss.
+    if metadata.get("extension_install_id") is not None:
+        from app.core.database import async_session_maker
+        from app.services.extension_scope import assert_install_is_live
+
+        async with async_session_maker() as session:
+            await assert_install_is_live(session, x_api_key_id)
+
     _schedule_last_used_update(x_api_key_id)
 
     return metadata

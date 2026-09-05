@@ -389,8 +389,19 @@ async def redeliver(
     db: AsyncSession = Depends(get_db),
 ) -> Dict[str, Any]:
     await _install_for(db, install_id, user)
+    # important: the delivery must be bound to a subscription of THIS installation. Looking it up
+    # by primary key alone let any partner holding any installation requeue any delivery in the
+    # deployment by guessing an integer, and the response hands back its event_id. `list_deliveries`
+    # above already scopes the same table this way.
     row = (
-        await db.execute(select(WebhookDelivery).where(WebhookDelivery.id == delivery_id))
+        await db.execute(
+            select(WebhookDelivery)
+            .join(WebhookSubscription, WebhookSubscription.id == WebhookDelivery.subscription_id)
+            .where(
+                WebhookDelivery.id == delivery_id,
+                WebhookSubscription.installation_id == install_id,
+            )
+        )
     ).scalar_one_or_none()
     if row is None:
         raise HTTPException(status_code=404, detail="Delivery not found")

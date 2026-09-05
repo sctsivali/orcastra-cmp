@@ -29,6 +29,7 @@ MODULES = [
     "app.services.extension_service",
     "app.services.extension_scope",
     "app.services.extension_teardown",
+    "app.services.extension_reconcile",
     # These two work against Vault rather than the ORM today. Listed anyway, because the
     # coverage check below is what makes a new one impossible to forget and an exemption
     # here would be a hole rather than a saving.
