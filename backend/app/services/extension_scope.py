@@ -160,7 +160,12 @@ async def _assert_guest_access_is_consented(
     from app.services.desktop_policy import consent_for_cluster
 
     for cluster_id in sorted(clusters):
-        consent, refused_by = await consent_for_cluster(db, cluster_id)
+        # important: the second element names the first organization that withheld consent, and it
+        # is discarded on purpose. A shared cluster carries more than one tenant, and the installer
+        # is not necessarily one of them, so naming the dissenter would tell a partner who else is
+        # on that hardware. It is audit-only by the contract of `consent_for_cluster`, and the
+        # desktop router drops it for the same reason. Keep it unused.
+        consent, _refused_by = await consent_for_cluster(db, cluster_id)
         if not consent.enabled:
             raise ScopeRefused(
                 "This add-on asks to reach inside guests ("

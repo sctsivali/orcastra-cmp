@@ -54,6 +54,7 @@ def _install(
     manifest_scope: Dict[str, Any],
     capabilities: List[str],
     consent: Consent = Consent(),
+    refused_by: Optional[str] = None,
     organization_id: int = 3,
     is_admin: bool = False,
 ):
@@ -66,7 +67,7 @@ def _install(
         return [(oid, f"org-{oid}") for oid in cluster_bindings.get(cluster_id, [])]
 
     async def _consent(_db, _cluster_id):
-        return consent, None
+        return consent, refused_by
 
     monkeypatch.setattr(scope, "get_user_org_ids", _orgs)
     monkeypatch.setattr(scope, "resolve_cluster_orgs", _cluster_orgs)
@@ -285,3 +286,31 @@ def test_a_change_published_by_another_worker_drops_the_snapshot(monkeypatch) ->
 
     monkeypatch.setattr(scope, "_install_revoked_elsewhere", lambda _k: True)
     assert scope._cached_install("oak_x") is None, "a published change did not drop the snapshot"
+
+
+# The dissenting organization is audit-only. `consent_for_cluster` returns it so the decision can
+# be recorded, not so it can be shown to whoever tripped the gate. A shared cluster carries more
+# than one tenant and the installing partner is not necessarily one of them, so putting that name
+# in a refusal would answer "who else is on this hardware" for anybody able to attempt an install.
+# The call site discards it today; this fails if a later edit decides the unused variable was an
+# oversight.
+DISSENTER = "acme-competitor-holdings"
+
+
+def test_a_refusal_never_names_the_organization_that_withheld_consent(monkeypatch) -> None:
+    with pytest.raises(ScopeRefused) as refusal:
+        _install(
+            monkeypatch,
+            **{
+                **BASE,
+                "capabilities": ["desktop.view"],
+                "consent": Consent(enabled=False),
+                "refused_by": DISSENTER,
+            },
+        )
+
+    message = str(refusal.value)
+    assert DISSENTER not in message, f"the refusal named the dissenting organization: {message}"
+    # Proves the refusal that ran is the guest-access one, so the assertion above is not passing
+    # because some unrelated check fired first and never consulted consent at all.
+    assert "desktop.view" in message
