@@ -479,3 +479,27 @@ def test_a_key_granted_exec_does_not_thereby_get_files(mcp_app_full, monkeypatch
     assert "lxd_exec_instance" in names
     assert "lxd_read_file" not in names
     assert "lxd_write_file" not in names
+
+
+def test_an_authentication_backend_failure_is_503_not_500(mcp_app, monkeypatch) -> None:
+    """A credential DECISION is an HTTPException; anything else is the backend failing.
+
+    This path grew a dependency it did not used to have. `validate_api_key` now consults the
+    extensions installation row for a credential an add-on install issued, so a database outage
+    reaches authentication where previously only Vault did. Left uncaught it leaves this endpoint
+    as a bare 500, which breaks the one contract it has: that a credential failure is always a
+    clean status a client can act on. `validate_api_key` already answers 503 for the analogous
+    Vault timeout.
+    """
+    async def _explode(**_: object):
+        raise RuntimeError("database is down")
+
+    import app.routers.integrations as integrations
+
+    monkeypatch.setattr(integrations, "validate_api_key", _explode)
+    with TestClient(mcp_app, raise_server_exceptions=False) as client:
+        response = _rpc(client, "tools/list")
+    assert response.status_code == 503, response.text
+    assert "unavailable" in response.text.lower()
+    # The failure must not leak what broke.
+    assert "database" not in response.text.lower()

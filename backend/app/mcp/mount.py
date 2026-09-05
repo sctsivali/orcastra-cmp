@@ -129,6 +129,22 @@ class _McpEndpoint:
                 scope, receive, send, exc.status_code, exc.detail, dict(exc.headers or {})
             )
             return
+        except Exception:  # noqa: BLE001 - see below
+            # important: a DECISION about the credential arrives as HTTPException and is handled
+            # above. Anything else here is the authentication backend failing rather than the
+            # caller being wrong, and it must not leave this endpoint as a bare 500.
+            #
+            # This path grew a dependency it did not used to have: `validate_api_key` now consults
+            # the extensions installation row for a credential issued by an add-on install, so a
+            # database outage reaches authentication where previously only Vault did.
+            # `validate_api_key` already answers 503 for the analogous Vault timeout, so matching
+            # it keeps this endpoint's contract true, which is that a credential failure is always
+            # a clean HTTP status a client can act on.
+            logger.exception("MCP authentication errored for key %s", key_id)
+            await self._refuse(
+                scope, receive, send, 503, "Authentication backend unavailable"
+            )
+            return
 
         # Read back by ApiKeyMiddleware. The SDK builds its Request from this very scope
         # (`streamable_http.handle_request`), so this is the message loop's view of the same
