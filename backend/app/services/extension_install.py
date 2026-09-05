@@ -89,7 +89,7 @@ async def build_install_preview(
 
     reachable: List[str] = []
     refused: List[str] = []
-    for cluster_id, _slug in await _clusters_bound_to(db, organization_id):
+    for cluster_id in await _clusters_bound_to(db, organization_id):
         if allowed is None or cluster_id in allowed:
             reachable.append(cluster_id)
         else:
@@ -113,15 +113,22 @@ async def build_install_preview(
     }
 
 
-async def _clusters_bound_to(db: AsyncSession, organization_id: int) -> List[Tuple[str, str]]:
+async def _clusters_bound_to(db: AsyncSession, organization_id: int) -> List[str]:
+    """The cluster ids this organization is bound to.
+
+    note: ids only. `OrganizationCluster` carries no display name; the cluster id IS the Vault
+    key and the name a cluster is known by everywhere else in this codebase. An earlier version
+    of this selected a `cluster_name` column that does not exist, which is a 500 no unit test
+    could see because they fake the session.
+    """
     from app.models.db_models import OrganizationCluster
 
     result = await db.execute(
-        select(OrganizationCluster.cluster_id, OrganizationCluster.cluster_name).where(
+        select(OrganizationCluster.cluster_id).where(
             OrganizationCluster.organization_id == organization_id
         )
     )
-    return [(row[0], row[1] or row[0]) for row in result.all()]
+    return [row[0] for row in result.all() if row[0]]
 
 
 # ── installing ─────────────────────────────────────────────────────────────────────────────────
