@@ -18,7 +18,7 @@ renaming a handler is not a breaking change for a generated client.
 """
 
 import logging
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
@@ -105,27 +105,100 @@ def operation_id_for(method: str, path: str, api_prefix: str) -> str:
     return "_".join([method.lower()] + parts)
 
 
-def public_routes(app: FastAPI) -> List[Tuple[str, APIRoute]]:
-    """(method, route) for everything an add-on may call."""
+def _walk_routes(container: Any, _depth: int = 0) -> List[APIRoute]:
+    """Every APIRoute reachable from an app or a router, however it is nested.
+
+    Used by tests and diagnostics rather than by selection. `app.routes` is not a flat list of
+    APIRoute across the FastAPI versions this project supports: up to 0.128 `include_router`
+    copied routes onto the parent, and from 0.141 it stores a nested router instead, so a flat
+    loop finds two routes on an application serving nearly three hundred.
+    """
+    found: List[APIRoute] = []
+    if _depth > 8:  # a cycle would otherwise hang rather than fail
+        return found
+    for route in getattr(container, "routes", []):
+        if isinstance(route, APIRoute):
+            found.append(route)
+        elif hasattr(route, "routes"):
+            found.extend(_walk_routes(route, _depth + 1))
+        elif hasattr(route, "original_router"):
+            # FastAPI 0.141's nested include. Descending here would give paths without the
+            # parent's prefix and dependants without the parent's dependencies, so it is
+            # deliberately only followed for diagnostics, never for selection.
+            found.extend(_walk_routes(route.original_router, _depth + 1))
+    return found
+
+
+def _api_key_routers() -> List[Tuple[str, Any]]:
+    """The routers whose handlers authenticate with an integration API key.
+
+    important: selection is by router object, not by walking the application's route tree.
+    Walking looked cleaner and was wrong in a way that only the deployed image showed. From
+    FastAPI 0.141 an included router is stored nested, and the route objects inside it have not
+    had the parent's prefix applied or the parent's dependencies merged. Descending into them
+    therefore produces paths that are missing their prefix and dependants that are missing the
+    router-level `require_partner()` and `org_scope_dependency`, which would put the dashboard's
+    own JWT surface into a document served to anybody who asks.
+
+    A router object's own `routes` list is a plain list of APIRoute on every version in
+    requirements.txt, and each route's path already carries that router's prefix. So this reads
+    the same on 0.109 and on 0.141.
+
+    This is the same list the capability ratchet already maintains by filename, not a second one.
+    """
+    from app.routers import extensions_external, image_uploads, integrations, iso_uploads
+
+    routers: List[Tuple[str, Any]] = [
+        ("integrations.py", integrations.external_router),
+        ("image_uploads.py", image_uploads.router),
+        ("iso_uploads.py", iso_uploads.router),
+    ]
+    # Only advertise an endpoint this deployment actually serves.
+    from app.core.config import get_settings
+
+    if get_settings().extensions_enabled:
+        routers.append(("extensions_external.py", extensions_external.external_router))
+    return routers
+
+
+def public_routes(app: Optional[FastAPI] = None) -> List[Tuple[str, APIRoute]]:
+    """(method, route) for everything an add-on may call.
+
+    `app` is accepted and unused, so callers read naturally and a future change that does need it
+    does not have to move every call site.
+    """
     selected: List[Tuple[str, APIRoute]] = []
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
-            continue
-        names = _dependency_names(route)
-        handler = getattr(route.endpoint, "__name__", "")
-        is_public = API_KEY_DEPENDENCY in names or handler in EXTRA_PUBLIC_HANDLERS
-        if not is_public:
-            continue
-        if names & NEVER_PUBLIC_DEPENDENCIES:
-            # A route reachable both ways would put a JWT surface in a public document.
-            logger.warning(
-                "Route %s depends on both an API key and a session dependency; excluded from "
-                "the public document",
-                route.path,
-            )
-            continue
-        for method in sorted(route.methods - EXCLUDED_METHODS):
-            selected.append((method, route))
+    for _filename, router in _api_key_routers():
+        for route in router.routes:
+            if not isinstance(route, APIRoute):
+                continue
+            methods = route.methods - EXCLUDED_METHODS
+            if not methods:
+                # OPTIONS only. tus CORS discovery, which OpenAPI models badly and which
+                # generators emit noise for. Skipped before the dependency check so a
+                # deliberate exclusion does not log as a surprise.
+                continue
+
+            names = _dependency_names(route)
+            handler = getattr(route.endpoint, "__name__", "")
+            if API_KEY_DEPENDENCY not in names and handler not in EXTRA_PUBLIC_HANDLERS:
+                # On an API-key router this means a handler that authenticates some other way.
+                # The capability ratchet already refuses one that authenticates no way at all.
+                logger.warning(
+                    "Route %s is on an API-key router but does not depend on %s; excluded",
+                    route.path, API_KEY_DEPENDENCY,
+                )
+                continue
+            if names & NEVER_PUBLIC_DEPENDENCIES:
+                # The safety assertion the selection no longer provides on its own. A route
+                # reachable both ways must never reach a public document.
+                logger.error(
+                    "Route %s carries a session dependency and was excluded from the public "
+                    "document", route.path,
+                )
+                continue
+            for method in sorted(methods):
+                selected.append((method, route))
     return selected
 
 

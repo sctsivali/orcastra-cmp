@@ -27,6 +27,7 @@ os.environ.setdefault("DEBUG", "true")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost")
 
 from app.core.extension_manifest import RESERVED_SLUGS  # noqa: E402
+from app.core.public_openapi import _walk_routes  # noqa: E402
 from app.main import create_app  # noqa: E402
 
 
@@ -40,9 +41,10 @@ def _resolve(app, method: str, path: str) -> str:
         "type": "http", "method": method, "path": path,
         "headers": [], "path_params": {}, "root_path": "",
     }
-    for route in app.routes:
-        if not hasattr(route, "methods"):
-            continue
+    # important: _walk_routes, not app.routes. From FastAPI 0.141 include_router stores a
+    # nested router rather than copying routes onto the parent, so a flat loop sees almost
+    # nothing. requirements.txt allows both shapes.
+    for route in _walk_routes(app):
         if route.matches(scope)[0] == Match.FULL:
             return route.name
     raise AssertionError(f"nothing matched {method} {path}")
@@ -73,8 +75,8 @@ def test_every_literal_first_segment_is_a_reserved_slug(app) -> None:
     detail page is a route the platform already answers on.
     """
     literals = set()
-    for route in app.routes:
-        if not hasattr(route, "methods") or not route.path.startswith("/api/v1/extensions/"):
+    for route in _walk_routes(app):
+        if not route.path.startswith("/api/v1/extensions/"):
             continue
         segment = route.path[len("/api/v1/extensions/"):].split("/")[0]
         if segment and not segment.startswith("{"):

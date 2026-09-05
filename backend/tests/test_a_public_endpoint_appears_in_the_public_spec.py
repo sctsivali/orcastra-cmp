@@ -31,6 +31,7 @@ from app.core.public_openapi import (  # noqa: E402
     NEVER_PUBLIC_DEPENDENCIES,
     SECURITY_SCHEMES,
     _dependency_names,
+    _walk_routes,
     build_public_openapi,
     operation_id_for,
     public_routes,
@@ -105,13 +106,31 @@ def test_the_internal_document_stays_off_in_production(monkeypatch) -> None:
         assert production.openapi_url is None
         assert production.docs_url is None
         assert production.redoc_url is None
-        paths = {r.path for r in production.routes if hasattr(r, "path")}
+        paths = {r.path for r in _walk_routes(production)}
         assert "/api/v1/openapi.public.json" in paths
     finally:
         config.get_settings.cache_clear()
 
 
 # ── what is in it ──────────────────────────────────────────────────────────────────────────────
+
+def test_the_document_is_not_empty(app, document) -> None:
+    """The failure that shipped, and that a set comparison alone reported as a rename.
+
+    `app.routes` stopped being a flat list of APIRoute at FastAPI 0.141: include_router now
+    stores a nested router instead of copying routes onto the parent. A loop over app.routes
+    then finds two routes on an application serving nearly three hundred, and the document is
+    served, valid, and completely empty. requirements.txt allows 0.109 through 0.141, so the
+    version a developer's virtualenv holds is not the version the image runs, which is exactly
+    how this passed every gate and was broken on the deployed backend.
+    """
+    assert len(_walk_routes(app)) > 50, (
+        "route traversal found almost nothing, so it is walking the wrong structure for this "
+        "FastAPI version rather than finding no public routes"
+    )
+    assert public_routes(app), "no route was selected as public"
+    assert document["paths"], "the document is served and empty"
+
 
 def test_every_public_operation_id_is_pinned(document) -> None:
     found = {operation["operationId"] for operation in _operations(document).values()}
@@ -222,7 +241,9 @@ def test_each_flag_gates_only_its_own_surface(monkeypatch, flag, path_fragment) 
     config.get_settings.cache_clear()
     try:
         built = create_app()
-        paths = {getattr(r, "path", "") for r in built.routes}
+        paths = {r.path for r in _walk_routes(built)} | {
+            getattr(r, "path", "") for r in built.routes
+        }
         assert path_fragment not in paths, f"{flag}=false did not remove {path_fragment}"
 
         # And the other two are untouched, which is the half the incident actually broke.
