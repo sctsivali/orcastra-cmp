@@ -281,7 +281,12 @@ async def verify_subscription(
 @router.post(
     "/installations/{install_id}/webhooks/{subscription_id}/rotate-secret",
     response_model=SubscriptionSecretResponse,
-    summary="Issue a new signing secret",
+    summary="Issue a new signing secret for this installation",
+    description=(
+        "The signing secret belongs to the installation, not to one subscription, so this "
+        "changes the secret every endpoint on this installation is signed with. Any other "
+        "receiver must be given the new value or it will start rejecting deliveries."
+    ),
 )
 async def rotate_secret(
     install_id: int,
@@ -292,13 +297,33 @@ async def rotate_secret(
 ) -> SubscriptionSecretResponse:
     row = await _subscription_for(db, install_id, subscription_id, user)
     secret = rotate_signing_secret(get_vault_integrations_client(), row.installation_id)
-    row.secret_fingerprint = secret_fingerprint(secret)
+
+    # important: one secret per installation, and no constraint stops an installation having
+    # several subscriptions. Stamping only this row left every sibling advertising a fingerprint
+    # for a secret that no longer exists, so an operator comparing the dashboard against what
+    # their receiver reports would be told the wrong thing about the endpoint that just broke.
+    # Deliveries themselves stay correct either way, because the header's fingerprint is computed
+    # from the secret at send time rather than read from here.
+    fingerprint = secret_fingerprint(secret)
+    siblings = (
+        await db.execute(
+            select(WebhookSubscription).where(
+                WebhookSubscription.installation_id == row.installation_id
+            )
+        )
+    ).scalars().all()
+    for subscription in siblings:
+        subscription.secret_fingerprint = fingerprint
     await db.commit()
     activity_logger.log_activity(
         action="extension.webhook.secret.rotate",
         target_type="extension_installation",
         target_id=str(install_id),
-        details={"subscription_id": row.id},
+        details={
+            "subscription_id": row.id,
+            # Named so the audit trail shows this reached endpoints nobody asked about.
+            "subscriptions_resigned": sorted(s.id for s in siblings),
+        },
     )
     return SubscriptionSecretResponse(
         subscription_id=row.id, signing_secret=secret, secret_fingerprint=row.secret_fingerprint
