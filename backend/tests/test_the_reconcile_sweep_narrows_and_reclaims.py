@@ -55,7 +55,9 @@ class ScopeDB:
     commits: int = 0
 
     async def execute(self, _statement):
-        return FakeResult([i for i in self.installs if i.status == "active"])
+        # note: returns every row. Filtering here would have hidden the suspended-row bug, since
+        # the fake would have reproduced the same mistake the code was making.
+        return FakeResult(list(self.installs))
 
     async def commit(self):
         self.commits += 1
@@ -118,6 +120,54 @@ def test_a_grant_that_still_fits_is_left_alone(monkeypatch) -> None:
     assert _run_scope_pass(db, monkeypatch) == 0
     assert db.commits == 0, "an unchanged grant must not write"
     assert install.granted_scope == [{"cluster_id": "nuc2"}]
+
+
+def test_the_scope_pass_does_not_filter_by_status() -> None:
+    """The behavioural cases below cannot see this on their own, and that is the point.
+
+    important: ScopeDB returns whatever it holds without honouring a WHERE clause, so restoring
+    `status == "active"` to the real query leaves them green. Discovered by ablating: the two
+    tests written for this bug both passed against the reintroduced bug. A fake that does not model
+    the filter cannot test the filter, so the filter is asserted here on the statement itself.
+    """
+    import inspect
+
+    source = inspect.getsource(sweep._narrow_drifted_scope)
+    select_body = source[source.index("select(ExtensionInstallation"):]
+    select_body = select_body[: select_body.index(".scalars()")]
+    assert 'status == "active"' not in select_body, (
+        "the scope pass skips suspended installations again, so resuming one returns a grant its "
+        "organization no longer has"
+    )
+
+
+def test_a_suspended_installation_is_narrowed_too(monkeypatch) -> None:
+    """Resume only flips the status back, so a suspended row skipped by the sweep comes back
+    holding a grant its organization no longer has. Filtering on active looked like a saving and
+    left exactly that window open."""
+    install = FakeInstall(
+        id=4, organization_id=3, api_key_id="k4", status="suspended",
+        granted_scope=[{"cluster_id": "nuc2"}, {"cluster_id": "sold-on"}],
+    )
+    db = ScopeDB(installs=[install], bindings={3: {"nuc2"}})
+
+    assert _run_scope_pass(db, monkeypatch) == 1
+    assert install.granted_scope == [{"cluster_id": "nuc2"}]
+    assert install.status == "suspended", "a suspended row must not be re-suspended"
+
+
+def test_a_suspended_row_keeps_the_reason_it_was_suspended_for(monkeypatch) -> None:
+    """Narrowing must not overwrite why an operator suspended it."""
+    install = FakeInstall(
+        id=5, organization_id=3, api_key_id="k5", status="suspended",
+        granted_scope=[{"cluster_id": "sold-on"}],
+        suspend_reason="Operator: misbehaving",
+    )
+    db = ScopeDB(installs=[install], bindings={3: set()})
+
+    assert _run_scope_pass(db, monkeypatch) == 1
+    assert install.granted_scope == []
+    assert install.suspend_reason == "Operator: misbehaving"
 
 
 # ── the orphan pass ────────────────────────────────────────────────────────────────────────────

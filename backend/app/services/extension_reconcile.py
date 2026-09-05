@@ -1,10 +1,20 @@
 """The slow half of an installation's defence: catching drift the request path deliberately skips.
 
 `extension_scope` refuses a credential whose installation is suspended or gone, and it does that
-from a cached snapshot so authentication stays cheap. What it deliberately does not do is re-run
-the two-table join that decides whether the installing partner still reaches every cluster in the
-grant. That join on every authenticated request is the worse trade, so the drift is left to this
-sweep and the window is named by `EXTENSION_RECONCILE_INTERVAL_SECONDS`.
+from a cached snapshot so authentication stays cheap. What it deliberately does not do is re-check
+whether the organization still reaches every cluster in the grant. That join on every
+authenticated request is the worse trade, so the drift is left to this sweep and the window is
+named by `EXTENSION_RECONCILE_INTERVAL_SECONDS`.
+
+note: the organization's bindings, not the installing partner's own scope. Install time enforces
+the intersection of both, and this reconciles only the organization half. That is deliberate on
+one ground and forced on another. The ground: an installation is granted to an organization, and
+the organization's binding is what entitles it afterwards, so a partner later losing personal
+access does not retract an entitlement the organization still holds. The force:
+`get_current_allowed_clusters` is a ContextVar with no value in a background task, so the
+install-time helper cannot be reused here, and reimplementing a nearly-identical notion of partner
+scope would risk narrowing grants that are in fact correct. Partner-scope drift is therefore not
+reconciled, and this says so rather than leaving the docstring claiming a guarantee.
 
 important: without this the stored grant is trusted indefinitely, which is the exact failure
 `extension_scope`'s own docstring names. On a platform where clusters are rented, an installation
@@ -48,11 +58,17 @@ async def _bound_clusters(db, organization_id: int) -> Set[str]:
 
 
 async def _narrow_drifted_scope(db) -> int:
-    """Trim every live grant to what its organization still reaches. Returns rows changed."""
+    """Trim every grant to what its organization still reaches. Returns rows changed.
+
+    important: suspended rows are narrowed too. Filtering on active looked like a saving and was a
+    hole: `resume` only flips the status back, so suspending an installation, losing a cluster and
+    resuming it returned a grant naming a cluster the organization no longer has, until the next
+    tick. Narrowing a suspended row costs nothing and closes the window instead of shortening it,
+    which is better than narrowing on resume because it does not depend on the second path
+    remembering to.
+    """
     installs = (
-        await db.execute(
-            select(ExtensionInstallation).where(ExtensionInstallation.status == "active")
-        )
+        await db.execute(select(ExtensionInstallation))
     ).scalars().all()
 
     changed = 0
@@ -81,7 +97,7 @@ async def _narrow_drifted_scope(db) -> int:
             }
         )
         install.granted_scope = kept
-        if not kept:
+        if not kept and install.status == "active":
             install.status = "suspended"
             install.suspend_reason = (
                 "Reconcile: this organization no longer reaches any cluster in the grant"
