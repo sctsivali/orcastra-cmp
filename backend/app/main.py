@@ -577,6 +577,22 @@ Ensure your client certificates are properly configured.
             )
 
     if settings.mcp_enabled:
+        # important: appended as a plain Route. NOT include_router, and NOT app.mount(). Three
+        # separate things break if this is tidied into either, and none of them fails loudly:
+        #
+        # 1. Lifespan. Starlette does not propagate lifespan into a mounted sub-app, so the SDK's
+        #    session manager never gets its task group and every request raises "Task group is not
+        #    initialized". That is why the manager is built here and run from this app's lifespan.
+        # 2. Rate limiting. mount() compiles to a prefix route, so a POST to the canonical path is
+        #    answered with a 307 to the trailing-slash form, and both the redirect and the retry
+        #    pass through RequestSecurityMiddleware. That spends two IP rate-limit tokens per
+        #    JSON-RPC message.
+        # 3. Route discovery. From FastAPI 0.141 include_router stores a nested router rather than
+        #    copying routes onto the parent: measured on this app, 50 top-level entries of which
+        #    only 3 expose `.path`. A plain Route stays at the top level, which is what keeps
+        #    `test_the_mcp_server_authenticates_every_call` meaningful rather than vacuous. The
+        #    host venv is on 0.128, which flattens, so a regression here would be invisible
+        #    locally and real in the image.
         from app.mcp import build_mcp_route
         _mcp_route, _mcp_manager = build_mcp_route(settings)
         app.state.mcp_session_manager = _mcp_manager
