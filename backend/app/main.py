@@ -285,6 +285,17 @@ async def lifespan(app: FastAPI):
         start_expiry_sweep()
         start_iso_expiry_sweep()
         logger.info("Upload expiry sweeps started")
+
+        # Webhook delivery. Every worker runs it: rows are claimed with FOR UPDATE SKIP LOCKED,
+        # so four workers pulling from the queue is the parallelism rather than a race, and a
+        # worker dying mid-delivery is recovered by the reaper rather than stranding the row.
+        if settings.extensions_enabled:
+            from app.core.database import async_session_maker
+            from app.routers.integrations import get_vault_integrations_client
+            from app.services.webhooks.dispatcher import start_dispatcher
+
+            start_dispatcher(async_session_maker, get_vault_integrations_client)
+            logger.info("Webhook dispatcher started")
     except Exception as sweep_err:
         logger.warning(f"Could not start upload expiry sweeps: {sweep_err}")
 
@@ -543,9 +554,11 @@ Ensure your client certificates are properly configured.
         from app.routers.extensions_external import external_router as extensions_external_router
         from app.routers.extensions import router as extensions_router
         from app.routers.extension_installs import router as extension_installs_router
+        from app.routers.extension_webhooks import router as extension_webhooks_router
 
         app.include_router(extensions_external_router, prefix=settings.api_prefix)
         app.include_router(extension_installs_router, prefix=settings.api_prefix)
+        app.include_router(extension_webhooks_router, prefix=settings.api_prefix)
         app.include_router(extensions_router, prefix=settings.api_prefix)
         logger.info("Extensions surface enabled at %s/extensions", settings.api_prefix)
 

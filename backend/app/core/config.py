@@ -219,6 +219,21 @@ class Settings(BaseSettings):
         alias="EXTENSION_CREDENTIAL_MIN_ROTATE_SECONDS",
         description="Floor between two rotations of the same installation, so a loop cannot mint unbounded Vault keys."
     )
+    webhook_dest_allowlist_cidrs: str = Field(
+        default="",
+        alias="WEBHOOK_DEST_ALLOWLIST_CIDRS",
+        description="Comma-separated CIDRs a webhook may be delivered to even though they are private. IGNORED unless DEBUG is true, because every address on a deployment host is private and a test receiver has to live somewhere. Setting this in production has no effect."
+    )
+    webhook_allow_http: bool = Field(
+        default=False,
+        alias="WEBHOOK_ALLOW_HTTP",
+        description="Accept a plain-http delivery endpoint. IGNORED unless DEBUG is true, for the same reason: a local receiver has no certificate this deployment would trust."
+    )
+    public_api_base_url: str = Field(
+        default="",
+        alias="PUBLIC_API_BASE_URL",
+        description="Absolute base URL integrators reach this deployment on, for example https://api.example.com. Used as the `servers` entry of the public API document and as the `source` of a webhook envelope. A relative servers entry makes a generated client unusable, so this is required when DEBUG is false."
+    )
     extension_credential_max_grace_seconds: int = Field(
         default=86400,
         alias="EXTENSION_CREDENTIAL_MAX_GRACE_SECONDS",
@@ -432,3 +447,35 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Cached settings instance."""
     return Settings()
+
+
+def webhook_destination_exemptions() -> tuple:
+    """CIDRs a webhook delivery may reach despite being private, or nothing.
+
+    important: gated on DEBUG in code, not by asking an operator to leave the variable unset. A
+    setting whose only protection is that nobody fills it in is a setting that eventually gets
+    filled in, copied from a development compose file into a production one. Here the value is
+    read and then discarded unless DEBUG is on, so the production behaviour does not depend on
+    the environment being tidy.
+    """
+    import ipaddress
+
+    settings = get_settings()
+    if not settings.debug:
+        return ()
+    networks = []
+    for raw in (settings.webhook_dest_allowlist_cidrs or "").split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(raw, strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+def webhook_requires_https() -> bool:
+    """False only on a development deployment that opted out."""
+    settings = get_settings()
+    return not (settings.debug and settings.webhook_allow_http)

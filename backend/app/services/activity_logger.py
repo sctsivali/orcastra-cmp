@@ -121,6 +121,11 @@ ACTION_CATEGORIES = {
     "extension.install.uninstall": EventCategory.ADMIN,
     "extension.install.scope_narrowed": EventCategory.ADMIN,
     "extension.credential.orphan_revoked": EventCategory.ADMIN,
+    "extension.webhook.subscribe": EventCategory.SETTINGS,
+    "extension.webhook.unsubscribe": EventCategory.SETTINGS,
+    "extension.webhook.secret.rotate": EventCategory.ADMIN,
+    "extension.webhook.redeliver": EventCategory.ADMIN,
+    "extension.webhook.suspended": EventCategory.ADMIN,
     # A destructive proxy call removes the same resource the dashboard's own endpoint would, so
     # it is named for the act rather than for the transport. Without these it landed under
     # `integration.proxy.request`, which is not high severity, and an alert on `image.delete`
@@ -196,6 +201,8 @@ HIGH_SEVERITY_ACTIONS = {
     "extension.install.resume",
     "extension.install.credential.rotate",
     "extension.credential.orphan_revoked",
+    "extension.webhook.secret.rotate",
+    "extension.webhook.redeliver",
     "integration.image.delete",
     "integration.instance.delete",
     "integration.network.delete",

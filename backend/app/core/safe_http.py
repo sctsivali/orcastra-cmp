@@ -15,13 +15,14 @@ image proxy shipped a weaker copy of the private-range list is that having two m
 stale without anybody noticing.
 """
 
+import ipaddress
 import logging
-from typing import Optional, Tuple
-from urllib.parse import urljoin
+from typing import Any, Mapping, Optional, Sequence, Tuple
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
 
-from app.core.url_safety import describe_url_risk
+from app.core.url_safety import describe_url_risk, resolve_safe_addresses
 
 logger = logging.getLogger(__name__)
 
@@ -92,3 +93,103 @@ async def fetch_guarded(
                 raise SafeHTTPError("could not reach the URL") from exc
 
     raise SafeHTTPError("too many redirects")
+
+
+def _pin(url: str, *, exemptions: Sequence[Any] = ()) -> Tuple[str, str, str]:
+    """Resolve once and rewrite the URL to connect to that exact address.
+
+    Returns (connect_url, original_host, resolved_address).
+
+    important: this is the half a boundary check cannot do. `describe_url_risk` resolves a name to
+    decide whether it is safe, and then the HTTP client resolves it again to connect. For a value
+    validated at the boundary and fetched moments later the gap is small. For a delivery endpoint
+    stored at subscribe time and contacted for the life of an installation, the gap is the whole
+    life of the installation: a name registered against a public record can answer with Vault's
+    address the next day and nothing revalidates.
+
+    Pinning closes it by resolving exactly once, judging every address that name answers with, and
+    then connecting to the literal rather than to the name. `Host` and `sni_hostname` are carried
+    across so the server still receives the request it expects and TLS still validates the
+    certificate against the real hostname, which means a pinned connection to an attacker's
+    address fails the handshake rather than succeeding quietly.
+    """
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    addresses = resolve_safe_addresses(host, port=parts.port, exemptions=exemptions)
+    address = addresses[0]
+
+    literal = ipaddress.ip_address(address)
+    netloc = f"[{address}]" if literal.version == 6 else address
+    if parts.port:
+        netloc = f"{netloc}:{parts.port}"
+
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment)), host, address
+
+
+async def post_pinned(
+    url: str,
+    *,
+    content: bytes,
+    headers: Mapping[str, str],
+    max_response_bytes: int,
+    timeout: httpx.Timeout = DEFAULT_TIMEOUT,
+    transport: Optional[httpx.AsyncBaseTransport] = None,
+) -> Tuple[int, bytes, int]:
+    """Deliver a signed body to a caller-registered endpoint, safely.
+
+    Returns (status_code, first bytes of the response, total bytes seen).
+
+    Redirects are refused outright rather than revalidated. A receiver controls the URL it
+    registered with us, so it has no legitimate need to redirect, and every implementation of
+    per-hop revalidation in the wild has had a bug in it. A 3xx is a delivery failure with a
+    reason, which is more useful to the operator than a silent hop.
+    """
+    from app.core.config import webhook_destination_exemptions, webhook_requires_https
+
+    exemptions = webhook_destination_exemptions()
+    reason = describe_url_risk(
+        url, require_https=webhook_requires_https(), exemptions=exemptions
+    )
+    if reason is not None:
+        raise SafeHTTPError(reason)
+
+    try:
+        connect_url, host, address = _pin(url, exemptions=exemptions)
+    except ValueError as exc:
+        raise SafeHTTPError(str(exc)) from exc
+
+    # No keepalive: a pooled connection outlives the moment its address was judged, which is the
+    # same staleness the pin exists to remove.
+    limits = httpx.Limits(max_connections=4, max_keepalive_connections=0)
+    async with httpx.AsyncClient(
+        timeout=timeout, follow_redirects=False, limits=limits, transport=transport
+    ) as client:
+        request = client.build_request(
+            "POST",
+            connect_url,
+            content=content,
+            headers={**dict(headers), "Host": host},
+            extensions={"sni_hostname": host},
+        )
+        try:
+            response = await client.send(request, stream=True)
+        except httpx.HTTPError as exc:
+            logger.warning("Pinned delivery failed: %s", type(exc).__name__)
+            raise SafeHTTPError("could not reach the endpoint") from exc
+
+        try:
+            if response.status_code in _REDIRECT_STATUSES:
+                raise SafeHTTPError("endpoint redirected, which a delivery does not follow")
+
+            seen = 0
+            head = bytearray()
+            async for chunk in response.aiter_bytes():
+                seen += len(chunk)
+                if len(head) < max_response_bytes:
+                    head.extend(chunk[: max_response_bytes - len(head)])
+                if seen > max_response_bytes:
+                    # Stop reading. What the receiver says is diagnostic, not payload.
+                    break
+            return response.status_code, bytes(head), seen
+        finally:
+            await response.aclose()

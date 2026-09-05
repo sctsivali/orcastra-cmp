@@ -27,7 +27,7 @@ module stays the boundary validator, shaped for a Pydantic refusal; it is not th
 import ipaddress
 import logging
 import socket
-from typing import FrozenSet, Optional, Tuple, Union
+from typing import Any, FrozenSet, Optional, Sequence, Tuple, Union
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -109,12 +109,23 @@ def _unwrap_address(address: IPAddress) -> IPAddress:
     return address
 
 
-def _address_risk(address: IPAddress) -> Optional[str]:
+def _address_risk(
+    address: IPAddress,
+    exemptions: Sequence[Any] = (),
+) -> Optional[str]:
     """Why this address is unsafe to connect to, or None.
 
     Judges the literal and what it unwraps to, because either one reaching inside is enough.
     """
     for candidate in (address, _unwrap_address(address)):
+        # An operator-declared exemption, used only by a development deployment so a test
+        # receiver on this host is reachable. `webhook_destination_exemptions` returns nothing
+        # at all unless DEBUG is on, so setting the variable in production has no effect.
+        if any(
+            candidate.version == network.version and candidate in network
+            for network in exemptions
+        ):
+            return None
         for network in PRIVATE_NETWORKS:
             if candidate.version == network.version and candidate in network:
                 return _INTERNAL
@@ -129,6 +140,7 @@ def describe_url_risk(
     require_https: bool = False,
     resolve: bool = True,
     allowed_ports: Optional[FrozenSet[int]] = None,
+    exemptions: Sequence[Any] = (),
 ) -> Optional[str]:
     """Why this URL is unsafe to fetch, or None when it is safe.
 
@@ -192,7 +204,7 @@ def describe_url_risk(
             address = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             return "host resolves to an address this server cannot classify"
-        risk = _address_risk(address)
+        risk = _address_risk(address, exemptions)
         if risk is not None:
             return risk
 
@@ -203,6 +215,7 @@ def resolve_safe_addresses(
     host: str,
     *,
     port: Optional[int] = None,
+    exemptions: Sequence[Any] = (),
 ) -> Tuple[str, ...]:
     """Every address `host` answers with, refusing outright if any of them reaches inside.
 
@@ -225,7 +238,7 @@ def resolve_safe_addresses(
             address = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             raise ValueError("host resolves to an address this server cannot classify")
-        risk = _address_risk(address)
+        risk = _address_risk(address, exemptions)
         if risk is not None:
             raise ValueError(risk)
         addresses.append(sockaddr[0])

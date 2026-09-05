@@ -86,6 +86,15 @@ INSTALL_ARTEFACTS: Dict[str, Artefact] = {
     "postgres:extension_installation_row": Artefact(
         "postgres", "install_extension", "teardown_install"
     ),
+    "postgres:webhook_subscriptions": Artefact(
+        "postgres", "create_subscription", "teardown_install",
+        "removed by the installation's own foreign key, which is CASCADE here because a "
+        "subscription owns no credential material of its own",
+    ),
+    "postgres:webhook_deliveries": Artefact(
+        "postgres", "enqueue_event", "teardown_install",
+        "CASCADE from the subscription, so the delivery log goes with the thing it logged",
+    ),
     "postgres:image_upload_sessions": Artefact(
         "postgres", "create_image_upload_session", "teardown_install",
         "expired rather than deleted, so the existing GC removes the staged bytes on disk",
