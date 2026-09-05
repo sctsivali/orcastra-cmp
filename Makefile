@@ -1,7 +1,7 @@
 # Makefile for Orcastra CMP
 # This Makefile provides convenient commands for managing the development and production environment
 
-.PHONY: release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
+.PHONY: export-openapi release release-preflight release-build release-tag release-push release-verify setup-hooks help build build-nc up down restart logs logs-backend logs-frontend logs-redis ps clean prune status health test-backend test-frontend install-backend install-frontend dev-backend dev-frontend shell-backend shell-frontend redis-cli backup restore config version version-sync version-check version-set env-check pull update quick-start quick-restart quick-rebuild
 
 # Variables
 COMPOSE_FILE := docker-compose.yml
@@ -326,6 +326,12 @@ lint-backend: ## Lint backend code
 # note: the local eslint binary, not `next lint`. The latter is deprecated in Next 15 and passes
 # eslintrc-era options that a newer ESLint rejects, so it fails for reasons unrelated to the
 # code. Scope and rationale: frontend/.eslintrc.README.md.
+# Scrubbed for the reason documented above test-backend: make hands .env values through with
+# their quotes intact, and this target builds the app, so an unscrubbed API_PREFIX aborts it.
+export-openapi: ## Regenerate the committed add-on API document in orcastra-docs
+	@echo "$(COLOR_GREEN)Exporting the add-on API document...$(COLOR_RESET)"
+	@$(ENV_SCRUB) .venv/bin/python scripts/export-public-openapi.py ../orcastra-docs/docs/extensions/orcastra-extensions-v1.yaml
+
 lint-frontend: ## Lint frontend code
 	@echo "$(COLOR_GREEN)Linting frontend code...$(COLOR_RESET)"
 	@cd frontend && ./node_modules/.bin/eslint src --ext .ts,.tsx
