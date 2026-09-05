@@ -1176,20 +1176,27 @@ def _validate_api_key_blocking(key_id: str, key_secret: str) -> Dict[str, Any]:
     if not verify_api_key_secret(key_secret, secret_hash):
         raise HTTPException(status_code=401, detail="Invalid API key secret")
 
-    # Backfill raw secret if not already stored (for callback auth)
-    try:
-        secret_data = vault_client.vault_read(
-            f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
-        )
-        if not secret_data.get("raw"):
-            secret_data["raw"] = key_secret
-            vault_client.vault_kv_put(
-                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
-                secret_data,
+    # important: the recoverable copy of the secret exists for exactly one reason, which is that
+    # the outbound OrcaHub callbacks in services/orcahub_sync.py re-present it to the partner.
+    # Its only reader returns None unless the key carries `app_url`, so backfilling every key
+    # wrote plaintext credentials that nothing would ever read. That is the material
+    # `test_a_credential_path_is_never_cached_in_redis.py` exists about, stored one layer down.
+    # Keys without a callback base stay hash-only, which is what lets an issued credential
+    # honestly claim it.
+    if metadata.get("app_url"):
+        try:
+            secret_data = vault_client.vault_read(
+                f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret"
             )
-            logger.info(f"Backfilled raw secret for API key {key_id}")
-    except Exception:
-        pass  # non-critical
+            if not secret_data.get("raw"):
+                secret_data["raw"] = key_secret
+                vault_client.vault_kv_put(
+                    f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/secret",
+                    secret_data,
+                )
+                logger.info(f"Backfilled raw secret for API key {key_id}")
+        except Exception:
+            pass  # non-critical
 
     return metadata
 
@@ -1828,6 +1835,10 @@ async def create_api_key(
         except Exception as e:
             logger.warning(f"reconcile_personal_clusters failed for {_rbac.email}: {e}")
 
+        _audit_credential_lifecycle(
+            action="integration.api_key.create", key_id=key_id, metadata=metadata
+        )
+
         return APIKeyCreateResponse(
             api_key=_key_info(metadata),
             api_key_id=key_id,
@@ -2121,7 +2132,10 @@ async def revoke_api_key(
         evict_api_key_cache(key_id)
 
         logger.info(f"API key {key_id} revoked")
-        
+        _audit_credential_lifecycle(
+            action="integration.api_key.revoke", key_id=key_id, metadata=metadata
+        )
+
         user_mappings = get_user_mappings_from_vault(vault_client, key_id)
         return _key_info(metadata, len(user_mappings))
         
@@ -2147,9 +2161,9 @@ async def delete_api_key(
     vault_client = get_vault_integrations_client()
     
     try:
-        # Verify it exists
-        get_api_key_from_vault(vault_client, key_id)
-        
+        # Read before the delete: afterwards there is nothing left to describe what was removed.
+        metadata, _ = get_api_key_from_vault(vault_client, key_id)
+
         # Delete from Vault
         delete_api_key_from_vault(vault_client, key_id)
 
@@ -2157,6 +2171,10 @@ async def delete_api_key(
         cache = get_cache_manager()
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
         evict_api_key_cache(key_id)
+
+        _audit_credential_lifecycle(
+            action="integration.api_key.delete", key_id=key_id, metadata=metadata
+        )
 
         return {"success": True, "message": f"API key {key_id} deleted"}
         
@@ -2754,6 +2772,52 @@ def _proxy_audit_action(method: str, path: str) -> str:
     if guest:
         return guest
     return proxy_destructive_action_for(method, path) or "integration.proxy.request"
+
+
+def _audit_credential_lifecycle(
+    *,
+    action: str,
+    key_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    result: str = "success",
+    error_message: Optional[str] = None,
+) -> None:
+    """Record an operator creating, revoking or deleting an integration credential.
+
+    important: distinct from `_audit_key_action`. There the actor is the key; here it is a human
+    holding a JWT, and `log_activity` fills that in from the request context. Issuing a
+    credential into an organization and taking one away are the two sharpest things this surface
+    does and neither left a record: `revoke_api_key` and `delete_api_key` wrote one
+    `logger.info` apiece, which is not routed to the audit index, and `create_api_key` wrote
+    nothing at all. An operator asking who minted a live credential had nowhere to look.
+
+    note: `api_key_id` is deliberately public and is allowlisted by the audit sanitiser. The
+    secret never passes through here, and the metadata is reduced to the fields that describe
+    the grant rather than handed over whole.
+    """
+    metadata = metadata or {}
+    try:
+        activity_logger.log_activity(
+            action=action,
+            target_type="api_key",
+            target_id=key_id,
+            result=result,
+            error_message=error_message,
+            details={
+                "api_key_id": key_id,
+                "app_name": metadata.get("app_name"),
+                "app_type": metadata.get("app_type"),
+                "capabilities": metadata.get("capabilities"),
+                "cluster_ids": [
+                    grant.get("cluster_id")
+                    for grant in (metadata.get("cluster_permissions") or [])
+                    if isinstance(grant, dict)
+                ],
+                "expires_at": metadata.get("expires_at"),
+            },
+        )
+    except Exception:  # pragma: no cover - a failed audit write must not fail the request
+        logger.warning("Could not write the audit record for %s", action, exc_info=True)
 
 
 def _audit_key_action(

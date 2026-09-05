@@ -102,6 +102,11 @@ ACTION_CATEGORIES = {
     "integration.instance.desktop_input": EventCategory.ADMIN,
     "integration.instance.desktop_clipboard": EventCategory.ADMIN,
     "integration.proxy.request": EventCategory.ADMIN,
+    # Credential lifecycle. The actor here is a human operator holding a JWT, not the key,
+    # so these carry the operator in `actor` and the key only as an annotation in details.
+    "integration.api_key.create": EventCategory.ADMIN,
+    "integration.api_key.revoke": EventCategory.ADMIN,
+    "integration.api_key.delete": EventCategory.ADMIN,
     # A destructive proxy call removes the same resource the dashboard's own endpoint would, so
     # it is named for the act rather than for the transport. Without these it landed under
     # `integration.proxy.request`, which is not high severity, and an alert on `image.delete`
@@ -169,6 +174,9 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.instance.desktop_view",
     "integration.instance.desktop_input",
     "integration.instance.desktop_clipboard",
+    "integration.api_key.create",
+    "integration.api_key.revoke",
+    "integration.api_key.delete",
     "integration.image.delete",
     "integration.instance.delete",
     "integration.network.delete",

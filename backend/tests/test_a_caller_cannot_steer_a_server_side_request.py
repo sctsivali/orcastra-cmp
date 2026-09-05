@@ -32,7 +32,10 @@ VAULT = "http://vault.invalid:8200"
     "url",
     [
         "https://169.254.169.254/latest/meta-data/",   # cloud metadata
+        "https://[::ffff:169.254.169.254]/",           # the same, spelled so a v4 list misses it
         "https://127.0.0.1:8200/v1/secret",            # this app's own Vault
+        "https://[::ffff:127.0.0.1]:8200/v1/secret",   # ditto
+        "https://user:pass@example.com/",              # userinfo becomes an Authorization header
         "https://localhost/",
         "https://[::1]/",
         "https://10.0.0.5/",

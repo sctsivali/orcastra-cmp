@@ -17,11 +17,9 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timezone
 import logging
 import base64
-import ipaddress
-import socket
-import httpx
 
 from app.core.database import get_db
+from app.core.safe_http import SafeHTTPError, fetch_guarded
 from app.core.dependencies import check_read_only_mode, require_authenticated, AuthenticatedUser
 from app.models.db_models import UserPreferences
 
@@ -362,39 +360,10 @@ async def reset_user_preferences(
 # Image Proxy - fetch cross-origin images server-side
 # ============================================
 
-# important: SSRF protection - block requests to private/internal network ranges
-_PRIVATE_NETWORKS = [
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("100.64.0.0/10"),   # Carrier-grade NAT (Tailscale range)
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("169.254.0.0/16"),  # Link-local / cloud metadata
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-]
-
-_BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
-
-
-def _is_ssrf_safe(url: str) -> bool:
-    """Return False if the URL resolves to a private/internal IP address."""
-    from urllib.parse import urlparse
-    try:
-        parsed = urlparse(url)
-        host = parsed.hostname or ""
-        if not host:
-            return False
-        if host.lower() in _BLOCKED_HOSTNAMES:
-            return False
-        resolved = socket.getaddrinfo(host, None)
-        for _, _, _, _, sockaddr in resolved:
-            ip = ipaddress.ip_address(sockaddr[0])
-            if any(ip in net for net in _PRIVATE_NETWORKS):
-                return False
-        return True
-    except Exception:
-        return False
+# note: the private-range list and the URL check that used to live here were a second, older
+# copy of core/url_safety.py. It had drifted: no 0.0.0.0/8, no fe80::/10, no scheme check, and
+# it missed every IPv4-mapped IPv6 form. Two copies of an SSRF filter guarantees one goes
+# stale, so this surface now uses the same guarded client as every other outbound fetch.
 
 
 class ProxyImageRequest(BaseModel):
@@ -418,40 +387,20 @@ async def proxy_image(
 ):
     """Proxy-fetch an image URL to avoid browser CORS restrictions."""
     url = request.url.strip()
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="URL must start with http:// or https://")
-
-    if not _is_ssrf_safe(url):
-        raise HTTPException(status_code=400, detail="URL points to a private or disallowed address")
-
-    # limit max image size to 2MB
     max_size = 2 * 1024 * 1024
 
     try:
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
+        content_type, body = await fetch_guarded(url, max_bytes=max_size)
+    except SafeHTTPError as exc:
+        # The reason names a category, never a resolved address, so a refusal cannot be walked
+        # to map the network. Reachable by any authenticated user, tenants included.
+        raise HTTPException(status_code=400, detail=str(exc))
 
-            content_type = resp.headers.get("content-type", "")
-            if not content_type.startswith("image/"):
-                raise HTTPException(status_code=400, detail=f"URL does not point to an image (content-type: {content_type})")
+    if not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"URL does not point to an image (content-type: {content_type})",
+        )
 
-            if len(resp.content) > max_size:
-                raise HTTPException(status_code=400, detail="Image exceeds 2MB size limit")
-
-            # build data URI
-            b64 = base64.b64encode(resp.content).decode("utf-8")
-            data_uri = f"data:{content_type};base64,{b64}"
-            return ProxyImageResponse(data=data_uri)
-
-    except httpx.HTTPStatusError as e:
-        logger.warning(f"Image proxy HTTP error for {url}: {e.response.status_code}")
-        raise HTTPException(status_code=400, detail=f"Failed to fetch image: HTTP {e.response.status_code}")
-    except httpx.RequestError as e:
-        logger.warning(f"Image proxy request error for {url}: {e}")
-        raise HTTPException(status_code=400, detail=f"Failed to fetch image: {str(e)}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Image proxy unexpected error for {url}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch image")
+    b64 = base64.b64encode(body).decode("utf-8")
+    return ProxyImageResponse(data=f"data:{content_type};base64,{b64}")
