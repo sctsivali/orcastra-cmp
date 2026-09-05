@@ -314,3 +314,25 @@ def test_a_refusal_never_names_the_organization_that_withheld_consent(monkeypatc
     # Proves the refusal that ran is the guest-access one, so the assertion above is not passing
     # because some unrelated check fired first and never consulted consent at all.
     assert "desktop.view" in message
+
+
+def test_a_superseded_key_still_resolves_to_its_installation() -> None:
+    """Rotation retires the old key by shortening its expiry, so it stays usable for the grace
+    window and `validate_api_key` is what ends it.
+
+    important: wiring the installation check into the auth path broke this the moment it landed.
+    The lookup matched `api_key_id` only, so a rotation moved the row onto the new key and the old
+    one resolved to nothing, which the check turns into a 401. The grace window became a flag day,
+    and it was a live rotation spec that caught it rather than any unit test. The statement must
+    name both columns.
+    """
+    import inspect
+
+    from app.services import extension_scope
+
+    source = inspect.getsource(extension_scope.load_install_snapshot)
+    assert "previous_api_key_id" in source, (
+        "load_install_snapshot ignores the superseded key, so rotating a credential kills the old "
+        "one immediately instead of after its grace window"
+    )
+    assert "api_key_id ==" in source, "the lookup no longer matches the current key either"

@@ -23,7 +23,7 @@ import threading
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capabilities import GUEST_ACCESS_CAPABILITIES
@@ -236,9 +236,16 @@ async def load_install_snapshot(db: AsyncSession, api_key_id: str) -> Optional[D
     if cached is not None:
         return cached
 
+    # important: a rotation's superseded key must resolve too. It is retired by shortening its
+    # expiry, not by revoking it, so it is legitimately usable inside the grace window and
+    # `validate_api_key` is what ends it. Matching only `api_key_id` made this return None for the
+    # old key the moment a rotation happened, which turned the grace window into a flag day.
     result = await db.execute(
         select(ExtensionInstallation).where(
-            ExtensionInstallation.api_key_id == api_key_id
+            or_(
+                ExtensionInstallation.api_key_id == api_key_id,
+                ExtensionInstallation.previous_api_key_id == api_key_id,
+            )
         )
     )
     install = result.scalar_one_or_none()
