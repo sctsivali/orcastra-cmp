@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback } from "react";
+import { Suspense, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -9,6 +9,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { CredentialRevealDialog } from "@/components/extensions/credential-reveal-dialog";
 import { ExtensionSettingsForm } from "@/components/extensions/extension-settings-form";
 import { WebhookPanel } from "@/components/extensions/webhook-panel";
@@ -93,6 +94,25 @@ function InstallDetail() {
     onSuccess: invalidate,
   });
 
+  const [confirmUninstall, setConfirmUninstall] = useState(false);
+  const [uninstallError, setUninstallError] = useState<string | null>(null);
+  // important: a ref, not `isPending`. The shared dialog blocks its confirm on React state, which
+  // does not reach the DOM until the next render, so two clicks in one tick both get through. The
+  // house pattern for this is a ref claimed before any await, the same as the consent dialog.
+  const uninstalling = useRef(false);
+  const uninstall = useMutation({
+    mutationFn: () => extensionsAPI.uninstall(installId),
+    onSuccess: () => {
+      setConfirmUninstall(false);
+      queryClient.invalidateQueries({ queryKey: ["extensions", "installs"] });
+      router.push("/extensions");
+    },
+    onError: (error: Error) => {
+      uninstalling.current = false;
+      setUninstallError(error.message);
+    },
+  });
+
   if (install.isLoading) return <LoadingLottiePage />;
   if (install.error) {
     return (
@@ -128,8 +148,42 @@ function InstallDetail() {
               Resume
             </Button>
           ) : null}
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => {
+              uninstalling.current = false;
+              setUninstallError(null);
+              setConfirmUninstall(true);
+            }}
+          >
+            Uninstall
+          </Button>
         </div>
       </div>
+
+      <DestructiveConfirmDialog
+        open={confirmUninstall}
+        onOpenChange={setConfirmUninstall}
+        title={`Uninstall ${row.extension_name}?`}
+        description={
+          <>
+            The credential this installation issued stops working immediately, and its webhook
+            subscriptions and stored settings are removed. Anything the add-on created on a
+            cluster is left alone. This cannot be undone, and reinstalling issues a new
+            credential rather than restoring this one.
+          </>
+        }
+        confirmLabel="Uninstall"
+        pendingLabel="Uninstalling"
+        pending={uninstall.isPending}
+        onConfirm={() => {
+          if (uninstalling.current) return;
+          uninstalling.current = true;
+          uninstall.mutate();
+        }}
+        error={uninstallError}
+      />
 
       <Tabs value={panel} onValueChange={setPanel}>
         <TabsList>
