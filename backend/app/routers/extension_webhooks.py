@@ -263,6 +263,16 @@ async def verify_subscription(
     else:
         row.status = "pending_verification"
         row.last_failure_reason = delivery.last_error
+        # important: a verification ping is one shot. `deliver` schedules a retry on failure by
+        # leaving the row `pending`, which the queue claims, so a refused verification became
+        # queued traffic aimed at an endpoint that had just declined it. That is the reflector
+        # behaviour the auto-suspend rule exists to prevent, and it is worse here because the
+        # whole point of verifying is to establish that the endpoint wants this traffic at all.
+        # A failure also must not count towards the consecutive-failure budget of a subscription
+        # that has never been active.
+        delivery.state = "dead"
+        delivery.next_attempt_at = None
+        row.consecutive_failures = 0
     await db.commit()
     await db.refresh(row)
     return _to_response(row)
