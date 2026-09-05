@@ -93,8 +93,12 @@ SETTING_TYPES: Dict[str, str] = {
     "url": "An https URL",
 }
 
+# important: "self", "installations", "install-preview" and "vocabulary" are route segments on
+# the same prefix. A slug that shadowed one would let an author claim a path the platform
+# already answers on, so they are reserved rather than merely ordered around.
 RESERVED_SLUGS: FrozenSet[str] = frozenset({
     "orcastra", "orca", "orcahub", "admin", "system", "internal", "official", "verified",
+    "self", "installations", "install-preview", "vocabulary",
 })
 
 

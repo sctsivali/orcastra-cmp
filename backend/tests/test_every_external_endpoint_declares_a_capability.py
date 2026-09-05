@@ -20,10 +20,20 @@ from app.core.api_key_capabilities import CAPABILITIES
 ROUTERS = Path(__file__).resolve().parents[1] / "app" / "routers"
 
 # Files whose handlers authenticate with an API key rather than a user session.
-API_KEY_ROUTERS = ("integrations.py", "image_uploads.py", "iso_uploads.py")
+API_KEY_ROUTERS = (
+    "integrations.py",
+    "image_uploads.py",
+    "iso_uploads.py",
+    "extensions_external.py",
+)
 
 # Handlers that legitimately authenticate without requiring a capability, each with the reason.
 EXEMPT = {
+    (
+        "extensions_external.py",
+        "describe_self",
+    ): "reports what the presenting installation holds and nothing else. It grants no access, reads no cluster, and gating it would make the only reconcile backstop unavailable to an installation whose single capability is storage.upload",
+
     (
         "integrations.py",
         "validate_api_key_endpoint",

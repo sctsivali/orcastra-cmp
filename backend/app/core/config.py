@@ -192,6 +192,39 @@ class Settings(BaseSettings):
         alias="MCP_DESKTOP_TOOLS_ENABLED",
         description="Offer the tools that see and drive a guest's graphical session. Each costs a capability of its own that no application type seeds and no legacy key inherits, and the organization owning the cluster must separately have consented in desktop_control_policy."
     )
+    # ── Extensions (add-ons) ──────────────────────────────────────────────────────────────────
+    # Settings are lru_cache'd, so every one of these needs a restart to take effect.
+    extensions_enabled: bool = Field(
+        default=True,
+        alias="EXTENSIONS_ENABLED",
+        description="Serve the add-on registry, installation and settings endpoints."
+    )
+    extension_max_installs_per_org: int = Field(
+        default=25,
+        alias="EXTENSION_MAX_INSTALLS_PER_ORG",
+        description="Cap on live installations in one organization. 0 disables the cap."
+    )
+    extension_reconcile_interval_seconds: int = Field(
+        default=300,
+        alias="EXTENSION_RECONCILE_INTERVAL_SECONDS",
+        description="How often the sweep reclaims orphaned credentials and narrows drifted scope. This is the window in which a partner losing a cluster is still reachable by an installation under it, and it is documented as such rather than left implicit."
+    )
+    extension_credential_expire_days: int = Field(
+        default=365,
+        alias="EXTENSION_CREDENTIAL_EXPIRE_DAYS",
+        description="Lifetime of an installation credential. expiry_state already warns at 14 days, so this doubles as a renewal signal with no extra machinery."
+    )
+    extension_credential_min_rotate_seconds: int = Field(
+        default=60,
+        alias="EXTENSION_CREDENTIAL_MIN_ROTATE_SECONDS",
+        description="Floor between two rotations of the same installation, so a loop cannot mint unbounded Vault keys."
+    )
+    extension_credential_max_grace_seconds: int = Field(
+        default=86400,
+        alias="EXTENSION_CREDENTIAL_MAX_GRACE_SECONDS",
+        description="Longest overlap a rotation may leave the superseded credential alive for."
+    )
+
     mcp_guest_tools_enabled: bool = Field(
         default=True,
         alias="MCP_GUEST_TOOLS_ENABLED",

@@ -20,6 +20,7 @@ from typing import Any, Dict, List
 import pytest
 
 from app.services import extension_credentials as ec
+from app.services import extension_settings as es
 from app.services import extension_teardown as td
 
 # Artefacts that outlive an uninstall on purpose. Anything else with no remover is an omission.
@@ -37,7 +38,11 @@ EXPECTED_VAULT_WRITERS = {
     "rotate_install_credential",     # the next generation, same
     "_retire_key",                   # shortens or revokes the superseded one
     "rotate_signing_secret",
+    "store_secrets",                 # values for the manifest's secret fields
 }
+
+# Watching one module is how the settings store shipped with no teardown entry for two minutes.
+WRITING_MODULES = (ec, es)
 
 
 def test_an_artefact_kept_on_purpose_is_named_as_such() -> None:
@@ -59,9 +64,11 @@ def test_the_audit_trail_is_kept_deliberately() -> None:
 
 def test_a_new_vault_write_forces_a_new_artefact_entry() -> None:
     """The structural half. No behavioural test can notice a write nobody thought to make."""
-    tree = ast.parse(inspect.getsource(ec))
     writers = set()
-    for node in ast.walk(tree):
+    nodes = []
+    for module in WRITING_MODULES:
+        nodes.extend(ast.walk(ast.parse(inspect.getsource(module))))
+    for node in nodes:
         if not isinstance(node, ast.FunctionDef):
             continue
         for inner in ast.walk(node):

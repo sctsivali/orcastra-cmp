@@ -107,6 +107,20 @@ ACTION_CATEGORIES = {
     "integration.api_key.create": EventCategory.ADMIN,
     "integration.api_key.revoke": EventCategory.ADMIN,
     "integration.api_key.delete": EventCategory.ADMIN,
+    # Add-ons. Installing one hands a third party a credential into an organization, so the
+    # grant-shaped actions are high severity and the descriptive ones are not.
+    "extension.register": EventCategory.SETTINGS,
+    "extension.update": EventCategory.SETTINGS,
+    "extension.delete": EventCategory.SETTINGS,
+    "extension.install": EventCategory.ADMIN,
+    "extension.install.rescope": EventCategory.ADMIN,
+    "extension.install.suspend": EventCategory.ADMIN,
+    "extension.install.resume": EventCategory.ADMIN,
+    "extension.install.credential.rotate": EventCategory.ADMIN,
+    "extension.install.settings": EventCategory.SETTINGS,
+    "extension.install.uninstall": EventCategory.ADMIN,
+    "extension.install.scope_narrowed": EventCategory.ADMIN,
+    "extension.credential.orphan_revoked": EventCategory.ADMIN,
     # A destructive proxy call removes the same resource the dashboard's own endpoint would, so
     # it is named for the act rather than for the transport. Without these it landed under
     # `integration.proxy.request`, which is not high severity, and an alert on `image.delete`
@@ -177,6 +191,11 @@ HIGH_SEVERITY_ACTIONS = {
     "integration.api_key.create",
     "integration.api_key.revoke",
     "integration.api_key.delete",
+    "extension.install",
+    "extension.install.rescope",
+    "extension.install.resume",
+    "extension.install.credential.rotate",
+    "extension.credential.orphan_revoked",
     "integration.image.delete",
     "integration.instance.delete",
     "integration.network.delete",

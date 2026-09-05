@@ -24,6 +24,7 @@ from app.services.extension_credentials import (
     destroy_install_credential,
     destroy_signing_secret,
 )
+from app.services.extension_settings import destroy_settings
 from app.services.extension_scope import evict_install_cache
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,10 @@ INSTALL_ARTEFACTS: Dict[str, Artefact] = {
     ),
     "vault:webhook_signing_secret": Artefact(
         "vault", "issue_install_credential", "destroy_signing_secret"
+    ),
+    "vault:settings_secrets": Artefact(
+        "vault", "store_secrets", "destroy_settings",
+        "values for the manifest's secret fields, write-only and never read back to a browser",
     ),
     "vault:superseded_api_key": Artefact(
         "vault", "rotate_install_credential", "destroy_install_credential",
@@ -128,6 +133,9 @@ async def teardown_install(
 
     destroy_signing_secret(vault_client, install_id)
     done.append("vault:webhook_signing_secret")
+
+    destroy_settings(vault_client, install_id)
+    done.append("vault:settings_secrets")
 
     cache = get_cache_manager()
     for key_id in filter(None, (api_key_id, previous_api_key_id)):

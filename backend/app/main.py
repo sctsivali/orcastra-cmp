@@ -532,6 +532,23 @@ Ensure your client certificates are properly configured.
     # MCP server. Same credential as external_router, different protocol. Appended to the raw
     # router rather than include_router'd because the endpoint is an ASGI callable, not an
     # APIRoute, and mounting it as a sub-app would cost a 307 on every JSON-RPC POST.
+    if settings.extensions_enabled:
+        # important: the external router is included FIRST. Both routers sit on the /extensions
+        # prefix, and the authoring router owns /extensions/{slug}. Registered the other way
+        # round, an add-on calling /extensions/self would be matched by the slug route and
+        # answered 401 by a JWT dependency it has no way to satisfy. The installations router
+        # goes ahead of it for the same reason: /extensions/installations would otherwise be
+        # read as an add-on named 'installations'. The reserved-slug list is the second half
+        # of the same guard, and test_a_literal_route_is_not_read_as_a_slug is the third.
+        from app.routers.extensions_external import external_router as extensions_external_router
+        from app.routers.extensions import router as extensions_router
+        from app.routers.extension_installs import router as extension_installs_router
+
+        app.include_router(extensions_external_router, prefix=settings.api_prefix)
+        app.include_router(extension_installs_router, prefix=settings.api_prefix)
+        app.include_router(extensions_router, prefix=settings.api_prefix)
+        logger.info("Extensions surface enabled at %s/extensions", settings.api_prefix)
+
     if settings.mcp_enabled:
         from app.mcp import build_mcp_route
         _mcp_route, _mcp_manager = build_mcp_route(settings)
