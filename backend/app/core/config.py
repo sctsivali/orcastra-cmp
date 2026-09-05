@@ -219,6 +219,16 @@ class Settings(BaseSettings):
         alias="EXTENSION_CREDENTIAL_MIN_ROTATE_SECONDS",
         description="Floor between two rotations of the same installation, so a loop cannot mint unbounded Vault keys."
     )
+    public_openapi_enabled: bool = Field(
+        default=True,
+        alias="PUBLIC_OPENAPI_ENABLED",
+        description="Serve the curated add-on API document. Unauthenticated on purpose: an integrator needs the specification before they hold a credential, and it names no internal route. The full internal document stays off in production regardless."
+    )
+    public_docs_ui_enabled: bool = Field(
+        default=True,
+        alias="PUBLIC_DOCS_UI_ENABLED",
+        description="Render the add-on API document in a browser. Requires PUBLIC_OPENAPI_ENABLED."
+    )
     webhook_dest_allowlist_cidrs: str = Field(
         default="",
         alias="WEBHOOK_DEST_ALLOWLIST_CIDRS",

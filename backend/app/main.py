@@ -562,6 +562,20 @@ Ensure your client certificates are properly configured.
         app.include_router(extensions_router, prefix=settings.api_prefix)
         logger.info("Extensions surface enabled at %s/extensions", settings.api_prefix)
 
+    if settings.public_openapi_enabled:
+        # important: this does NOT re-enable the internal document. `openapi_url` above stays
+        # None in production; this is a separate, curated document describing only the surface
+        # an add-on may call, selected by which routes authenticate with an API key.
+        from app.routers.public_docs import router as public_docs_router
+
+        app.include_router(public_docs_router, prefix=settings.api_prefix)
+        if not is_debug and not settings.public_api_base_url:
+            logger.error(
+                "PUBLIC_API_BASE_URL is empty, so the add-on API document has no servers entry "
+                "and generated clients from it will not work. Set it to the absolute base URL "
+                "integrators reach this deployment on."
+            )
+
     if settings.mcp_enabled:
         from app.mcp import build_mcp_route
         _mcp_route, _mcp_manager = build_mcp_route(settings)
