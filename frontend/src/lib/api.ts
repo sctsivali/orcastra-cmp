@@ -223,7 +223,7 @@ export interface FetchAPIOptions {
   force?: boolean;
 }
 
-async function fetchAPI<T>(
+export async function fetchAPI<T>(
   endpoint: string,
   options: RequestInit = {},
   timeoutMs: number = 45000,
@@ -292,7 +292,7 @@ export interface ReadOptions {
 const HEAVY_FRESH_TIMEOUT_MS = 90000;
 
 /** GET helper for the read paths behind a refresh button. */
-function fetchRead<T>(
+export function fetchRead<T>(
   endpoint: string,
   opts: ReadOptions = {},
   timeoutMs?: number,

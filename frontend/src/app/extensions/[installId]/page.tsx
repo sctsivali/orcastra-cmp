@@ -1,0 +1,226 @@
+"use client";
+
+import { Suspense, useCallback } from "react";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CredentialRevealDialog } from "@/components/extensions/credential-reveal-dialog";
+import { ExtensionSettingsForm } from "@/components/extensions/extension-settings-form";
+import { WebhookPanel } from "@/components/extensions/webhook-panel";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import { useRequireRole } from "@/hooks/use-require-role";
+import { useToast } from "@/hooks/use-toast";
+import { extensionsAPI } from "@/lib/extensions-api";
+import { INSTALL_STATUS } from "@/lib/extension-display";
+import { Role } from "@/types/rbac";
+import type { ExtensionInstallResponse, WebhookSecretResponse } from "@/types/api";
+
+const PANELS = ["overview", "settings", "webhooks"] as const;
+type Panel = (typeof PANELS)[number];
+
+function InstallDetail() {
+  const params = useParams<{ installId: string }>();
+  const search = useSearchParams();
+  const router = useRouter();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const installId = Number(params.installId);
+  const [issued, setIssued] = useState<ExtensionInstallResponse | null>(null);
+
+  // important: the panel lives in the URL. Settings cannot deep-link to a tab and a refresh
+  // drops you back to the first one, which is the limitation this surface deliberately does not
+  // inherit: an operator sent a link to a delivery log should land on the delivery log.
+  const raw = search.get("panel");
+  const panel: Panel = PANELS.includes(raw as Panel) ? (raw as Panel) : "overview";
+  const setPanel = useCallback(
+    (next: string) => router.replace(`/extensions/${installId}?panel=${next}`, { scroll: false }),
+    [router, installId],
+  );
+
+  const install = useQuery({
+    queryKey: ["extensions", "install", installId],
+    queryFn: () => extensionsAPI.getInstall(installId),
+    enabled: Number.isFinite(installId),
+  });
+
+  // The settings form is drawn from the add-on's declared schema, which lives on the
+  // definition rather than on the installation. The installation carries the values.
+  const definition = useQuery({
+    queryKey: ["extensions", "definition", install.data?.extension_slug],
+    queryFn: () => extensionsAPI.get(install.data!.extension_slug),
+    enabled: Boolean(install.data?.extension_slug),
+    staleTime: 60000,
+  });
+
+  const vocabulary = useQuery({
+    queryKey: ["extensions", "vocabulary"],
+    queryFn: () => extensionsAPI.vocabulary(),
+    staleTime: 3600000,
+  });
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["extensions", "install", installId] });
+
+  const saveSettings = useMutation({
+    mutationFn: (values: Record<string, unknown>) =>
+      extensionsAPI.updateSettings(installId, values),
+    onSuccess: () => {
+      toast({ title: "Settings saved" });
+      invalidate();
+    },
+    onError: (error: Error) =>
+      toast({ title: "Could not save", description: error.message, variant: "destructive" }),
+  });
+
+  const rotate = useMutation({
+    mutationFn: () => extensionsAPI.rotateCredential(installId, 0),
+    onSuccess: (result) => {
+      setIssued(result);
+      invalidate();
+    },
+    onError: (error: Error) =>
+      toast({ title: "Could not rotate", description: error.message, variant: "destructive" }),
+  });
+
+  const setStatus = useMutation({
+    mutationFn: (next: "suspend" | "resume") =>
+      next === "suspend" ? extensionsAPI.suspend(installId) : extensionsAPI.resume(installId),
+    onSuccess: invalidate,
+  });
+
+  if (install.isLoading) return <LoadingLottiePage />;
+  if (install.error) {
+    return (
+      <div className="container mx-auto p-6">
+        <Alert variant="destructive">
+          <AlertDescription>{(install.error as Error).message}</AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
+  const row = install.data;
+  if (!row) return null;
+  const meta = INSTALL_STATUS[row.status];
+
+  return (
+    <div className="container mx-auto space-y-6 p-6">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold">{row.extension_name}</h1>
+          <p className="text-sm text-muted-foreground">
+            v{row.extension_version} in {row.organization_slug ?? row.organization_id}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge variant={meta.tone}>{meta.label}</Badge>
+          {row.status === "active" ? (
+            <Button variant="outline" size="sm" onClick={() => setStatus.mutate("suspend")}>
+              Suspend
+            </Button>
+          ) : row.status === "suspended" ? (
+            <Button variant="outline" size="sm" onClick={() => setStatus.mutate("resume")}>
+              Resume
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      <Tabs value={panel} onValueChange={setPanel}>
+        <TabsList>
+          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="settings">Settings</TabsTrigger>
+          <TabsTrigger value="webhooks">Webhooks</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="overview" className="space-y-4 pt-4">
+          <section>
+            <h2 className="text-lg font-semibold">Granted Capabilities</h2>
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {row.granted_capabilities.map((name) => (
+                <li key={name}>
+                  <Badge variant="muted" className="font-mono">
+                    {name}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <section>
+            <h2 className="text-lg font-semibold">Clusters</h2>
+            <ul className="mt-2 flex flex-wrap gap-2">
+              {row.granted_scope.map((grant) => (
+                <li key={String(grant.cluster_id)}>
+                  <Badge variant="muted" className="font-mono">
+                    {String(grant.cluster_id)}
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Reach is recomputed on every call, so narrowing your own access narrows this too.
+            </p>
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-lg font-semibold">Credential</h2>
+            <p className="text-sm text-muted-foreground">
+              Key <span className="font-mono">{row.api_key_id}</span>, generation{" "}
+              {row.credential_generation}. The secret is not readable. If it was lost, rotate.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => rotate.mutate()} disabled={rotate.isPending}>
+              Rotate Credential
+            </Button>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="settings" className="pt-4">
+          <ExtensionSettingsForm
+            schema={definition.data?.settings_schema ?? []}
+            values={row.settings}
+            configuredSecrets={row.configured_secrets}
+            onSave={(values) => saveSettings.mutate(values)}
+            pending={saveSettings.isPending}
+          />
+        </TabsContent>
+
+        <TabsContent value="webhooks" className="pt-4">
+          <WebhookPanel
+            installId={installId}
+            vocabulary={vocabulary.data}
+            onSecretIssued={(secret: WebhookSecretResponse) =>
+              toast({
+                title: "Signing secret issued",
+                description: `Fingerprint ${secret.secret_fingerprint}. It is not shown again.`,
+              })
+            }
+          />
+        </TabsContent>
+      </Tabs>
+
+      <CredentialRevealDialog
+        result={issued}
+        open={issued !== null}
+        onClose={() => setIssued(null)}
+      />
+    </div>
+  );
+}
+
+export default function InstallDetailPage() {
+  const { allowed, isResolved } = useRequireRole(Role.PARTNER);
+  if (!isResolved) return <LoadingLottiePage />;
+  if (!allowed) return null;
+  // useSearchParams needs a boundary, or the whole route opts into client rendering.
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <InstallDetail />
+    </Suspense>
+  );
+}

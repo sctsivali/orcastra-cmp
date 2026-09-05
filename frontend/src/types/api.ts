@@ -2229,3 +2229,187 @@ export interface MyAccessResponse {
   total_clusters: number;
   total_rules: number;
 }
+
+// ============================================
+// Add-ons (extensions)
+// ============================================
+
+/** One configuration field an add-on declares. A closed vocabulary the dashboard renders itself. */
+export interface ExtensionSettingField {
+  key: string;
+  type: "string" | "secret" | "integer" | "boolean" | "enum" | "url";
+  label: string;
+  help?: string | null;
+  required?: boolean;
+  default?: unknown;
+  options?: string[] | null;
+  min?: number | null;
+  max?: number | null;
+}
+
+/**
+ * One requested capability, with the server's own reason for marking it.
+ *
+ * `elevated_reason` is nullable and differs per capability: "Writes access control" is true of
+ * two of them and false of the rest, which is why a single hardcoded label was wrong.
+ */
+export interface ExtensionCapabilityInfo {
+  name: string;
+  description: string;
+  elevated: boolean;
+  elevated_reason?: string | null;
+  reaches_inside_a_guest: boolean;
+}
+
+export interface ExtensionVocabulary {
+  capabilities: ExtensionCapabilityInfo[];
+  events: Array<{ name: string; description: string }>;
+  setting_types: Array<{ name: string; description: string }>;
+}
+
+export interface ExtensionDetail {
+  id: number;
+  slug: string;
+  name: string;
+  publisher: string;
+  version: string;
+  status: "draft" | "published" | "deprecated" | "disabled";
+  description?: string | null;
+  homepage_url?: string | null;
+  support_url?: string | null;
+  owner_email: string;
+  requested_capabilities: string[];
+  requested_scope: Record<string, unknown>;
+  settings_schema?: ExtensionSettingField[] | null;
+  default_webhook_url?: string | null;
+  default_webhook_events?: string[] | null;
+  manifest_digest: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The consent screen's source of truth. Every field here was computed by the server. */
+export interface ExtensionInstallPreview {
+  extension: ExtensionDetail;
+  organization_id: number;
+  organization_slug: string;
+  capabilities: ExtensionCapabilityInfo[];
+  /** The intersection. Never recomputed in the browser. */
+  grantable_cluster_ids: string[];
+  /** Asked for and outside the installer's own scope, so the screen can say so. */
+  refused_cluster_ids: string[];
+  requested_scope: Record<string, unknown>;
+  settings_schema: ExtensionSettingField[];
+  manifest_digest: string;
+  version: string;
+}
+
+export interface ExtensionInstallRequest {
+  organization_id: number;
+  consent: {
+    version: string;
+    manifest_digest: string;
+    accepted_capabilities: string[];
+  };
+  capabilities: string[];
+  cluster_permissions: ClusterPermission[];
+  settings?: Record<string, unknown> | null;
+}
+
+export type ExtensionInstallStatus = "active" | "suspended" | "revoked";
+
+export interface ExtensionInstall {
+  id: number;
+  extension_id: number;
+  extension_slug: string;
+  extension_name: string;
+  extension_version: string;
+  organization_id: number;
+  organization_slug?: string | null;
+  status: ExtensionInstallStatus;
+  /**
+   * note: `null` on an APIKeyInfo means a pre-capability key, which grants everything. An
+   * installation can never produce one, but the type keeps the null so the UI renders honestly
+   * rather than silently if the backend ever hands one back.
+   */
+  granted_capabilities: string[];
+  granted_scope: ClusterPermission[];
+  settings: Record<string, unknown>;
+  /** The NAMES of secret fields that hold a value. Never the values. */
+  configured_secrets: string[];
+  api_key_id: string;
+  credential_generation: number;
+  consent_version: string;
+  consented_at: string;
+  installed_by: string;
+  suspended_at?: string | null;
+  suspend_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The one response that carries secrets. Shown once and never readable again. */
+export interface ExtensionInstallResponse {
+  install: ExtensionInstall;
+  api_key_id: string;
+  api_key_secret: string;
+  webhook_signing_secret: string;
+}
+
+export type WebhookSubscriptionStatus =
+  | "pending_verification"
+  | "active"
+  | "suspended"
+  | "disabled";
+
+export interface WebhookSubscriptionRequest {
+  endpoint_url: string;
+  event_types: string[];
+}
+
+export interface WebhookSubscription {
+  id: number;
+  installation_id: number;
+  endpoint_url: string;
+  event_types: string[];
+  status: WebhookSubscriptionStatus;
+  /** A short hash, so two secrets can be told apart without either being shown. */
+  secret_fingerprint: string;
+  verified_at?: string | null;
+  consecutive_failures: number;
+  last_success_at?: string | null;
+  last_failure_at?: string | null;
+  last_failure_reason?: string | null;
+  suspended_reason?: string | null;
+}
+
+export interface WebhookSecretResponse {
+  subscription_id: number;
+  signing_secret: string;
+  secret_fingerprint: string;
+}
+
+export type WebhookDeliveryState =
+  | "pending"
+  | "inflight"
+  | "delivered"
+  | "failed"
+  | "dead"
+  | "dropped";
+
+export interface WebhookDelivery {
+  id: number;
+  subscription_id: number;
+  /** Stable across every attempt. This is what a receiver dedupes on. */
+  event_id: string;
+  event_type: string;
+  state: WebhookDeliveryState;
+  attempt: number;
+  response_status?: number | null;
+  response_ms?: number | null;
+  response_excerpt?: string | null;
+  last_error?: string | null;
+  next_attempt_at?: string | null;
+  created_at: string;
+  payload?: Record<string, unknown>;
+}

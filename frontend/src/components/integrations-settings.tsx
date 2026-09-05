@@ -54,7 +54,7 @@ import {
   isLegacyUnscopedKey,
   summarizeClusterAccessLevel,
 } from "@/lib/integration-display";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { VaultUnavailableNotice } from "@/components/ui/vault-unavailable-notice";
 import { EditAPIKeyPermissionsDialog } from "@/components/integrations/edit-api-key-permissions-dialog";
 import { CreateAPIKeyDialog } from "@/components/integrations/create-api-key-dialog";
 import { ApiKeyConnectionGuide } from "@/components/integrations/api-key-connection-guide";
@@ -328,22 +328,7 @@ export function IntegrationsSettings() {
             Manage API keys for external applications
           </p>
         </div>
-        <Alert variant="destructive" className="border-yellow-500/50 bg-yellow-500/10 text-yellow-200 [&>svg]:text-yellow-500">
-          <ShieldAlert className="h-5 w-5" />
-          <AlertTitle className="text-yellow-400 font-semibold">Vault Not Configured</AlertTitle>
-          <AlertDescription className="text-yellow-200/80 mt-1 space-y-2">
-            <p>
-              API key management requires HashiCorp Vault to be enabled and configured.
-              Keys are securely stored in Vault&apos;s encrypted secret engine.
-            </p>
-            <p className="text-xs text-yellow-200/60">
-              Set <code className="bg-yellow-500/20 px-1.5 py-0.5 rounded text-yellow-300">VAULT_ENABLED=true</code>,{" "}
-              <code className="bg-yellow-500/20 px-1.5 py-0.5 rounded text-yellow-300">VAULT_ADDR</code>, and{" "}
-              <code className="bg-yellow-500/20 px-1.5 py-0.5 rounded text-yellow-300">VAULT_TOKEN</code>{" "}
-              in the backend environment, then restart the backend service.
-            </p>
-          </AlertDescription>
-        </Alert>
+        <VaultUnavailableNotice surface="API key management" />
       </div>
     );
   }
