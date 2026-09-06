@@ -40,6 +40,7 @@ from app.models.db_models import OrganizationCluster
 from app.models.extension_models import ExtensionInstallation
 from app.services.activity_logger import get_activity_logger
 from app.services.extension_credentials import revoke_install_credential
+from app.services.extension_install import _rewrite_key_grant
 from app.services.extension_scope import evict_install_cache
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ async def _bound_clusters(db, organization_id: int) -> Set[str]:
     return {row[0] for row in rows.all() if row[0]}
 
 
-async def _narrow_drifted_scope(db) -> int:
+async def _narrow_drifted_scope(db, vault_client) -> int:
     """Trim every grant to what its organization still reaches. Returns rows changed.
 
     important: suspended rows are narrowed too. Filtering on active looked like a saving and was a
@@ -66,6 +67,24 @@ async def _narrow_drifted_scope(db) -> int:
     tick. Narrowing a suspended row costs nothing and closes the window instead of shortening it,
     which is better than narrowing on resume because it does not depend on the second path
     remembering to.
+
+    important: the CREDENTIAL is rewritten, not just the row, and that is the whole point. This
+    pass shipped writing `granted_scope` and nothing else, which did nothing at all: the request
+    path authorizes clusters from the Vault key's `cluster_permissions`, never from the row, and
+    the one request-time reader of `granted_scope` is called without a cluster to check. So an
+    organization that lost one of several clusters got a narrowed row, an audit record saying so,
+    and an add-on that kept full access to the cluster it lost. `_rewrite_key_grant` states that
+    invariant in its own comment and the operator-driven path already honoured it; only this one
+    did not.
+
+    Worse than merely inert, because the two places that DO read `granted_scope` hid the drift:
+    webhook deliveries for the dropped cluster stopped and the add-on's self-describe reported the
+    shortened list, so an operator saw a narrowing that had not happened.
+
+    Vault first, row second. A failure then leaves the credential WIDER than the row rather than
+    the row narrower than the credential, so the row never claims a reach the key does not have.
+    Each row is its own transaction with its own guard: a Vault outage or a bad row delays that
+    installation to the next tick instead of ending the pass for everyone.
     """
     installs = (
         await db.execute(select(ExtensionInstallation))
@@ -96,13 +115,33 @@ async def _narrow_drifted_scope(db) -> int:
                 if isinstance(grant, dict) and grant.get("cluster_id") not in reachable
             }
         )
-        install.granted_scope = kept
-        if not kept and install.status == "active":
-            install.status = "suspended"
-            install.suspend_reason = (
-                "Reconcile: this organization no longer reaches any cluster in the grant"
+        # important: an empty grant is NEVER written. `ck_ext_install_scope_nonempty` refuses it,
+        # so the old code's total-loss branch raised IntegrityError on commit, rolled the
+        # suspension back with it, and escaped to the loop's blanket handler: one totally-drifted
+        # installation aborted the entire scope pass on every tick, forever, taking unrelated
+        # partial narrowings with it. The constraint is right - an installation with no reach is a
+        # contradiction - so the row keeps its last grant as the record of what was withdrawn and
+        # the credential is revoked instead.
+        total_loss = not kept
+        try:
+            if total_loss:
+                revoke_install_credential(vault_client, install.api_key_id)
+            else:
+                install.granted_scope = kept
+                _rewrite_key_grant(vault_client, install)
+            if total_loss and install.status == "active":
+                install.status = "suspended"
+                install.suspend_reason = (
+                    "Reconcile: this organization no longer reaches any cluster in the grant"
+                )
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001 - one row must not end the pass
+            await db.rollback()
+            logger.warning(
+                "Reconcile could not narrow installation %s, retrying next tick: %s",
+                install.id, exc,
             )
-        await db.commit()
+            continue
         # The row moved without the Vault key moving, so only the install tombstone carries it.
         evict_install_cache(install.api_key_id)
         changed += 1
@@ -176,22 +215,35 @@ async def _revoke_orphaned_credentials(db, vault_client) -> int:
 
 
 async def reconcile_once(session_factory, vault_factory) -> Dict[str, int]:
-    """One full pass. Safe to run concurrently on every worker: both passes are idempotent."""
+    """One full pass. Safe to run concurrently on every worker: both passes are idempotent.
+
+    important: the Vault client is obtained FIRST now, because both passes need it. The scope pass
+    used to run without one, which is exactly why its narrowing never reached a credential. A
+    sealed Vault therefore skips both passes rather than running a scope pass that would write a
+    row the credential does not match - the state this function exists to prevent.
+    """
+    try:
+        vault_client = vault_factory()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Reconcile skipped: the credential store is unavailable: %s", exc)
+        return {
+            "scope_narrowed": 0, "orphans_revoked": 0,
+            "scope_pass_ran": False, "orphan_pass_ran": False,
+        }
+    if vault_client is None:
+        return {
+            "scope_narrowed": 0, "orphans_revoked": 0,
+            "scope_pass_ran": False, "orphan_pass_ran": False,
+        }
+
     async with session_factory() as db:
-        narrowed = await _narrow_drifted_scope(db)
-        try:
-            vault_client = vault_factory()
-        except Exception as exc:
-            # A sealed or unreachable Vault must not stop the scope pass, which needs no Vault.
-            logger.warning("Reconcile skipped the orphan pass: %s", exc)
-            return {"scope_narrowed": narrowed, "orphans_revoked": 0, "orphan_pass_ran": False}
-
-        if vault_client is None:
-            return {"scope_narrowed": narrowed, "orphans_revoked": 0, "orphan_pass_ran": False}
-
+        narrowed = await _narrow_drifted_scope(db, vault_client)
         revoked = await _revoke_orphaned_credentials(db, vault_client)
 
-    return {"scope_narrowed": narrowed, "orphans_revoked": revoked, "orphan_pass_ran": True}
+    return {
+        "scope_narrowed": narrowed, "orphans_revoked": revoked,
+        "scope_pass_ran": True, "orphan_pass_ran": True,
+    }
 
 
 async def reconcile_loop(session_factory, vault_factory, *, interval: float) -> None:

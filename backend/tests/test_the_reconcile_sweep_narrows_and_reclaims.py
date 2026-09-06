@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.services import extension_reconcile as sweep
 
@@ -53,6 +54,7 @@ class ScopeDB:
     installs: List[FakeInstall]
     bindings: Dict[int, Set[str]]
     commits: int = 0
+    rollbacks: int = 0
 
     async def execute(self, _statement):
         # note: returns every row. Filtering here would have hidden the suspended-row bug, since
@@ -60,7 +62,19 @@ class ScopeDB:
         return FakeResult(list(self.installs))
 
     async def commit(self):
+        # important: models `ck_ext_install_scope_nonempty`. The previous fake just counted
+        # commits, so the total-loss branch looked fine here while the real database rejected it,
+        # rolled the suspension back with it, and aborted the whole pass on every tick. A fake
+        # that does not model the constraint cannot test the constraint.
+        for install in self.installs:
+            if install.granted_scope == []:
+                raise IntegrityError(
+                    "ck_ext_install_scope_nonempty", None, Exception("empty granted_scope")
+                )
         self.commits += 1
+
+    async def rollback(self):
+        self.rollbacks += 1
 
 
 @dataclass
@@ -75,14 +89,43 @@ class OrphanDB:
         self.commits += 1
 
 
-def _run_scope_pass(db: ScopeDB, monkeypatch) -> int:
+@dataclass
+class CredentialStore:
+    """What the sweep actually did to the credential, which is the half nothing asserted.
+
+    The request path authorizes clusters from the Vault key, never from the row, so a narrowing
+    that only writes the row changes nothing an add-on can feel. That was the defect, and it was
+    invisible because no fake here had a credential in it to check.
+    """
+
+    rewritten: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
+    revoked: List[str] = field(default_factory=list)
+    fail_on: Optional[str] = None
+
+    def rewrite(self, _client, install) -> None:
+        if self.fail_on == install.api_key_id:
+            raise RuntimeError("vault is sealed")
+        self.rewritten[install.api_key_id] = list(install.granted_scope or [])
+
+    def revoke(self, _client, key_id: str) -> None:
+        if self.fail_on == key_id:
+            raise RuntimeError("vault is sealed")
+        self.revoked.append(key_id)
+
+
+def _run_scope_pass(db: ScopeDB, monkeypatch, store: Optional[CredentialStore] = None):
+    store = store or CredentialStore()
+
     async def _bound(_db, organization_id: int):
         return db.bindings.get(organization_id, set())
 
     monkeypatch.setattr(sweep, "_bound_clusters", _bound)
     monkeypatch.setattr(sweep, "evict_install_cache", lambda _k: None)
     monkeypatch.setattr(sweep.activity_logger, "log_activity", lambda **_kw: None)
-    return asyncio.run(sweep._narrow_drifted_scope(db))
+    monkeypatch.setattr(sweep, "_rewrite_key_grant", store.rewrite)
+    monkeypatch.setattr(sweep, "revoke_install_credential", store.revoke)
+    changed = asyncio.run(sweep._narrow_drifted_scope(db, object()))
+    return changed, store
 
 
 def test_a_grant_is_trimmed_to_what_the_organization_still_reaches(monkeypatch) -> None:
@@ -92,9 +135,15 @@ def test_a_grant_is_trimmed_to_what_the_organization_still_reaches(monkeypatch) 
     )
     db = ScopeDB(installs=[install], bindings={3: {"nuc2"}})
 
-    assert _run_scope_pass(db, monkeypatch) == 1
+    changed, store = _run_scope_pass(db, monkeypatch)
+    assert changed == 1
     assert install.granted_scope == [{"cluster_id": "nuc2"}]
     assert install.status == "active", "it still reaches something, so it must not be suspended"
+    # The assertion that was missing, and the reason the pass did nothing for a day: the request
+    # path reads the credential, so a narrowing that stops at the row is not a narrowing.
+    assert store.rewritten["k1"] == [{"cluster_id": "nuc2"}], (
+        "the row was trimmed and the credential was not, so the add-on keeps the cluster"
+    )
 
 
 def test_an_installation_left_reaching_nothing_is_suspended(monkeypatch) -> None:
@@ -103,10 +152,16 @@ def test_an_installation_left_reaching_nothing_is_suspended(monkeypatch) -> None
     )
     db = ScopeDB(installs=[install], bindings={3: set()})
 
-    assert _run_scope_pass(db, monkeypatch) == 1
-    assert install.granted_scope == []
+    changed, store = _run_scope_pass(db, monkeypatch)
+    assert changed == 1
     assert install.status == "suspended"
     assert "no longer reaches" in (install.suspend_reason or "")
+    # important: the grant is NOT emptied. `ck_ext_install_scope_nonempty` refuses an empty one,
+    # so writing it raised on commit and rolled the suspension back with it. The last grant stays
+    # as the record of what was withdrawn and the credential is revoked instead.
+    assert install.granted_scope == [{"cluster_id": "sold-on"}]
+    assert store.revoked == ["k2"], "reaching nothing must revoke the credential, not just the row"
+    assert db.rollbacks == 0, "the constraint must never be hit in the first place"
 
 
 def test_a_grant_that_still_fits_is_left_alone(monkeypatch) -> None:
@@ -117,9 +172,11 @@ def test_a_grant_that_still_fits_is_left_alone(monkeypatch) -> None:
     )
     db = ScopeDB(installs=[install], bindings={3: {"nuc2", "pandora"}})
 
-    assert _run_scope_pass(db, monkeypatch) == 0
+    changed, store = _run_scope_pass(db, monkeypatch)
+    assert changed == 0
     assert db.commits == 0, "an unchanged grant must not write"
     assert install.granted_scope == [{"cluster_id": "nuc2"}]
+    assert store.rewritten == {} and store.revoked == [], "nothing drifted, so nothing to rewrite"
 
 
 def test_the_scope_pass_does_not_filter_by_status() -> None:
@@ -151,9 +208,11 @@ def test_a_suspended_installation_is_narrowed_too(monkeypatch) -> None:
     )
     db = ScopeDB(installs=[install], bindings={3: {"nuc2"}})
 
-    assert _run_scope_pass(db, monkeypatch) == 1
+    changed, store = _run_scope_pass(db, monkeypatch)
+    assert changed == 1
     assert install.granted_scope == [{"cluster_id": "nuc2"}]
     assert install.status == "suspended", "a suspended row must not be re-suspended"
+    assert store.rewritten["k4"] == [{"cluster_id": "nuc2"}]
 
 
 def test_a_suspended_row_keeps_the_reason_it_was_suspended_for(monkeypatch) -> None:
@@ -165,9 +224,10 @@ def test_a_suspended_row_keeps_the_reason_it_was_suspended_for(monkeypatch) -> N
     )
     db = ScopeDB(installs=[install], bindings={3: set()})
 
-    assert _run_scope_pass(db, monkeypatch) == 1
-    assert install.granted_scope == []
+    changed, store = _run_scope_pass(db, monkeypatch)
+    assert changed == 1
     assert install.suspend_reason == "Operator: misbehaving"
+    assert store.revoked == ["k5"]
 
 
 # ── the orphan pass ────────────────────────────────────────────────────────────────────────────
@@ -306,3 +366,46 @@ def test_both_audit_actions_have_an_emitter(action: str) -> None:
     import inspect
 
     assert action in inspect.getsource(sweep), f"{action} is registered but nothing emits it"
+
+
+def test_a_sealed_vault_delays_one_row_rather_than_ending_the_pass(monkeypatch) -> None:
+    """One bad row used to abort the whole scope pass, and then every later tick too.
+
+    The total-loss branch wrote an empty grant, the CHECK constraint refused it, and the
+    IntegrityError escaped to the loop's blanket handler. So one totally-drifted installation
+    stopped unrelated partial narrowings from ever being applied. Here the first row cannot reach
+    Vault and the second still gets its narrowing.
+    """
+    stuck = FakeInstall(
+        id=6, organization_id=3, api_key_id="stuck",
+        granted_scope=[{"cluster_id": "nuc2"}, {"cluster_id": "sold-on"}],
+    )
+    fine = FakeInstall(
+        id=7, organization_id=3, api_key_id="fine",
+        granted_scope=[{"cluster_id": "nuc2"}, {"cluster_id": "sold-on"}],
+    )
+    db = ScopeDB(installs=[stuck, fine], bindings={3: {"nuc2"}})
+
+    changed, store = _run_scope_pass(db, monkeypatch, CredentialStore(fail_on="stuck"))
+
+    assert changed == 1, "the healthy row must still be narrowed"
+    assert store.rewritten["fine"] == [{"cluster_id": "nuc2"}]
+    assert "stuck" not in store.rewritten
+    assert db.rollbacks == 1, "the failed row must roll back rather than leave a half-write"
+
+
+def test_the_scope_pass_rewrites_the_credential_not_only_the_row() -> None:
+    """Structural, because the behavioural cases above cannot see a regression that removes the
+    Vault call while still trimming the row: they would keep passing on `granted_scope` alone if
+    somebody restored the old body. The request path reads `cluster_permissions` from the key."""
+    import inspect
+
+    source = inspect.getsource(sweep._narrow_drifted_scope)
+    assert "_rewrite_key_grant" in source, (
+        "the sweep trims the row without rewriting the credential, which changes nothing a "
+        "request can feel"
+    )
+    assert "granted_scope = []" not in source, (
+        "an empty grant violates ck_ext_install_scope_nonempty and takes the suspension down "
+        "with it"
+    )

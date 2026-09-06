@@ -279,6 +279,18 @@ async def create_project(
         cache.delete("api_responses", "projects:list:all:scope=all")
         cache.delete("api_responses", f"projects:list:{request.host}:scope=all")
         
+
+        # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
+        # until now, so the catalogue was a promise with no sender behind it.
+        from app.services.webhooks.emitter import emit_resource_event
+
+        await emit_resource_event(
+            event_type="orcastra.project.created.v1",
+            cluster_id=request.host,
+            resource_type="project",
+            resource_name=request.name,
+        )
+
         # Log activity for audit trail
         activity_logger.log_activity(
             action="project.create",
@@ -502,6 +514,18 @@ async def delete_project(
     verify_cluster_access(host)
     try:
         await lxd_service.delete_project(host, project_name)
+
+        # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
+        # until now, so the catalogue was a promise with no sender behind it.
+        from app.services.webhooks.emitter import emit_resource_event
+
+        await emit_resource_event(
+            event_type="orcastra.project.deleted.v1",
+            cluster_id=host,
+            resource_type="project",
+            resource_name=project_name,
+        )
+
         
         # Invalidate project list caches so frontend gets fresh data
         # Must use scoped cache keys to match the keys used by list endpoints

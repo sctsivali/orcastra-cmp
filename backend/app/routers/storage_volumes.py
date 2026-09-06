@@ -278,6 +278,18 @@ async def create_storage_volume(
             "content_type": request.content_type
         })
         
+        # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
+        # the integrations proxy vocabulary, so this router is their only source: without it two
+        # of the nine catalogued events could never fire at all.
+        from app.services.webhooks.emitter import emit_resource_event
+
+        await emit_resource_event(
+            event_type="orcastra.volume.created.v1",
+            cluster_id=host,
+            resource_type="volume",
+            resource_name=request.name,
+        )
+
         # Log activity: storage volume creation success
         activity_logger.log_activity(
             action="storage.volume.create",
@@ -437,6 +449,18 @@ async def delete_storage_volume(
             raise HTTPException(status_code=409, detail=_in_use_detail(volume_name, attached))
 
         volume.delete()
+
+        # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
+        # the integrations proxy vocabulary, so this router is their only source: without it two
+        # of the nine catalogued events could never fire at all.
+        from app.services.webhooks.emitter import emit_resource_event
+
+        await emit_resource_event(
+            event_type="orcastra.volume.deleted.v1",
+            cluster_id=host,
+            resource_type="volume",
+            resource_name=volume_name,
+        )
 
         # Log activity: storage volume deletion success
         activity_logger.log_activity(

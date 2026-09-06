@@ -28,7 +28,7 @@ re-serialises will not match, and the difference is real: the sender emits compa
 
 import hashlib
 import hmac
-from typing import Iterable, Sequence, Tuple
+from typing import Sequence
 
 SIGNATURE_VERSION = "v1"
 SIGNATURE_HEADER = "X-Orcastra-Signature"
@@ -90,12 +90,3 @@ def verify(
     return False
 
 
-def parse_entries(header_value: str) -> Iterable[Tuple[str, str, str]]:
-    """(version, key fingerprint, hex digest) for each entry, for diagnostics only."""
-    for entry in header_value.split():
-        try:
-            version, rest = entry.split(",", 1)
-            label, digest = rest.rsplit(":", 1)
-            yield version, label.removeprefix("k="), digest
-        except ValueError:
-            continue

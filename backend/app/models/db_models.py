@@ -757,6 +757,12 @@ class DesktopControlPolicy(Base):
     # watching and touching are different consents: a support desk that may look at a stuck screen
     # has not thereby been allowed to type into it.
     allow_input = Column(Boolean, nullable=False, default=False, server_default="false")
+    # Separate switches, because they are separate disclosures. The clipboard used to ride on
+    # view consent while the code calls it the highest-yield exfiltration primitive here, and
+    # guest access rode on it too, so enabling screenshots silently authorized an add-on to take
+    # root inside a container. Both default to refusing, so nothing is granted by this migration.
+    allow_clipboard = Column(Boolean, nullable=False, server_default="false")
+    allow_guest_access = Column(Boolean, nullable=False, server_default="false")
 
     updated_by = Column(String(255), nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

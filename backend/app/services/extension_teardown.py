@@ -140,27 +140,32 @@ async def teardown_install(
         destroy_install_credential(vault_client, previous_api_key_id)
         done.append("vault:superseded_api_key")
 
-    destroy_signing_secret(vault_client, install_id)
-    done.append("vault:webhook_signing_secret")
-
-    destroy_settings(vault_client, install_id)
-    done.append("vault:settings_secrets")
+    # important: these two swallow their own failures, so calling them proves nothing. They are
+    # the entries that matter most, because a Vault-side failure leaves real secret material
+    # behind while the audit record says it was destroyed.
+    if destroy_signing_secret(vault_client, install_id):
+        done.append("vault:webhook_signing_secret")
+    if destroy_settings(vault_client, install_id):
+        done.append("vault:settings_secrets")
 
     cache = get_cache_manager()
+    cleared = True
     for key_id in filter(None, (api_key_id, previous_api_key_id)):
         try:
             cache.delete_pattern(
                 "vault", f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/*"
             )
         except Exception:
+            cleared = False
             logger.warning("Could not clear cached descriptors for %s", key_id, exc_info=True)
-    done.append("redis:vault_descriptor_cache")
+    if cleared:
+        done.append("redis:vault_descriptor_cache")
 
     try:
         cache.delete_pattern("api_responses", "integrations:api_keys:list*")
+        done.append("redis:api_key_list_responses")
     except Exception:
         logger.warning("Could not clear the cached key list", exc_info=True)
-    done.append("redis:api_key_list_responses")
 
     evict_install_cache(api_key_id)
     if previous_api_key_id:
@@ -178,10 +183,9 @@ async def teardown_install(
                 ),
                 {"key": api_key_id},
             )
+            done.append(f"postgres:{table}")
         except Exception:
             logger.warning("Could not expire %s rows for %s", table, api_key_id, exc_info=True)
-    done.append("postgres:image_upload_sessions")
-    done.append("postgres:iso_upload_sessions")
 
     # A grant naming a key that no longer exists is worse than useless: cluster_id is free text
     # with no foreign key, so the same id registered again by a different owner matches it.
@@ -194,9 +198,9 @@ async def teardown_install(
             ),
             {"key": api_key_id},
         )
+        done.append("postgres:break_glass_grants")
     except Exception:
         logger.warning("Could not revoke break-glass grants for %s", api_key_id, exc_info=True)
-    done.append("postgres:break_glass_grants")
 
     await db.execute(
         text("DELETE FROM extension_installations WHERE id = :id"), {"id": install_id}

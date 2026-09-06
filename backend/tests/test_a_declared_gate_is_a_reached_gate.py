@@ -24,10 +24,18 @@ from typing import Dict, Set
 APP = Path(__file__).resolve().parents[1] / "app"
 
 # The packages whose contents are gates, transports or budgets rather than incidental helpers.
+#
+# important: the extensions and webhooks packages were added after this ratchet caught its first
+# five dead symbols, and adding them caught a sixth that had been live for a day: `enqueue_event`,
+# the function every extension event was supposed to travel through, had no caller at all. Nine
+# events were catalogued, served to add-on authors and documented publicly with a "when it fires"
+# column, and none of them ever fired. That is the exact shape this file exists to refuse, and it
+# was invisible only because the walker was not pointed at that directory.
 WATCHED = (
     APP / "services" / "desktop",
     APP / "services" / "desktop_policy.py",
     APP / "mcp",
+    APP / "services" / "webhooks",
 )
 
 # Deliberate exceptions, each with the reason it is not a defect.
@@ -53,6 +61,11 @@ EXEMPT: Dict[str, str] = {
     "register": "each tool module's registrar, called from server.build_mcp_server",
     "build_mcp_server": "called by build_mcp_route",
     "build_mcp_route": "called from main.create_app",
+    # The receiver's half of the signature recipe, published for add-on authors and deliberately
+    # not called by the sender. What stops it drifting from `sign` is
+    # `test_a_delivery_arrives_signed_over_its_raw_bytes`, which signs with one and verifies with
+    # the other, so this is exercised rather than merely present.
+    "verify": "the receiver-side reference implementation, round-tripped against sign in tests",
 }
 
 
@@ -75,14 +88,16 @@ def _public_callables(path: Path) -> Dict[str, Set[str]]:
     return defined
 
 
-def _referenced_outside(name: str, owner: str) -> bool:
-    """Whether `name` is CALLED or read as an attribute anywhere else under app/.
+def _referenced(name: str, *, owner: str, include_owner: bool) -> bool:
+    """Whether `name` is CALLED or read as an attribute under app/.
 
     note: a re-export in a package `__init__` does not count. Being exported and never called is
     precisely the shape of the four controls this file exists for.
     """
     for file in sorted(APP.rglob("*.py")):
-        if str(file) == owner or file.name == "__init__.py":
+        if file.name == "__init__.py":
+            continue
+        if str(file) == owner and not include_owner:
             continue
         try:
             tree = ast.parse(file.read_text())
@@ -99,14 +114,24 @@ def _referenced_outside(name: str, owner: str) -> bool:
     return False
 
 
+def _module_is_used(owner: str, names: Set[str]) -> bool:
+    """Whether anything this module defines is reached from outside it."""
+    return any(_referenced(name, owner=owner, include_owner=False) for name in names)
+
+
 def test_no_gate_is_declared_without_being_reached() -> None:
     unreached = []
     for path in WATCHED:
         for owner, names in _public_callables(path).items():
+            # A module whose entry point is reached may reach its own helpers internally, and
+            # those are not dead. A module NOTHING reaches gets no such credit, so a whole
+            # package that is never imported is still caught, and so is a function with no
+            # reference anywhere at all - which is what `enqueue_event` was.
+            used = _module_is_used(owner, names)
             for name in sorted(names):
                 if name in EXEMPT:
                     continue
-                if not _referenced_outside(name, owner):
+                if not _referenced(name, owner=owner, include_owner=used):
                     unreached.append(f"{Path(owner).relative_to(APP)}::{name}")
     assert not unreached, (
         "these are defined and never reached from anywhere else in the application, which is how "

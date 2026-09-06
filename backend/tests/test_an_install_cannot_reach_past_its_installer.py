@@ -36,8 +36,35 @@ class Grant:
 
 @dataclass
 class Consent:
+    """Mirrors DesktopConsent, accessors included.
+
+    important: the accessors, not just the fields. The install path used to read `.enabled` and
+    `.allow_input` directly, which was correct only because `consent_for_cluster` pre-composes
+    them, and a fake exposing only the raw fields could not have caught that. Guest access is its
+    own switch now, because gating root-in-guest on the screen-capture toggle meant an
+    organization that enabled screenshots silently authorized a shell inside its containers.
+    """
+
     enabled: bool = True
     allow_input: bool = True
+    allow_clipboard: bool = True
+    allow_guest_access: bool = True
+
+    @property
+    def may_view(self) -> bool:
+        return self.enabled
+
+    @property
+    def may_input(self) -> bool:
+        return self.enabled and self.allow_input
+
+    @property
+    def may_clipboard(self) -> bool:
+        return self.enabled and self.allow_clipboard
+
+    @property
+    def may_guest_access(self) -> bool:
+        return self.enabled and self.allow_guest_access
 
 
 class FakeUser:
@@ -214,13 +241,28 @@ def test_a_capability_that_does_not_reach_inside_needs_no_consent(monkeypatch) -
 # ── request time ───────────────────────────────────────────────────────────────────────────────
 
 class FakeResult:
-    def __init__(self, value): self._value = value
+    """The loader selects (installation, extension.status) now, so it reads a row.
+
+    The add-on's own status rides along because `disabled` was consulted at install and at resume
+    and nowhere else, so disabling a misbehaving add-on left every existing installation working.
+    """
+
+    def __init__(self, value, extension_status="published"):
+        self._value = value
+        self._status = extension_status
+
     def scalar_one_or_none(self): return self._value
+
+    def first(self):
+        return None if self._value is None else (self._value, self._status)
 
 
 class FakeDB:
-    def __init__(self, install): self._install = install
-    async def execute(self, _stmt): return FakeResult(self._install)
+    def __init__(self, install, extension_status="published"):
+        self._install = install
+        self._status = extension_status
+
+    async def execute(self, _stmt): return FakeResult(self._install, self._status)
 
 
 @dataclass
@@ -336,3 +378,37 @@ def test_a_superseded_key_still_resolves_to_its_installation() -> None:
         "one immediately instead of after its grace window"
     )
     assert "api_key_id ==" in source, "the lookup no longer matches the current key either"
+
+
+def test_a_disabled_addon_stops_the_installations_it_already_has() -> None:
+    """`disabled` was consulted at install time and at resume, and nowhere else.
+
+    Withdrawing an add-on is refused while any organization still has it installed, so `disabled`
+    is the only lever an owner or an administrator has against one that is misbehaving. It
+    refused new installs, refused a resume, and left every credential already issued working on
+    both REST and MCP.
+    """
+    import asyncio
+
+    import pytest as _pytest
+
+    from app.services.extension_scope import ScopeRefused, assert_install_is_live
+
+    install = FakeInstall()
+    with _pytest.raises(ScopeRefused) as refused:
+        asyncio.run(assert_install_is_live(FakeDB(install, extension_status="disabled"), "oak_x"))
+    assert "disabled" in str(refused.value.detail).lower()
+
+
+def test_a_published_addon_is_not_refused_by_that_check() -> None:
+    """The positive twin. Without it the refusal above would pass just as well if the check
+    rejected everything, which is how a gate that is too wide reads as a gate that works."""
+    import asyncio
+
+    from app.services.extension_scope import assert_install_is_live
+
+    install = FakeInstall()
+    snapshot = asyncio.run(
+        assert_install_is_live(FakeDB(install, extension_status="published"), "oak_x")
+    )
+    assert snapshot["status"] == "active"

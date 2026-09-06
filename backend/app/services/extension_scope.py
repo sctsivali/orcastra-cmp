@@ -34,7 +34,7 @@ from app.core.org_scope import (
     get_user_org_ids,
     resolve_cluster_orgs,
 )
-from app.models.extension_models import ExtensionInstallation
+from app.models.extension_models import Extension, ExtensionInstallation
 
 logger = logging.getLogger(__name__)
 
@@ -166,16 +166,22 @@ async def _assert_guest_access_is_consented(
         # on that hardware. It is audit-only by the contract of `consent_for_cluster`, and the
         # desktop router drops it for the same reason. Keep it unused.
         consent, _refused_by = await consent_for_cluster(db, cluster_id)
-        if not consent.enabled:
+        # important: the accessors, not the raw fields. `may_view` and `may_input` exist because
+        # `allow_input` alone must never authorize typing against a row that is disabled overall,
+        # and reading the fields directly is correct here only because `consent_for_cluster`
+        # happens to pre-compose them. Hand this a `DesktopConsent` from `get_consent`, which does
+        # not, and a disabled organization would authorize guest access.
+        if not consent.may_guest_access:
             raise ScopeRefused(
                 "This add-on asks to reach inside guests ("
                 + ", ".join(wanted)
-                + f"), which cluster {cluster_id} has not consented to. An organization "
-                "administrator enables that in the organization's settings first."
+                + f"), which an organization sharing {cluster_id} has not consented to. An "
+                "administrator of every organization on that cluster enables guest access in the "
+                "organization's settings first."
             )
         # Typing into a live session is a larger power than running a command, and the existing
         # policy already separates them, so the install respects the same split.
-        if "desktop.input" in wanted and not consent.allow_input:
+        if "desktop.input" in wanted and not consent.may_input:
             raise ScopeRefused(
                 f"Cluster {cluster_id} consents to viewing a desktop but not to controlling one, "
                 "so desktop.input cannot be granted here."
@@ -240,21 +246,28 @@ async def load_install_snapshot(db: AsyncSession, api_key_id: str) -> Optional[D
     # expiry, not by revoking it, so it is legitimately usable inside the grace window and
     # `validate_api_key` is what ends it. Matching only `api_key_id` made this return None for the
     # old key the moment a rotation happened, which turned the grace window into a flag day.
+    # The add-on's own status rides along, because disabling one has to stop the installations it
+    # already has and the request path is where that has to bite. One join, on the same query
+    # that was already being made, on a path that is cached for the key's own TTL.
     result = await db.execute(
-        select(ExtensionInstallation).where(
+        select(ExtensionInstallation, Extension.status)
+        .join(Extension, Extension.id == ExtensionInstallation.extension_id)
+        .where(
             or_(
                 ExtensionInstallation.api_key_id == api_key_id,
                 ExtensionInstallation.previous_api_key_id == api_key_id,
             )
         )
     )
-    install = result.scalar_one_or_none()
-    if install is None:
+    row = result.first()
+    if row is None:
         return None
+    install, extension_status = row
 
     snapshot = {
         "id": install.id,
         "extension_id": install.extension_id,
+        "extension_status": extension_status,
         "organization_id": install.organization_id,
         "status": install.status,
         "granted_capabilities": list(install.granted_capabilities or []),
@@ -276,6 +289,13 @@ async def assert_install_is_live(
     snapshot = await load_install_snapshot(db, api_key_id)
     if snapshot is None:
         raise ScopeRefused("This credential's installation no longer exists", status_code=401)
+    # important: the ADD-ON's status, not only the installation's. `disabled` was consulted at
+    # install time and at resume, and nowhere else, so disabling a misbehaving add-on refused new
+    # installs while every organization that already had one kept a fully working credential.
+    # Withdrawing it is refused while anything is installed, so this was the only lever an owner
+    # had, and it did not reach the thing it was aimed at.
+    if snapshot.get("extension_status") == "disabled":
+        raise ScopeRefused("This add-on has been disabled")
     if snapshot["status"] != "active":
         raise ScopeRefused(
             f"This installation is {snapshot['status']}", status_code=403

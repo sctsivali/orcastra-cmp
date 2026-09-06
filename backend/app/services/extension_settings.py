@@ -125,11 +125,21 @@ def store_secrets(vault_client, install_id: int, secrets_: Dict[str, str]) -> Li
     """
     if not secrets_:
         return list(read_secret_names(vault_client, install_id))
-    current: Dict[str, Any] = {}
+    # important: a read failure must NOT become an empty dict. Swallowing it turned the merge
+    # this function exists for into a replace: one Vault hiccup during a settings save destroyed
+    # every other stored secret for that installation and answered 200 with a shortened list.
+    # This module's own docstring calls that "a data loss bug disguised as a save button", and
+    # the swallow was sitting three lines under it.
     try:
-        current = vault_client.vault_read(_settings_path(install_id)) or {}
-    except Exception:
-        current = {}
+        current: Dict[str, Any] = vault_client.vault_read(_settings_path(install_id)) or {}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The secret store is unavailable, so nothing was saved. Existing values are "
+                "untouched. Try again once it is reachable."
+            ),
+        ) from exc
     current.update(secrets_)
     vault_client.vault_kv_put(_settings_path(install_id), current)
     return sorted(current)
@@ -160,14 +170,17 @@ def read_resolved_settings(
     return resolved
 
 
-def destroy_settings(vault_client, install_id: int) -> None:
+def destroy_settings(vault_client, install_id: int) -> bool:
+    """True when nothing is left behind. See `destroy_signing_secret` for why it answers."""
     from app.core.vault_client import VaultClientError
 
     try:
         vault_client.vault_delete(_settings_path(install_id))
+        return True
     except VaultClientError:
-        pass
+        return True
     except Exception:
         logger.warning(
             "Could not delete stored settings for installation %s", install_id, exc_info=True
         )
+        return False

@@ -34,6 +34,13 @@ class DesktopControlPolicyResponse(BaseModel):
     organization_id: int
     enabled: bool = Field(description="Whether an agent may capture this organization's screens")
     allow_input: bool = Field(description="Whether an agent may also type and click")
+    allow_clipboard: bool = Field(
+        default=False, description="Whether an agent may read this organization's clipboards"
+    )
+    allow_guest_access: bool = Field(
+        default=False,
+        description="Whether an add-on install may take instance.exec or instance.files here",
+    )
 
 
 class DesktopControlPolicyRequest(BaseModel):
@@ -43,6 +50,21 @@ class DesktopControlPolicyRequest(BaseModel):
         description=(
             "Also allow it to type and click. Ignored unless enabled is true: turning the feature "
             "off clears this rather than leaving it set for the next time it is turned on."
+        ),
+    )
+    allow_clipboard: bool = Field(
+        default=False,
+        description=(
+            "Also allow it to read the clipboard. Its own switch because watching a screen and "
+            "lifting whatever was last copied on it are different disclosures."
+        ),
+    )
+    allow_guest_access: bool = Field(
+        default=False,
+        description=(
+            "Allow an add-on installed here to run commands and read files inside guests. This "
+            "is root in the container by default, and it used to ride on the screen-capture "
+            "switch, which is not what that switch says."
         ),
     )
 
@@ -102,6 +124,8 @@ async def set_policy(
         org_id,
         enabled=body.enabled,
         allow_input=body.allow_input,
+        allow_clipboard=body.allow_clipboard,
+        allow_guest_access=body.allow_guest_access,
         updated_by=user.email,
     )
     # Consent to a third-party disclosure is exactly the kind of decision that has to be

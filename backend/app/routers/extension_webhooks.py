@@ -7,6 +7,7 @@ our address.
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -30,7 +31,11 @@ from app.models.extension_models import (
 )
 from app.routers.integrations import get_vault_integrations_client
 from app.services.activity_logger import get_activity_logger
-from app.services.extension_credentials import read_signing_secret, rotate_signing_secret
+from app.services.extension_credentials import (
+    SIGNING_OVERLAP_SECONDS,
+    read_signing_secret,
+    rotate_signing_secret,
+)
 from app.services.webhooks import dispatcher
 from app.services.webhooks.envelope import ResourceEvent
 from app.services.webhooks.signing import secret_fingerprint
@@ -312,8 +317,14 @@ async def rotate_secret(
             )
         )
     ).scalars().all()
+    # The overlap window, recorded so an operator can see how long the old secret keeps working
+    # rather than having to know. This column has existed since the table was created, with a
+    # comment describing exactly this, and nothing ever set it because nothing sent two
+    # signatures.
+    overlap_until = datetime.now(timezone.utc) + timedelta(seconds=SIGNING_OVERLAP_SECONDS)
     for subscription in siblings:
         subscription.secret_fingerprint = fingerprint
+        subscription.previous_secret_expires_at = overlap_until
     await db.commit()
     activity_logger.log_activity(
         action="extension.webhook.secret.rotate",
@@ -323,6 +334,7 @@ async def rotate_secret(
             "subscription_id": row.id,
             # Named so the audit trail shows this reached endpoints nobody asked about.
             "subscriptions_resigned": sorted(s.id for s in siblings),
+            "previous_secret_valid_until": overlap_until.isoformat(),
         },
     )
     return SubscriptionSecretResponse(

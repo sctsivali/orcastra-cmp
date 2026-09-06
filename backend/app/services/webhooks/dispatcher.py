@@ -38,7 +38,7 @@ from app.models.extension_models import (
     WebhookDelivery,
     WebhookSubscription,
 )
-from app.services.extension_credentials import read_signing_secret
+from app.services.extension_credentials import read_signing_secrets
 from app.services.webhooks.envelope import ResourceEvent, assert_payload_is_clean, build_envelope
 from app.services.webhooks.signing import (
     DELIVERY_ID_HEADER,
@@ -234,8 +234,13 @@ async def deliver(
         logger.info("Dropped delivery %s: %s", delivery.id, refusal)
         return delivery.state
 
-    secret = read_signing_secret(vault_client, subscription.installation_id)
-    if not secret:
+    # important: every currently valid secret, not just the newest. The header is a space
+    # separated list for exactly this reason, and the subscription row has carried
+    # `previous_secret_expires_at` since it was created, but only one secret was ever sent. So a
+    # rotation broke every receiver on its very next delivery rather than giving it a window to
+    # switch in, which is the failure the list format exists to prevent.
+    secrets_ = read_signing_secrets(vault_client, subscription.installation_id)
+    if not secrets_:
         delivery.state = "dropped"
         delivery.last_error = "no signing secret is stored for this installation"
         await db.commit()
@@ -248,7 +253,7 @@ async def deliver(
     headers = {
         "content-type": "application/json",
         "user-agent": "Orcastra-Webhook/1",
-        SIGNATURE_HEADER: signature_header([secret], timestamp, body),
+        SIGNATURE_HEADER: signature_header(secrets_, timestamp, body),
         TIMESTAMP_HEADER: str(timestamp),
         EVENT_ID_HEADER: delivery.event_id,
         EVENT_TYPE_HEADER: delivery.event_type,

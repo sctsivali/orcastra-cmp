@@ -20,6 +20,7 @@ from us, and rotating either leaves the other alone.
 
 import logging
 import secrets
+import time
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -47,6 +48,11 @@ SIGNING_SECRET_PREFIX = "whsec_"
 # A new application type would mean touching every consumer of APP_TYPES, the create form and the
 # validator, to distinguish keys that `extension_install_id` already distinguishes.
 INSTALL_APP_TYPE = "automation"
+
+
+# How long a superseded signing secret stays acceptable. Long enough that a receiver can be
+# redeployed on its own schedule, short enough that a leaked secret is not honoured for a day.
+SIGNING_OVERLAP_SECONDS = 3600.0
 
 
 def _signing_secret_path(install_id: int) -> str:
@@ -164,11 +170,51 @@ def read_signing_secret(vault_client, install_id: int) -> Optional[str]:
     return (payload or {}).get("signing_secret")
 
 
-def rotate_signing_secret(vault_client, install_id: int) -> str:
+def read_signing_secrets(vault_client, install_id: int, *, now: Optional[float] = None) -> List[str]:
+    """Every secret a delivery should currently be signed with, newest first.
+
+    important: this exists because rotation had no overlap at all. `signature_header` takes a LIST
+    precisely so both signatures ride during a rotation, and the subscription row has carried
+    `previous_secret_expires_at` since it was created, with a comment saying a receiver switches
+    at its own pace. But only one secret was ever stored and rotation overwrote it in place, so
+    every receiver that had not already been handed the new value started rejecting on the very
+    next delivery and walked toward AUTO_SUSPEND_AFTER. The mechanism was built and never
+    connected to anything.
+    """
+    try:
+        payload = vault_client.vault_read(_signing_secret_path(install_id)) or {}
+    except Exception:
+        return []
+
+    secrets_ = [payload.get("signing_secret")]
+    previous = payload.get("previous_signing_secret")
+    expires_at = payload.get("previous_expires_at")
+    if previous and expires_at:
+        try:
+            still_valid = float(expires_at) > (now if now is not None else time.time())
+        except (TypeError, ValueError):
+            still_valid = False
+        if still_valid:
+            secrets_.append(previous)
+    return [secret for secret in secrets_ if secret]
+
+
+def rotate_signing_secret(
+    vault_client, install_id: int, *, overlap_seconds: float = SIGNING_OVERLAP_SECONDS
+) -> str:
+    """Issue a new secret and keep the old one live for a bounded window.
+
+    The window is what makes a rotation something a receiver survives rather than something it
+    has to be redeployed for. It is bounded because an old secret that never expires is not a
+    rotation, and the expiry is stored beside the secret so nothing has to remember to clean up.
+    """
+    previous = read_signing_secret(vault_client, install_id)
     signing_secret = generate_signing_secret()
-    vault_client.vault_kv_put(
-        _signing_secret_path(install_id), {"signing_secret": signing_secret}
-    )
+    payload = {"signing_secret": signing_secret}
+    if previous:
+        payload["previous_signing_secret"] = previous
+        payload["previous_expires_at"] = time.time() + overlap_seconds
+    vault_client.vault_kv_put(_signing_secret_path(install_id), payload)
     return signing_secret
 
 
@@ -272,14 +318,24 @@ def destroy_install_credential(vault_client, key_id: str) -> None:
     evict_api_key_cache(key_id)
 
 
-def destroy_signing_secret(vault_client, install_id: int) -> None:
+def destroy_signing_secret(vault_client, install_id: int) -> bool:
+    """True when nothing is left behind. Already gone counts, an unknown failure does not.
+
+    important: it returns an answer now because the teardown records what it removed into the
+    uninstall audit record, and it used to record this one unconditionally. Secret material left
+    in Vault while the operator is told it was destroyed is the worst entry on that list to have
+    wrong.
+    """
     from app.core.vault_client import VaultClientError
 
     try:
         vault_client.vault_delete(_signing_secret_path(install_id))
+        return True
     except VaultClientError:
         logger.warning("Signing secret for installation %s was already gone", install_id)
+        return True
     except Exception:
         logger.warning(
             "Could not delete the signing secret for installation %s", install_id, exc_info=True
         )
+        return False

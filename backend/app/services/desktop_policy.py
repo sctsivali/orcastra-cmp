@@ -33,6 +33,8 @@ class DesktopConsent:
 
     enabled: bool = False
     allow_input: bool = False
+    allow_clipboard: bool = False
+    allow_guest_access: bool = False
 
     @property
     def may_view(self) -> bool:
@@ -45,8 +47,29 @@ class DesktopConsent:
         # desktop control off and expects everything to stop.
         return self.enabled and self.allow_input
 
+    @property
+    def may_clipboard(self) -> bool:
+        # The clipboard was authorized by view consent alone, and `services/desktop/actions.py`
+        # calls it the highest-yield exfiltration primitive on this surface. The capability is
+        # already separate on the key; this makes the consent separate too.
+        return self.enabled and self.allow_clipboard
 
-DENIED = DesktopConsent(enabled=False, allow_input=False)
+    @property
+    def may_guest_access(self) -> bool:
+        """Whether an add-on install may take `instance.exec` or `instance.files` here.
+
+        important: its own switch, not `enabled`. The install path gated root-in-guest on the
+        DESKTOP consent, whose toggle says "whether an agent may capture this organization's
+        screens". So enabling screenshots silently authorized an add-on to take a shell inside a
+        renting customer's container, and an organization that wanted an exec add-on had to
+        enable screen capture it did not want. Two different disclosures, two decisions.
+        """
+        return self.enabled and self.allow_guest_access
+
+
+DENIED = DesktopConsent(
+    enabled=False, allow_input=False, allow_clipboard=False, allow_guest_access=False
+)
 
 
 async def get_consent(db: AsyncSession, organization_id: Optional[int]) -> DesktopConsent:
@@ -64,7 +87,12 @@ async def get_consent(db: AsyncSession, organization_id: Optional[int]) -> Deskt
     ).scalar_one_or_none()
     if row is None:
         return DENIED
-    return DesktopConsent(enabled=bool(row.enabled), allow_input=bool(row.allow_input))
+    return DesktopConsent(
+        enabled=bool(row.enabled),
+        allow_input=bool(row.allow_input),
+        allow_clipboard=bool(getattr(row, "allow_clipboard", False)),
+        allow_guest_access=bool(getattr(row, "allow_guest_access", False)),
+    )
 
 
 async def consent_for_cluster(db: AsyncSession, cluster_id: str) -> tuple[DesktopConsent, Optional[str]]:
@@ -88,16 +116,38 @@ async def consent_for_cluster(db: AsyncSession, cluster_id: str) -> tuple[Deskto
 
     view = True
     inputs = True
-    dissenting: Optional[str] = None
+    clipboard = True
+    guest = True
+    # Recorded in the audit and never returned to a caller. Reported in the order the gates fire,
+    # so an operator reading a refusal about viewing is pointed at whoever withheld viewing rather
+    # than at whoever happened to be first in the list.
+    withheld: dict = {}
     for org_id, slug in orgs:
         consent = await get_consent(db, org_id)
-        if not consent.may_view and dissenting is None:
-            dissenting = slug
+        for power, allowed in (
+            ("view", consent.may_view),
+            ("input", consent.may_input),
+            ("clipboard", consent.may_clipboard),
+            ("guest", consent.may_guest_access),
+        ):
+            if not allowed:
+                withheld.setdefault(power, slug)
         view = view and consent.may_view
         inputs = inputs and consent.may_input
-        if not inputs and dissenting is None and not consent.may_input:
-            dissenting = slug
-    return DesktopConsent(enabled=view, allow_input=view and inputs), dissenting
+        clipboard = clipboard and consent.may_clipboard
+        guest = guest and consent.may_guest_access
+    dissenting: Optional[str] = next(
+        (withheld[p] for p in ("view", "input", "clipboard", "guest") if p in withheld), None
+    )
+    return (
+        DesktopConsent(
+            enabled=view,
+            allow_input=view and inputs,
+            allow_clipboard=view and clipboard,
+            allow_guest_access=view and guest,
+        ),
+        dissenting,
+    )
 
 
 async def set_consent(
@@ -106,6 +156,8 @@ async def set_consent(
     *,
     enabled: bool,
     allow_input: bool,
+    allow_clipboard: bool = False,
+    allow_guest_access: bool = False,
     updated_by: str,
 ) -> DesktopConsent:
     """Record an organization's decision, creating the row on first use."""
@@ -122,11 +174,22 @@ async def set_consent(
     row.enabled = enabled
     # Turning the feature off clears the input consent rather than leaving it set, so that turning
     # it back on later does not silently restore a stronger permission than the operator expects.
+    # Each rides on `enabled`, so turning the feature off clears all three rather than leaving
+    # them set for the next time it is turned on.
     row.allow_input = allow_input and enabled
+    row.allow_clipboard = allow_clipboard and enabled
+    row.allow_guest_access = allow_guest_access and enabled
     row.updated_by = updated_by
     await db.commit()
     logger.info(
-        "Desktop control consent for org %s set to enabled=%s allow_input=%s by %s",
-        organization_id, row.enabled, row.allow_input, updated_by,
+        "Desktop control consent for org %s set to enabled=%s allow_input=%s allow_clipboard=%s "
+        "allow_guest_access=%s by %s",
+        organization_id, row.enabled, row.allow_input, row.allow_clipboard,
+        row.allow_guest_access, updated_by,
     )
-    return DesktopConsent(enabled=bool(row.enabled), allow_input=bool(row.allow_input))
+    return DesktopConsent(
+        enabled=bool(row.enabled),
+        allow_input=bool(row.allow_input),
+        allow_clipboard=bool(row.allow_clipboard),
+        allow_guest_access=bool(row.allow_guest_access),
+    )

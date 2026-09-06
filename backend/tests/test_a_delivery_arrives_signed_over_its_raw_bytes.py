@@ -214,3 +214,64 @@ def test_loopback_is_refused_when_the_deployment_is_not_a_development_one(receiv
             _send(receiver, {"specversion": "1.0", "id": "evt_prod", "type": "x", "data": {}})
     finally:
         config.get_settings.cache_clear()
+
+
+# ── rotation has to be survivable ──────────────────────────────────────────────────────────────
+
+class _RotatingVault:
+    """Just enough Vault to hold one installation's signing material."""
+
+    def __init__(self) -> None:
+        self.store: dict = {}
+
+    def vault_read(self, path: str):
+        return self.store.get(path)
+
+    def vault_kv_put(self, path: str, payload: dict) -> None:
+        self.store[path] = dict(payload)
+
+
+def test_a_rotation_keeps_the_old_secret_valid_for_a_window() -> None:
+    """The header is a list so a receiver can switch at its own pace, and nothing used that.
+
+    Only one secret was ever stored, rotation overwrote it in place, and the sender sent one
+    entry. So every receiver that had not already been handed the new value began rejecting on
+    the very next delivery and walked toward AUTO_SUSPEND_AFTER. That is the exact failure the
+    list format exists to prevent, built and never connected.
+    """
+    from app.services.extension_credentials import (
+        read_signing_secrets,
+        rotate_signing_secret,
+    )
+
+    vault = _RotatingVault()
+    old = rotate_signing_secret(vault, 42)
+    new = rotate_signing_secret(vault, 42)
+    assert old != new
+
+    live = read_signing_secrets(vault, 42)
+    assert new in live, "the new secret must sign"
+    assert old in live, "a receiver still holding the old secret must survive the rotation"
+
+    header = signature_header(live, TIMESTAMP, b"{}")
+    assert verify(old, header, TIMESTAMP, b"{}", now=TIMESTAMP), "the old secret must verify"
+    assert verify(new, header, TIMESTAMP, b"{}", now=TIMESTAMP), "and so must the new one"
+
+
+def test_the_overlap_ends(monkeypatch) -> None:
+    """The positive twin above would pass just as well if the old secret were kept forever, which
+    is not a rotation. This is the half that makes it one."""
+    from app.services.extension_credentials import (
+        SIGNING_OVERLAP_SECONDS,
+        read_signing_secrets,
+        rotate_signing_secret,
+    )
+
+    vault = _RotatingVault()
+    old = rotate_signing_secret(vault, 43)
+    new = rotate_signing_secret(vault, 43)
+
+    later = __import__("time").time() + SIGNING_OVERLAP_SECONDS + 1
+    live = read_signing_secrets(vault, 43, now=later)
+    assert live == [new], "the superseded secret must stop being honoured once the window passes"
+    assert old not in live

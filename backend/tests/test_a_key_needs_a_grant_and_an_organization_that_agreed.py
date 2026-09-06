@@ -217,8 +217,16 @@ class _Scalar:
         return self._row
 
 
-def _row(enabled: bool, allow_input: bool):
-    return SimpleNamespace(enabled=enabled, allow_input=allow_input)
+def _row(enabled: bool, allow_input: bool, allow_clipboard: bool = True,
+         allow_guest_access: bool = True):
+    """A policy row. Clipboard and guest access default to agreed so a case about viewing and
+    typing stays about viewing and typing; the cases that are about them say so."""
+    return SimpleNamespace(
+        enabled=enabled,
+        allow_input=allow_input,
+        allow_clipboard=allow_clipboard,
+        allow_guest_access=allow_guest_access,
+    )
 
 
 @pytest.mark.asyncio
@@ -629,3 +637,38 @@ def test_no_person_is_invented_for_an_agent_session() -> None:
     assert "user_id=None" in handler and "user_email=None" in handler, (
         "an agent session is given a human identity it does not have"
     )
+
+
+@pytest.mark.asyncio
+async def test_the_clipboard_needs_its_own_consent() -> None:
+    """It used to ride on view consent, while the code calls it the highest-yield exfiltration
+    primitive on this surface and the capability is already separate on the key."""
+    consent, _ = await consent_for_cluster(
+        _MultiOrgSession([(6, "provider")], [_row(True, True, allow_clipboard=False)]), "nuc2"
+    )
+    assert consent.may_view, "watching is still agreed"
+    assert consent.may_input, "typing is still agreed"
+    assert not consent.may_clipboard
+
+
+@pytest.mark.asyncio
+async def test_guest_access_needs_its_own_consent() -> None:
+    """The install path gated instance.exec on the DESKTOP consent, whose toggle says it is about
+    capturing screens. So enabling screenshots silently authorized a shell inside a customer's
+    container."""
+    consent, _ = await consent_for_cluster(
+        _MultiOrgSession([(6, "provider")], [_row(True, True, allow_guest_access=False)]), "nuc2"
+    )
+    assert consent.may_view
+    assert not consent.may_guest_access
+
+
+@pytest.mark.asyncio
+async def test_turning_the_feature_off_withdraws_all_four() -> None:
+    consent, _ = await consent_for_cluster(
+        _MultiOrgSession([(6, "provider")], [_row(False, True, True, True)]), "nuc2"
+    )
+    assert not consent.may_view
+    assert not consent.may_input
+    assert not consent.may_clipboard
+    assert not consent.may_guest_access

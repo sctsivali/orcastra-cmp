@@ -1696,8 +1696,24 @@ async def validate_api_key(
         from app.core.database import async_session_maker
         from app.services.extension_scope import assert_install_is_live
 
-        async with async_session_maker() as session:
-            await assert_install_is_live(session, x_api_key_id)
+        try:
+            async with async_session_maker() as session:
+                await assert_install_is_live(session, x_api_key_id)
+        except HTTPException:
+            # A decision about the credential. ScopeRefused is one of these.
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # important: this check put a database on the authentication path, where previously
+            # only Vault was. The MCP door already turns that into a 503; without this the same
+            # outage is a bare 500 on every REST endpoint an add-on credential touches. The Vault
+            # timeout a few lines above is modelled as 503 for exactly this reason, so matching it
+            # keeps one contract rather than two.
+            logger.warning(
+                "Installation check unavailable for key %s: %s", x_api_key_id, exc
+            )
+            raise HTTPException(
+                status_code=503, detail="Authentication backend unavailable"
+            ) from None
 
     _schedule_last_used_update(x_api_key_id)
 
@@ -2684,6 +2700,17 @@ async def _assert_desktop_allowed(
                     "organization on this cluster has to turn it on first."
                 ),
                 "organization_has_not_consented",
+                dissenting=dissenting,
+            )
+        if capability == "desktop.clipboard" and not consent.may_clipboard:
+            _refuse(
+                403,
+                (
+                    "An organization sharing this cluster has not consented to an agent reading "
+                    "its clipboards. Watching a screen and lifting whatever was last copied on "
+                    "it are separate decisions."
+                ),
+                "organization_has_not_allowed_clipboard",
                 dissenting=dissenting,
             )
         if capability == "desktop.input" and not consent.may_input:
@@ -3941,6 +3968,25 @@ async def proxy_operation(
         operation_id = (
             result_data.get("operation_id") if isinstance(result_data, dict) else None
         )
+
+        # important: announce the lifecycle change to any add-on subscribed to it. Until this
+        # existed nothing in the deployment ever called `enqueue_event`, so nine catalogued
+        # events, served to authors and documented publicly with a "when it fires" column, never
+        # fired once. A subscription verified, went active, and delivered nothing forever.
+        #
+        # After the operation and before the response on purpose: the cluster has already changed,
+        # so the event describes something true, and `emit_for_proxy_operation` never raises, so a
+        # notification problem cannot turn a completed create into a failed one.
+        from app.services.webhooks.emitter import emit_for_proxy_operation
+
+        await emit_for_proxy_operation(
+            operation,
+            cluster_id=request.cluster_id,
+            project=request.project,
+            params=request.params,
+            result=result_data,
+        )
+
         return ProxyResponse(
             success=True,
             data=result_data,

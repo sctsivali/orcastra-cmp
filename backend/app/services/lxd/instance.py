@@ -1272,6 +1272,22 @@ class InstanceManager:
             )
         except Exception:  # noqa: BLE001
             pass
+
+        # important: the add-on event is emitted HERE and not at the router, for the same reason
+        # the terminal audit record is. The router answers "accepted" while LXD still has the
+        # create queued, so announcing it there would tell every subscriber an instance exists
+        # moments before LXD refuses it, with no correction to follow. This is the single place a
+        # create is judged, so it is the only honest place to say it happened.
+        from app.services.webhooks.emitter import emit_resource_event
+
+        await emit_resource_event(
+            event_type="orcastra.instance.created.v1",
+            cluster_id=host,
+            resource_type="instance",
+            resource_name=name,
+            project=project,
+            operation_id=operation_id,
+        )
         return True
 
     async def _watch_create_operation(self, client, name: str, operation_id: Optional[str],

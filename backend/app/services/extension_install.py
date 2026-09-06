@@ -312,6 +312,12 @@ async def rescope_install(
 
     # The Vault key carries the same grant, because that is what the request path reads.
     _rewrite_key_grant(vault_client, install)
+
+    from app.services.webhooks.emitter import emit_installation_event
+
+    await emit_installation_event(
+        db, event_type="orcastra.install.scope_changed.v1", installation=install
+    )
     await db.commit()
     await db.refresh(install)
     evict_install_cache(install.api_key_id)
@@ -378,6 +384,21 @@ async def set_install_status(
         install.suspended_at = None
         install.suspended_by = None
         install.suspend_reason = None
+
+    # important: enqueued BEFORE the commit, so the event and the status move together. An add-on
+    # is never told it was suspended by a suspension that then rolled back, and a suspension never
+    # lands silently. Both catalogued events are sourced here because this is the one function
+    # that changes an installation's status.
+    from app.services.webhooks.emitter import emit_installation_event
+
+    await emit_installation_event(
+        db,
+        event_type=(
+            "orcastra.install.suspended.v1" if status == "suspended"
+            else "orcastra.install.resumed.v1"
+        ),
+        installation=install,
+    )
     await db.commit()
     await db.refresh(install)
     # The row moved without the Vault key moving, so the key cache's own tombstone would not

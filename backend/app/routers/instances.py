@@ -580,6 +580,19 @@ async def delete_instance(
         await lxd_service.delete_vm(instance_name, host, force=force, project=project)
         get_cache_manager().invalidate_instance_cache()
 
+        # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
+        # until now, so the catalogue was a promise with no sender behind it.
+        from app.services.webhooks.emitter import emit_resource_event
+
+        await emit_resource_event(
+            event_type="orcastra.instance.deleted.v1",
+            cluster_id=host,
+            resource_type="instance",
+            resource_name=instance_name,
+            project=project,
+        )
+
+
         # Clean up the instance's tag rows so the tag store doesn't drift from the
         # deleted container. Best-effort, because the instance is already gone.
         try:
