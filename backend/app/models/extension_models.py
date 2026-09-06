@@ -204,6 +204,10 @@ class ExtensionInstallation(Base):
     # What the operator was actually shown, so a manifest edited afterwards is detectable.
     consent_version = Column(String(32), nullable=False)
     consent_manifest_digest = Column(String(64), nullable=False)
+    # important: the document, not only its digest. Publishing a new version replaces the manifest
+    # on the extension row, so without this copy the text an organization approved is gone and
+    # only a hash of it survives. An audit asks what was approved, not which hash it had.
+    consented_manifest = Column(JSONB, nullable=True)
     consented_at = Column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )

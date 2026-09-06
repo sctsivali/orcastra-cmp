@@ -166,6 +166,44 @@ async def update_extension(
     return extension_service.to_response(extension)
 
 
+@router.post(
+    "/{slug}/versions",
+    response_model=ExtensionResponse,
+    summary="Publish a new version of an add-on",
+    description=(
+        "Send the whole manifest, not a patch, under a version greater than the published one. "
+        "Existing installations are untouched: they keep the reach they were granted and stay on "
+        "the version they consented to. Their stored digest no longer matches, so changing one of "
+        "them requires an operator to approve the new manifest first."
+    ),
+    status_code=200,
+)
+async def publish_extension_version(
+    slug: str,
+    manifest: ExtensionManifest,
+    _: None = Depends(check_read_only_mode),
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
+) -> ExtensionResponse:
+    extension = await extension_service.get_extension_or_404(
+        db, slug, caller_email=user.email, is_admin=_is_admin(user)
+    )
+    previous = extension.version
+    extension = await extension_service.publish_version(
+        db, extension, manifest=manifest, actor_email=user.email
+    )
+    _audit(
+        "extension.version.publish",
+        slug,
+        {
+            "from_version": previous,
+            "to_version": extension.version,
+            "capabilities": list(extension.requested_capabilities or []),
+        },
+    )
+    return extension_service.to_response(extension)
+
+
 @router.delete(
     "/{slug}",
     status_code=204,

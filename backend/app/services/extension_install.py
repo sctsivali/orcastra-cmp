@@ -46,14 +46,27 @@ async def _organization(db: AsyncSession, organization_id: int) -> Organization:
 
 
 def to_response(
-    install: ExtensionInstallation, extension: Extension, organization_slug: Optional[str]
+    install: ExtensionInstallation,
+    extension: Extension,
+    organization_slug: Optional[str],
+    *,
+    credential: Optional[Dict[str, Any]] = None,
 ) -> InstallResponse:
+    """What an installation is, as its operator should see it.
+
+    important: `extension_version` is the version THIS installation consented to, not whatever the
+    add-on has published since. Reporting the current one made an install that agreed to 1.0.0
+    display 2.0.0, which is the opposite of what a consent record is for. The newer version is
+    reported separately as something available, so the difference is visible rather than hidden.
+    """
+    consented = install.consent_version or extension.version
     return InstallResponse(
         id=install.id,
         extension_id=install.extension_id,
         extension_slug=extension.slug,
         extension_name=extension.name,
-        extension_version=extension.version,
+        extension_version=consented,
+        available_version=extension.version if extension.version != consented else None,
         organization_id=install.organization_id,
         organization_slug=organization_slug,
         status=install.status,
@@ -67,7 +80,14 @@ def to_response(
         consented_at=install.consented_at,
         installed_by=install.installed_by,
         suspended_at=install.suspended_at,
+        suspended_by=install.suspended_by,
         suspend_reason=install.suspend_reason,
+        # An operator asking "is this add-on working" needs a signal, and the only honest one we
+        # hold is when its credential last authenticated. Absent when the key could not be read,
+        # which is itself worth showing rather than rendering as "never used".
+        credential_last_used_at=(credential or {}).get("last_used_at"),
+        credential_expires_at=(credential or {}).get("expires_at"),
+        credential_readable=credential is not None,
         created_at=install.created_at,
         updated_at=install.updated_at,
     )
@@ -237,6 +257,9 @@ async def install_extension(
         api_key_id=f"pending-{extension.slug}-{organization_id}",
         consent_version=consent_version,
         consent_manifest_digest=consent_digest,
+        # The document, not only its hash. A later version replaces the manifest on the extension
+        # row, so this is the only surviving record of what this organization actually approved.
+        consented_manifest=dict(extension.manifest or {}),
         installed_by=getattr(user, "email", "unknown"),
     )
     db.add(install)
@@ -308,6 +331,9 @@ async def rescope_install(
     install.granted_scope = grant_dicts
     install.consent_version = consent_version
     install.consent_manifest_digest = consent_digest
+    # Rescoping is a fresh consent, so the snapshot moves with it. Leaving the old one would make
+    # the record claim agreement to a document this operator never saw.
+    install.consented_manifest = dict(extension.manifest or {})
     install.last_scope_change_at = now_utc()
 
     # The Vault key carries the same grant, because that is what the request path reads.

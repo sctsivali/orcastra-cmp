@@ -238,7 +238,36 @@ async def get_installation(
     db: AsyncSession = Depends(get_db),
 ) -> InstallResponse:
     record, extension, org_slug = await _load(db, install_id, user)
-    return extension_install.to_response(record, extension, org_slug)
+    return extension_install.to_response(
+        record, extension, org_slug, credential=_credential_health(record.api_key_id)
+    )
+
+
+def _credential_health(key_id: str) -> Optional[Dict[str, Any]]:
+    """When the credential was last used and when it expires, or None if it cannot be read.
+
+    important: only the detail read pays for this. The listing renders many installations and a
+    Vault round trip each would make opening the page cost one request per row.
+
+    A failure here must not fail the page. An operator opening an installation because something
+    looks wrong is the worst moment to answer 503, and Vault sealing itself is a live condition on
+    this deployment. None is returned and the response says the credential was unreadable, which
+    is honest and different from "never used".
+    """
+    try:
+        from app.routers.integrations import (
+            get_api_key_from_vault,
+            get_vault_integrations_client,
+        )
+
+        metadata, _ = get_api_key_from_vault(get_vault_integrations_client(), key_id)
+    except Exception as exc:
+        logger.warning("Could not read credential health for %s: %s", key_id, exc)
+        return None
+    return {
+        "last_used_at": metadata.get("last_used_at"),
+        "expires_at": metadata.get("expires_at"),
+    }
 
 
 @router.put(

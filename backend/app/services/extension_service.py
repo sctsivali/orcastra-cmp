@@ -92,6 +92,71 @@ async def create_extension(
     return extension
 
 
+def _semver_tuple(version: str) -> tuple:
+    """Compare on the numeric core only. A pre-release suffix does not order a version here.
+
+    note: `VERSION_RE` permits a `-rc.1` style suffix, and comparing those correctly means
+    implementing the whole semver precedence rule. Rather than half-implement it, the core is what
+    orders and a suffix-only change is refused as not-greater, which is the safe direction: it
+    refuses an ambiguous bump instead of accepting one nobody can reason about.
+    """
+    core = version.split("-")[0].split("+")[0]
+    return tuple(int(part) for part in core.split("."))
+
+
+async def publish_version(
+    db: AsyncSession, extension: Extension, *, manifest: ExtensionManifest, actor_email: str
+) -> Extension:
+    """Replace what an add-on asks for, under a strictly greater version.
+
+    Existing installations are deliberately untouched. Their grants live on their own row, so they
+    keep working at the version they consented to, and their stored digest no longer matches this
+    one, which makes any rescope answer 409 until an operator approves the new manifest. That is
+    the re-consent the documentation already promises.
+    """
+    if manifest.slug != extension.slug:
+        raise HTTPException(
+            status_code=422,
+            detail="A new version keeps the same slug. Publishing under a different slug is a "
+            "different add-on.",
+        )
+    if extension.owner_email != actor_email:
+        raise HTTPException(status_code=404, detail="Extension not found")
+    if _semver_tuple(manifest.version) <= _semver_tuple(extension.version):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Version {manifest.version} is not greater than the published "
+                f"{extension.version}. A new version moves forward."
+            ),
+        )
+
+    document = manifest.model_dump(mode="json", exclude_none=True)
+    extension.name = manifest.name
+    extension.publisher = manifest.publisher
+    extension.description = manifest.description
+    extension.homepage_url = manifest.homepage_url
+    extension.support_url = manifest.support_url
+    extension.version = manifest.version
+    extension.requested_capabilities = list(manifest.capabilities)
+    extension.requested_scope = manifest.scope.model_dump()
+    extension.settings_schema = [
+        field.model_dump(exclude_none=True) for field in manifest.settings
+    ] or None
+    extension.default_webhook_url = manifest.webhook_url
+    extension.default_webhook_events = manifest.webhook_events
+    extension.manifest = document
+    extension.manifest_digest = manifest_digest(document)
+    await db.commit()
+    await db.refresh(extension)
+    logger.info(
+        "Published %s v%s; existing installations stay on what they consented to",
+        extension.slug,
+        extension.version,
+    )
+    return extension
+
+
 async def get_extension_or_404(
     db: AsyncSession, slug: str, *, caller_email: str, is_admin: bool
 ) -> Extension:
@@ -134,11 +199,12 @@ async def list_extensions(
 async def update_extension(
     db: AsyncSession, extension: Extension, update: ExtensionUpdate
 ) -> Extension:
-    """Everything except identity may change.
+    """Presentation may change. What the add-on asks for may not.
 
-    important: the slug is immutable, and the version is not editable here either. A consent
-    binds to a version and a digest, so silently moving either would leave every installation
-    claiming agreement to a document that no longer exists.
+    important: the slug is immutable and the version is not editable here. A consent binds to a
+    version and a digest, so moving either would leave every installation claiming agreement to a
+    document that no longer exists. Changing the ask is `publish_version`, which is a deliberate
+    act with its own re-consent consequence rather than a side effect of fixing a typo.
     """
     document: Dict[str, Any] = dict(extension.manifest or {})
     for field in ("name", "description", "homepage_url", "support_url"):
@@ -150,7 +216,11 @@ async def update_extension(
         extension.status = update.status
 
     extension.manifest = document
-    extension.manifest_digest = manifest_digest(document)
+    # important: the digest deliberately does NOT move here. It used to be recomputed on every
+    # edit, so correcting a typo in a description silently invalidated the consent of every
+    # existing installation and answered 409 on their next rescope. Nothing on this path changes
+    # what the add-on asks for, and a digest is a promise about that, not about the prose. Only
+    # `publish_version` may move it, because only a version bump changes the ask.
     await db.commit()
     await db.refresh(extension)
     return extension

@@ -350,7 +350,11 @@ class InstallResponse(BaseModel):
     extension_id: int
     extension_slug: str
     extension_name: str
+    # note: the version this installation consented to, not what the add-on has published since.
     extension_version: str
+    # Present only when the add-on has moved on, so the difference is visible to the operator who
+    # would have to approve it. Null when the installation is on the current version.
+    available_version: Optional[str] = None
     organization_id: int
     organization_slug: Optional[str] = None
     status: str
@@ -366,7 +370,14 @@ class InstallResponse(BaseModel):
     consented_at: datetime
     installed_by: str
     suspended_at: Optional[datetime] = None
+    suspended_by: Optional[str] = None
     suspend_reason: Optional[str] = None
+    # Credential health, so "is this add-on working" is answerable without reading a log.
+    # `credential_readable` false means the key could not be read, which is a different thing from
+    # a credential that has never been used and must not render as one.
+    credential_last_used_at: Optional[str] = None
+    credential_expires_at: Optional[str] = None
+    credential_readable: bool = True
     created_at: datetime
     updated_at: datetime
 
