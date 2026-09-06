@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useCallback, useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -19,7 +19,10 @@ import { ClusterStatus } from "@/types/api";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
-import { TableSubText } from "@/components/ui/table-text";
+import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle, DialogTrigger,
@@ -37,6 +40,9 @@ import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
 import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import type {
   AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
@@ -488,7 +494,75 @@ function PolicyEditorDialog({
 // Main Exported Component
 // ============================================
 
-export function PolicyManagementSection() {
+/** Resolved once in the component, where the organization list is in scope. */
+interface PolicyContext {
+  orgName: (organizationId: number) => string;
+}
+
+/**
+ * A policy list is mostly `auto:cust-*` rows minted per customer project, so the names differ
+ * by a hash and nothing else. Search is what makes one findable; sorting alone is not enough
+ * once the list is longer than a screen.
+ *
+ * important: an id. This section renders inside the user-groups settings screen, which carries
+ * its own filtered table, and without a namespace both would write `q` into the same key and
+ * narrow each other on every keystroke.
+ */
+const POLICIES = defineTable<AccessPolicy, PolicyContext>()({
+  id: "policies",
+  searchPlaceholder: "Search policies by name or description",
+  defaultSort: { field: "name", direction: "asc" },
+  searchExtra: (policy) => [policy.description ?? ""],
+  columns: [
+    {
+      field: "name",
+      label: "Policy Name",
+      sort: (policy) => policy.name,
+      search: (policy) => policy.name,
+      filter: fromSort("text"),
+    },
+    {
+      // The resolved display name rather than the id, because that is what the row shows and
+      // what an operator would pick from a list. The sort side is merged in at the call site:
+      // a declared sort accessor is handed the row and nothing else, and the name lives in a
+      // separate query.
+      field: "organization",
+      label: "Organization",
+      facet: (policy, ctx) => ctx.orgName(policy.organization_id),
+      facetSpec: { primary: true },
+    },
+    {
+      field: "rules",
+      label: "Rules",
+      sort: (policy) => policy.rules?.length ?? 0,
+      filter: fromSort("number", {
+        unit: "count",
+        presets: [
+          { label: "None", min: null, max: 0 },
+          { label: "Any", min: 1, max: null },
+        ],
+      }),
+    },
+    {
+      field: "assigned",
+      label: "Assigned",
+      sort: (policy) => policy.assignments_count,
+      filter: fromSort("number", {
+        unit: "count",
+        // "Which policies are minted but reaching nobody" is the question this list is worst
+        // at answering by eye, and the one that finds provisioning left half-done.
+        presets: [
+          { label: "Unassigned", min: null, max: 0 },
+          { label: "Assigned", min: 1, max: null },
+        ],
+      }),
+    },
+  ],
+});
+
+const POLICY_COLUMN_COUNT = 5;
+
+function PolicyManagementSectionContent() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -537,25 +611,71 @@ export function PolicyManagementSection() {
     () => (orgs || []).filter((o) => myOrgIds.has(o.id)),
     [orgs, myOrgIds],
   );
-  const policies = policiesData?.policies || [];
+  // note: memoised. A fresh array every render hands the filter engine a new identity each
+  // time and re-runs the whole pass over rows that did not change.
+  const policies: AccessPolicy[] = useMemo(
+    () => policiesData?.policies ?? [],
+    [policiesData],
+  );
 
-  // policy table sorting (org column sorts by the resolved org name shown in the row)
+  // The name an organization id resolves to, shared by the facet and the sort so the control
+  // and the column cannot end up ordering by one value and filtering by another.
+  const orgName = useCallback(
+    (organizationId: number) =>
+      organizations.find((o) => o.id === organizationId)?.name || `ID ${organizationId}`,
+    [organizations],
+  );
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
+
+  const filterContext = useMemo<PolicyContext>(() => ({ orgName }), [orgName]);
+  const filters = useTableFilters(POLICIES, policies, {
+    context: filterContext,
+    // Covers every seam at once: the search box, the Organization facet, both count ranges,
+    // chip removal and Clear all. Without it a search lands on page 3 of 1 and paints nothing.
+    onFilterChange: resetPage,
+    // This section lives inside a settings card, not on a route of its own, so its filters
+    // would outlive the screen in the address bar.
+    syncUrl: false,
+  });
+
+  // The organization column sorts by the resolved name shown in the row, which is not a field
+  // on a policy. Merged here, where the org list is in scope; the rest still come from POLICIES.
   const policySortAccessors = useMemo(
     () => ({
-      name: (p: any) => p.name,
-      organization: (p: any) =>
-        organizations.find((o) => o.id === p.organization_id)?.name || `ID ${p.organization_id}`,
-      rules: (p: any) => p.rules?.length ?? 0,
-      assigned: (p: any) => p.assignments_count,
+      ...POLICIES.sortAccessors,
+      organization: (policy: AccessPolicy) => orgName(policy.organization_id),
     }),
-    [organizations],
+    [orgName],
   );
   const {
     sortField: policySortField,
     sortDirection: policySortDirection,
     handleSort: handlePolicySort,
     sortItems: sortPolicies,
-  } = useTableSort(policySortAccessors, "name");
+  } = useTableSort(
+    policySortAccessors,
+    POLICIES.defaultSort.field,
+    POLICIES.defaultSort.direction,
+    resetPage,
+  );
+
+  // Filter, then sort, then slice. Sorting therefore covers the whole filtered set rather than
+  // the page on screen.
+  const sortedPolicies = useMemo(
+    () => sortPolicies(filters.filteredRows),
+    [sortPolicies, filters.filteredRows],
+  );
+  // Clamped on read, never corrected in an effect: an effect would snap the operator back a
+  // page mid-task and still paint one wrong frame first.
+  const totalPages = Math.max(1, Math.ceil(sortedPolicies.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedPolicies = sortedPolicies.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
 
   // mutations
   const createMutation = useMutation({
@@ -663,7 +783,12 @@ export function PolicyManagementSection() {
                 </Button>
               </div>
             ) : (
-              <div className="rounded-md border">
+              <>
+                <TableToolbar filters={filters} noun="policies" className="mb-4" />
+                {/* note: named because the User Groups table sits above this one on the same
+                    screen, so "the table on this page" is ambiguous to anything reading the DOM.
+                    Same device as data-slot="projects-pagination" on the project grid. */}
+                <div className="rounded-md border" data-slot="policies-table">
                 <Table density="compact">
                   <TableHeader>
                     <TableRow>
@@ -699,7 +824,19 @@ export function PolicyManagementSection() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sortPolicies(policies).map((policy) => {
+                    {pagedPolicies.length === 0 ? (
+                      <TableEmptyRow
+                        colSpan={POLICY_COLUMN_COUNT}
+                        icon={ShieldCheck}
+                        title="No policy matches the current filters"
+                        description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${policies.length} policies.`}
+                        action={
+                          <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                            Clear filters
+                          </Button>
+                        }
+                      />
+                    ) : pagedPolicies.map((policy) => {
                       // find org name
                       const org = organizations.find(o => o.id === policy.organization_id);
                       return (
@@ -791,7 +928,25 @@ export function PolicyManagementSection() {
                     })}
                   </TableBody>
                 </Table>
-              </div>
+                </div>
+                {/* Absent rather than disabled when everything fits on one page. */}
+                {totalPages > 1 && (
+                  <div className="mt-4">
+                    <DataTablePagination
+                      currentPage={currentPage}
+                      totalPages={totalPages}
+                      totalItems={sortedPolicies.length}
+                      pageSize={pageSize}
+                      pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                      onPageChange={setPage}
+                      onPageSizeChange={(size) => {
+                        setPageSize(size);
+                        setPage(1);
+                      }}
+                    />
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         )}
@@ -820,5 +975,20 @@ export function PolicyManagementSection() {
         />
       )}
     </>
+  );
+}
+
+/**
+ * The boundary the filter hook requires.
+ *
+ * useTableFilters reads the query string even with syncUrl off, which opts a client component
+ * out of prerendering, and Next then fails the build on the route unless a boundary sits above
+ * it. Carrying its own means this can be dropped anywhere without the caller knowing that.
+ */
+export function PolicyManagementSection() {
+  return (
+    <Suspense fallback={<Skeleton className="h-32 rounded-xl" />}>
+      <PolicyManagementSectionContent />
+    </Suspense>
   );
 }

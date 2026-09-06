@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import {
   GPU_EMPTY_TITLE,
   GPU_NO_COMPUTE_TITLE,
@@ -14,6 +14,8 @@ import { Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } 
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NodeConnectionSummary } from "./node-connection-summary";
@@ -38,6 +40,7 @@ import { useNodesStatus, useUpdateNodeTags, useUpdateNodeDisplayName } from "@/h
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { cn } from "@/lib/utils";
 import { clusterStatusMeta } from "@/lib/cluster-status";
+import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { NodeDetailModal } from "./node-detail/node-detail-modal";
 import { useLiveRecord } from "@/hooks/use-live-record";
 import { NodeStatusCard } from "./node-status/node-status-card";
@@ -84,6 +87,20 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
   // numbers behind the dialog moved while the ones inside it did not.
   const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(GRID_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
+
+  // important: narrowing the tag filter has to send the operator back to page one. Without this a
+  // filter applied from page three keeps that page number, and the clamp then paints the last page
+  // of the new result instead of its first.
+  const handleTagsChange = useCallback(
+    (tags: string[]) => {
+      setSelectedTags(tags);
+      resetPage();
+    },
+    [resetPage],
+  );
 
   // note: data.nodes, not filteredNodes. The grid filters to connected && server_version, so a
   // cluster dropping offline would vanish from the filtered list and blank the open dialog.
@@ -120,6 +137,14 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
     });
   }, [data?.nodes, selectedTags]);
 
+  // Filter, then slice for the page. This grid has no sort control, so the filtered set is already
+  // the whole ordered set the page is taken from.
+  // note: clamped on read rather than corrected in an effect, which would snap the operator back a
+  // page mid-task and still paint one wrong frame first.
+  const totalPages = Math.max(1, Math.ceil(filteredNodes.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedNodes = filteredNodes.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   const handleViewDetails = (node: NodeStatus) => setSelectedNodeName(node.name);
 
   const handleCloseModal = () => setSelectedNodeName(null);
@@ -153,21 +178,54 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
           <TagFilter
             availableTags={allTags}
             selectedTags={selectedTags}
-            onTagsChange={setSelectedTags}
+            onTagsChange={handleTagsChange}
           />
         )}
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredNodes.map((node, index) => (
-            <NodeStatusCard
-              key={node.name}
-              node={node}
-              index={index}
-              onViewDetails={handleViewDetails}
-              onTagsUpdate={refetch}
-            />
-          ))}
-        </div>
+        {filteredNodes.length === 0 && selectedTags.length > 0 ? (
+          // A tag filter that matches nothing is not the same as having no clusters, so it says so
+          // and offers the way back out.
+          <EmptyState
+            icon={Server}
+            title="No cluster matches the current tags"
+            description={`${selectedTags.length} tag filter${selectedTags.length === 1 ? "" : "s"} active`}
+            action={
+              <Button size="sm" variant="outline" onClick={() => handleTagsChange([])}>
+                Clear filters
+              </Button>
+            }
+          />
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* note: the index is the position on the page, not in the list, so the card stagger
+                restarts each page instead of delaying page four by several seconds. */}
+            {pagedNodes.map((node, index) => (
+              <NodeStatusCard
+                key={node.name}
+                node={node}
+                index={index}
+                onViewDetails={handleViewDetails}
+                onTagsUpdate={refetch}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Absent rather than disabled when everything fits. The parent is already space-y-4. */}
+        {totalPages > 1 && (
+          <DataTablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            pageSizeOptions={[...GRID_PAGE_SIZES]}
+            totalItems={filteredNodes.length}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(1);
+            }}
+          />
+        )}
       </div>
 
       <NodeDetailModal

@@ -66,6 +66,8 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { formatDate, formatLabel } from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 
 function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return "N/A";
@@ -122,7 +124,7 @@ function certToTime(value: string | null | undefined): number | null {
 
 function CertificatesContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useCertificates();
-  const certificates = data?.certificates || [];
+  const certificates = React.useMemo(() => data?.certificates || [], [data]);
   const { isReadOnly } = useReadOnlyMode();
 
   // Renewal modal state
@@ -152,14 +154,31 @@ function CertificatesContent() {
   const verifyCertRenewal = useVerifyCertRenewal();
   const cancelPendingCert = useCancelPendingCert();
 
-  const filters = useTableFilters(CERTIFICATES, certificates);
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(TABLE_PAGE_SIZE);
+  const resetPage = React.useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(CERTIFICATES, certificates, {
+    onFilterChange: resetPage,
+  });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     CERTIFICATES.sortAccessors,
     CERTIFICATES.defaultSort.field,
     CERTIFICATES.defaultSort.direction,
+    resetPage,
   );
 
-  const visibleCerts = sortItems(filters.filteredRows);
+  const sortedCerts = React.useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
+
+  // Clamped on read rather than corrected in an effect. A renewal drops a certificate out of
+  // the Expiring facet while the operator sits on the last page, so the page count shrinks
+  // underneath them. An effect would fire only after the empty frame had already painted.
+  const totalPages = Math.max(1, Math.ceil(sortedCerts.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedCerts = sortedCerts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // The summary cards and the Status facet are one piece of state rendered twice, not two
   // controls. Two controls for one state is the failure this whole change exists to remove.
@@ -368,6 +387,7 @@ function CertificatesContent() {
               No certificates found. Register a cluster first.
             </div>
           ) : (
+            <>
             <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -382,19 +402,22 @@ function CertificatesContent() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleCerts.length === 0 ? (
+                {sortedCerts.length === 0 ? (
+                  // The outer branch already covers a fleet with no certificate at all, so
+                  // reaching here always means the filters excluded every row.
                   <TableEmptyRow
                     colSpan={7}
                     icon={ShieldCheck}
-                    title="No certificates found"
-                    description={
-                      filters.activeFilterCount > 0
-                        ? "No certificate matches the current filters."
-                        : undefined
+                    title="No certificate matches the current filters"
+                    description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${certificates.length} certificates.`}
+                    action={
+                      <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                        Clear filters
+                      </Button>
                     }
                   />
                 ) : (
-                  visibleCerts.map((cert) => {
+                  pagedCerts.map((cert) => {
                   const config = certificateStatusMeta(cert.status);
                   const StatusIcon = config.icon;
 
@@ -509,6 +532,26 @@ function CertificatesContent() {
               </TableBody>
             </Table>
             </div>
+
+            {/* Absent rather than disabled when everything fits on one page. Outside the
+                horizontal scroller so it does not slide away with a wide table. */}
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <DataTablePagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                  totalItems={sortedCerts.length}
+                  onPageChange={setPage}
+                  onPageSizeChange={(size) => {
+                    setPageSize(size);
+                    setPage(1);
+                  }}
+                />
+              </div>
+            )}
+            </>
           )}
         </CardContent>
       </Card>

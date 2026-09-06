@@ -3,6 +3,7 @@
 import * as React from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
   Dialog,
   DialogBody,
@@ -13,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Activity, Layers } from "lucide-react";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { formatInstanceType } from "@/lib/utils";
 import type { MemberResources, VMInfo } from "@/types/api";
 
@@ -46,6 +48,26 @@ export function MemberInstancesDialog({
   error,
   resources,
 }: MemberInstancesDialogProps) {
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(PANEL_PAGE_SIZE);
+
+  // important: this dialog stays mounted between openings, because the parent renders it beside
+  // its own dialog rather than behind the open flag. Without this the reader reopens on whatever
+  // page the previous drill-down left behind, on a different member's list. Reset during render
+  // rather than in an effect, which would paint the stale page first.
+  const drillDown = `${memberName ?? ""}:${filter ?? ""}`;
+  const [pagedDrillDown, setPagedDrillDown] = React.useState(drillDown);
+  if (pagedDrillDown !== drillDown) {
+    setPagedDrillDown(drillDown);
+    setPage(1);
+  }
+
+  // note: clamped on read rather than corrected in an effect. The list refetches while the dialog
+  // is open, so a shrinking result would otherwise strand the reader on a page past the end.
+  const totalPages = Math.max(1, Math.ceil(instances.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedInstances = instances.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
@@ -65,8 +87,10 @@ export function MemberInstancesDialog({
           </div>
         ) : instances.length > 0 ? (
           <div className="space-y-3">
-            {instances.map((instance, index) => (
-              <Card key={index}>
+            {/* note: keyed on the instance rather than its index, which now numbers a position
+                within the page and would reuse a card across a page change. */}
+            {pagedInstances.map((instance) => (
+              <Card key={`${instance.host}/${instance.project || "default"}/${instance.name}`}>
                 <CardContent className="pt-6">
                   <div className="flex items-start justify-between">
                     <div className="space-y-1 flex-1">
@@ -100,6 +124,22 @@ export function MemberInstancesDialog({
                 </CardContent>
               </Card>
             ))}
+            {/* Absent rather than disabled when everything fits on one page. No mt-4 wrapper: the
+                list is already a space-y-3 stack, whose gap wins over a margin on the child. */}
+            {totalPages > 1 && (
+              <DataTablePagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[...PANEL_PAGE_SIZES]}
+                totalItems={instances.length}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
+            )}
           </div>
         ) : error ? (
           <EmptyState

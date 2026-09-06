@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useMemo } from "react";
+import { Suspense, useCallback, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { BackLink } from "@/components/ui/back-link";
@@ -73,6 +73,8 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 
 const MY_KEYS = defineTable<KeyInfo>()({
   searchPlaceholder: "Search by name, project, or node",
@@ -146,16 +148,40 @@ function MyKeysContent() {
     return keys;
   }, [keys, activeTab]);
 
-  const filters = useTableFilters(MY_KEYS, tabKeys as KeyInfo[]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
+
+  // note: the tabs are a filter over the same list, so they owe the same page reset the search
+  // and facet controls give. Without it, moving to a shorter tab leaves the operator on a page
+  // that tab does not have.
+  const handleTabChange = useCallback(
+    (value: string) => {
+      setActiveTab(value);
+      resetPage();
+    },
+    [resetPage],
+  );
+
+  const filters = useTableFilters(MY_KEYS, tabKeys as KeyInfo[], {
+    onFilterChange: resetPage,
+  });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     MY_KEYS.sortAccessors,
     MY_KEYS.defaultSort.field,
     MY_KEYS.defaultSort.direction,
+    resetPage,
   );
   const sortedKeys = useMemo(
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+
+  // Clamped on read rather than corrected in an effect. Deleting the last key on the final page
+  // shrinks the list under the operator, and an effect would fire after a wrong frame painted.
+  const totalPages = Math.max(1, Math.ceil(sortedKeys.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedKeys = sortedKeys.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // note: the node list is built inside CreateKeyDialog by useNodePickerOptions, the one place
   // node-picker options are assembled. This page used to pass down
@@ -324,7 +350,7 @@ function MyKeysContent() {
       {/* Keys Table with Tabs */}
       <Card>
         <CardHeader className="space-y-4">
-          <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <Tabs value={activeTab} onValueChange={handleTabChange}>
             <TabsList className="grid w-full max-w-md grid-cols-3 h-auto p-1">
               <TabsTrigger value="active" className="text-xs sm:text-sm px-2 py-1.5">
                 Active ({activeCount})
@@ -355,6 +381,7 @@ function MyKeysContent() {
               </p>
             </div>
           ) : (
+            <>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -370,7 +397,7 @@ function MyKeysContent() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedKeys.map((key: KeyInfo) => (
+                  {pagedKeys.map((key: KeyInfo) => (
                     <TableRow key={key.id}>
                       <TableCell className="font-medium">{key.name}</TableCell>
                       <TableCell>
@@ -441,6 +468,25 @@ function MyKeysContent() {
                 </TableBody>
               </Table>
             </div>
+            {/* Absent rather than disabled when everything fits on one page. Outside the
+                horizontal scroller, so the controls stay put when a wide table scrolls. */}
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <DataTablePagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  pageSize={pageSize}
+                  pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                  totalItems={sortedKeys.length}
+                  onPageChange={setPage}
+                  onPageSizeChange={(size) => {
+                    setPageSize(size);
+                    setPage(1);
+                  }}
+                />
+              </div>
+            )}
+            </>
           )}
         </CardContent>
       </Card>

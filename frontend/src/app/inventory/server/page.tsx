@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +19,7 @@ import { TableEmptyValue } from "@/components/ui/table-text";
 import { ServerInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { useServerInfo } from "@/hooks/use-lxd";
+import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
@@ -110,11 +112,22 @@ function ConfigMapLink({
 export default function ServerPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
-  const servers = (data as any)?.servers || [];
+  const servers: any[] = useMemo(() => (data as any)?.servers || [], [data]);
   // Clusters that never answered: their server details are absent from the grid, so warn
   // rather than showing fewer cards with nothing to explain it.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
   const { toast } = useToast();
+
+  // The grid is one, two or three columns wide, so it takes the grid page sizes rather than the
+  // table set: every one of them divides by all three and a full page never ends in a ragged row.
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(GRID_PAGE_SIZE);
+
+  // note: clamped on read rather than corrected in an effect. An effect would paint one wrong
+  // frame first and then snap the operator back a page.
+  const totalPages = Math.max(1, Math.ceil(servers.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedServers = servers.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   if (!isResolved) return <LoadingLottiePage />;
   if (!isPartner) return null;
@@ -144,7 +157,7 @@ export default function ServerPage() {
       <UnreachableNodesBanner noun="server details" nodes={unreachableNodes} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {servers.map((server: any) => (
+        {pagedServers.map((server: any) => (
           <Card key={server.node}>
             <CardHeader>
               <CardTitle>
@@ -201,6 +214,22 @@ export default function ServerPage() {
           </Card>
         ))}
       </div>
+
+      {/* Absent rather than disabled when every node fits on one page. */}
+      {totalPages > 1 && (
+        <DataTablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          pageSizeOptions={[...GRID_PAGE_SIZES]}
+          totalItems={servers.length}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+        />
+      )}
     </div>
   );
 }

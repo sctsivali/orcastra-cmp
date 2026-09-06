@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect } from "react";
+import { Suspense, useCallback, useMemo, useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Key,
@@ -48,12 +48,24 @@ import {
 } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
+import type { APIKeyStatusLabel } from "@/lib/integration-display";
 import {
+  API_KEY_STATUS_ORDER,
   formatApplicationType,
+  getAPIKeyStatus,
   getClusterAccessDisplay,
   isLegacyUnscopedKey,
   summarizeClusterAccessLevel,
 } from "@/lib/integration-display";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { SortSelect } from "@/components/ui/sort-select";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { defineTable, fromSort } from "@/lib/table-filter";
+import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { VaultUnavailableNotice } from "@/components/ui/vault-unavailable-notice";
 import { EditAPIKeyPermissionsDialog } from "@/components/integrations/edit-api-key-permissions-dialog";
 import { CreateAPIKeyDialog } from "@/components/integrations/create-api-key-dialog";
@@ -178,7 +190,100 @@ function APIKeySecretDialog({
 }
 
 // Main Integrations Settings Component (for embedding in Settings page)
-export function IntegrationsSettings() {
+/**
+ * A credential list is a security surface, so the questions it has to answer are narrow ones:
+ * which keys are lapsed, which still reach a cluster, which predate capabilities. Sorting alone
+ * answered none of them, and nineteen full-height cards in one scroll answered them badly.
+ *
+ * important: an id. The settings screen carries more than one filtered list, and without a
+ * namespace they would share `q` and narrow each other on every keystroke.
+ */
+const API_KEYS = defineTable<APIKeyInfo>()({
+  id: "apikeys",
+  searchPlaceholder: "Search keys by name, application, or id",
+  defaultSort: { field: "name", direction: "asc" },
+  // The key id and the capability names are on the card but are not columns of their own.
+  searchExtra: (key) => [
+    key.id,
+    key.app_name ?? "",
+    ...(key.capabilities ?? []),
+  ],
+  columns: [
+    {
+      field: "name",
+      label: "Name",
+      sort: (key) => key.name,
+      search: (key) => key.name,
+      filter: fromSort("text"),
+    },
+    {
+      field: "application",
+      label: "Application",
+      sort: (key) => formatApplicationType(key.app_type),
+      facet: (key) => formatApplicationType(key.app_type),
+      facetSpec: { primary: true },
+    },
+    {
+      field: "status",
+      label: "Status",
+      sort: (key) => getAPIKeyStatus(key),
+      facet: (key) => getAPIKeyStatus(key),
+      // Working first, then the two ways a key stops working, rather than by today's counts.
+      facetSpec: { primary: true, order: API_KEY_STATUS_ORDER },
+    },
+    {
+      field: "clusters",
+      label: "Clusters",
+      sort: (key) => key.cluster_permissions?.length ?? 0,
+      filter: fromSort("number", {
+        unit: "count",
+        // A key reaching nothing is the one an operator wants to find and revoke.
+        presets: [
+          { label: "None", min: null, max: 0 },
+          { label: "Any", min: 1, max: null },
+        ],
+      }),
+    },
+    {
+      field: "access",
+      label: "Access",
+      sort: (key) => summarizeClusterAccessLevel(getClusterAccessDisplay(key.cluster_permissions)),
+      facet: (key) => summarizeClusterAccessLevel(getClusterAccessDisplay(key.cluster_permissions)),
+    },
+    {
+      // note: null capabilities and an empty list are opposites here. A key predating
+      // capabilities keeps unrestricted access to the external router, so it gets its own
+      // dimension rather than being read off a count of zero.
+      field: "scope",
+      label: "Capability Scope",
+      facet: (key) => (isLegacyUnscopedKey(key.capabilities) ? "Unscoped legacy" : "Scoped"),
+    },
+    {
+      field: "expires",
+      label: "Expires",
+      sort: (key) => (key.expires_at ? new Date(key.expires_at).getTime() : null),
+      filter: fromSort("date", { horizon: "future" }),
+    },
+  ],
+});
+
+/** The badge tone each status wears. Paired here so the word and the colour move together. */
+const API_KEY_STATUS_VARIANTS: Record<APIKeyStatusLabel, "destructive" | "negative" | "positive" | "secondary"> = {
+  Revoked: "destructive",
+  Expired: "negative",
+  Active: "positive",
+  Inactive: "secondary",
+};
+
+const KEY_SORT_OPTIONS = [
+  { value: "name", label: API_KEYS.byField.name.label },
+  { value: "application", label: API_KEYS.byField.application.label },
+  { value: "status", label: API_KEYS.byField.status.label },
+  { value: "clusters", label: API_KEYS.byField.clusters.label },
+  { value: "expires", label: API_KEYS.byField.expires.label },
+] as const;
+
+function IntegrationsSettingsContent() {
   const queryClient = useQueryClient();
   const [mounted, setMounted] = useState(false);
   const [createdKey, setCreatedKey] = useState<APIKeyCreateResponse | null>(null);
@@ -295,6 +400,49 @@ export function IntegrationsSettings() {
     },
   });
 
+  // important: derived above the loading return, not below it. The filter, sort and page hooks
+  // read these, and a hook below a conditional return is a hook that does not always run.
+  const apiKeys: APIKeyInfo[] = useMemo(
+    () => (Array.isArray(apiKeysData?.keys) ? apiKeysData.keys : []),
+    [apiKeysData],
+  );
+  const clusters: AvailableCluster[] = useMemo(
+    () => (Array.isArray(clustersData?.clusters) ? clustersData.clusters : []),
+    [clustersData],
+  );
+  const totalKeys = typeof apiKeysData?.total === 'number' ? apiKeysData.total : 0;
+  const activeKeys = typeof apiKeysData?.active === 'number' ? apiKeysData.active : 0;
+  const revokedKeys = typeof apiKeysData?.revoked === 'number' ? apiKeysData.revoked : 0;
+  const expiredKeys = typeof apiKeysData?.expired === 'number' ? apiKeysData.expired : 0;
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(GRID_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(API_KEYS, apiKeys, {
+    onFilterChange: resetPage,
+    // A settings tab, not a route of its own: leaving these keys in the address bar would
+    // filter a list the operator has already navigated away from.
+    syncUrl: false,
+  });
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    API_KEYS.sortAccessors,
+    API_KEYS.defaultSort.field,
+    API_KEYS.defaultSort.direction,
+    resetPage,
+  );
+
+  // Filter, then sort, then slice. Sorting covers the whole filtered set, not the page shown.
+  const sortedKeys = useMemo(
+    () => sortItems(filters.filteredRows),
+    [sortItems, filters.filteredRows],
+  );
+  // Clamped on read rather than corrected in an effect, which would snap the operator back a
+  // page mid-task and paint one wrong frame on the way.
+  const totalPages = Math.max(1, Math.ceil(sortedKeys.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedKeys = sortedKeys.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   // Show loading skeleton
   if (!mounted || keysLoading) {
     return (
@@ -309,14 +457,6 @@ export function IntegrationsSettings() {
       </div>
     );
   }
-
-  // Safely extract data with defaults
-  const apiKeys: APIKeyInfo[] = Array.isArray(apiKeysData?.keys) ? apiKeysData.keys : [];
-  const clusters: AvailableCluster[] = Array.isArray(clustersData?.clusters) ? clustersData.clusters : [];
-  const totalKeys = typeof apiKeysData?.total === 'number' ? apiKeysData.total : 0;
-  const activeKeys = typeof apiKeysData?.active === 'number' ? apiKeysData.active : 0;
-  const revokedKeys = typeof apiKeysData?.revoked === 'number' ? apiKeysData.revoked : 0;
-  const expiredKeys = typeof apiKeysData?.expired === 'number' ? apiKeysData.expired : 0;
 
   // Vault not configured, so show an informative banner instead of the full UI
   if (vaultUnavailable) {
@@ -432,8 +572,34 @@ export function IntegrationsSettings() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {apiKeys.map((apiKey) => {
+        <div className="space-y-4">
+          <TableToolbar
+            filters={filters}
+            noun="API keys"
+            actions={
+              <SortSelect
+                options={KEY_SORT_OPTIONS}
+                value={sortField}
+                direction={sortDirection}
+                onSort={handleSort}
+              />
+            }
+          />
+
+          {pagedKeys.length === 0 ? (
+            <EmptyState
+              icon={Key}
+              title="No API key matches the current filters"
+              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${apiKeys.length} keys.`}
+              action={
+                <Button size="sm" variant="outline" onClick={() => filters.clearAll()}>
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          {pagedKeys.map((apiKey) => {
             if (!apiKey || typeof apiKey.id !== 'string') return null;
             const clusterAccess = getClusterAccessDisplay(apiKey.cluster_permissions, clusters);
             const clusterCount = clusterAccess.length;
@@ -448,6 +614,7 @@ export function IntegrationsSettings() {
             // mean parsing the stored string in the browser, where an offsetless value is read
             // as local time and lands a day out either side of midnight.
             const expiryState = apiKey.expiry_state ?? (apiKey.expires_at ? "active" : "never");
+            const keyStatus = getAPIKeyStatus(apiKey);
             
             return (
               <Card key={apiKey.id}>
@@ -481,24 +648,20 @@ export function IntegrationsSettings() {
                       </CardDescription>
                     </div>
                     <div className="shrink-0">
-                      {apiKey.is_revoked ? (
-                        <Badge variant="destructive">Revoked</Badge>
-                      ) : expiryState === "expired" ? (
-                        // Six keys on this deployment read a green "Active" while lapsed, which
-                        // is the distinction that was actually missing.
-                        //
-                        // note: Expired shares the red family with Revoked deliberately. Both
-                        // mean the key does not work, and giving the same outcome two colours
-                        // would be decoration; the word carries the cause, which is the part
-                        // that differs. The tones are the solid --status-* ones whose ratios
-                        // ui/badge.tsx records for both themes, not the translucent tints it
-                        // measures at 2.73:1 on --card in light mode.
-                        <Badge variant="negative">Expired</Badge>
-                      ) : apiKey.is_active ? (
-                        <Badge variant="positive">Active</Badge>
-                      ) : (
-                        <Badge variant="secondary">Inactive</Badge>
-                      )}
+                      {/* Six keys on this deployment read a green "Active" while lapsed, which
+                          is the distinction that was actually missing.
+
+                          note: Expired shares the red family with Revoked deliberately. Both
+                          mean the key does not work, and giving the same outcome two colours
+                          would be decoration; the word carries the cause, which is the part
+                          that differs. The tones are the solid --status-* ones whose ratios
+                          ui/badge.tsx records for both themes, not the translucent tints it
+                          measures at 2.73:1 on --card in light mode.
+
+                          important: the word comes from getAPIKeyStatus, the same helper the
+                          Status filter reads. Deciding it twice is how a chip and the facet
+                          beside it end up disagreeing about the same key. */}
+                      <Badge variant={API_KEY_STATUS_VARIANTS[keyStatus]}>{keyStatus}</Badge>
                     </div>
                   </div>
                 </CardHeader>
@@ -616,6 +779,27 @@ export function IntegrationsSettings() {
               </Card>
             );
           })}
+          </div>
+          )}
+
+          {/* note: 12, 24, 48 and 96 rather than the table set. The grid is one or two columns
+              wide and every one of these divides by both, so a full page never ends in a lone
+              card on its own row.
+              Absent rather than disabled when everything fits. */}
+          {totalPages > 1 && (
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={sortedKeys.length}
+              pageSize={pageSize}
+              pageSizeOptions={[...GRID_PAGE_SIZES]}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+            />
+          )}
         </div>
       )}
 
@@ -626,5 +810,19 @@ export function IntegrationsSettings() {
         response={createdKey}
       />
     </div>
+  );
+}
+
+/**
+ * The boundary the filter hook requires.
+ *
+ * useTableFilters reads the query string even with syncUrl off, which opts a client component
+ * out of prerendering; Next then fails the build on the route unless a boundary sits above it.
+ */
+export function IntegrationsSettings() {
+  return (
+    <Suspense fallback={<Skeleton className="h-48 rounded-lg" />}>
+      <IntegrationsSettingsContent />
+    </Suspense>
   );
 }

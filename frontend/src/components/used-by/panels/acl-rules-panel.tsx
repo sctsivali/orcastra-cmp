@@ -6,11 +6,14 @@ import { Table, TableBody, TableCell, TableHeader, TableRow } from "@/components
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { formatLabel } from "@/lib/utils";
 import { Shield } from "lucide-react";
 import type { AclRule } from "../types";
@@ -83,13 +86,25 @@ function AclRulesPanelContent({ ingress, egress }: { ingress?: AclRule[]; egress
     [ingress, egress],
   );
 
-  const filters = useTableFilters(RULES, rules, { syncUrl: false });
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(PANEL_PAGE_SIZE);
+  const resetPage = React.useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(RULES, rules, { syncUrl: false, onFilterChange: resetPage });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     RULES.sortAccessors,
     RULES.defaultSort.field,
     RULES.defaultSort.direction,
+    resetPage,
   );
-  const shown = React.useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
+  // Filter, then sort, then slice, so an ordering covers every rule the filters kept and not
+  // only the page on screen.
+  const sortedRules = React.useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
+  // note: clamped on read rather than corrected in an effect. An effect paints one wrong frame
+  // first and then moves the panel while it is being read.
+  const totalPages = Math.max(1, Math.ceil(sortedRules.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRules = sortedRules.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   if (rules.length === 0) {
     return <EmptyState icon={Shield} title="No rules" description="This ACL defines no ingress or egress rules." />;
@@ -111,10 +126,20 @@ function AclRulesPanelContent({ ingress, egress }: { ingress?: AclRule[]; egress
             </TableRow>
           </TableHeader>
           <TableBody>
-            {shown.length === 0 ? (
-              <TableEmptyRow colSpan={6} title="No rules match the current filters" />
+            {pagedRules.length === 0 ? (
+              <TableEmptyRow
+                colSpan={6}
+                icon={Shield}
+                title="No rules match the current filters"
+                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${rules.length} rules.`}
+                action={
+                  <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                    Clear filters
+                  </Button>
+                }
+              />
             ) : (
-              shown.map((rule) => (
+              pagedRules.map((rule) => (
                 <TableRow key={`${rule.direction}-${rule.index}`}>
                   <TableCell>{rule.direction}</TableCell>
                   <TableCell>{rule.action ? formatLabel(rule.action) : <TableEmptyValue label="No action" />}</TableCell>
@@ -131,6 +156,22 @@ function AclRulesPanelContent({ ingress, egress }: { ingress?: AclRule[]; egress
           </TableBody>
         </Table>
       </div>
+      {/* Absent rather than disabled when everything fits on one page. No mt-4 wrapper: the
+          panel is already a space-y-3 stack, whose gap wins over a margin on the child. */}
+      {totalPages > 1 && (
+        <DataTablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          pageSizeOptions={[...PANEL_PAGE_SIZES]}
+          totalItems={sortedRules.length}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+        />
+      )}
     </div>
   );
 }

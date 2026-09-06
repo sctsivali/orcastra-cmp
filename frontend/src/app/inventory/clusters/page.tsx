@@ -53,6 +53,8 @@ import { ClusterLocationDialog } from "@/components/cluster-location-dialog";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { Role } from "@/types/rbac";
 import { clusterStatusMeta } from "@/lib/cluster-status";
@@ -98,7 +100,7 @@ const CLUSTERS = defineTable<any>()({
 function ClustersContent() {
   const { navigate } = useNavigationProgress();
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useClusters();
-  const clusters = (data as any)?.clusters || [];
+  const clusters = React.useMemo(() => (data as any)?.clusters || [], [data]);
   const [detailCluster, setDetailCluster] = React.useState<ClusterInfo | null>(null);
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
   const [regenerateModal, setRegenerateModal] = React.useState<{open: boolean, cluster: any | null}>({open: false, cluster: null});
@@ -111,14 +113,34 @@ function ClustersContent() {
   const deleteCluster = useDeleteCluster();
   const regenerateCert = useRegenerateCert();
 
-  const filters = useTableFilters(CLUSTERS, clusters as any[]);
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(TABLE_PAGE_SIZE);
+  const resetPage = React.useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(CLUSTERS, clusters as any[], {
+    onFilterChange: resetPage,
+  });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     CLUSTERS.sortAccessors,
     CLUSTERS.defaultSort.field,
     CLUSTERS.defaultSort.direction,
+    resetPage,
   );
 
-  const visibleClusters = sortItems(filters.filteredRows);
+  const sortedClusters = React.useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
+
+  // note: clamped on read rather than corrected in an effect. Deleting a cluster and the
+  // background refetch both shrink this list under the operator, and an effect would only
+  // fire after an out-of-range page had already painted an empty table.
+  const totalPages = Math.max(1, Math.ceil(sortedClusters.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedClusters = sortedClusters.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
 
   const handleCheckAuth = async (clusterId: string) => {
     setCheckingAuth(clusterId);
@@ -384,19 +406,26 @@ function ClustersContent() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visibleClusters.length === 0 ? (
+                {sortedClusters.length === 0 ? (
                   <TableEmptyRow
                     colSpan={6}
                     icon={Server}
                     title="No clusters found"
                     description={
                       filters.activeFilterCount > 0
-                        ? "No cluster matches the current filters."
+                        ? `No cluster matches the current filters. ${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active.`
                         : undefined
+                    }
+                    action={
+                      filters.activeFilterCount > 0 ? (
+                        <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                          Clear filters
+                        </Button>
+                      ) : undefined
                     }
                   />
                 ) : (
-                  visibleClusters.map((cluster: any) => {
+                  pagedClusters.map((cluster: any) => {
                   const statusMeta = clusterStatusMeta(cluster.status);
                   const StatusIcon = statusMeta.icon;
                   return (
@@ -528,6 +557,24 @@ function ClustersContent() {
               )}
               </TableBody>
             </Table>
+          )}
+
+          {/* Absent rather than disabled when everything fits on one page. */}
+          {totalPages > 1 && (
+            <div className="mt-4">
+              <DataTablePagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                totalItems={sortedClusters.length}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
+            </div>
           )}
         </CardContent>
       </Card>

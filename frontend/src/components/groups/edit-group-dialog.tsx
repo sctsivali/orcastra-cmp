@@ -58,6 +58,8 @@ import { GroupInfo, IdentityInfo, IdentityListResponse } from "@/types/api";
 import { cn } from "@/lib/utils";
 import { getResourceBasePath, getValidEntitlements, getEntitlementLabel } from "@/lib/lxd-entitlements";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 
 interface EditGroupDialogProps {
   open: boolean;
@@ -97,6 +99,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const [description, setDescription] = useState("");
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [isPermissionsDirty, setIsPermissionsDirty] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
   const [newPermission, setNewPermission] = useState({
     entity_type: "project",
     entitlement: "can_view",
@@ -194,6 +198,9 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       setIsPermissionsDirty(false);
       setActiveTab("basic");
       setPermissionsTabVisited(false);
+      // note: the dialog stays mounted between groups, so the page has to be released here.
+      // This is a lifecycle reset on close, not a clamp: the clamp lives on the read path.
+      setPage(1);
     }
   }, [open]);
 
@@ -295,6 +302,17 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         : [...prev, resourcePath]
     );
   };
+
+  // note: clamped on read rather than corrected in an effect. Removing the last permission on a
+  // page would otherwise paint an empty list for a frame before snapping back.
+  const totalPages = Math.max(1, Math.ceil(permissions.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  // important: every paged row carries its index into the full permissions array, never into the
+  // visible page. The remove button edits that array, so a page-local index would delete the
+  // wrong pending edit on any page after the first.
+  const pagedPermissions = permissions
+    .map((permission, index) => ({ permission, index }))
+    .slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   if (!group) return null;
 
@@ -663,9 +681,9 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
             {/* Existing Permissions */}
             {permissions.length > 0 && (
               <div className="space-y-2">
-                {permissions.map((permission, index) => (
+                {pagedPermissions.map(({ permission, index }) => (
                   <div
-                    key={index}
+                    key={`${permission.entity_type}-${permission.url}-${permission.entitlement}-${index}`}
                     className="flex items-center gap-2 p-3 bg-secondary/50 rounded-lg group hover:bg-secondary/70 transition-colors"
                   >
                     <Badge variant="outline" className="min-w-[90px] capitalize">
@@ -698,6 +716,23 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                   </div>
                 ))}
               </div>
+            )}
+
+            {/* Absent rather than disabled when every permission fits on one page. No mt-4
+                wrapper: the tab is already a space-y-3 stack, whose gap wins over a margin. */}
+            {totalPages > 1 && (
+              <DataTablePagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[...PANEL_PAGE_SIZES]}
+                totalItems={permissions.length}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
             )}
 
             {permissions.length === 0 && (

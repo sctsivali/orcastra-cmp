@@ -1,11 +1,14 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { AlertTriangle, PauseCircle } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { INSTALL_STATUS } from "@/lib/extension-display";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { formatDateTime } from "@/lib/utils";
 import type {
   ExtensionInstall,
@@ -58,8 +61,19 @@ export function AddonHealthPanel({
 }: AddonHealthPanelProps) {
   const readable = install.credential_readable !== false;
   const expiresInDays = daysUntil(install.credential_expires_at);
-  const failing = subscriptions.filter((s) => (s.consecutive_failures ?? 0) > 0);
+  const failing = useMemo(
+    () => subscriptions.filter((s) => (s.consecutive_failures ?? 0) > 0),
+    [subscriptions],
+  );
   const suspendedSubscriptions = subscriptions.filter((s) => s.status === "suspended");
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
+  // note: clamped on read, never corrected in an effect. An endpoint recovering shortens this
+  // list under whoever is reading it, and an effect would paint one wrong frame before snapping.
+  const totalPages = Math.max(1, Math.ceil(failing.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedFailing = failing.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const dead = deliveryCounts.dead ?? 0;
   const dropped = deliveryCounts.dropped ?? 0;
@@ -189,7 +203,7 @@ export function AddonHealthPanel({
 
       {failing.length > 0 && (
         <ul className="space-y-2">
-          {failing.map((subscription) => (
+          {pagedFailing.map((subscription) => (
             <li key={subscription.id} className="rounded-md border p-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <OverflowText
@@ -215,6 +229,23 @@ export function AddonHealthPanel({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Absent rather than disabled when every failing endpoint fits on one page. The section
+          already spaces its children, so this carries no margin of its own. */}
+      {totalPages > 1 && (
+        <DataTablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          pageSizeOptions={[...PANEL_PAGE_SIZES]}
+          totalItems={failing.length}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+        />
       )}
     </section>
   );

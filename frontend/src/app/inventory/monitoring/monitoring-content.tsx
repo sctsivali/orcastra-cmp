@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { NodeFilterSelect } from "@/components/monitoring/node-filter-select";
 import { TableLink } from "@/components/ui/table-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -30,6 +31,7 @@ import { InstanceDetailDialog } from "@/components/instance-detail/instance-deta
 import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { usePermissions } from "@/hooks/use-permissions";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { cn, formatMemory } from "@/lib/utils";
 import { InstanceMonitoringSummary, VMInfo } from "@/types";
 import { vmAPI } from "@/lib/api";
@@ -580,6 +582,30 @@ interface InstanceDetailsDialogProps {
 }
 
 function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading, onSelectInstance }: InstanceDetailsDialogProps) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
+
+  // important: this dialog stays mounted between openings, so its page survives a close. The
+  // parent reopens it with a different filterType (running, then containers), which is a
+  // different list entirely, and without this an operator who was on page 3 lands on page 3 of
+  // a list they have not seen. Compared during render rather than in an effect, which would
+  // paint the wrong page once before correcting it.
+  // note: filterType only. Keying on the row count too would reset the page every time the
+  // poll saw an instance start or stop, throwing the operator back to page 1 mid-read. A list
+  // that merely shrank is what the clamp below is for.
+  const [lastFilterType, setLastFilterType] = useState(filterType);
+  if (lastFilterType !== filterType) {
+    setLastFilterType(filterType);
+    setPage(1);
+  }
+
+  // important: the list behind this dialog is live, so instances appear and vanish under the
+  // operator. Clamp the page on read rather than correcting it in an effect, or a shrinking
+  // list leaves them parked past the end painting nothing.
+  const totalPages = Math.max(1, Math.ceil(instances.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedInstances = instances.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
   const getTitle = () => {
     switch (filterType) {
       case "running": return "Running Instances";
@@ -621,7 +647,7 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
               ))}
             </div>
           ) : instances.length > 0 ? (
-            instances.map((instance) => (
+            pagedInstances.map((instance) => (
               <div
                 key={`${instance.host}-${instance.name}`}
                 className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
@@ -663,6 +689,24 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
             </div>
           )}
         </div>
+        {/* Absent rather than disabled when everything fits on one page. Sits outside the
+            scroll area so paging does not require scrolling to the bottom first. */}
+        {totalPages > 1 && (
+          <div className="mt-4">
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              pageSize={pageSize}
+              pageSizeOptions={[...PANEL_PAGE_SIZES]}
+              totalItems={instances.length}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+            />
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

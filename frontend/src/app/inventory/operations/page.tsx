@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useMemo } from "react";
+import { Suspense, useCallback, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { Button } from "@/components/ui/button";
@@ -45,6 +45,8 @@ import { formatDateTime, formatLabel} from "@/lib/utils";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 
@@ -141,16 +143,33 @@ function OperationsContent() {
   }>({ open: false, operationId: "", host: "", description: "" });
 
 
-  const filters = useTableFilters(OPERATIONS, operations as any[]);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(OPERATIONS, operations as any[], {
+    onFilterChange: resetPage,
+  });
 
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     OPERATIONS.sortAccessors,
     OPERATIONS.defaultSort.field,
     OPERATIONS.defaultSort.direction,
+    resetPage,
   );
   const sortedOperations = useMemo(
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
+  );
+
+  // Clamped on read rather than corrected in an effect. This list polls every 15s and
+  // operations leave it as they finish, so the page under the operator shrinks on its own;
+  // an effect would fire after a wrong frame had already painted.
+  const totalPages = Math.max(1, Math.ceil(sortedOperations.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedOperations = sortedOperations.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
   );
 
   // Find the host for an operation (check metadata, node_name, or iterate nodes)
@@ -369,7 +388,7 @@ function OperationsContent() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedOperations.map((operation: any) => {
+                  {pagedOperations.map((operation: any) => {
                     // Use instance_name from backend, or extract from metadata
                     const instanceName = operation.instance_name || extractInstanceName(operation) || "";
                     const isConsoleOp = operation.class_name === "websocket";
@@ -473,6 +492,24 @@ function OperationsContent() {
                   )})}
                 </TableBody>
               </Table>
+
+              {/* Absent rather than disabled when everything fits on one page. */}
+              {totalPages > 1 && (
+                <div className="mt-4">
+                  <DataTablePagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    pageSize={pageSize}
+                    pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                    totalItems={sortedOperations.length}
+                    onPageChange={setPage}
+                    onPageSizeChange={(size) => {
+                      setPageSize(size);
+                      setPage(1);
+                    }}
+                  />
+                </div>
+              )}
             </TooltipProvider>
           )}
         </CardContent>

@@ -5,11 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { ScrollArea } from "@/components/ui/scroll-area";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
+import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { formatBytes, formatMemory} from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -192,8 +193,32 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
   const [expandedRegions, setExpandedRegions] = React.useState<Set<string>>(new Set());
   const [selectedRegion, setSelectedRegion] = React.useState<string | null>(null);
 
-  const filters = useTableFilters(REGIONS, (data?.regions ?? []) as any[]);
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState<number>(GRID_PAGE_SIZE);
+  const resetPage = React.useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(REGIONS, (data?.regions ?? []) as any[], {
+    onFilterChange: resetPage,
+  });
   const filteredRegions = filters.filteredRows;
+
+  // Clamped on read rather than corrected in an effect: an effect would paint one wrong frame
+  // first and then snap the operator back a page mid-task.
+  const totalPages = Math.max(1, Math.ceil(filteredRegions.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRegions = filteredRegions.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize
+  );
+
+  // important: the map plots the whole filtered set while the list shows one page, so a marker
+  // can point at a card that is not mounted. handleSelectRegion reads the page through this ref
+  // instead of taking it as a dependency, because it has to keep the stable identity the marker
+  // layer needs (see below).
+  const pagingRef = React.useRef({ regions: filteredRegions, pageSize });
+  React.useEffect(() => {
+    pagingRef.current = { regions: filteredRegions, pageSize };
+  }, [filteredRegions, pageSize]);
 
   // Toggle region expansion
   const toggleRegion = (regionId: string) => {
@@ -222,6 +247,12 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
       next.add(regionId);
       return next;
     });
+    // Move to the page the region is on, or the scroll below finds nothing to scroll to.
+    const { regions, pageSize: size } = pagingRef.current;
+    const index = regions.findIndex((r) => r.region_id === regionId);
+    if (index >= 0) {
+      setPage(Math.floor(index / size) + 1);
+    }
     // Scroll to the region card
     setTimeout(() => {
       const element = document.getElementById(`region-card-${regionId}`);
@@ -376,30 +407,50 @@ function RegionsContent({ basemap }: { basemap: BasemapConfig }) {
                     : "No regions match your filters."}
                 </p>
                 {filters.activeFilterCount > 0 && (
-                  <Button
-                    variant="link"
-                    onClick={filters.clearAll}
-                    className="mt-2"
-                  >
-                    Clear filters
-                  </Button>
+                  <>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {filters.activeFilterCount} filter
+                      {filters.activeFilterCount === 1 ? "" : "s"} active
+                    </p>
+                    <Button
+                      variant="link"
+                      onClick={filters.clearAll}
+                      className="mt-2"
+                    >
+                      Clear filters
+                    </Button>
+                  </>
                 )}
               </CardContent>
             </Card>
           ) : (
-            <ScrollArea className="h-[600px] pr-4">
-              <div className="space-y-4">
-                {filteredRegions.map((region) => (
-                  <RegionCard
-                    key={region.region_id}
-                    region={region}
-                    isExpanded={expandedRegions.has(region.region_id)}
-                    onToggle={() => toggleRegion(region.region_id)}
-                    onViewOnMap={() => handleViewOnMap(region.region_id)}
-                  />
-                ))}
-              </div>
-            </ScrollArea>
+            <div className="space-y-4">
+              {pagedRegions.map((region) => (
+                <RegionCard
+                  key={region.region_id}
+                  region={region}
+                  isExpanded={expandedRegions.has(region.region_id)}
+                  onToggle={() => toggleRegion(region.region_id)}
+                  onViewOnMap={() => handleViewOnMap(region.region_id)}
+                />
+              ))}
+            </div>
+          )}
+
+          {/* Absent rather than disabled when every region fits on one page. */}
+          {totalPages > 1 && (
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              pageSize={pageSize}
+              pageSizeOptions={[...GRID_PAGE_SIZES]}
+              totalItems={filteredRegions.length}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+            />
           )}
         </div>
       </div>

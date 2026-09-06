@@ -42,6 +42,8 @@ import { useRequireRole } from "@/hooks/use-require-role";
 import { Role } from "@/types/rbac";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 
 const MEMBERS = defineTable<any>()({
   searchPlaceholder: "Search members",
@@ -90,6 +92,11 @@ function ClusterMembersContent() {
   const [node, setNode] = React.useState<string>(nodeParam || "");
   const [selectedMember, setSelectedMember] = React.useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = React.useState(false);
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(TABLE_PAGE_SIZE);
+  // note: declared here rather than beside the filters, because the cluster picker resets the
+  // page as well and its handler is defined further up than they are.
+  const resetPage = React.useCallback(() => setPage(1), []);
   
   const { data: clustersData } = useClusters();
   const clusters = React.useMemo<ClusterInfo[]>(() => {
@@ -172,19 +179,36 @@ function ClusterMembersContent() {
 
   const handleNodeChange = (value: string) => {
     setNode(value);
+    // important: members are scoped to the cluster, so a page number carried over from the
+    // previous one addresses nothing. Clamping alone would land page 3 of a long cluster on
+    // the last page of a short one instead of at the top of it.
+    resetPage();
     router.replace(`/inventory/clustering/members?node=${value}`);
   };
 
   // Sorting
-  const filters = useTableFilters(MEMBERS, members as any[]);
+  const filters = useTableFilters(MEMBERS, members as any[], {
+    onFilterChange: resetPage,
+  });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     MEMBERS.sortAccessors,
     MEMBERS.defaultSort.field,
     MEMBERS.defaultSort.direction,
+    resetPage,
   );
   const sortedMembers = React.useMemo(
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
+  );
+
+  // note: clamped on read rather than corrected in an effect. A member leaving the cluster
+  // shrinks this list while the page is open, so the last page can disappear underneath the
+  // operator, and an effect would only fire after a page that no longer exists had painted.
+  const totalPages = Math.max(1, Math.ceil(sortedMembers.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedMembers = sortedMembers.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
   );
 
   // Full-page loading state
@@ -310,86 +334,111 @@ function ClusterMembersContent() {
               description="Could not retrieve cluster member information"
             />
           ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <SortableTableHead label="Server Name" field="server_name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableTableHead label="URL" field="url" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableTableHead label="Roles" field="roles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableTableHead label="Architecture" field="architecture" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                  <SortableTableHead label="Failure Domain" field="failure_domain" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {sortedMembers.length === 0 ? (
-                  <TableEmptyRow
-                    colSpan={6}
-                    icon={Server}
-                    title="No members found"
-                    description={
-                      filters.activeFilterCount > 0
-                        ? "No member matches the current filters."
-                        : undefined
-                    }
-                  />
-                ) : (
-                  sortedMembers.map((member: any) => (
-                  <TableRow key={member.server_name}>
-                    <TableCell className="font-medium">
-                      <span className="flex items-center gap-2">
-                        <Server className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                        <TableLink onClick={() => handleMemberClick(member.server_name)}>
-                          {member.server_name}
-                        </TableLink>
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 text-sm">
-                        <Globe className="h-3 w-3 text-muted-foreground" />
-                        {member.url}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1 flex-wrap">
-                        {member.roles && member.roles.length > 0 ? (
-                          member.roles.map((role: string) => formatLabel(role)).join(", ")
-                        ) : (
-                          <TableEmptyValue label="No roles" />
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge 
-                        variant={member.status === "Online" ? "positive" : "negative"}
-                        className="gap-1"
-                      >
-                        {member.status === "Online" ? (
-                          <CheckCircle className="h-3 w-3" />
-                        ) : (
-                          <XCircle className="h-3 w-3" />
-                        )}
-                        {member.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm">
-                        {member.architecture || <TableEmptyValue label="No architecture" />}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <Shield className="h-3 w-3 text-muted-foreground" />
-                        <span className="text-sm">
-                          {member.failure_domain || "default"}
-                        </span>
-                      </div>
-                    </TableCell>
+            <>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <SortableTableHead label="Server Name" field="server_name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="URL" field="url" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Roles" field="roles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Architecture" field="architecture" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Failure Domain" field="failure_domain" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   </TableRow>
-                ))
+                </TableHeader>
+                <TableBody>
+                  {sortedMembers.length === 0 ? (
+                    // important: this branch is only reachable with members present, because the
+                    // outer condition already handled the empty cluster. Reaching it means the
+                    // filters hid every member, which is a different fact from an empty cluster
+                    // and must not borrow its wording.
+                    <TableEmptyRow
+                      colSpan={6}
+                      icon={Server}
+                      title="No member matches the current filters"
+                      description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${members.length} member${members.length === 1 ? "" : "s"} in this cluster.`}
+                      action={
+                        <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                          Clear filters
+                        </Button>
+                      }
+                    />
+                  ) : (
+                    pagedMembers.map((member: any) => (
+                    <TableRow key={member.server_name}>
+                      <TableCell className="font-medium">
+                        <span className="flex items-center gap-2">
+                          <Server className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                          <TableLink onClick={() => handleMemberClick(member.server_name)}>
+                            {member.server_name}
+                          </TableLink>
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 text-sm">
+                          <Globe className="h-3 w-3 text-muted-foreground" />
+                          {member.url}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex gap-1 flex-wrap">
+                          {member.roles && member.roles.length > 0 ? (
+                            member.roles.map((role: string) => formatLabel(role)).join(", ")
+                          ) : (
+                            <TableEmptyValue label="No roles" />
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge 
+                          variant={member.status === "Online" ? "positive" : "negative"}
+                          className="gap-1"
+                        >
+                          {member.status === "Online" ? (
+                            <CheckCircle className="h-3 w-3" />
+                          ) : (
+                            <XCircle className="h-3 w-3" />
+                          )}
+                          {member.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm">
+                          {member.architecture || <TableEmptyValue label="No architecture" />}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1">
+                          <Shield className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-sm">
+                            {member.failure_domain || "default"}
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+                </TableBody>
+              </Table>
+
+              {/* Absent rather than disabled when every member fits on one page. */}
+              {totalPages > 1 && (
+                <div className="mt-4">
+                  <DataTablePagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    pageSize={pageSize}
+                    pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                    totalItems={sortedMembers.length}
+                    onPageChange={setPage}
+                    onPageSizeChange={(size) => {
+                      setPageSize(size);
+                      setPage(1);
+                    }}
+                  />
+                </div>
               )}
-              </TableBody>
-            </Table>
+            </>
           )}
         </CardContent>
       </Card>

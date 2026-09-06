@@ -12,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { TableEmptyValue } from "@/components/ui/table-text";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "active") return <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15">active</Badge>;
@@ -31,6 +33,14 @@ export function BreakGlassPanel() {
     queryFn: () => api.breakGlass.listGrants(),
     refetchInterval: 15000,
   });
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
+  // note: clamped on read, never corrected in an effect. This list refetches every 15 seconds,
+  // so an effect would paint one wrong frame and then move the page under whoever is reading it.
+  const totalPages = Math.max(1, Math.ceil(grants.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedGrants = grants.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const revoke = async (id: number) => {
     setRevoking(id);
@@ -75,6 +85,7 @@ export function BreakGlassPanel() {
         ) : grants.length === 0 ? (
           <p className="text-sm text-muted-foreground py-6">No break-glass grants.</p>
         ) : (
+          <>
           <Table>
             <TableHeader>
               <TableRow>
@@ -88,7 +99,7 @@ export function BreakGlassPanel() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {grants.map((g) => (
+              {pagedGrants.map((g) => (
                 <TableRow key={g.id}>
                   <TableCell className="font-medium">{g.cluster_id}</TableCell>
                   <TableCell>{g.target_org_slug || <TableEmptyValue label="No target organization" />}</TableCell>
@@ -115,6 +126,23 @@ export function BreakGlassPanel() {
               ))}
             </TableBody>
           </Table>
+          {totalPages > 1 && (
+            <div className="mt-4">
+              <DataTablePagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[...PANEL_PAGE_SIZES]}
+                totalItems={grants.length}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
+            </div>
+          )}
+          </>
         )}
       </CardContent>
     </Card>

@@ -65,6 +65,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import {
   useCreateInstance,
@@ -667,6 +669,31 @@ function InstanceCreateFormContent() {
     }
     return true;
   });
+
+  const [imagePage, setImagePage] = useState(1);
+  const [imagePageSize, setImagePageSize] = useState(TABLE_PAGE_SIZE);
+
+  // important: one reset seam for every image filter, compared during render rather than in an
+  // effect. An effect would paint a blank page first and correct it after, and a per-setter
+  // reset would have to be remembered again the next time a filter is added here. Narrowing
+  // from a later page is the failure this prevents: the slice starts past the end of the
+  // shorter list and the picker shows nothing while reporting a count.
+  const imageFilterKey = [
+    imgSearch, fDistribution, fRelease, fVariant, fArch, fCachedOnly, wantedImageType,
+  ].join("|");
+  const [lastImageFilterKey, setLastImageFilterKey] = useState(imageFilterKey);
+  if (lastImageFilterKey !== imageFilterKey) {
+    setLastImageFilterKey(imageFilterKey);
+    setImagePage(1);
+  }
+
+  // Clamped on read. The catalogue is refetched per node, so the list can shrink underneath.
+  const imageTotalPages = Math.max(1, Math.ceil(filteredImageRows.length / imagePageSize));
+  const imageCurrentPage = Math.min(imagePage, imageTotalPages);
+  const pagedImageRows = filteredImageRows.slice(
+    (imageCurrentPage - 1) * imagePageSize,
+    imageCurrentPage * imagePageSize,
+  );
 
   const openImageDialog = () => {
     setFType(wantedImageType); // default to the instance type being created
@@ -2235,7 +2262,7 @@ function InstanceCreateFormContent() {
                         description="Widen the filters, or pick a different node."
                       />
                     ) : (
-                      filteredImageRows.slice(0, 500).map((row) => (
+                      pagedImageRows.map((row) => (
                         <TableRow key={row.key}>
                           <TableCell>{row.distribution}</TableCell>
                           <TableCell>{row.release || <TableEmptyValue label="No release" />}</TableCell>
@@ -2264,10 +2291,26 @@ function InstanceCreateFormContent() {
                   </TableBody>
                 </Table>
               </div>
+              {/* note: this replaced a hard `.slice(0, 500)` and the words "(showing first 500)".
+                  The remote catalogue runs to thousands of rows, so image 501 was reachable only
+                  by guessing a search term that narrowed the list under the cap. */}
+              {imageTotalPages > 1 && (
+                <DataTablePagination
+                  currentPage={imageCurrentPage}
+                  totalPages={imageTotalPages}
+                  totalItems={filteredImageRows.length}
+                  pageSize={imagePageSize}
+                  pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                  onPageChange={setImagePage}
+                  onPageSizeChange={(size) => {
+                    setImagePageSize(size);
+                    setImagePage(1);
+                  }}
+                />
+              )}
               <p className="text-xs text-muted-foreground">
                 {filteredImageRows.length} image
                 {filteredImageRows.length === 1 ? "" : "s"}
-                {filteredImageRows.length > 500 ? " (showing first 500)" : ""}
               </p>
             </div>
           </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter,
@@ -34,6 +34,8 @@ import { useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { OverflowText } from "@/components/ui/overflow-text";
 import type {
   AccessPolicy, PolicyRule, PolicyCreateRequest, PolicyUpdateRequest,
@@ -935,7 +937,13 @@ function AssignedPolicyCard({
   onEditPolicy: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const rules = policy?.rules || [];
+  // note: memoised because it feeds the sort and the page slice below. A fresh array on every
+  // render would re-sort the whole rule set each time the parent re-renders.
+  const rules = useMemo(() => policy?.rules || [], [policy]);
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
 
   // rule table sorting (cluster column sorts by the resolved display name shown in the row)
   const ruleSortAccessors = useMemo(
@@ -955,7 +963,15 @@ function AssignedPolicyCard({
     sortDirection: ruleSortDirection,
     handleSort: handleRuleSort,
     sortItems: sortRules,
-  } = useTableSort(ruleSortAccessors, "cluster");
+  } = useTableSort(ruleSortAccessors, "cluster", "asc", resetPage);
+
+  // Sort the whole rule set, then take the page from it.
+  const sortedRules = useMemo(() => sortRules(rules), [sortRules, rules]);
+  // note: clamped on read rather than reset in an effect, so revoking a policy cannot leave
+  // this card sitting on a page that no longer exists and painting nothing.
+  const totalPages = Math.max(1, Math.ceil(sortedRules.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRules = sortedRules.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div className="border rounded-lg overflow-hidden">
@@ -1083,7 +1099,7 @@ function AssignedPolicyCard({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortRules(rules).map((r, idx) => (
+              {pagedRules.map((r, idx) => (
                 <TableRow key={idx} className="hover:bg-muted/30">
                   <TableCell>
                     {r.cluster_id === "*" ? (
@@ -1105,6 +1121,24 @@ function AssignedPolicyCard({
               ))}
             </TableBody>
           </Table>
+
+          {/* Absent rather than disabled when everything fits on one page. */}
+          {totalPages > 1 && (
+            <div className="mt-4">
+              <DataTablePagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[...PANEL_PAGE_SIZES]}
+                totalItems={sortedRules.length}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -1130,6 +1164,10 @@ function EffectivePermissionsSection({
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
+
   // effective rules sorting (cluster column sorts by the resolved display name shown in the row)
   const effectiveSortAccessors = useMemo(
     () => ({
@@ -1149,7 +1187,15 @@ function EffectivePermissionsSection({
     sortDirection: effectiveSortDirection,
     handleSort: handleEffectiveSort,
     sortItems: sortEffectiveRules,
-  } = useTableSort(effectiveSortAccessors, "cluster");
+  } = useTableSort(effectiveSortAccessors, "cluster", "asc", resetPage);
+
+  // Sort the whole aggregated set, then take the page from it.
+  const sortedRules = useMemo(() => sortEffectiveRules(rules), [sortEffectiveRules, rules]);
+  // note: clamped on read rather than reset in an effect, so a policy revoked while this
+  // section is open cannot strand the operator on a page past the end.
+  const totalPages = Math.max(1, Math.ceil(sortedRules.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedRules = sortedRules.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   return (
     <div>
@@ -1213,7 +1259,7 @@ function EffectivePermissionsSection({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortEffectiveRules(rules).map((r, idx) => (
+              {pagedRules.map((r, idx) => (
                 <TableRow key={idx} className="hover:bg-muted/20">
                   <TableCell className="font-medium">
                     {r.cluster_id === "*" ? (
@@ -1238,6 +1284,24 @@ function EffectivePermissionsSection({
               ))}
             </TableBody>
           </Table>
+
+          {/* Absent rather than disabled when everything fits on one page. */}
+          {totalPages > 1 && (
+            <div className="mt-4">
+              <DataTablePagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                pageSize={pageSize}
+                pageSizeOptions={[...PANEL_PAGE_SIZES]}
+                totalItems={sortedRules.length}
+                onPageChange={setPage}
+                onPageSizeChange={(size) => {
+                  setPageSize(size);
+                  setPage(1);
+                }}
+              />
+            </div>
+          )}
         </div>
       )}
     </div>

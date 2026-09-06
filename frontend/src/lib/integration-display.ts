@@ -102,3 +102,32 @@ export function formatApplicationType(appType: string | null | undefined): strin
 export function isLegacyUnscopedKey(capabilities: string[] | null | undefined): boolean {
   return capabilities == null;
 }
+
+/**
+ * What a key's status badge says, as a value.
+ *
+ * important: the branch order mirrors the badge exactly, and both read this rather than each
+ * deciding for themselves. A status facet that disagreed with the chip beside it would send an
+ * operator looking for a key the filter had already ruled out.
+ */
+export type APIKeyStatusLabel = "Active" | "Expired" | "Revoked" | "Inactive";
+
+export function getAPIKeyStatus(key: {
+  is_revoked?: boolean;
+  is_active?: boolean;
+  expires_at?: string | null;
+  expiry_state?: "never" | "active" | "expiring" | "expired" | null;
+}): APIKeyStatusLabel {
+  if (key.is_revoked) return "Revoked";
+  const expiryState = key.expiry_state ?? (key.expires_at ? "active" : "never");
+  if (expiryState === "expired") return "Expired";
+  return key.is_active ? "Active" : "Inactive";
+}
+
+/** Fixed order for the status facet: working first, then the two ways a key stops working. */
+export const API_KEY_STATUS_ORDER: readonly APIKeyStatusLabel[] = [
+  "Active",
+  "Inactive",
+  "Expired",
+  "Revoked",
+];

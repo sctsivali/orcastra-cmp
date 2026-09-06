@@ -19,6 +19,7 @@ import { useToast } from "@/hooks/use-toast";
 import { formatDateTime } from "@/lib/utils";
 import { extensionsAPI } from "@/lib/extensions-api";
 import { DELIVERY_STATE, SUBSCRIPTION_STATUS } from "@/lib/extension-display";
+import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import type {
   ExtensionVocabulary,
   WebhookDeliveryState,
@@ -62,7 +63,10 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
   const searchParams = useSearchParams();
   const [endpoint, setEndpoint] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
+  // note: `page` is the delivery log's, and it is the server's offset. The subscription list is
+  // held whole in memory and paged here, so it needs its own and cannot borrow that one.
   const [page, setPage] = useState(1);
+  const [subscriptionPage, setSubscriptionPage] = useState(1);
 
   // The parent already keeps the open panel in the URL so a delivery log can be linked to. A
   // filtered log is what somebody actually wants to send, so the filter goes there too.
@@ -97,6 +101,17 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
     queryClient.invalidateQueries({ queryKey: ["extensions", "subscriptions", installId] });
     queryClient.invalidateQueries({ queryKey: ["extensions", "deliveries", installId] });
   };
+
+  const subscriptionRows = subscriptions.data ?? [];
+  const subscriptionPages = Math.max(1, Math.ceil(subscriptionRows.length / PANEL_PAGE_SIZE));
+  // Clamped on read, the same rule the delivery pager below follows. Removing the only
+  // subscription on the last page shortens the list under whoever is reading it, and an effect
+  // would paint that empty page once before correcting itself.
+  const currentSubscriptionPage = Math.min(subscriptionPage, subscriptionPages);
+  const pagedSubscriptions = subscriptionRows.slice(
+    (currentSubscriptionPage - 1) * PANEL_PAGE_SIZE,
+    currentSubscriptionPage * PANEL_PAGE_SIZE,
+  );
 
   const deliveryRows = deliveries.data?.deliveries ?? [];
   const deliveryTotal = deliveries.data?.total ?? 0;
@@ -165,7 +180,7 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
 
         {subscriptions.isLoading ? (
           <div className="h-24 animate-pulse rounded-lg bg-muted" />
-        ) : (subscriptions.data ?? []).length === 0 ? (
+        ) : subscriptionRows.length === 0 ? (
           <EmptyState
             icon={Send}
             title="Nothing is subscribed yet"
@@ -173,7 +188,7 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
           />
         ) : (
           <ul className="divide-y rounded-lg border">
-            {(subscriptions.data ?? []).map((row) => {
+            {pagedSubscriptions.map((row) => {
               const meta = SUBSCRIPTION_STATUS[row.status];
               return (
                 <li key={row.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
@@ -220,6 +235,22 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
               );
             })}
           </ul>
+        )}
+
+        {/* Absent rather than disabled when everything fits. No mt-4 wrapper: the section is
+            already a space-y-3 stack, whose gap wins over a margin on the child.
+
+            important: the label is not decoration. Two pagers sit on this panel, so without it
+            the screen carries two Previous and two Next buttons named identically and a screen
+            reader cannot say which list either one moves. */}
+        {subscriptionPages > 1 && (
+          <DataTablePagination
+            variant="compact"
+            currentPage={currentSubscriptionPage}
+            totalPages={subscriptionPages}
+            onPageChange={setSubscriptionPage}
+            label={`subscriptions for installation ${installId}`}
+          />
         )}
 
         <div className="space-y-3 rounded-lg border p-3">

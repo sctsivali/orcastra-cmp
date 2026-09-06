@@ -14,6 +14,8 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { TableLink } from "@/components/ui/table-link";
+import { Button } from "@/components/ui/button";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
@@ -22,6 +24,7 @@ import { CopyableText } from "@/components/detail/copyable-text";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
+import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { parseLxdReference } from "@/lib/used-by";
 import { referenceKind } from "@/lib/used-by-kinds";
 import { formatLabel } from "@/lib/utils";
@@ -61,13 +64,25 @@ const PERMISSIONS = defineTable<any>()({
 
 function PermissionsPanelContent({ group }: { group: any }) {
   const permissions = React.useMemo(() => group?.permissions ?? [], [group]);
-  const filters = useTableFilters(PERMISSIONS, permissions, { syncUrl: false });
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState(PANEL_PAGE_SIZE);
+  const resetPage = React.useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(PERMISSIONS, permissions, { syncUrl: false, onFilterChange: resetPage });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     PERMISSIONS.sortAccessors,
     PERMISSIONS.defaultSort.field,
     PERMISSIONS.defaultSort.direction,
+    resetPage,
   );
-  const rows = React.useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
+  // Filter, then sort, then slice, so an ordering covers every permission the filters kept and
+  // not only the page on screen.
+  const sortedPermissions = React.useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
+  // note: clamped on read rather than corrected in an effect. An effect paints one wrong frame
+  // first and then moves the table while the reader is auditing it.
+  const totalPages = Math.max(1, Math.ceil(sortedPermissions.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedPermissions = sortedPermissions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   if (permissions.length === 0) {
     return <EmptyState icon={Shield} title="No permissions" description="This group grants nothing." />;
@@ -86,10 +101,20 @@ function PermissionsPanelContent({ group }: { group: any }) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.length === 0 ? (
-              <TableEmptyRow colSpan={3} title="No permissions match the current filters" />
+            {pagedPermissions.length === 0 ? (
+              <TableEmptyRow
+                colSpan={3}
+                icon={Shield}
+                title="No permissions match the current filters"
+                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${permissions.length} permissions.`}
+                action={
+                  <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                    Clear filters
+                  </Button>
+                }
+              />
             ) : (
-              rows.map((permission: any, index: number) => {
+              pagedPermissions.map((permission: any, index: number) => {
                 const reference = parseLxdReference(permission.url ?? "");
                 const kind = referenceKind(reference);
                 const href = kind.href?.(reference, group?.node);
@@ -121,6 +146,22 @@ function PermissionsPanelContent({ group }: { group: any }) {
           </TableBody>
         </Table>
       </div>
+      {/* Absent rather than disabled when everything fits on one page. No mt-4 wrapper: the
+          panel is already a space-y-3 stack, whose gap wins over a margin on the child. */}
+      {totalPages > 1 && (
+        <DataTablePagination
+          currentPage={currentPage}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          pageSizeOptions={[...PANEL_PAGE_SIZES]}
+          totalItems={sortedPermissions.length}
+          onPageChange={setPage}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(1);
+          }}
+        />
+      )}
     </div>
   );
 }

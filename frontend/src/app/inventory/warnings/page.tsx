@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, Suspense } from "react";
+import { useState, useMemo, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -50,6 +50,8 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import type { CertificateWarning, WarningInfo } from "@/types/api";
 import { SEVERITY_RANK } from "@/lib/sort";
@@ -204,9 +206,23 @@ function WarningsContent() {
   const gate = <F extends string>(fields: readonly F[], field: F, present: boolean) =>
     present ? fields : fields.filter((f) => f !== field);
 
+  // Paging is per tab for the same reason the filters are: three tables of three shapes and
+  // three lengths. One shared page number would drop the operator onto page 4 of a two-page
+  // certificates table the moment they switched tabs.
+  const [platformPage, setPlatformPage] = useState(1);
+  const [platformPageSize, setPlatformPageSize] = useState(TABLE_PAGE_SIZE);
+  const resetPlatformPage = useCallback(() => setPlatformPage(1), []);
+  const [certPage, setCertPage] = useState(1);
+  const [certPageSize, setCertPageSize] = useState(TABLE_PAGE_SIZE);
+  const resetCertPage = useCallback(() => setCertPage(1), []);
+  const [nodePage, setNodePage] = useState(1);
+  const [nodePageSize, setNodePageSize] = useState(TABLE_PAGE_SIZE);
+  const resetNodePage = useCallback(() => setNodePage(1), []);
+
   // One filter instance per tab, each namespaced in the URL so a selection on one cannot
   // leak into another.
   const platformFilters = useTableFilters(PLATFORM_WARNINGS, allWarnings as any[], {
+    onFilterChange: resetPlatformPage,
     availableFields: gate(
       PLATFORM_WARNINGS.facetFields,
       "node",
@@ -214,6 +230,7 @@ function WarningsContent() {
     ),
   });
   const certFilters = useTableFilters(CERT_WARNINGS, certWarnings as any[], {
+    onFilterChange: resetCertPage,
     availableFields: gate(
       CERT_WARNINGS.facetFields,
       "cluster",
@@ -221,6 +238,7 @@ function WarningsContent() {
     ),
   });
   const nodeFilters = useTableFilters(NODE_WARNINGS, nodeWarnings as any[], {
+    onFilterChange: resetNodePage,
     availableFields: gate(
       NODE_WARNINGS.facetFields,
       "cluster",
@@ -233,22 +251,42 @@ function WarningsContent() {
     sortField: platformSortField,
     sortDirection: platformSortDirection,
     handleSort: platformHandleSort,
-    sortItems: platformSortItems } = useTableSort(PLATFORM_WARNINGS.sortAccessors, PLATFORM_WARNINGS.defaultSort.field, PLATFORM_WARNINGS.defaultSort.direction);
+    sortItems: platformSortItems } = useTableSort(PLATFORM_WARNINGS.sortAccessors, PLATFORM_WARNINGS.defaultSort.field, PLATFORM_WARNINGS.defaultSort.direction, resetPlatformPage);
   const sortedWarnings = useMemo(() => platformSortItems(platformFilters.filteredRows), [platformFilters.filteredRows, platformSortItems]);
+  // Clamped on read rather than corrected in an effect: this list refetches on its own and a
+  // warning can age out of it, so the page under the operator shrinks with no interaction.
+  const platformTotalPages = Math.max(1, Math.ceil(sortedWarnings.length / platformPageSize));
+  const platformCurrentPage = Math.min(platformPage, platformTotalPages);
+  const pagedWarnings = sortedWarnings.slice(
+    (platformCurrentPage - 1) * platformPageSize,
+    platformCurrentPage * platformPageSize,
+  );
 
   const {
     sortField: certSortField,
     sortDirection: certSortDirection,
     handleSort: certHandleSort,
-    sortItems: certSortItems } = useTableSort(CERT_WARNINGS.sortAccessors, CERT_WARNINGS.defaultSort.field, CERT_WARNINGS.defaultSort.direction);
+    sortItems: certSortItems } = useTableSort(CERT_WARNINGS.sortAccessors, CERT_WARNINGS.defaultSort.field, CERT_WARNINGS.defaultSort.direction, resetCertPage);
   const sortedCertWarnings = useMemo(() => certSortItems(certFilters.filteredRows), [certFilters.filteredRows, certSortItems]);
+  const certTotalPages = Math.max(1, Math.ceil(sortedCertWarnings.length / certPageSize));
+  const certCurrentPage = Math.min(certPage, certTotalPages);
+  const pagedCertWarnings = sortedCertWarnings.slice(
+    (certCurrentPage - 1) * certPageSize,
+    certCurrentPage * certPageSize,
+  );
 
   const {
     sortField: nodeSortField,
     sortDirection: nodeSortDirection,
     handleSort: nodeHandleSort,
-    sortItems: nodeSortItems } = useTableSort(NODE_WARNINGS.sortAccessors, NODE_WARNINGS.defaultSort.field, NODE_WARNINGS.defaultSort.direction);
+    sortItems: nodeSortItems } = useTableSort(NODE_WARNINGS.sortAccessors, NODE_WARNINGS.defaultSort.field, NODE_WARNINGS.defaultSort.direction, resetNodePage);
   const sortedNodeWarnings = useMemo(() => nodeSortItems(nodeFilters.filteredRows), [nodeFilters.filteredRows, nodeSortItems]);
+  const nodeTotalPages = Math.max(1, Math.ceil(sortedNodeWarnings.length / nodePageSize));
+  const nodeCurrentPage = Math.min(nodePage, nodeTotalPages);
+  const pagedNodeWarnings = sortedNodeWarnings.slice(
+    (nodeCurrentPage - 1) * nodePageSize,
+    nodeCurrentPage * nodePageSize,
+  );
 
   
   // State for warning detail modal. The kind travels with the record, because the three tabs
@@ -390,6 +428,7 @@ function WarningsContent() {
                 : "No warnings found"}
             </div>
           ) : (
+            <>
             <div className="overflow-x-auto">
             <Table>
               <TableHeader>
@@ -424,7 +463,7 @@ function WarningsContent() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedWarnings.map((warning: any) => (
+                {pagedWarnings.map((warning: any) => (
                   <TableRow key={warning.uuid}>
                     <TableCell>
                       <TableLink
@@ -465,6 +504,25 @@ function WarningsContent() {
               </TableBody>
             </Table>
             </div>
+            {/* Absent rather than disabled when everything fits on one page. Outside the
+                horizontal scroller, so the controls stay put when a wide table scrolls. */}
+            {platformTotalPages > 1 && (
+              <div className="mt-4">
+                <DataTablePagination
+                  currentPage={platformCurrentPage}
+                  totalPages={platformTotalPages}
+                  pageSize={platformPageSize}
+                  pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                  totalItems={sortedWarnings.length}
+                  onPageChange={setPlatformPage}
+                  onPageSizeChange={(size) => {
+                    setPlatformPageSize(size);
+                    setPlatformPage(1);
+                  }}
+                />
+              </div>
+            )}
+            </>
           )}
         </CardContent>
       </Card>
@@ -486,12 +544,32 @@ function WarningsContent() {
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
               {sortedCertWarnings.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>No certificate issues found</p>
-                  <p className="text-sm mt-1">All certificates are healthy</p>
-                </div>
+                /* important: "all healthy" is a claim about the fleet, so it must not be made
+                   about a list that a filter emptied. On a health surface the two readings lead
+                   an operator to opposite conclusions, and the filtered one is now easier to
+                   reach than it was before this table could be narrowed and paged. */
+                certFilters.activeFilterCount > 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>No certificate issue matches the current filters</p>
+                    <p className="text-sm mt-1">
+                      {certFilters.activeFilterCount} filter
+                      {certFilters.activeFilterCount === 1 ? "" : "s"} active. This is not a
+                      clean bill of health.
+                    </p>
+                    <Button variant="outline" size="sm" className="mt-4" onClick={() => certFilters.clearAll()}>
+                      Clear filters
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Shield className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>No certificate issues found</p>
+                    <p className="text-sm mt-1">All certificates are healthy</p>
+                  </div>
+                )
               ) : (
+                <>
                 <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -505,7 +583,7 @@ function WarningsContent() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sortedCertWarnings.map((warning: any) => {
+                    {pagedCertWarnings.map((warning: any) => {
                       const isExpired = warning.warning_type === "cert_expired" || warning.days_until_expiry <= 0;
                       const statusLabel = isExpired ? "Expired" : "Expiring";
                       
@@ -557,6 +635,23 @@ function WarningsContent() {
                   </TableBody>
                 </Table>
                 </div>
+                {certTotalPages > 1 && (
+                  <div className="mt-4">
+                    <DataTablePagination
+                      currentPage={certCurrentPage}
+                      totalPages={certTotalPages}
+                      pageSize={certPageSize}
+                      pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                      totalItems={sortedCertWarnings.length}
+                      onPageChange={setCertPage}
+                      onPageSizeChange={(size) => {
+                        setCertPageSize(size);
+                        setCertPage(1);
+                      }}
+                    />
+                  </div>
+                )}
+                </>
               )}
             </CardContent>
           </Card>
@@ -576,12 +671,30 @@ function WarningsContent() {
             </CardHeader>
             <CardContent className="p-0 md:p-6 md:pt-0">
               {sortedNodeWarnings.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground">
-                  <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p>All nodes are online</p>
-                  <p className="text-sm mt-1">No connectivity issues detected</p>
-                </div>
+                /* Same reason as the certificate tab: "all nodes are online" is a claim about
+                   the fleet and a filter must never be allowed to make it. */
+                nodeFilters.activeFilterCount > 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>No offline node matches the current filters</p>
+                    <p className="text-sm mt-1">
+                      {nodeFilters.activeFilterCount} filter
+                      {nodeFilters.activeFilterCount === 1 ? "" : "s"} active. This does not mean
+                      every node is online.
+                    </p>
+                    <Button variant="outline" size="sm" className="mt-4" onClick={() => nodeFilters.clearAll()}>
+                      Clear filters
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Wifi className="h-12 w-12 mx-auto mb-4 opacity-50" />
+                    <p>All nodes are online</p>
+                    <p className="text-sm mt-1">No connectivity issues detected</p>
+                  </div>
+                )
               ) : (
+                <>
                 <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -593,7 +706,7 @@ function WarningsContent() {
                                           </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {sortedNodeWarnings.map((warning: any) => (
+                    {pagedNodeWarnings.map((warning: any) => (
                       <TableRow key={warning.cluster_id}>
                         <TableCell>
                           <div>
@@ -636,6 +749,23 @@ function WarningsContent() {
                   </TableBody>
                 </Table>
                 </div>
+                {nodeTotalPages > 1 && (
+                  <div className="mt-4">
+                    <DataTablePagination
+                      currentPage={nodeCurrentPage}
+                      totalPages={nodeTotalPages}
+                      pageSize={nodePageSize}
+                      pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                      totalItems={sortedNodeWarnings.length}
+                      onPageChange={setNodePage}
+                      onPageSizeChange={(size) => {
+                        setNodePageSize(size);
+                        setNodePage(1);
+                      }}
+                    />
+                  </div>
+                )}
+                </>
               )}
             </CardContent>
           </Card>

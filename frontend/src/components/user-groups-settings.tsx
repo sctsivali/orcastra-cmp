@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { Suspense, useCallback, useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
@@ -30,6 +30,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { OverflowCell } from "@/components/ui/overflow-cell";
+import { TableEmptyRow } from "@/components/ui/table-text";
+import { TableToolbar } from "@/components/ui/table-toolbar";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog,
   DialogContent,
@@ -61,7 +65,11 @@ import { toast } from "@/hooks/use-toast";
 import { PolicyManagementSection } from "@/components/policy-management-section";
 import { TenantAccessDialog } from "@/components/tenant-access-dialog";
 import { useTableSort } from "@/hooks/use-table-sort";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { defineTable, fromSort } from "@/lib/table-filter";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { formatLabel } from "@/lib/utils";
 import type {
   UserGroupEntry,
   IntegrationOrganization,
@@ -93,7 +101,52 @@ function roleBadge(role: string) {
   }
 }
 
-export function UserGroupsSettings() {
+/**
+ * Every assigned user across every organization lands in this one list, so an operator looking
+ * for one person is scanning a set that grows with the whole fleet. Search is what makes a row
+ * findable once the list is longer than a screen; sorting alone stops helping there.
+ *
+ * important: an id, and one that is not "policies". PolicyManagementSection renders its own
+ * filtered table on this same screen, and two tables without a namespace write `q` into the
+ * same key and narrow each other on every keystroke.
+ */
+const USERS = defineTable<UserGroupEntry>()({
+  id: "users",
+  searchPlaceholder: "Search users by email or organization",
+  defaultSort: { field: "email", direction: "asc" },
+  searchExtra: (user) => (user.organizations ?? []).flatMap((org) => [org.name, org.slug]),
+  columns: [
+    {
+      field: "email",
+      label: "Email",
+      sort: (user) => user.user_email,
+      search: (user) => user.user_email,
+      filter: fromSort("text"),
+    },
+    {
+      field: "role",
+      label: "Role",
+      sort: (user) => user.role,
+      facet: (user) => user.role,
+      facetSpec: { primary: true, format: formatLabel },
+    },
+    {
+      // note: sorted by how many organizations a user reaches, filtered by which ones. The
+      // count is what the column answers at a glance; the names are what an operator narrows
+      // by, and "who can see org X" is the question this list is worst at answering by eye.
+      field: "organizations",
+      label: "Organizations",
+      sort: (user) => user.organizations?.length ?? 0,
+      facet: (user) => (user.organizations ?? []).map((org) => org.name),
+      facetSpec: { primary: true, emptyLabel: "No organizations" },
+    },
+  ],
+});
+
+/** Email, Role, Organizations, Actions. */
+const USER_COLUMN_COUNT = 4;
+
+function UserGroupsSettingsContent() {
   const queryClient = useQueryClient();
   const [assignOpen, setAssignOpen] = useState(false);
   const [deleteEmail, setDeleteEmail] = useState<string | null>(null);
@@ -104,22 +157,6 @@ export function UserGroupsSettings() {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("tenant");
   const [orgId, setOrgId] = useState<string>("");
-
-  // user table sorting
-  const userSortAccessors = useMemo(
-    () => ({
-      email: (u: any) => u.user_email,
-      role: (u: any) => u.role,
-      organizations: (u: any) => u.organizations?.length ?? 0,
-    }),
-    [],
-  );
-  const {
-    sortField: userSortField,
-    sortDirection: userSortDirection,
-    handleSort: handleUserSort,
-    sortItems: sortUsers,
-  } = useTableSort(userSortAccessors, "email");
 
   // fetch user list
   const {
@@ -145,6 +182,50 @@ export function UserGroupsSettings() {
     queryFn: () => api.userGroups.syncStatus(),
     refetchInterval: 30000, // check every 30s
   });
+
+  // note: memoised. A fresh array every render hands the filter engine a new identity each
+  // time and re-runs the whole pass over rows that did not change.
+  const userRows = useMemo<UserGroupEntry[]>(() => users ?? [], [users]);
+
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
+
+  const filters = useTableFilters(USERS, userRows, {
+    // Covers every seam at once: the search box, both facets, chip removal and Clear all.
+    // Without it a search lands on page 3 of 1 and paints nothing.
+    onFilterChange: resetPage,
+    // This table lives inside a settings card, not on a route of its own, so its filters
+    // would outlive the screen in the address bar.
+    syncUrl: false,
+  });
+
+  const {
+    sortField: userSortField,
+    sortDirection: userSortDirection,
+    handleSort: handleUserSort,
+    sortItems: sortUsers,
+  } = useTableSort(
+    USERS.sortAccessors,
+    USERS.defaultSort.field,
+    USERS.defaultSort.direction,
+    resetPage,
+  );
+
+  // Filter, then sort, then slice. Sorting therefore covers the whole filtered set rather than
+  // the page on screen.
+  const sortedUsers = useMemo(
+    () => sortUsers(filters.filteredRows),
+    [sortUsers, filters.filteredRows],
+  );
+  // Clamped on read, never corrected in an effect: an effect would snap the operator back a
+  // page mid-task and still paint one wrong frame first.
+  const totalPages = Math.max(1, Math.ceil(sortedUsers.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedUsers = sortedUsers.slice(
+    (currentPage - 1) * pageSize,
+    currentPage * pageSize,
+  );
 
   // assign mutation
   const assignMutation = useMutation({
@@ -411,7 +492,7 @@ export function UserGroupsSettings() {
               <AlertCircle className="h-5 w-5" />
               <span>Failed to load users: {(usersError as Error).message}</span>
             </div>
-          ) : !users?.length ? (
+          ) : userRows.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <Users className="h-10 w-10 mx-auto mb-3 opacity-40" />
               <p className="text-sm">No users assigned yet</p>
@@ -420,6 +501,8 @@ export function UserGroupsSettings() {
               </p>
             </div>
           ) : (
+            <>
+            <TableToolbar filters={filters} noun="users" className="mb-4" />
             <div className="rounded-md border">
               <Table>
                 <TableHeader>
@@ -449,7 +532,19 @@ export function UserGroupsSettings() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortUsers(users).map((user: UserGroupEntry) => (
+                  {pagedUsers.length === 0 ? (
+                    <TableEmptyRow
+                      colSpan={USER_COLUMN_COUNT}
+                      icon={Users}
+                      title="No user matches the current filters"
+                      description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${userRows.length} users.`}
+                      action={
+                        <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                          Clear filters
+                        </Button>
+                      }
+                    />
+                  ) : pagedUsers.map((user: UserGroupEntry) => (
                     <TableRow key={user.user_email}>
                       <TableCell className="font-medium">
                         {user.user_email}
@@ -553,6 +648,24 @@ export function UserGroupsSettings() {
                 </TableBody>
               </Table>
             </div>
+            {/* Absent rather than disabled when everything fits on one page. */}
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <DataTablePagination
+                  currentPage={currentPage}
+                  totalPages={totalPages}
+                  totalItems={sortedUsers.length}
+                  pageSize={pageSize}
+                  pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                  onPageChange={setPage}
+                  onPageSizeChange={(size) => {
+                    setPageSize(size);
+                    setPage(1);
+                  }}
+                />
+              </div>
+            )}
+            </>
           )}
         </CardContent>
       </Card>
@@ -572,5 +685,20 @@ export function UserGroupsSettings() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * The boundary the filter hook requires.
+ *
+ * useTableFilters reads the query string even with syncUrl off, which opts a client component
+ * out of prerendering, and Next then fails the build on the route unless a boundary sits above
+ * it. Carrying its own means this can be dropped anywhere without the caller knowing that.
+ */
+export function UserGroupsSettings() {
+  return (
+    <Suspense fallback={<Skeleton className="h-64 rounded-xl" />}>
+      <UserGroupsSettingsContent />
+    </Suspense>
   );
 }
