@@ -1955,9 +1955,13 @@ async def list_api_keys(fresh: bool = False):
     try:
         # Scoped cache key so each org gets its own cached list
         cache = get_cache_manager()
-        cache_key = get_scope_cache_key("integrations:api_keys:list")
+        # important: `:v2` because the cached value changed shape. It now carries the user
+        # mapping counts beside the metadata, and a v1 entry written by a running instance
+        # during a rolling deploy is a bare list. A new key is cheaper and safer than teaching
+        # the reader to recognise both, and the old entries expire on their own in 60s.
+        cache_key = get_scope_cache_key("integrations:api_keys:list:v2")
         cached_data = None if fresh else cache.get("api_responses", cache_key)
-        
+
         if cached_data is None:
             all_metadata = list_api_keys_from_vault(vault_client)
             
@@ -1973,10 +1977,27 @@ async def list_api_keys(fresh: bool = False):
                     if key_clusters & allowed:
                         filtered.append(meta)
                 all_metadata = filtered
-            
-            cache.set("api_responses", cache_key, all_metadata, ttl=60)
+
+            # important: the user mapping count is resolved HERE, inside the cache miss, and
+            # cached with the metadata it belongs to. It used to be read one key at a time
+            # below the cache, so every request paid a Vault LIST plus one read per mapping
+            # for every visible key even on a cache hit. The cache covered the metadata and
+            # nothing else, which is why the endpoint stayed slow no matter how warm it was.
+            user_counts = {
+                meta["id"]: len(get_user_mappings_from_vault(vault_client, meta["id"]))
+                for meta in all_metadata
+                if isinstance(meta, dict) and meta.get("id")
+            }
+
+            cache.set(
+                "api_responses",
+                cache_key,
+                {"metadata": all_metadata, "user_counts": user_counts},
+                ttl=60,
+            )
         else:
-            all_metadata = cached_data
+            all_metadata = cached_data.get("metadata", [])
+            user_counts = cached_data.get("user_counts", {})
         
         # Process and count
         # important: an expired key is not active. It was counted here, so the dashboard
@@ -1987,8 +2008,10 @@ async def list_api_keys(fresh: bool = False):
         records = [m for m in all_metadata if isinstance(m, dict)]
         counts = tally_keys(records)
 
+        # note: `_key_info` builds the model with `APIKeyInfo(**metadata)`, so the count is
+        # passed alongside rather than folded into the dict, which would be an unexpected field.
         keys = [
-            _key_info(metadata, len(get_user_mappings_from_vault(vault_client, metadata["id"])))
+            _key_info(metadata, user_counts.get(metadata.get("id"), 0))
             for metadata in records
         ]
 
