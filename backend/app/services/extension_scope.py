@@ -270,6 +270,7 @@ async def load_install_snapshot(db: AsyncSession, api_key_id: str) -> Optional[D
         "extension_status": extension_status,
         "organization_id": install.organization_id,
         "status": install.status,
+        "suspend_reason": install.suspend_reason,
         "granted_capabilities": list(install.granted_capabilities or []),
         "granted_scope": list(install.granted_scope or []),
     }
@@ -297,9 +298,18 @@ async def assert_install_is_live(
     if snapshot.get("extension_status") == "disabled":
         raise ScopeRefused("This add-on has been disabled")
     if snapshot["status"] != "active":
-        raise ScopeRefused(
-            f"This installation is {snapshot['status']}", status_code=403
-        )
+        # important: the reason travels with the refusal. Without it the add-on was told only
+        # "suspended", and when the reconcile sweep is what suspended it, that stored sentence is
+        # the only explanation that exists anywhere the add-on can reach.
+        #
+        # This is a deliberate disclosure: an operator types that text and a third party reads it.
+        # The party whose access stopped is the party who has to act, so it is returned, and the
+        # form that collects it says so.
+        reason = (snapshot.get("suspend_reason") or "").strip()
+        detail = f"This installation is {snapshot['status']}"
+        if reason:
+            detail = f"{detail}: {reason}"
+        raise ScopeRefused(detail, status_code=403)
     if cluster_id is not None:
         reachable = {
             grant.get("cluster_id") for grant in snapshot["granted_scope"] if isinstance(grant, dict)

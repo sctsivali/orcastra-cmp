@@ -1,6 +1,6 @@
 """Where the installation check sits in `validate_api_key` is load-bearing, not incidental.
 
-The check runs AFTER `consume_api_key_budget`. Placed before it, a suspended add-on would be
+The check runs AFTER the budget is spent. Placed before it, a suspended add-on would be
 refused for free and could hammer the door without ever reaching its own per-key rate limit,
 bounded only by the IP limiter. Placed after, it spends its budget and gets throttled like
 anything else.
@@ -30,11 +30,15 @@ def _statement_order(fn) -> list:
 def test_the_installation_check_runs_after_the_budget_is_spent() -> None:
     order = _statement_order(validate_api_key)
 
-    assert "consume_api_key_budget" in order, "the per-key rate limit is gone from this path"
+    # Matched on the prefix rather than the exact name: the call became
+    # `consume_api_key_budget_state` when the limiter started reporting the caller's remaining
+    # budget, and an exact match would have read that rename as the throttle being deleted.
+    spend = next((name for name in order if name.startswith("consume_api_key_budget")), None)
+    assert spend is not None, "the per-key rate limit is gone from this path"
     assert "assert_install_is_live" in order, (
         "nothing checks the installation, so suspending an add-on does not stop its credential"
     )
-    assert order.index("consume_api_key_budget") < order.index("assert_install_is_live"), (
+    assert order.index(spend) < order.index("assert_install_is_live"), (
         "the installation check moved ahead of the budget spend, so a suspended add-on is "
         "refused without spending its own rate limit and can hammer the door for free"
     )

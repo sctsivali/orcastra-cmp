@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.api_key_expiry import days_remaining, expiry_state
 from app.core.database import get_db
 from app.core.extension_manifest import EXTENSION_EVENTS
 from app.models.db_models import Organization
@@ -96,5 +97,17 @@ async def describe_self(
         "granted_scope": list(install.granted_scope or []),
         "settings": resolved,
         "credential_generation": install.credential_generation,
+        # important: the credential's own expiry, reported by the one endpoint every page of the
+        # public documentation tells an add-on to poll. It was absent, so the first signal that a
+        # credential was about to lapse was a 401 in production, which is precisely the failure
+        # `expiry_state` was written to prevent. `whoami` already answered this, under a different
+        # name, on a route no extensions page recommends.
+        #
+        # `never` is a real answer, not a missing one: a key with no expiry is a supported state.
+        "credential": {
+            "expires_at": api_key.get("expires_at"),
+            "expires_in_days": days_remaining(api_key.get("expires_at")),
+            "state": expiry_state(api_key.get("expires_at")),
+        },
         "available_events": sorted(EXTENSION_EVENTS),
     }

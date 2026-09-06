@@ -271,6 +271,7 @@ class FakeInstall:
     extension_id: int = 1
     organization_id: int = 3
     status: str = "active"
+    suspend_reason: Optional[str] = None
     granted_capabilities: Optional[List[str]] = None
     granted_scope: Optional[List[Dict[str, Any]]] = None
 
@@ -304,6 +305,42 @@ def test_a_suspended_installation_stops_working(monkeypatch) -> None:
         )
     assert exc.value.status_code == 403
     assert "suspended" in exc.value.detail
+
+
+def test_a_suspended_installation_is_told_why(monkeypatch) -> None:
+    """The reason travels with the refusal.
+
+    Without it the add-on is told only that it is suspended, and when the reconcile sweep is what
+    suspended it, the stored sentence is the only explanation that exists anywhere the add-on can
+    reach. This is a deliberate disclosure of operator-authored text, so it is pinned rather than
+    left to drift.
+    """
+    monkeypatch.setattr(scope, "_install_revoked_elsewhere", lambda _k: False)
+    reason = "Reconcile: this organization no longer reaches any cluster in the grant"
+    with pytest.raises(ScopeRefused) as exc:
+        asyncio.run(
+            scope.assert_install_is_live(
+                FakeDB(FakeInstall(status="suspended", suspend_reason=reason)), "oak_x"
+            )
+        )
+    assert reason in exc.value.detail, (
+        "the add-on is told it is suspended and not why, which is the whole of what it needs"
+    )
+
+
+def test_a_reasonless_suspension_does_not_grow_a_dangling_colon(monkeypatch) -> None:
+    """The positive twin's edge: an operator may suspend without typing anything."""
+    monkeypatch.setattr(scope, "_install_revoked_elsewhere", lambda _k: False)
+    for blank in (None, "", "   "):
+        with pytest.raises(ScopeRefused) as exc:
+            asyncio.run(
+                scope.assert_install_is_live(
+                    FakeDB(FakeInstall(status="suspended", suspend_reason=blank)), "oak_x"
+                )
+            )
+        assert exc.value.detail == "This installation is suspended", (
+            f"a {blank!r} reason produced {exc.value.detail!r}"
+        )
 
 
 def test_a_cluster_outside_the_stored_grant_is_refused_at_request_time(monkeypatch) -> None:

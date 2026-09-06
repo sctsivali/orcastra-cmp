@@ -43,8 +43,13 @@ SETTING_KEY_RE = re.compile(r"\A[a-z][a-z0-9_]{0,62}\Z")
 SLUG_MIN_LENGTH = 3
 SLUG_MAX_LENGTH = 64
 
-# No request-size limit exists anywhere in the middleware stack, so a handler that parses a
-# manifest reads the raw body and refuses past this before Pydantic ever sees it.
+# important: enforced by `assert_manifest_within_limit` on the two routes that accept a manifest,
+# not by middleware. This closes the contract gap, since the cap was documented as a server rule
+# and lived only in the browser dialog, so an API publisher and a UI publisher were held to
+# different limits. It is deliberately NOT a memory bound: no request-size limit exists anywhere in
+# the middleware stack, so the body has already been read by the time this refuses. Saying so
+# plainly, because the comment that used to sit here claimed the opposite and nothing enforced it
+# at all.
 MANIFEST_MAX_BYTES = 16 * 1024
 
 MAX_SETTINGS_FIELDS = 32

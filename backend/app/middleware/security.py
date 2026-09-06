@@ -8,7 +8,7 @@ import hashlib
 import logging
 import os
 import time
-from typing import Iterable, Optional
+from typing import Dict, Iterable, Optional, Tuple
 
 from pydantic import TypeAdapter, ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -62,6 +62,38 @@ def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
         if count == 1:
             client.expire(bucket, window_seconds)
         return int(count) <= limit
+    except Exception as exc:  # noqa: BLE001 - any store failure must fall back, not block
+        logger.warning("Shared rate limit unavailable, falling back to in-memory: %s", exc)
+        return None
+
+
+def _shared_consume(key: str, limit: int, window_seconds: int) -> Optional[Tuple[int, int]]:
+    """Spend one hit and report the count and the seconds left in the window.
+
+    The same operation `_shared_allow` performs, keeping the number it throws away. A caller that
+    wants to tell the client where it stands needs the count; a caller that only wants a yes or no
+    keeps using `_shared_allow`, whose contract is unchanged.
+
+    None means the store could not answer, which is the fail-open case: a caller must not invent a
+    remaining budget it does not know.
+    """
+    if limit <= 0:
+        return None
+    try:
+        from app.core.cache import get_cache_manager
+
+        client = get_cache_manager().redis_client
+        if client is None:
+            return None
+        bucket = f"orcastra:ratelimit:{key}"
+        count = int(client.incr(bucket))
+        if count == 1:
+            client.expire(bucket, window_seconds)
+        ttl = client.ttl(bucket)
+        # Redis answers -1 for a key with no expiry and -2 for one that just vanished. Neither is
+        # a window this caller can report, so both fall back to the configured length.
+        reset = window_seconds if ttl is None or ttl < 0 else int(ttl)
+        return count, reset
     except Exception as exc:  # noqa: BLE001 - any store failure must fall back, not block
         logger.warning("Shared rate limit unavailable, falling back to in-memory: %s", exc)
         return None
@@ -161,6 +193,41 @@ def consume_api_key_budget(key_id: str) -> bool:
         return True
     allowed = _shared_allow(f"apikey:{key_id}", limit, settings.rate_limit_window_seconds)
     return True if allowed is None else allowed
+
+
+def consume_api_key_budget_state(key_id: str) -> Tuple[bool, Optional[Dict[str, int]]]:
+    """Spend one request and report where the caller now stands.
+
+    Returns `(allowed, state)`. `state` carries `limit`, `remaining` and `reset`, or is None when
+    the limiter is off or its store could not answer. A caller emitting headers must omit them
+    rather than guess: an integration told it has budget it does not have is worse served than one
+    told nothing.
+
+    This exists because a caller had no way to learn its limit. The refusal carried a hardcoded
+    `Retry-After: 30` and no ceiling, while the documentation says deployments retune the number,
+    so an integrator was asked to guess something the server knew.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return True, None
+    limit = settings.rate_limit_api_key_requests
+    if limit <= 0:
+        return True, None
+
+    window = settings.rate_limit_window_seconds
+    spent = _shared_consume(f"apikey:{key_id}", limit, window)
+    if spent is None:
+        # Fails open, like every other limiter here.
+        return True, None
+
+    count, reset = spent
+    return count <= limit, {
+        "limit": limit,
+        "remaining": max(0, limit - count),
+        "reset": reset,
+    }
 
 
 class WindowedRateLimiter:

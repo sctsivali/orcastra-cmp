@@ -7,13 +7,13 @@ consents to; `extension_installs.py` is where a grant is actually made.
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_capabilities import CAPABILITIES
 from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_partner
-from app.core.extension_manifest import EXTENSION_EVENTS, SETTING_TYPES
+from app.core.extension_manifest import EXTENSION_EVENTS, MANIFEST_MAX_BYTES, SETTING_TYPES
 from app.core.org_scope import get_user_org_ids, org_scope_dependency
 from app.core.rbac import Role
 from app.models.extension_schemas import (
@@ -78,6 +78,23 @@ async def get_vocabulary() -> Dict[str, Any]:
     }
 
 
+async def assert_manifest_within_limit(request: Request) -> None:
+    """Hold an API publisher to the same 16 KB the dialog and the docs already promise.
+
+    The cap was documented as a server rule and enforced only in the browser, so publishing the
+    same manifest through the API succeeded where the UI refused it. Reading the cached body here
+    costs nothing: FastAPI has already read it to build the model.
+    """
+    body = await request.body()
+    if len(body) > MANIFEST_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"That manifest is {len(body)} bytes. The limit is {MANIFEST_MAX_BYTES}."
+            ),
+        )
+
+
 @router.post(
     "",
     response_model=ExtensionResponse,
@@ -88,6 +105,7 @@ async def get_vocabulary() -> Dict[str, Any]:
 async def register_extension(
     manifest: ExtensionManifest,
     _: None = Depends(check_read_only_mode),
+    __: None = Depends(assert_manifest_within_limit),
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ) -> ExtensionResponse:
@@ -182,6 +200,7 @@ async def publish_extension_version(
     slug: str,
     manifest: ExtensionManifest,
     _: None = Depends(check_read_only_mode),
+    __: None = Depends(assert_manifest_within_limit),
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
 ) -> ExtensionResponse:

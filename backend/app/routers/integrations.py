@@ -14,7 +14,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, NamedTuple, Tuple, Union
-from fastapi import APIRouter, HTTPException, Depends, Query, Header
+from fastapi import APIRouter, HTTPException, Depends, Query, Header, Response
 from pydantic import BaseModel, Field, field_validator
 import requests
 
@@ -87,7 +87,7 @@ from app.core.api_key_capabilities import (
 from app.core import build_identity
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.url_safety import assert_url_is_fetchable
-from app.middleware.security import consume_api_key_budget
+from app.middleware.security import consume_api_key_budget, consume_api_key_budget_state
 from app.core.dependencies import check_read_only_mode, require_admin, require_partner, require_tenant, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, get_scope_cache_key, get_current_allowed_clusters, reconcile_personal_clusters
 from app.core.cache import get_cache_manager
@@ -1621,6 +1621,11 @@ async def _reconcile_synced_members(
 async def validate_api_key(
     x_api_key_id: str = Header(..., alias="X-API-Key-ID"),
     x_api_key_secret: str = Header(..., alias="X-API-Key-Secret"),
+    # important: trailing, and defaulted, so the header positions are unchanged. FastAPI injects a
+    # Response by annotation regardless of where it sits or whether it carries a default, while the
+    # tests that call this dependency directly keep passing two positional arguments. Putting it
+    # first silently shifted those calls by one and turned every such test into a 401.
+    response: Response = None,  # type: ignore[assignment]
 ) -> Dict[str, Any]:
     """
     Dependency to validate API key from headers.
@@ -1679,11 +1684,32 @@ async def validate_api_key(
     # note: after the secret verifies, never before. The key id is public, so counting it in the
     # middleware would let anyone holding a victim's id spend that integration's budget with a
     # wrong secret. See consume_api_key_budget.
-    if not consume_api_key_budget(x_api_key_id):
+    allowed, budget = consume_api_key_budget_state(x_api_key_id)
+    if budget is not None and response is not None:
+        # A caller could not previously learn its own limit: the ceiling is retuned per deployment
+        # and the refusal carried a fixed Retry-After, so an integrator was asked to guess a number
+        # the server already knew. Omitted entirely when the limiter is off or its store could not
+        # answer, because a budget we cannot compute must not be reported as one we can.
+        response.headers["X-RateLimit-Limit"] = str(budget["limit"])
+        response.headers["X-RateLimit-Remaining"] = str(budget["remaining"])
+        response.headers["X-RateLimit-Reset"] = str(budget["reset"])
+    if not allowed:
+        retry_after = str(budget["reset"]) if budget is not None else "30"
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded for this API key. Please try again later.",
-            headers={"Retry-After": "30"},
+            headers={
+                "Retry-After": retry_after,
+                **(
+                    {
+                        "X-RateLimit-Limit": str(budget["limit"]),
+                        "X-RateLimit-Remaining": "0",
+                        "X-RateLimit-Reset": str(budget["reset"]),
+                    }
+                    if budget is not None
+                    else {}
+                ),
+            },
         )
 
     # important: an add-on's credential is an ordinary key pair, so every check above passes for
