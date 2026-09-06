@@ -484,8 +484,29 @@ function InstancesContent() {
                   <TableEmptyRow
                     colSpan={10}
                     icon={Box}
-                    title="No instances found"
-                    description="No instance matches the current filters."
+                    title={
+                      filters.activeFilterCount > 0
+                        ? "No instances found"
+                        : "No instances yet"
+                    }
+                    // The description was unconditional, so a deployment with no clusters at all
+                    // was told its filters were wrong. Eight sibling tables already guard this;
+                    // this is the most-visited one and was the outlier.
+                    description={
+                      filters.activeFilterCount > 0
+                        ? "No instance matches the current filters."
+                        : "Instances appear here once a cluster reports one."
+                    }
+                    action={
+                      filters.activeFilterCount === 0 && canCreateInstance ? (
+                        <Button
+                          size="sm"
+                          onClick={() => navigate("/inventory/instances/create")}
+                        >
+                          Create Instance
+                        </Button>
+                      ) : undefined
+                    }
                   />
                 ) : null
               ) : (
@@ -502,7 +523,14 @@ function InstancesContent() {
                     </Badge>
                   </TableCell>
                   <TableCell>{formatInstanceType(instance.type)}</TableCell>
-                  <TableCell className="whitespace-nowrap">{instance.host}</TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {/* The row was half-linked: the name cell beside this is already a TableLink
+                        while the cluster it runs on was plain text. The deep link it needs already
+                        exists and is documented at the top of this file. */}
+                    <TableLink href={`/inventory/clusters?q=${encodeURIComponent(instance.host)}`}>
+                      {instance.host}
+                    </TableLink>
+                  </TableCell>
                   <TableCell className="whitespace-nowrap">{instance.project || "default"}</TableCell>
                   <TableCell>
                     <OverflowCell

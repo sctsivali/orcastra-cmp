@@ -13,6 +13,7 @@ import {
   Trash2,
   Plus,
   Users,
+  Box,
   KeyRound,
   Terminal,
   Shield,
@@ -453,6 +454,23 @@ function ClustersContent() {
                       </TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-2">
+                          {/* The most obvious traversal in the product, and the one this row did
+                              not offer: a cluster to the instances running on it. The deep link
+                              was already built and documented on the instances page. Named as well
+                              as titled, unlike its neighbours, so a screen reader reaches it. */}
+                          <Button
+                            asChild
+                            variant="outline"
+                            size="sm"
+                            aria-label={`View instances on ${cluster.cluster_id}`}
+                            title="View Instances"
+                          >
+                            <IntentLink
+                              href={`/inventory/instances?host=${encodeURIComponent(cluster.cluster_id)}`}
+                            >
+                              <Box className="h-4 w-4" aria-hidden="true" />
+                            </IntentLink>
+                          </Button>
                           {cluster.clustered && cluster.status === "online" && (
                             <Button asChild variant="outline" size="sm" title="View Cluster Members">
                               <IntentLink href={`/inventory/clustering/members?node=${cluster.cluster_id}`}>
