@@ -18,7 +18,6 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { useToast } from "@/hooks/use-toast";
 import { extensionsAPI } from "@/lib/extensions-api";
-import { INSTALL_STATUS } from "@/lib/extension-display";
 import { Role } from "@/types/rbac";
 import type { ExtensionInstallResponse, WebhookSecretResponse } from "@/types/api";
 
@@ -139,7 +138,6 @@ function InstallDetail() {
 
   const row = install.data;
   if (!row) return null;
-  const meta = INSTALL_STATUS[row.status];
 
   return (
     <div className="container mx-auto space-y-6 p-6">
@@ -150,8 +148,9 @@ function InstallDetail() {
             v{row.extension_version} in {row.organization_slug ?? row.organization_id}
           </p>
         </div>
+        {/* Actions only. The status moved into the Health panel, where the notice explaining a
+            suspension already lives; beside these buttons it read as a third one. */}
         <div className="flex items-center gap-2">
-          <Badge variant={meta.tone}>{meta.label}</Badge>
           {row.status === "active" ? (
             <Button variant="outline" size="sm" onClick={() => setStatus.mutate("suspend")}>
               Suspend

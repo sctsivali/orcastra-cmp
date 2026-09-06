@@ -22,12 +22,6 @@ export default function ExtensionsPage() {
 
   return (
     <div className="container mx-auto space-y-6 p-6">
-      <div>
-        <h1 className="text-3xl font-bold">Extensions</h1>
-        <p className="text-sm text-muted-foreground">
-          External applications built against the Orcastra API
-        </p>
-      </div>
       <ExtensionsOverview />
     </div>
   );

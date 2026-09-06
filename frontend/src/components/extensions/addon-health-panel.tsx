@@ -5,6 +5,7 @@ import { AlertTriangle, PauseCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { INSTALL_STATUS } from "@/lib/extension-display";
 import { formatDateTime } from "@/lib/utils";
 import type { ExtensionInstall, WebhookDelivery, WebhookSubscription } from "@/types/api";
 
@@ -76,6 +77,16 @@ export function AddonHealthPanel({ install, subscriptions, deliveries }: AddonHe
       )}
 
       <dl className="grid gap-x-6 gap-y-3 rounded-lg border p-4 sm:grid-cols-2">
+        {/* Status reads as a state rather than a third button here, and it sits with the
+            suspension notice above that explains it. */}
+        <div>
+          <dt className="text-sm text-muted-foreground">Status</dt>
+          <dd className="text-sm">
+            <Badge variant={INSTALL_STATUS[install.status].tone}>
+              {INSTALL_STATUS[install.status].label}
+            </Badge>
+          </dd>
+        </div>
         <div>
           <dt className="text-sm text-muted-foreground">Credential last used</dt>
           <dd className="text-sm">

@@ -153,6 +153,22 @@ export function ExtensionsOverview() {
 
   return (
     <div className="space-y-8">
+      {/* The refresh reads the catalogue query this component owns, so the page title lives here
+          rather than in the route file. Beside the organization picker it read as a statement
+          about the picker; on the title line it reads as one about the page. */}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-3xl font-bold">Extensions</h1>
+          <p className="text-sm text-muted-foreground">
+            External applications built against the Orcastra API
+          </p>
+        </div>
+        <RefreshButton
+          onRefresh={() => catalogue.refetch()}
+          lastUpdatedAt={catalogue.dataUpdatedAt}
+        />
+      </div>
+
       <section className="space-y-3">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
@@ -189,10 +205,6 @@ export function ExtensionsOverview() {
               <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
               Publish Add-on
             </Button>
-            <RefreshButton
-              onRefresh={() => catalogue.refetch()}
-              lastUpdatedAt={catalogue.dataUpdatedAt}
-            />
           </div>
         </div>
 

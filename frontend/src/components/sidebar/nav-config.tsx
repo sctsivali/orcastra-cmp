@@ -1,5 +1,4 @@
 import {
-  Puzzle,
   LayoutGrid,
   Activity,
   Box,
@@ -26,7 +25,6 @@ import {
 } from "lucide-react";
 import type { QueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { extensionsAPI } from "@/lib/extensions-api";
 import { queryKeys } from "@/hooks/use-lxd";
 import type { NavGroup, NavItem, PermissionFlags, RoleGate } from "./types";
 
@@ -115,7 +113,6 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Platform",
     icon: Blocks,
     items: [
-      { id: "extensions", label: "Extensions", href: "/extensions", icon: Puzzle, role: "partner" },
       { id: "regions", label: "Regions", href: "/regions", icon: MapPin },
       { id: "technologies", label: "Technologies", href: "/technologies", icon: Blocks },
     ],
@@ -149,10 +146,6 @@ export function buildPrefetchMap(queryClient: QueryClient): Record<string, () =>
       queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
       queryClient.prefetchQuery({ queryKey: queryKeys.allProjects, queryFn: () => api.projects.listAll(), staleTime: 180_000 });
       queryClient.prefetchQuery({ queryKey: ["clusters", { fresh: false }], queryFn: () => api.clusters.list(false), staleTime: 120_000 });
-    },
-    "/extensions": () => {
-      queryClient.prefetchQuery({ queryKey: ["extensions", "catalogue"], queryFn: () => extensionsAPI.list(), staleTime: 60_000 });
-      queryClient.prefetchQuery({ queryKey: ["extensions", "installs"], queryFn: () => extensionsAPI.listInstalls(), staleTime: 60_000 });
     },
     "/inventory/instances": () => {
       queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });

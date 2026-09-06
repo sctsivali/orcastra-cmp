@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, FileJson, Upload } from "lucide-react";
+import { AlertCircle, Upload } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { capabilityNote } from "@/lib/extension-display";
+import { formatLabel } from "@/lib/utils";
 import type { ExtensionManifestInput, ExtensionVocabulary } from "@/types/api";
 
 interface PublishAddonDialogProps {
@@ -170,7 +171,7 @@ export function PublishAddonDialog({
         </DialogHeader>
 
         <Tabs defaultValue="form" className="flex min-h-0 flex-1 flex-col">
-          <TabsList className="mx-6 w-fit">
+          <TabsList className="w-fit">
             <TabsTrigger value="form">Form</TabsTrigger>
             <TabsTrigger value="manifest">Manifest File</TabsTrigger>
           </TabsList>
@@ -285,7 +286,7 @@ export function PublishAddonDialog({
                     <SelectContent>
                       {PERMISSIONS.map((value) => (
                         <SelectItem key={value} value={value}>
-                          {value}
+                          {formatLabel(value)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -303,7 +304,7 @@ export function PublishAddonDialog({
                     <SelectContent>
                       {BREADTHS.map((value) => (
                         <SelectItem key={value} value={value}>
-                          {value}
+                          {formatLabel(value)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -321,7 +322,7 @@ export function PublishAddonDialog({
                     <SelectContent>
                       {BREADTHS.map((value) => (
                         <SelectItem key={value} value={value}>
-                          {value}
+                          {formatLabel(value)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -381,7 +382,6 @@ export function PublishAddonDialog({
                 </Alert>
               )}
               <p className="text-xs text-muted-foreground">
-                <FileJson className="mr-1 inline h-3 w-3" aria-hidden="true" />
                 This path accepts every manifest field, including settings and webhook defaults
                 that the form does not build.
               </p>
