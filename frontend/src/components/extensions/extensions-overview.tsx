@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 
+import { BackLink } from "@/components/ui/back-link";
 import { Button } from "@/components/ui/button";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
@@ -208,11 +209,16 @@ function ExtensionsOverviewContent() {
           than in the route file. Beside the organization picker it read as a statement about the
           picker; on the title line it reads as one about the page. */}
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold">Extensions</h1>
-          <p className="text-sm text-muted-foreground">
-            External applications built against the Orcastra API
-          </p>
+        {/* This route is deliberately absent from the sidebar, so the card in Settings is the only
+            way in and this is the only way back. */}
+        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4">
+          <BackLink href="/settings" label="Settings" />
+          <div className="min-w-0">
+            <h1 className="text-3xl font-bold">Extensions</h1>
+            <p className="text-sm text-muted-foreground">
+              External applications built against the Orcastra API
+            </p>
+          </div>
         </div>
         <RefreshButton
           label="Refresh add-ons"

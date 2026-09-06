@@ -3,6 +3,7 @@
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { BackLink } from "@/components/ui/back-link";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -254,13 +255,7 @@ function MyKeysContent() {
       <ReadOnlyBanner />
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:gap-4">
-          <Button asChild variant="ghost" size="sm" className="shrink-0">
-            <IntentLink href="/settings">
-              <ChevronLeft className="h-4 w-4 mr-1" />
-              <span className="hidden sm:inline">Back to Settings</span>
-              <span className="sm:hidden">Back</span>
-            </IntentLink>
-          </Button>
+          <BackLink href="/settings" label="Settings" />
           <div className="min-w-0">
             <h1 className="text-2xl sm:text-3xl font-bold">
               My Keys

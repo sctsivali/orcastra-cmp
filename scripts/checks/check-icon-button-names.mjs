@@ -53,7 +53,10 @@ const src = join(root, 'frontend', 'src');
 // copy buttons were bare Copy glyphs pinned over a Textarea; CodeBlock's carries a visible label
 // and an aria-label naming what it copies, which matters most here because the two sat adjacent
 // and copied different things, the command and the PEM.
-const BASELINE = 48;
+// Lowered 48 -> 46 when the terminal and console back controls were named. Those two are the only
+// navigational control on their pages, because MainLayout hides the sidebar, header and footer on
+// both prefixes, so an unnamed arrow was the entire way out for anyone who could not see it.
+const BASELINE = 46;
 
 // `vm-table.tsx` is deprecated and rendered by nothing, so its buttons cannot be announced
 // to anybody. Counting them would mean either a permanently failing check or a baseline

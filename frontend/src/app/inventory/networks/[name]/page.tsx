@@ -4,9 +4,9 @@ import { Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { Loader2 } from "lucide-react";
 
+import { BackLink } from "@/components/ui/back-link";
 import { NetworkDetail } from "@/components/network-detail";
 import { ReadOnlyBanner } from "@/components/read-only-banner";
-import Link from "next/link";
 
 function NetworkDetailContent() {
   const params = useParams();
@@ -21,12 +21,7 @@ function NetworkDetailContent() {
         <NetworkDetail name={name} host={host} />
       ) : (
         <div className="space-y-4">
-          <Link
-            href="/inventory/networks"
-            className="text-sm text-primary hover:underline"
-          >
-            &larr; Back to Networks
-          </Link>
+          <BackLink href="/inventory/networks" label="Networks" />
           <div className="text-sm text-muted-foreground">
             Missing host parameter.
           </div>

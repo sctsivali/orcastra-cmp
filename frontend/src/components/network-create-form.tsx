@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { BackLink } from "@/components/ui/back-link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -215,11 +216,14 @@ export function NetworkCreateForm() {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      <div>
-        <h1 className="text-3xl font-bold">Create New Network</h1>
-        <p className="text-muted-foreground mt-2">
-          Create a Bridge or OVN network on a node
-        </p>
+      <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4">
+        <BackLink href="/inventory/networks" label="Networks" />
+        <div className="min-w-0">
+          <h1 className="text-3xl font-bold">Create New Network</h1>
+          <p className="text-muted-foreground mt-2">
+            Create a Bridge or OVN network on a node
+          </p>
+        </div>
       </div>
 
       <Card>

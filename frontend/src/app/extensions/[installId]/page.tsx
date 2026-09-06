@@ -9,9 +9,11 @@ import { RotateCcw } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { BackLink } from "@/components/ui/back-link";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { TableLink } from "@/components/ui/table-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { AddonHealthPanel } from "@/components/extensions/addon-health-panel";
@@ -158,11 +160,14 @@ function InstallDetail() {
   return (
     <div className="container mx-auto space-y-6 p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-bold">{row.extension_name}</h1>
-          <p className="text-sm text-muted-foreground">
-            v{row.extension_version} in {row.organization_slug ?? row.organization_id}
-          </p>
+        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4">
+          <BackLink href="/extensions" label="Extensions" />
+          <div className="min-w-0">
+            <h1 className="text-3xl font-bold">{row.extension_name}</h1>
+            <p className="text-sm text-muted-foreground">
+              v{row.extension_version} in {row.organization_slug ?? row.organization_id}
+            </p>
+          </div>
         </div>
         {/* Actions only. The status moved into the Health panel, where the notice explaining a
             suspension already lives; beside these buttons it read as a third one. */}
@@ -251,11 +256,17 @@ function InstallDetail() {
           <section>
             <h2 className="text-lg font-semibold">Clusters</h2>
             <ul className="mt-2 flex flex-wrap gap-2">
+              {/* The reach an add-on was granted, and the one place an operator asks "which
+                  cluster is that". It rendered the id as dead text, so answering meant leaving the
+                  page and searching for it by hand. */}
               {row.granted_scope.map((grant) => (
                 <li key={String(grant.cluster_id)}>
-                  <Badge variant="muted" className="font-mono">
+                  <TableLink
+                    href={`/inventory/clusters?q=${encodeURIComponent(String(grant.cluster_id))}`}
+                    className="font-mono text-sm"
+                  >
                     {String(grant.cluster_id)}
-                  </Badge>
+                  </TableLink>
                 </li>
               ))}
             </ul>

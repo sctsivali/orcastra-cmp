@@ -470,9 +470,11 @@ function TerminalContent() {
             variant="ghost"
             size="icon"
             className="h-8 w-8 text-gray-400 hover:text-white"
+            aria-label="Close this terminal window"
+            title="Close this terminal window"
             onClick={() => window.close()}
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           </Button>
           <TerminalIcon className="h-5 w-5 text-blue-400" />
           <div className="flex items-center gap-2">
