@@ -78,6 +78,7 @@ import {
 } from "@/lib/instance-action-copy";
 import { useManualRefresh } from "@/hooks/use-manual-refresh";
 import { API_URL, getAccessToken } from "@/lib/api";
+import { AgentActivityBadge } from "./components/agent-activity-badge";
 import { OnScreenKeyboard } from "@/components/console/on-screen-keyboard";
 import { OnScreenCursor } from "@/components/console/on-screen-cursor";
 import { ClipboardManager } from "@/components/console/clipboard-manager";
@@ -1421,6 +1422,9 @@ function ConsoleContent() {
             <span className="text-gray-600 text-sm">({project})</span>
           </div>
           <StatusBadge />
+          {/* A human watching this console could not tell that an agent was driving the same X
+              session. The Sessions page shows it afterwards; this shows it while it matters. */}
+          <AgentActivityBadge instanceName={instanceName} accessToken={getAccessToken()} />
         </div>
 
         {/* Center - Tabs for VMs */}

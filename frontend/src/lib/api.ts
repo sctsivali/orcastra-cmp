@@ -37,6 +37,8 @@ import {
   GeoLocation,
   ClusterLocationUpdateResponse,
   Organization,
+  DesktopControlPolicy,
+  DesktopControlPolicyRequest,
   OrganizationCreateRequest,
   OrganizationUpdateRequest,
   OrganizationMember,
@@ -1970,6 +1972,18 @@ export const api = {
   organizations: {
     list: () => fetchAPI<Organization[]>("/organizations"),
     get: (id: string) => fetchAPI<Organization>(`/organizations/${id}`),
+    // Whether an agent may see and drive this organization's guest desktops. Four separate
+    // decisions rather than one, because they are four separate disclosures: a screenshot, a
+    // keystroke, the clipboard, and a shell inside the container.
+    desktopControl: {
+      get: (orgId: number) =>
+        fetchAPI<DesktopControlPolicy>(`/organizations/${orgId}/desktop-control`),
+      set: (orgId: number, data: DesktopControlPolicyRequest) =>
+        fetchAPI<DesktopControlPolicy>(`/organizations/${orgId}/desktop-control`, {
+          method: "PUT",
+          body: JSON.stringify(data),
+        }),
+    },
     create: (data: OrganizationCreateRequest) =>
       fetchAPI<Organization>("/organizations", {
         method: "POST",

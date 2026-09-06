@@ -2413,3 +2413,24 @@ export interface WebhookDelivery {
   created_at: string;
   payload?: Record<string, unknown>;
 }
+
+// Whether an organization permits an AI agent to see and drive its guests' desktops.
+//
+// Four switches, not one. Screen capture, keyboard and pointer, the clipboard, and guest access
+// are separate disclosures: the clipboard is the highest-yield exfiltration primitive on the
+// surface, and guest access is root inside the container. The last two used to ride on `enabled`,
+// so an organization that agreed to screenshots was silently agreeing to both.
+export interface DesktopControlPolicy {
+  organization_id: number;
+  enabled: boolean;
+  allow_input: boolean;
+  allow_clipboard: boolean;
+  allow_guest_access: boolean;
+}
+
+export interface DesktopControlPolicyRequest {
+  enabled: boolean;
+  allow_input: boolean;
+  allow_clipboard: boolean;
+  allow_guest_access: boolean;
+}

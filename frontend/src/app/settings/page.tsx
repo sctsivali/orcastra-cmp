@@ -8,6 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ChevronRight, Activity, Settings2, Palette, Shield, Users } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
+import { DesktopControlSettings } from "@/components/desktop-control-settings";
 import { SystemResourceUsagePanel } from "@/components/system-resource-usage";
 import { OrgPersonalizationSettings } from "@/components/org-personalization-settings";
 import { PersonalizationSettings } from "@/components/personalization-settings";
@@ -113,6 +114,9 @@ export default function SettingsPage() {
         {/* General Settings Tab - all roles, My Keys hidden for Tenant */}
         <TabsContent value="general" className="space-y-6">
           <div className="grid gap-6">
+            {/* The one decision the desktop-control feature rests on. It was settable by API and
+                by nothing else, so the consent existed and no operator could give it. */}
+            <DesktopControlSettings />
             {/* Extensions pointer - the surface is a route, not a tab, because a refresh
                 inside a tab would destroy the one-time credential an install shows. */}
             {isPartner && (
