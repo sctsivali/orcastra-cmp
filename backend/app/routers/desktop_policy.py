@@ -20,7 +20,7 @@ from app.core.database import get_db
 from app.core.dependencies import AuthenticatedUser, check_read_only_mode, require_tenant
 from app.core.rbac import get_highest_role, resolve_roles
 from app.services.activity_logger import get_activity_logger
-from app.services.desktop_policy import get_consent, set_consent
+from app.services.desktop_policy import DesktopConsent, get_consent, set_consent
 from app.services.organization_service import OrganizationService
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,24 @@ class DesktopControlPolicyRequest(BaseModel):
     )
 
 
+def _as_response(org_id: int, consent: DesktopConsent) -> DesktopControlPolicyResponse:
+    """One builder for both handlers.
+
+    important: the read used to construct this inline with two of the four fields, so the two
+    added later defaulted to False in the response. The row was correct, the form showed the
+    consent switched off, and an operator would have granted it twice and still seen nothing.
+    A response model with defaults will not tell you it is missing a field, so the builder is
+    the place that cannot forget one.
+    """
+    return DesktopControlPolicyResponse(
+        organization_id=org_id,
+        enabled=consent.enabled,
+        allow_input=consent.allow_input,
+        allow_clipboard=consent.allow_clipboard,
+        allow_guest_access=consent.allow_guest_access,
+    )
+
+
 async def _assert_member(
     org_id: int, user: AuthenticatedUser, db: AsyncSession
 ) -> None:
@@ -101,9 +119,7 @@ async def read_policy(
 ) -> DesktopControlPolicyResponse:
     await _assert_member(org_id, user, db)
     consent = await get_consent(db, org_id)
-    return DesktopControlPolicyResponse(
-        organization_id=org_id, enabled=consent.enabled, allow_input=consent.allow_input
-    )
+    return _as_response(org_id, consent)
 
 
 @router.put(
@@ -136,8 +152,11 @@ async def set_policy(
         target_id=str(org_id),
         target_organization_id=org_id,
         result="success",
-        details={"enabled": consent.enabled, "allow_input": consent.allow_input},
+        details={
+            "enabled": consent.enabled,
+            "allow_input": consent.allow_input,
+            "allow_clipboard": consent.allow_clipboard,
+            "allow_guest_access": consent.allow_guest_access,
+        },
     )
-    return DesktopControlPolicyResponse(
-        organization_id=org_id, enabled=consent.enabled, allow_input=consent.allow_input
-    )
+    return _as_response(org_id, consent)

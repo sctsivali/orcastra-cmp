@@ -672,3 +672,41 @@ async def test_turning_the_feature_off_withdraws_all_four() -> None:
     assert not consent.may_input
     assert not consent.may_clipboard
     assert not consent.may_guest_access
+
+
+def test_the_consent_response_carries_every_field_it_stores() -> None:
+    """A read that drops a field is invisible, because the model defaults it.
+
+    The read handler built its response inline with two of the four fields. The row was correct
+    and the form showed the consent switched off, so an operator would have granted it, seen
+    nothing change, and granted it again. Caught live by a spec that reloaded and re-read rather
+    than trusting the success toast.
+    """
+    import inspect
+
+    from app.routers import desktop_policy
+
+    fields = set(desktop_policy.DesktopControlPolicyResponse.model_fields) - {"organization_id"}
+    builder = inspect.getsource(desktop_policy._as_response)
+    for field in fields:
+        assert f"{field}=consent.{field}" in builder, (
+            f"{field} is stored and not returned, so a reader cannot see it"
+        )
+
+    # And nothing may build that response outside the one builder, or the next field added is
+    # dropped by whichever handler forgot it.
+    module = inspect.getsource(desktop_policy)
+    assert module.count("DesktopControlPolicyResponse(") == 2, (
+        "the response is constructed somewhere other than _as_response and the class definition"
+    )
+
+
+def test_withdrawing_the_consent_is_audited_with_every_switch() -> None:
+    """The audit is the record of a disclosure decision, so it has to say what was decided."""
+    import inspect
+
+    from app.routers import desktop_policy
+
+    source = inspect.getsource(desktop_policy.set_policy)
+    for field in ("enabled", "allow_input", "allow_clipboard", "allow_guest_access"):
+        assert f'"{field}": consent.{field}' in source, f"{field} is not in the audit record"
