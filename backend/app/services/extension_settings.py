@@ -130,16 +130,27 @@ def store_secrets(vault_client, install_id: int, secrets_: Dict[str, str]) -> Li
     # every other stored secret for that installation and answered 200 with a shortened list.
     # This module's own docstring calls that "a data loss bug disguised as a save button", and
     # the swallow was sitting three lines under it.
+    #
+    # important: "nothing stored yet" is not "unavailable", and conflating them broke the very
+    # first save on every installation. `vault_read` raises a 404 for a path that has never been
+    # written, which is exactly the empty case this merge wants, so it is the one failure that
+    # must not become a refusal. Everything else still refuses, which is the guard above intact.
     try:
         current: Dict[str, Any] = vault_client.vault_read(_settings_path(install_id)) or {}
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The secret store is unavailable, so nothing was saved. Existing values are "
-                "untouched. Try again once it is reachable."
-            ),
-        ) from exc
+        # A string match, reluctantly: `vault_read` raises `VaultClientError(...)` without
+        # `from e`, so there is no `__cause__` to inspect and no status on the exception. The
+        # message is `Vault read failed: 404 Client Error: ...` from requests, so the full phrase
+        # is matched rather than a bare "404" that could appear in a path or a body.
+        if "404 Client Error" not in str(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The secret store is unavailable, so nothing was saved. Existing values are "
+                    "untouched. Try again once it is reachable."
+                ),
+            ) from exc
+        current = {}
     current.update(secrets_)
     vault_client.vault_kv_put(_settings_path(install_id), current)
     return sorted(current)
