@@ -2267,6 +2267,41 @@ export interface ExtensionVocabulary {
   setting_types: Array<{ name: string; description: string }>;
 }
 
+/**
+ * A manifest as an author submits it.
+ *
+ * Mirrors the server's `ExtensionManifest`. Deliberately not a partial: publishing a new version
+ * sends the whole document, because a patch would leave an operator approving a diff rather than
+ * the thing being asked for.
+ */
+export interface ExtensionManifestInput {
+  slug: string;
+  name: string;
+  publisher: string;
+  version: string;
+  description?: string;
+  homepage_url?: string;
+  support_url?: string;
+  capabilities: string[];
+  scope: {
+    permission: "read" | "write" | "admin";
+    clusters: "all" | "selected";
+    projects: "all" | "selected";
+  };
+  settings?: Array<Record<string, unknown>>;
+  webhook_url?: string;
+  webhook_events?: string[];
+}
+
+/** What a PATCH may change. Never the slug, never the version, never what is asked for. */
+export interface ExtensionUpdateInput {
+  name?: string;
+  description?: string;
+  homepage_url?: string;
+  support_url?: string;
+  status?: ExtensionDetail["status"];
+}
+
 export interface ExtensionDetail {
   id: number;
   slug: string;
@@ -2323,7 +2358,10 @@ export interface ExtensionInstall {
   extension_id: number;
   extension_slug: string;
   extension_name: string;
+  /** The version THIS installation consented to, not what the add-on has published since. */
   extension_version: string;
+  /** Set only when the add-on has moved on, so the gap is visible to whoever must approve it. */
+  available_version?: string | null;
   organization_id: number;
   organization_slug?: string | null;
   status: ExtensionInstallStatus;
@@ -2343,7 +2381,13 @@ export interface ExtensionInstall {
   consented_at: string;
   installed_by: string;
   suspended_at?: string | null;
+  suspended_by?: string | null;
   suspend_reason?: string | null;
+  /** Credential health. `credential_readable` false means the key could not be read, which is a
+   *  different thing from a credential that has never been used. */
+  credential_last_used_at?: string | null;
+  credential_expires_at?: string | null;
+  credential_readable?: boolean;
   created_at: string;
   updated_at: string;
 }

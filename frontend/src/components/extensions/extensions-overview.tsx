@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Puzzle } from "lucide-react";
+import { Plus, Puzzle } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -19,14 +19,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CredentialRevealDialog } from "@/components/extensions/credential-reveal-dialog";
+import { PublishAddonDialog } from "@/components/extensions/publish-addon-dialog";
 import { InstallConsentDialog } from "@/components/extensions/install-consent-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import { extensionsAPI } from "@/lib/extensions-api";
 import { INSTALL_STATUS, describeClusterReach } from "@/lib/extension-display";
 import type {
+  ExtensionDetail,
   ExtensionInstallPreview,
   ExtensionInstallResponse,
+  ExtensionManifestInput,
 } from "@/types/api";
 
 /** Duck-typed: instanceof breaks across Next chunks, so the status is read off the error. */
@@ -102,12 +105,51 @@ export function ExtensionsOverview() {
     onError: (error: Error) => setInstallError(error.message),
   });
 
+  const vocabulary = useQuery({
+    queryKey: ["extensions", "vocabulary"],
+    queryFn: () => extensionsAPI.vocabulary(),
+    staleTime: 5 * 60_000,
+  });
+
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const publish = useMutation({
+    mutationFn: (manifest: ExtensionManifestInput) => extensionsAPI.create(manifest),
+    onSuccess: () => {
+      setPublishOpen(false);
+      setPublishError(null);
+      queryClient.invalidateQueries({ queryKey: ["extensions", "catalogue"] });
+    },
+    // The server's own words. A paraphrase here would hide which field it actually refused.
+    onError: (error: Error) => setPublishError(error.message),
+  });
+
+  const setStatus = useMutation({
+    mutationFn: ({ slug, status }: { slug: string; status: ExtensionDetail["status"] }) =>
+      extensionsAPI.setStatus(slug, status),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["extensions", "catalogue"] }),
+    onError: (error: Error) =>
+      toast({ title: "Could not change status", description: error.message, variant: "destructive" }),
+  });
+
+  const withdraw = useMutation({
+    mutationFn: (slug: string) => extensionsAPI.withdraw(slug),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["extensions", "catalogue"] }),
+    // A withdraw is refused while an installation still holds it, and that refusal explains why.
+    onError: (error: Error) =>
+      toast({ title: "Could not withdraw", description: error.message, variant: "destructive" }),
+  });
+
   if (isVaultUnavailable(catalogue.error) || isVaultUnavailable(installs.error)) {
     return <VaultUnavailableNotice surface="Add-on installation" />;
   }
 
   const orgs = organizations.data ?? [];
   const installedSlugs = new Set((installs.data ?? []).map((i) => i.extension_slug));
+  // A draft is visible only to its owner, which is exactly the step that used to strand people:
+  // publishing produced one, the operator saw an empty catalogue, and nobody got an error.
+  const drafts = (catalogue.data ?? []).filter((e) => e.status === "draft");
+  const installable = (catalogue.data ?? []).filter((e) => e.status !== "draft");
 
   return (
     <div className="space-y-8">
@@ -137,6 +179,16 @@ export function ExtensionsOverview() {
                 </SelectContent>
               </Select>
             </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                setPublishError(null);
+                setPublishOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
+              Publish Add-on
+            </Button>
             <RefreshButton
               onRefresh={() => catalogue.refetch()}
               lastUpdatedAt={catalogue.dataUpdatedAt}
@@ -153,15 +205,21 @@ export function ExtensionsOverview() {
           <Alert variant="destructive">
             <AlertDescription>{(catalogue.error as Error).message}</AlertDescription>
           </Alert>
-        ) : (catalogue.data ?? []).length === 0 ? (
+        ) : installable.length === 0 ? (
           <EmptyState
             icon={Puzzle}
             title="No add-ons are published yet"
             description="An add-on is an external application built against the Orcastra API. Publishing one makes it installable here."
+            action={
+              <Button size="sm" onClick={() => setPublishOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
+                Publish Add-on
+              </Button>
+            }
           />
         ) : (
           <ul className="grid gap-3 sm:grid-cols-2">
-            {(catalogue.data ?? []).map((extension) => (
+            {installable.map((extension) => (
               <li key={extension.slug} className="rounded-xl border bg-card p-4">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
@@ -194,6 +252,48 @@ export function ExtensionsOverview() {
           </ul>
         )}
       </section>
+
+      {drafts.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold">Your Drafts</h2>
+            <p className="text-sm text-muted-foreground">
+              A draft is visible only to you. Nobody can install it, and nobody is told it exists,
+              until you publish it.
+            </p>
+          </div>
+          <ul className="divide-y rounded-lg border">
+            {drafts.map((extension) => (
+              <li key={extension.slug} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{extension.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-mono">{extension.slug}</span> · v{extension.version} ·
+                    asks for {extension.requested_capabilities.length} capabilit
+                    {extension.requested_capabilities.length === 1 ? "y" : "ies"}
+                  </p>
+                </div>
+                <Badge variant="caution">Draft</Badge>
+                <Button
+                  size="sm"
+                  disabled={setStatus.isPending}
+                  onClick={() => setStatus.mutate({ slug: extension.slug, status: "published" })}
+                >
+                  Publish
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={withdraw.isPending}
+                  onClick={() => withdraw.mutate(extension.slug)}
+                >
+                  Discard
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Installed</h2>
@@ -228,6 +328,15 @@ export function ExtensionsOverview() {
           </ul>
         )}
       </section>
+
+      <PublishAddonDialog
+        open={publishOpen}
+        onOpenChange={setPublishOpen}
+        vocabulary={vocabulary.data}
+        pending={publish.isPending}
+        error={publishError}
+        onSubmit={(manifest) => publish.mutate(manifest)}
+      />
 
       <InstallConsentDialog
         preview={preview}

@@ -13,6 +13,8 @@ import type {
   ExtensionInstallPreview,
   ExtensionInstallRequest,
   ExtensionInstallResponse,
+  ExtensionManifestInput,
+  ExtensionUpdateInput,
   ExtensionVocabulary,
   WebhookDelivery,
   WebhookSubscription,
@@ -35,6 +37,47 @@ export const extensionsAPI = {
 
   list: (opts: ReadOptions = {}) => fetchRead<ExtensionDetail[]>(base, opts),
   get: (slug: string) => fetchAPI<ExtensionDetail>(`${base}/${encodeURIComponent(slug)}`),
+
+  /**
+   * Register a manifest. The add-on starts as a draft, which is the step that used to strand
+   * people: a draft is visible only to its owner, so an operator opening Extensions saw nothing
+   * and neither party got an error. `publish` is what makes it installable.
+   */
+  create: (manifest: ExtensionManifestInput) =>
+    fetchAPI<ExtensionDetail>(base, {
+      method: "POST",
+      body: JSON.stringify(manifest),
+    }),
+
+  update: (slug: string, changes: ExtensionUpdateInput) =>
+    fetchAPI<ExtensionDetail>(`${base}/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify(changes),
+    }),
+
+  /** Draft to published, or published to withdrawn from the catalogue without deleting it. */
+  setStatus: (slug: string, status: ExtensionDetail["status"]) =>
+    fetchAPI<ExtensionDetail>(`${base}/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ status }),
+    }),
+
+  /**
+   * A whole manifest under a greater version, not a patch.
+   *
+   * Existing installations keep the reach they were granted and stay on the version they
+   * consented to. Their digest stops matching this one, so changing one of them asks its operator
+   * to approve the new manifest first.
+   */
+  publishVersion: (slug: string, manifest: ExtensionManifestInput) =>
+    fetchAPI<ExtensionDetail>(`${base}/${encodeURIComponent(slug)}/versions`, {
+      method: "POST",
+      body: JSON.stringify(manifest),
+    }),
+
+  /** Refused while any organization still has it installed, so a credential is never orphaned. */
+  withdraw: (slug: string) =>
+    fetchAPI<void>(`${base}/${encodeURIComponent(slug)}`, { method: "DELETE" }),
 
   /**
    * What installing would actually grant.

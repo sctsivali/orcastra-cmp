@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
+import { AddonHealthPanel } from "@/components/extensions/addon-health-panel";
 import { CredentialRevealDialog } from "@/components/extensions/credential-reveal-dialog";
 import { ExtensionSettingsForm } from "@/components/extensions/extension-settings-form";
 import { WebhookPanel } from "@/components/extensions/webhook-panel";
@@ -62,6 +63,18 @@ function InstallDetail() {
     queryKey: ["extensions", "vocabulary"],
     queryFn: () => extensionsAPI.vocabulary(),
     staleTime: 3600000,
+  });
+
+  // note: the same query keys the webhook panel uses, so react-query serves both from one fetch
+  // rather than the health panel doubling every request the tab below it already makes.
+  const subscriptions = useQuery({
+    queryKey: ["extensions", "subscriptions", installId],
+    queryFn: () => extensionsAPI.listSubscriptions(installId),
+  });
+
+  const deliveries = useQuery({
+    queryKey: ["extensions", "deliveries", installId, ""],
+    queryFn: () => extensionsAPI.listDeliveries(installId, undefined),
   });
 
   const invalidate = () =>
@@ -193,6 +206,12 @@ function InstallDetail() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4 pt-4">
+          <AddonHealthPanel
+            install={row}
+            subscriptions={subscriptions.data ?? []}
+            deliveries={deliveries.data ?? []}
+          />
+
           <section>
             <h2 className="text-lg font-semibold">Granted Capabilities</h2>
             <ul className="mt-2 flex flex-wrap gap-2">
