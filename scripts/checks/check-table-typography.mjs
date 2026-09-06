@@ -111,7 +111,11 @@ for (const file of walk(ROOT)) {
 // Raise BADGE_BASELINE only with a reason.
 // 17 to 16: the clusters page rendered the hypervisor type as a pill. Type is not Status or
 // Severity, so it was never one of the two exceptions this baseline exists to hold.
-const BADGE_BASELINE = 16;
+// 16 to 17: the Installed add-ons list became a table, and its Status column carries the
+// installation's state. That is Status, so it is one of the two exceptions rather than a new
+// pill: the same value was already a Badge while the list was a feed, and converting the markup
+// is not a reason to start spelling it differently.
+const BADGE_BASELINE = 17;
 // A ratchet, not a ban. The remaining occurrences live on chart, console and dialog-form
 // surfaces rather than in table cells: the on-screen keyboard's legends are laid out to a
 // fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping those

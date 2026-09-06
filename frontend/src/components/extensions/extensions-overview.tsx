@@ -1,15 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useCallback, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Puzzle } from "lucide-react";
+import { Plus } from "lucide-react";
 
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { TableLink } from "@/components/ui/table-link";
 import { VaultUnavailableNotice } from "@/components/ui/vault-unavailable-notice";
 import {
   Select,
@@ -18,15 +17,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { AvailableAddons } from "@/components/extensions/available-addons";
 import { CredentialRevealDialog } from "@/components/extensions/credential-reveal-dialog";
+import { DraftsList } from "@/components/extensions/drafts-list";
+import { InstalledTable } from "@/components/extensions/installed-table";
 import { PublishAddonDialog } from "@/components/extensions/publish-addon-dialog";
 import { InstallConsentDialog } from "@/components/extensions/install-consent-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { api } from "@/lib/api";
 import { extensionsAPI } from "@/lib/extensions-api";
-import { INSTALL_STATUS, describeClusterReach } from "@/lib/extension-display";
 import type {
   ExtensionDetail,
+  ExtensionInstall,
   ExtensionInstallPreview,
   ExtensionInstallResponse,
   ExtensionManifestInput,
@@ -41,13 +43,40 @@ function isVaultUnavailable(error: unknown): boolean {
   );
 }
 
-export function ExtensionsOverview() {
+/**
+ * The query key the organization picker rides in.
+ *
+ * note: the page and page size deliberately stay out of the URL, and the reason is recorded in
+ * documentation/ui/project-grid-pagination.md: a page number resolves against the reader's page
+ * size and sort rather than the sender's, so a shared link lands somewhere else. Which organization
+ * you are installing into describes what you are looking at, so it belongs there.
+ */
+const ORG_PARAM = "org";
+
+function ExtensionsOverviewContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [organizationId, setOrganizationId] = useState<string>("");
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const organizationId = searchParams.get(ORG_PARAM) ?? "";
+  const setOrganizationId = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (next) params.set(ORG_PARAM, next);
+      else params.delete(ORG_PARAM);
+      // replace, not push: a picker change is not a navigation an operator wants Back to undo one
+      // selection at a time, and the filter engine writes here the same way.
+      router.replace(`?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
   const [preview, setPreview] = useState<ExtensionInstallPreview | null>(null);
   const [issued, setIssued] = useState<ExtensionInstallResponse | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  const [pendingUninstall, setPendingUninstall] = useState<ExtensionInstall | null>(null);
+  const [uninstallError, setUninstallError] = useState<string | null>(null);
 
   const organizations = useQuery({
     queryKey: ["organizations"],
@@ -68,8 +97,7 @@ export function ExtensionsOverview() {
   });
 
   const beginInstall = useMutation({
-    mutationFn: (slug: string) =>
-      extensionsAPI.installPreview(slug, Number(organizationId)),
+    mutationFn: (slug: string) => extensionsAPI.installPreview(slug, Number(organizationId)),
     onSuccess: (result) => {
       setInstallError(null);
       setPreview(result);
@@ -140,6 +168,29 @@ export function ExtensionsOverview() {
       toast({ title: "Could not withdraw", description: error.message, variant: "destructive" }),
   });
 
+  const setInstallStatus = useMutation({
+    mutationFn: ({ id, action }: { id: number; action: "suspend" | "resume" }) =>
+      action === "suspend"
+        ? extensionsAPI.suspend(id, "Suspended from the installations list")
+        : extensionsAPI.resume(id),
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["extensions", "installs"] });
+      queryClient.invalidateQueries({ queryKey: ["extensions", "install", variables.id] });
+    },
+    onError: (error: Error) =>
+      toast({ title: "Could not change the installation", description: error.message, variant: "destructive" }),
+  });
+
+  const uninstall = useMutation({
+    mutationFn: (id: number) => extensionsAPI.uninstall(id),
+    onSuccess: () => {
+      setPendingUninstall(null);
+      setUninstallError(null);
+      queryClient.invalidateQueries({ queryKey: ["extensions", "installs"] });
+    },
+    onError: (error: Error) => setUninstallError(error.message),
+  });
+
   if (isVaultUnavailable(catalogue.error) || isVaultUnavailable(installs.error)) {
     return <VaultUnavailableNotice surface="Add-on installation" />;
   }
@@ -153,9 +204,9 @@ export function ExtensionsOverview() {
 
   return (
     <div className="space-y-8">
-      {/* The refresh reads the catalogue query this component owns, so the page title lives here
-          rather than in the route file. Beside the organization picker it read as a statement
-          about the picker; on the title line it reads as one about the page. */}
+      {/* The refresh reads the queries this component owns, so the page title lives here rather
+          than in the route file. Beside the organization picker it read as a statement about the
+          picker; on the title line it reads as one about the page. */}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-3xl font-bold">Extensions</h1>
@@ -164,8 +215,13 @@ export function ExtensionsOverview() {
           </p>
         </div>
         <RefreshButton
-          onRefresh={() => catalogue.refetch()}
-          lastUpdatedAt={catalogue.dataUpdatedAt}
+          label="Refresh add-ons"
+          onRefresh={async () => {
+            // Both, because the page shows both and refreshing half of it is what made the
+            // Installed list look stale after an install.
+            await Promise.all([catalogue.refetch(), installs.refetch()]);
+          }}
+          lastUpdatedAt={Math.min(catalogue.dataUpdatedAt, installs.dataUpdatedAt) || undefined}
         />
       </div>
 
@@ -208,137 +264,59 @@ export function ExtensionsOverview() {
           </div>
         </div>
 
-        {catalogue.isLoading ? (
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="h-24 animate-pulse rounded-lg bg-muted" />
-            <div className="h-24 animate-pulse rounded-lg bg-muted" />
-          </div>
-        ) : catalogue.error ? (
-          <Alert variant="destructive">
-            <AlertDescription>{(catalogue.error as Error).message}</AlertDescription>
-          </Alert>
-        ) : installable.length === 0 ? (
-          <EmptyState
-            icon={Puzzle}
-            title="No add-ons are published yet"
-            description="An add-on is an external application built against the Orcastra API. Publishing one makes it installable here."
-            action={
-              <Button size="sm" onClick={() => setPublishOpen(true)}>
-                <Plus className="mr-2 h-4 w-4" aria-hidden="true" />
-                Publish Add-on
-              </Button>
-            }
-          />
-        ) : (
-          <ul className="grid gap-3 sm:grid-cols-2">
-            {installable.map((extension) => (
-              <li key={extension.slug} className="rounded-xl border bg-card p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <h3 className="font-semibold">{extension.name}</h3>
-                    <p className="text-xs text-muted-foreground">
-                      {extension.publisher} · v{extension.version}
-                    </p>
-                  </div>
-                  {installedSlugs.has(extension.slug) ? (
-                    <Badge variant="muted">Installed</Badge>
-                  ) : null}
-                </div>
-                {extension.description ? (
-                  <p className="mt-2 text-sm text-muted-foreground">{extension.description}</p>
-                ) : null}
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Asks for {extension.requested_capabilities.length} capabilit
-                  {extension.requested_capabilities.length === 1 ? "y" : "ies"}
-                </p>
-                <Button
-                  size="sm"
-                  className="mt-3"
-                  disabled={!organizationId || beginInstall.isPending}
-                  onClick={() => beginInstall.mutate(extension.slug)}
-                >
-                  Review And Install
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <AvailableAddons
+          rows={installable}
+          installedSlugs={installedSlugs}
+          loading={catalogue.isLoading}
+          error={(catalogue.error as Error) ?? null}
+          onRetry={() => void catalogue.refetch()}
+          organizationId={organizationId}
+          onInstall={(slug) => beginInstall.mutate(slug)}
+          installPending={beginInstall.isPending}
+          onPublish={() => setPublishOpen(true)}
+        />
       </section>
 
-      {drafts.length > 0 && (
-        <section className="space-y-3">
-          <div>
-            <h2 className="text-lg font-semibold">Your Drafts</h2>
-            <p className="text-sm text-muted-foreground">
-              A draft is visible only to you. Nobody can install it, and nobody is told it exists,
-              until you publish it.
-            </p>
-          </div>
-          <ul className="divide-y rounded-lg border">
-            {drafts.map((extension) => (
-              <li key={extension.slug} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium">{extension.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    <span className="font-mono">{extension.slug}</span> · v{extension.version} ·
-                    asks for {extension.requested_capabilities.length} capabilit
-                    {extension.requested_capabilities.length === 1 ? "y" : "ies"}
-                  </p>
-                </div>
-                <Badge variant="caution">Draft</Badge>
-                <Button
-                  size="sm"
-                  disabled={setStatus.isPending}
-                  onClick={() => setStatus.mutate({ slug: extension.slug, status: "published" })}
-                >
-                  Publish
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={withdraw.isPending}
-                  onClick={() => withdraw.mutate(extension.slug)}
-                >
-                  Discard
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </section>
+      {/* Present only when there is something to say. An always-on empty state cost a full
+          EmptyState block of whitespace on every visit for a section most operators never use, and
+          rows per screen is the product here. The loading and error cases still render, because
+          those were the two states this section genuinely lacked. */}
+      {(catalogue.isLoading || catalogue.error || drafts.length > 0) && (
+      <section className="space-y-3">
+        <div>
+          <h2 className="text-lg font-semibold">Your Drafts</h2>
+          <p className="text-sm text-muted-foreground">
+            A draft is visible only to you. Nobody can install it, and nobody is told it exists,
+            until you publish it.
+          </p>
+        </div>
+        <DraftsList
+          rows={drafts}
+          loading={catalogue.isLoading}
+          error={(catalogue.error as Error) ?? null}
+          onRetry={() => void catalogue.refetch()}
+          onPublish={(slug) => setStatus.mutate({ slug, status: "published" })}
+          onDiscard={(slug) => withdraw.mutate(slug)}
+          publishPending={setStatus.isPending}
+          discardPending={withdraw.isPending}
+        />
+      </section>
       )}
 
       <section className="space-y-3">
         <h2 className="text-lg font-semibold">Installed</h2>
-        {installs.isLoading ? (
-          <div className="h-24 animate-pulse rounded-lg bg-muted" />
-        ) : (installs.data ?? []).length === 0 ? (
-          <EmptyState
-            title="Nothing is installed yet"
-            description="Installing an add-on issues it a credential scoped to one organization."
-          />
-        ) : (
-          <ul className="divide-y rounded-lg border">
-            {(installs.data ?? []).map((row) => {
-              const meta = INSTALL_STATUS[row.status];
-              const clusters = row.granted_scope
-                .map((g) => String(g.cluster_id))
-                .filter(Boolean);
-              return (
-                <li key={row.id} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-                  <div className="min-w-0 flex-1">
-                    <TableLink href={`/extensions/${row.id}`}>{row.extension_name}</TableLink>
-                    <p className="text-xs text-muted-foreground">
-                      {row.organization_slug ?? `organization ${row.organization_id}`} ·{" "}
-                      {describeClusterReach(clusters)} · {row.granted_capabilities.length}{" "}
-                      capabilit{row.granted_capabilities.length === 1 ? "y" : "ies"}
-                    </p>
-                  </div>
-                  <Badge variant={meta.tone}>{meta.label}</Badge>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+        <InstalledTable
+          rows={installs.data ?? []}
+          loading={installs.isLoading}
+          error={(installs.error as Error) ?? null}
+          onRetry={() => void installs.refetch()}
+          onSetStatus={(row, action) => setInstallStatus.mutate({ id: row.id, action })}
+          onUninstall={(row) => {
+            setUninstallError(null);
+            setPendingUninstall(row);
+          }}
+          actionPending={setInstallStatus.isPending}
+        />
       </section>
 
       <PublishAddonDialog
@@ -364,11 +342,52 @@ export function ExtensionsOverview() {
         error={installError}
       />
 
+      <DestructiveConfirmDialog
+        open={pendingUninstall !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingUninstall(null);
+            setUninstallError(null);
+          }
+        }}
+        title={`Uninstall ${pendingUninstall?.extension_name ?? ""}?`}
+        description={
+          <>
+            The credential this installation issued stops working immediately, and its webhook
+            subscriptions and stored settings are removed. Anything the add-on created on a cluster
+            is left alone. This cannot be undone, and reinstalling issues a new credential rather
+            than restoring this one.
+          </>
+        }
+        confirmLabel="Uninstall"
+        pendingLabel="Uninstalling"
+        pending={uninstall.isPending}
+        onConfirm={() => {
+          if (pendingUninstall) uninstall.mutate(pendingUninstall.id);
+        }}
+        error={uninstallError}
+      />
+
       <CredentialRevealDialog
         result={issued}
         open={issued !== null}
         onClose={() => setIssued(null)}
       />
     </div>
+  );
+}
+
+/**
+ * The boundary the query string requires.
+ *
+ * The organization picker lives in the query string, which opts this out of prerendering, and Next
+ * fails `next build` on the route without a boundary above it. It sits here rather than in the
+ * route file so the component carries its own requirement.
+ */
+export function ExtensionsOverview() {
+  return (
+    <Suspense fallback={<LoadingLottiePage />}>
+      <ExtensionsOverviewContent />
+    </Suspense>
   );
 }
