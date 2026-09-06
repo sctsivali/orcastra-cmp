@@ -755,10 +755,16 @@ def get_user_mappings_from_vault(vault_client, api_key_id: str) -> List[External
 
 
 def update_api_key_last_used(vault_client, key_id: str):
-    """Update the last_used_at timestamp for an API key."""
+    """Update the last_used_at timestamp for an API key.
+
+    important: aware, like every other timestamp here. A naive `utcnow().isoformat()` carries no
+    offset, and a browser parsing it reads local time, so the add-on health panel rendered a use
+    as though it had happened the reader's UTC offset ago. `credential_expires_at`, rendered
+    beside it, was already written through utc_isoformat and was correct.
+    """
     try:
         metadata, _ = get_api_key_from_vault(vault_client, key_id)
-        metadata["last_used_at"] = datetime.utcnow().isoformat()
+        metadata["last_used_at"] = utc_isoformat()
         vault_client.vault_kv_put(
             f"secret/data/{VAULT_INTEGRATIONS_PATH}/api_keys/{key_id}/metadata",
             metadata
