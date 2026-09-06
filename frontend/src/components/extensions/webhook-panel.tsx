@@ -1,22 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Send, Trash2 } from "lucide-react";
+import { Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { formatDateTime } from "@/lib/utils";
 import { extensionsAPI } from "@/lib/extensions-api";
 import { DELIVERY_STATE, SUBSCRIPTION_STATUS } from "@/lib/extension-display";
-import type { ExtensionVocabulary, WebhookSecretResponse } from "@/types/api";
+import type {
+  ExtensionVocabulary,
+  WebhookDeliveryState,
+  WebhookSecretResponse,
+} from "@/types/api";
 
 /**
  * Where an installation's events go, and what happened to each one.
@@ -26,21 +33,47 @@ import type { ExtensionVocabulary, WebhookSecretResponse } from "@/types/api";
  * read but not narrow is a column that stops being usable at a hundred rows. A delivery log is
  * read newest-first and narrowed by state, so borrowing table markup would claim a contract this
  * surface does not honour, which is the failure the ratchet exists to catch.
+ *
+ * It is paged all the same. Being a feed was never a reason to stop at the newest fifty, which is
+ * what it did: the server capped at fifty with no offset, so the fifty-first delivery was
+ * unreachable and nothing said the list had been cut.
  */
-export function WebhookPanel({
-  installId,
-  vocabulary,
-  onSecretIssued,
-}: {
+const DELIVERY_PAGE_SIZE = 25;
+const DELIVERY_STATE_PARAM = "delivery";
+
+/**
+ * The states where sending again means something.
+ *
+ * `delivered` is already done, and `pending` or `inflight` is one the dispatcher still owns, so
+ * offering Retry there would race the sender rather than help.
+ */
+const RETRYABLE = new Set<WebhookDeliveryState>(["failed", "dead", "dropped"]);
+
+interface WebhookPanelProps {
   installId: number;
   vocabulary?: ExtensionVocabulary;
   onSecretIssued: (secret: WebhookSecretResponse) => void;
-}) {
+}
+
+function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookPanelProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [endpoint, setEndpoint] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
-  const [stateFilter, setStateFilter] = useState<string>("");
+  const [page, setPage] = useState(1);
+
+  // The parent already keeps the open panel in the URL so a delivery log can be linked to. A
+  // filtered log is what somebody actually wants to send, so the filter goes there too.
+  const stateFilter = searchParams.get(DELIVERY_STATE_PARAM) ?? "";
+  const setStateFilter = (next: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next) params.set(DELIVERY_STATE_PARAM, next);
+    else params.delete(DELIVERY_STATE_PARAM);
+    router.replace(`?${params.toString()}`, { scroll: false });
+    setPage(1);
+  };
 
   const subscriptions = useQuery({
     queryKey: ["extensions", "subscriptions", installId],
@@ -48,14 +81,41 @@ export function WebhookPanel({
   });
 
   const deliveries = useQuery({
-    queryKey: ["extensions", "deliveries", installId, stateFilter],
-    queryFn: () => extensionsAPI.listDeliveries(installId, stateFilter || undefined),
+    queryKey: ["extensions", "deliveries", installId, stateFilter, page],
+    queryFn: () =>
+      extensionsAPI.listDeliveries(installId, {
+        state: stateFilter || undefined,
+        limit: DELIVERY_PAGE_SIZE,
+        offset: (page - 1) * DELIVERY_PAGE_SIZE,
+      }),
+    // The window shifts under a live log, so the previous page stays on screen while the next one
+    // loads rather than the list blinking through an empty state on every step.
+    placeholderData: (previous) => previous,
   });
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["extensions", "subscriptions", installId] });
     queryClient.invalidateQueries({ queryKey: ["extensions", "deliveries", installId] });
   };
+
+  const deliveryRows = deliveries.data?.deliveries ?? [];
+  const deliveryTotal = deliveries.data?.total ?? 0;
+  const deliveryPages = Math.max(1, Math.ceil(deliveryTotal / DELIVERY_PAGE_SIZE));
+  // Clamped on read. The log grows while it is being read, so a page can vanish under the reader.
+  const deliveryPage = Math.min(page, deliveryPages);
+
+  const redeliver = useMutation({
+    mutationFn: (deliveryId: number) => extensionsAPI.redeliver(installId, deliveryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["extensions", "deliveries", installId] });
+      toast({
+        title: "Queued again",
+        description: "The same event id is reused, so a receiver that dedupes sees one event.",
+      });
+    },
+    onError: (error: Error) =>
+      toast({ title: "Could not retry", description: error.message, variant: "destructive" }),
+  });
 
   const create = useMutation({
     mutationFn: () =>
@@ -235,15 +295,19 @@ export function WebhookPanel({
         </div>
 
         {deliveries.isLoading ? (
-          <div className="h-32 animate-pulse rounded-lg bg-muted" />
-        ) : (deliveries.data ?? []).length === 0 ? (
+          <Skeleton className="h-32 rounded-lg" />
+        ) : deliveryRows.length === 0 ? (
           <EmptyState
-            title="Nothing has been delivered yet"
-            description="Events appear here as soon as something happens on a cluster this add-on reaches."
+            title={stateFilter ? "No delivery in that state" : "Nothing has been delivered yet"}
+            description={
+              stateFilter
+                ? "Every delivery on this installation is in some other state."
+                : "Events appear here as soon as something happens on a cluster this add-on reaches."
+            }
           />
         ) : (
           <ul className="divide-y rounded-lg border">
-            {(deliveries.data ?? []).map((row) => {
+            {deliveryRows.map((row) => {
               const meta = DELIVERY_STATE[row.state];
               return (
                 <li key={row.id} className="flex flex-wrap items-center gap-3 px-3 py-2">
@@ -259,6 +323,18 @@ export function WebhookPanel({
                   <span className="ml-auto text-xs text-muted-foreground">
                     {formatDateTime(row.created_at)}
                   </span>
+                  {RETRYABLE.has(row.state) ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      aria-label={`Retry delivery of ${row.event_type}`}
+                      disabled={redeliver.isPending}
+                      onClick={() => redeliver.mutate(row.id)}
+                    >
+                      <RotateCcw className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Retry
+                    </Button>
+                  ) : null}
                   {row.last_error ? (
                     <p className="w-full text-xs text-muted-foreground">{row.last_error}</p>
                   ) : null}
@@ -266,6 +342,16 @@ export function WebhookPanel({
               );
             })}
           </ul>
+        )}
+
+        {deliveryPages > 1 && (
+          <DataTablePagination
+            variant="compact"
+            currentPage={deliveryPage}
+            totalPages={deliveryPages}
+            onPageChange={setPage}
+            label={`deliveries for installation ${installId}`}
+          />
         )}
 
         <Alert>
@@ -277,5 +363,19 @@ export function WebhookPanel({
         </Alert>
       </section>
     </div>
+  );
+}
+
+/**
+ * The boundary the query string requires.
+ *
+ * The delivery state filter lives in the query string so a filtered log can be linked to, which
+ * opts this out of prerendering and makes the boundary a build requirement rather than a nicety.
+ */
+export function WebhookPanel(props: WebhookPanelProps) {
+  return (
+    <Suspense fallback={<Skeleton className="h-64 rounded-lg" />}>
+      <WebhookPanelContent {...props} />
+    </Suspense>
   );
 }

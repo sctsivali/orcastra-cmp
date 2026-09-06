@@ -7,12 +7,25 @@ import { Badge } from "@/components/ui/badge";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { INSTALL_STATUS } from "@/lib/extension-display";
 import { formatDateTime } from "@/lib/utils";
-import type { ExtensionInstall, WebhookDelivery, WebhookSubscription } from "@/types/api";
+import type {
+  ExtensionInstall,
+  WebhookDeliveryState,
+  WebhookSubscription,
+} from "@/types/api";
 
 interface AddonHealthPanelProps {
   install: ExtensionInstall;
   subscriptions: WebhookSubscription[];
-  deliveries: WebhookDelivery[];
+  /**
+   * The server's own breakdown over every delivery on this installation.
+   *
+   * important: counts rather than rows. This panel used to reduce over the delivery array it was
+   * handed, which was one capped page, and then present the result as how many deliveries had
+   * given up altogether. Past fifty deliveries that sentence was simply wrong, and it was wrong in
+   * the reassuring direction.
+   */
+  deliveryCounts: Partial<Record<WebhookDeliveryState, number>>;
+  deliveryTotal: number;
 }
 
 /** Nothing to show is not the same as a zero, so it is never rendered as one. */
@@ -37,18 +50,19 @@ function daysUntil(iso: string | null | undefined): number | null {
  * unknown is shown as unknown rather than as a zero, because "never used" and "we could not read
  * the key" lead an operator to opposite conclusions.
  */
-export function AddonHealthPanel({ install, subscriptions, deliveries }: AddonHealthPanelProps) {
+export function AddonHealthPanel({
+  install,
+  subscriptions,
+  deliveryCounts,
+  deliveryTotal,
+}: AddonHealthPanelProps) {
   const readable = install.credential_readable !== false;
   const expiresInDays = daysUntil(install.credential_expires_at);
   const failing = subscriptions.filter((s) => (s.consecutive_failures ?? 0) > 0);
   const suspendedSubscriptions = subscriptions.filter((s) => s.status === "suspended");
 
-  const byState = deliveries.reduce<Record<string, number>>((acc, row) => {
-    acc[row.state] = (acc[row.state] ?? 0) + 1;
-    return acc;
-  }, {});
-  const dead = byState.dead ?? 0;
-  const dropped = byState.dropped ?? 0;
+  const dead = deliveryCounts.dead ?? 0;
+  const dropped = deliveryCounts.dropped ?? 0;
 
   return (
     <section className="space-y-3">
@@ -129,6 +143,14 @@ export function AddonHealthPanel({ install, subscriptions, deliveries }: AddonHe
             {subscriptions.length === 0
               ? "None. This add-on polls rather than being told."
               : `${subscriptions.length} total, ${failing.length} currently failing`}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-sm text-muted-foreground">Deliveries</dt>
+          <dd className="text-sm">
+            {deliveryTotal === 0
+              ? "None yet"
+              : `${deliveryTotal} recorded, ${deliveryCounts.delivered ?? 0} delivered`}
           </dd>
         </div>
       </dl>

@@ -17,6 +17,7 @@ import type {
   ExtensionUpdateInput,
   ExtensionVocabulary,
   WebhookDelivery,
+  WebhookDeliveryPage,
   WebhookSubscription,
   WebhookSubscriptionRequest,
   WebhookSecretResponse,
@@ -151,11 +152,23 @@ export const extensionsAPI = {
   deleteSubscription: (id: number, subscriptionId: number) =>
     fetchAPI<void>(`${install(id)}/webhooks/${subscriptionId}`, { method: "DELETE" }),
 
-  listDeliveries: (id: number, state?: string, opts: ReadOptions = {}) =>
-    fetchRead<WebhookDelivery[]>(
-      `${install(id)}/deliveries${state ? `?state=${encodeURIComponent(state)}` : ""}`,
-      opts,
-    ),
+  /**
+   * One page of the delivery log.
+   *
+   * The page is asked for explicitly. This used to send nothing and take the server's default of
+   * fifty with no offset, so the fifty-first delivery was unreachable and nothing said so.
+   */
+  listDeliveries: (
+    id: number,
+    params: { state?: string; limit?: number; offset?: number } = {},
+    opts: ReadOptions = {},
+  ) => {
+    const query = new URLSearchParams();
+    if (params.state) query.set("state", params.state);
+    query.set("limit", String(params.limit ?? 25));
+    query.set("offset", String(params.offset ?? 0));
+    return fetchRead<WebhookDeliveryPage>(`${install(id)}/deliveries?${query.toString()}`, opts);
+  },
 
   /** A fresh attempt carrying the same event id, so a receiver's own dedupe still works. */
   redeliver: (id: number, deliveryId: number) =>

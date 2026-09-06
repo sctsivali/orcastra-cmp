@@ -2458,6 +2458,23 @@ export interface WebhookDelivery {
   payload?: Record<string, unknown>;
 }
 
+/**
+ * One page of the delivery log, with the two totals that answer different questions.
+ *
+ * `total` matches the state filter in force, because that is what the pager divides by. `counts` is
+ * the breakdown over every delivery on the installation and ignores the filter, because the health
+ * panel reports how much has failed altogether. Reducing over the rows in hand answered neither
+ * once the list was capped at fifty.
+ */
+export interface WebhookDeliveryPage {
+  deliveries: WebhookDelivery[];
+  total: number;
+  counts: Partial<Record<WebhookDeliveryState, number>>;
+  limit: number;
+  offset: number;
+  has_more: boolean;
+}
+
 // Whether an organization permits an AI agent to see and drive its guests' desktops.
 //
 // Four switches, not one. Screen capture, keyboard and pointer, the clipboard, and guest access

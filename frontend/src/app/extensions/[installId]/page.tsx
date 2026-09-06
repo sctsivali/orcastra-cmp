@@ -5,9 +5,13 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { RotateCcw } from "lucide-react";
+
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { AddonHealthPanel } from "@/components/extensions/addon-health-panel";
@@ -64,16 +68,21 @@ function InstallDetail() {
     staleTime: 3600000,
   });
 
-  // note: the same query keys the webhook panel uses, so react-query serves both from one fetch
-  // rather than the health panel doubling every request the tab below it already makes.
+  // note: the same query key the webhook panel uses, so react-query serves both from one fetch
+  // rather than the health panel doubling the request the tab below it already makes. The
+  // deliveries query below deliberately does not share a key any more, and says why.
   const subscriptions = useQuery({
     queryKey: ["extensions", "subscriptions", installId],
     queryFn: () => extensionsAPI.listSubscriptions(installId),
   });
 
+  // The health panel reads `counts`, which the server computes over every delivery on the
+  // installation. It asks for a single row because it does not render the list: reducing over
+  // whatever page happened to be in hand is exactly how it came to report the newest fifty as the
+  // whole history.
   const deliveries = useQuery({
-    queryKey: ["extensions", "deliveries", installId, ""],
-    queryFn: () => extensionsAPI.listDeliveries(installId, undefined),
+    queryKey: ["extensions", "deliveries", installId, "counts"],
+    queryFn: () => extensionsAPI.listDeliveries(installId, { limit: 1 }),
   });
 
   const invalidate = () =>
@@ -129,9 +138,16 @@ function InstallDetail() {
   if (install.error) {
     return (
       <div className="container mx-auto p-6">
-        <Alert variant="destructive">
-          <AlertDescription>{(install.error as Error).message}</AlertDescription>
-        </Alert>
+        <EmptyState
+          icon={RotateCcw}
+          title="Could not load this installation"
+          description={(install.error as Error).message}
+          action={
+            <Button size="sm" onClick={() => void install.refetch()}>
+              Retry
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -151,6 +167,13 @@ function InstallDetail() {
         {/* Actions only. The status moved into the Health panel, where the notice explaining a
             suspension already lives; beside these buttons it read as a third one. */}
         <div className="flex items-center gap-2">
+          <RefreshButton
+            label="Refresh this installation"
+            onRefresh={async () => {
+              await Promise.all([install.refetch(), subscriptions.refetch(), deliveries.refetch()]);
+            }}
+            lastUpdatedAt={install.dataUpdatedAt}
+          />
           {row.status === "active" ? (
             <Button variant="outline" size="sm" onClick={() => setStatus.mutate("suspend")}>
               Suspend
@@ -208,7 +231,8 @@ function InstallDetail() {
           <AddonHealthPanel
             install={row}
             subscriptions={subscriptions.data ?? []}
-            deliveries={deliveries.data ?? []}
+            deliveryCounts={deliveries.data?.counts ?? {}}
+            deliveryTotal={deliveries.data?.total ?? 0}
           />
 
           <section>
