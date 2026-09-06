@@ -1,9 +1,12 @@
 "use client";
 
+import * as React from "react";
 import { Server } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import type { NodeStatus } from "@/types/api";
 import { fleetDivergence } from "./software-fields";
 import { SoftwareNodeCard } from "./software-node-card";
@@ -23,8 +26,20 @@ import { SoftwareNodeCard } from "./software-node-card";
  */
 export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
   const connected = nodes.filter((node) => node.connected && node.environment);
+  const [page, setPage] = React.useState(1);
+  const [pageSize, setPageSize] = React.useState<number>(GRID_PAGE_SIZE);
   const unreachable = nodes.filter((node) => !node.connected);
   const divergence = fleetDivergence(connected);
+
+  // Clamped on read. These cards are heavier than the hardware tab's: each is expanded by
+  // default with two detail grids, a runtimes grid and a storage grid, so one card is roughly a
+  // screenful and the page length tracked the fleet exactly.
+  //
+  // note: `divergence` is computed over every connected node, not the page, because a fleet
+  // that disagrees about a version has to say so whichever page you are on.
+  const totalPages = Math.max(1, Math.ceil(connected.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedNodes = connected.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // important: `name` is the unique node id, `display_name` is a cosmetic label two nodes can
   // share (types/api.ts marks it optional). The banner keys its reasons by the label it is
@@ -82,10 +97,28 @@ export function SoftwareInventory({ nodes }: { nodes: NodeStatus[] }) {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
-          {connected.map((node) => (
-            <SoftwareNodeCard key={node.name} node={node} />
-          ))}
+        <div className="space-y-6">
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
+            {pagedNodes.map((node) => (
+              <SoftwareNodeCard key={node.name} node={node} />
+            ))}
+          </div>
+
+          {/* Absent rather than disabled when every connected node fits on one page. */}
+          {totalPages > 1 && (
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={connected.length}
+              pageSize={pageSize}
+              pageSizeOptions={[...GRID_PAGE_SIZES]}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+            />
+          )}
         </div>
       )}
     </section>

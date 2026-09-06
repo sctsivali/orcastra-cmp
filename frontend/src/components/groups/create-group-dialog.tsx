@@ -12,6 +12,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { SearchInput } from "@/components/ui/search-input";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { Label } from "@/components/ui/label";
@@ -62,6 +65,9 @@ interface Resource {
   path: string;
 }
 
+/** A checkbox list inside a 64-unit scroller. Ten rows fills it without hiding the pager. */
+const RESOURCE_PAGE_SIZE = PANEL_PAGE_SIZE;
+
 export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps) {
   const { toast } = useToast();
   const createGroupMutation = useCreateGroup();
@@ -97,6 +103,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   
   const [selectedResources, setSelectedResources] = useState<string[]>([]);
   const [allResources, setAllResources] = useState(false);
+  const [resourceSearch, setResourceSearch] = useState("");
+  const [resourcePage, setResourcePage] = useState(1);
   
   // Fetch resources based on selected node
   const { data: projectsData, isLoading: loadingProjects } = useProjects(formData.node);
@@ -186,6 +194,34 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
         : [...prev, resourceName]
     );
   };
+
+  // The list under the checkbox is live LXD data: every image pulled or cached on the node, every
+  // instance created on it. It rendered all of them into a 64-unit scroller, so a node with a
+  // cached image catalogue put thousands of checkboxes in the DOM with no way to find one.
+  //
+  // important: selection is stored by resource name, not by position, so paging and searching
+  // cannot lose a tick that is off screen. handleAddPermission still reads the full list.
+  const availableResources = getAvailableResources();
+  const matchingResources = resourceSearch.trim()
+    ? availableResources.filter((r) =>
+        r.name.toLowerCase().includes(resourceSearch.trim().toLowerCase()),
+      )
+    : availableResources;
+  const resourcePages = Math.max(1, Math.ceil(matchingResources.length / RESOURCE_PAGE_SIZE));
+  const currentResourcePage = Math.min(resourcePage, resourcePages);
+  const pagedResources = matchingResources.slice(
+    (currentResourcePage - 1) * RESOURCE_PAGE_SIZE,
+    currentResourcePage * RESOURCE_PAGE_SIZE,
+  );
+
+  // Compared during render rather than in an effect: switching the resource type or the node
+  // replaces the list entirely, and an effect would paint the old page against the new data.
+  const resourceListKey = `${formData.node}:${newPermission.entity_type}:${resourceSearch}`;
+  const [lastResourceListKey, setLastResourceListKey] = useState(resourceListKey);
+  if (lastResourceListKey !== resourceListKey) {
+    setLastResourceListKey(resourceListKey);
+    setResourcePage(1);
+  }
 
   const handleAddPermission = () => {
     if (newPermission.entity_type !== "server" && !allResources && selectedResources.length === 0) {
@@ -484,19 +520,33 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
 
                   {/* Resource List */}
                   {!allResources && (
+                    <>
+                    <SearchInput
+                      value={resourceSearch}
+                      onChange={setResourceSearch}
+                      placeholder={`Search ${newPermission.entity_type}s`}
+                      label={`Search ${newPermission.entity_type}s on ${formData.node}`}
+                      clearLabel={`Clear ${newPermission.entity_type} search`}
+                      className="mb-2"
+                    />
                     <div className="border rounded-lg max-h-64 overflow-y-auto bg-background">
                       {isLoadingResources() ? (
                         <div className="p-6 text-center text-sm text-muted-foreground">
                           <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
                           Loading {newPermission.entity_type}s from {formData.node}...
                         </div>
-                      ) : getAvailableResources().length === 0 ? (
+                      ) : availableResources.length === 0 ? (
                         <div className="p-6 text-center text-sm text-muted-foreground">
                           No {newPermission.entity_type}s found on {formData.node}
                         </div>
+                      ) : matchingResources.length === 0 ? (
+                        <div className="p-6 text-center text-sm text-muted-foreground">
+                          No {newPermission.entity_type} matches that search. There are{" "}
+                          {availableResources.length} on {formData.node}.
+                        </div>
                       ) : (
                         <div className="p-2 space-y-1">
-                          {getAvailableResources().map((resource) => (
+                          {pagedResources.map((resource) => (
                             <div
                               key={resource.name}
                               className="flex items-center gap-2 p-1.5 hover:bg-accent rounded transition-colors"
@@ -522,6 +572,18 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                         </div>
                       )}
                     </div>
+                    </>
+                  )}
+
+                  {/* Absent rather than disabled when every resource fits on one page. */}
+                  {!allResources && resourcePages > 1 && (
+                    <DataTablePagination
+                      variant="compact"
+                      label={`${newPermission.entity_type}s on ${formData.node}`}
+                      currentPage={currentResourcePage}
+                      totalPages={resourcePages}
+                      onPageChange={setResourcePage}
+                    />
                   )}
 
                   {selectedResources.length > 0 && !allResources && (

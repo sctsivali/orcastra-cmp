@@ -1,6 +1,9 @@
 "use client";
 
+import * as React from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { IntentLink as Link } from "@/components/navigation/route-intent";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -42,6 +45,9 @@ interface UsedByRef {
   project?: string;
 }
 
+/** Branches drawn on the trunk at once. Ten is already a tall diagram. */
+const TOPOLOGY_PAGE_SIZE = PANEL_PAGE_SIZE;
+
 function parseUsedBy(url: string): UsedByRef {
   const [path, query] = url.split("?");
   const parts = path.split("/").filter(Boolean); // ["1.0","instances","name"]
@@ -72,6 +78,7 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
   // global progress bar. These hops follow a mutation and are the slowest in the app.
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
+  const [topologyPage, setTopologyPage] = React.useState(1);
   const { data, isLoading, error } = useNetwork(name, host);
   const network = data as NetworkInfo | undefined;
   const { data: stateData } = useNetworkState(name, host);
@@ -105,6 +112,17 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
   const profiles = refs.filter((r) => r.kind === "profiles");
   const others = refs.filter(
     (r) => r.kind !== "instances" && r.kind !== "profiles",
+  );
+
+  // The trunk drew one branch per entry in used_by, which on a default bridge is every instance
+  // attached to it. A topology with two hundred branches has stopped being a diagram, so the
+  // branches are paged and the total moves onto the card title.
+  const branches = [...instances, ...profiles, ...others];
+  const branchPages = Math.max(1, Math.ceil(branches.length / TOPOLOGY_PAGE_SIZE));
+  const branchPage = Math.min(topologyPage, branchPages);
+  const pagedBranches = branches.slice(
+    (branchPage - 1) * TOPOLOGY_PAGE_SIZE,
+    branchPage * TOPOLOGY_PAGE_SIZE,
   );
 
   const state = (stateData as any)?.state;
@@ -184,7 +202,7 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
       {/* Connections / topology */}
       <Card>
         <CardHeader>
-          <CardTitle>Connections</CardTitle>
+          <CardTitle>Connections ({refs.length})</CardTitle>
         </CardHeader>
         <CardContent>
           {refs.length === 0 ? (
@@ -200,7 +218,7 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
               {/* horizontal line from the network to the trunk */}
               <div className="h-px w-6 bg-border shrink-0" />
               <div className="flex flex-col">
-                {[...instances, ...profiles, ...others].map((r, i, arr) => {
+                {pagedBranches.map((r, i, arr) => {
                   const isFirst = i === 0;
                   const isLast = i === arr.length - 1;
                   const icon =
@@ -240,6 +258,18 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
                   );
                 })}
               </div>
+            </div>
+          )}
+          {/* Absent rather than disabled when the whole topology fits. */}
+          {branchPages > 1 && (
+            <div className="mt-3">
+              <DataTablePagination
+                variant="compact"
+                label={`connections on ${network.name}`}
+                currentPage={branchPage}
+                totalPages={branchPages}
+                onPageChange={setTopologyPage}
+              />
             </div>
           )}
         </CardContent>

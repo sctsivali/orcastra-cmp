@@ -7,6 +7,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { TableLink } from "@/components/ui/table-link";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
+import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { formatBytes, formatDateTime, formatInstanceType } from "@/lib/utils";
 import type { ImageInfo, VMInfo } from "@/types/api";
 
@@ -21,6 +23,9 @@ import type { ImageInfo, VMInfo } from "@/types/api";
 // important: the heading says "Your instances", not "Instances". The list it joins against is
 // tenant-filtered server-side, so the count genuinely differs by role and a heading implying
 // totality would be wrong for everyone except an admin.
+/** A dialog section, not a table: ten rows is already a long read inside a modal. */
+const INSTANCE_PAGE_SIZE = PANEL_PAGE_SIZE;
+
 export function ImageDetailDialog({
   image,
   instances,
@@ -32,6 +37,29 @@ export function ImageDetailDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  // important: hooks before the early return, or opening the dialog for an image with no row
+  // would change how many hooks run.
+  const [page, setPage] = React.useState(1);
+
+  // The join key is volatile.base_image, so one standard image is the parent of nearly every
+  // instance an organization runs. This section is therefore the whole visible fleet for the
+  // image an operator is most likely to open, and it rendered every row unsliced.
+  const totalPages = Math.max(1, Math.ceil(instances.length / INSTANCE_PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pagedInstances = instances.slice(
+    (currentPage - 1) * INSTANCE_PAGE_SIZE,
+    currentPage * INSTANCE_PAGE_SIZE,
+  );
+
+  // note: reset when the dialog is pointed at a different image. It stays mounted between
+  // openings, so without this the next image opens on the previous one's page number.
+  const fingerprint = image?.fingerprint ?? null;
+  const [lastFingerprint, setLastFingerprint] = React.useState(fingerprint);
+  if (lastFingerprint !== fingerprint) {
+    setLastFingerprint(fingerprint);
+    setPage(1);
+  }
+
   if (!image) return null;
 
   // important: the description first. This used to title itself with a 12 character slice of the
@@ -93,7 +121,7 @@ export function ImageDetailDialog({
             <EmptyState icon={Box} title="No instances of yours use this image" />
           ) : (
             <ul className="divide-y rounded-md border">
-              {instances.map((instance) => (
+              {pagedInstances.map((instance) => (
                 <li key={`${instance.host}-${instance.name}`} className="flex items-center justify-between px-3 py-2">
                   <TableLink
                     href={`/inventory/instances?q=${encodeURIComponent(instance.name)}&project=${encodeURIComponent(instance.project || "default")}&host=${encodeURIComponent(instance.host)}`}
@@ -105,6 +133,20 @@ export function ImageDetailDialog({
                 </li>
               ))}
             </ul>
+          )}
+          {/* Absent rather than disabled when everything fits. The compact variant, because this
+              is a section inside a dialog rather than a table, and its label names the section so
+              a screen reader can tell it apart from any other pager on screen. */}
+          {totalPages > 1 && (
+            <div className="mt-3">
+              <DataTablePagination
+                variant="compact"
+                label={`instances using ${image.aliases?.[0] || "this image"}`}
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={setPage}
+              />
+            </div>
           )}
         </DetailSection>
       </div>
