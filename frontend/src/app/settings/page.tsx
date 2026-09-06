@@ -114,9 +114,10 @@ export default function SettingsPage() {
         {/* General Settings Tab - all roles, My Keys hidden for Tenant */}
         <TabsContent value="general" className="space-y-6">
           <div className="grid gap-6">
-            {/* The one decision the desktop-control feature rests on. It was settable by API and
-                by nothing else, so the consent existed and no operator could give it. */}
-            <DesktopControlSettings />
+            {/* Desktop Control lives in Integrations, beside the API keys it governs. A tenant
+                cannot open that tab, and this consent is deliberately theirs to give rather than
+                their partner's, so for them it stays here. */}
+            {!isPartner && <DesktopControlSettings />}
             {/* Extensions pointer - the surface is a route, not a tab, because a refresh
                 inside a tab would destroy the one-time credential an install shows. */}
             {isPartner && (
@@ -251,8 +252,13 @@ export default function SettingsPage() {
 
         {/* Integrations Tab - Admin + Partner */}
         {isPartner && (
-        <TabsContent value="integrations">
+        <TabsContent value="integrations" className="space-y-6">
           <IntegrationsSettings />
+          {/* The consent that decides whether the desktop and guest-access capabilities on those
+              keys do anything. It stays a card of its own rather than a switch inside the create
+              dialog: it is one standing decision per organization, read on every call and shared
+              with every organization on the cluster, not a property of the key being made. */}
+          <DesktopControlSettings />
         </TabsContent>
         )}
 

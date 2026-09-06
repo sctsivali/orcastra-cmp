@@ -40,7 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { MonitorPlay, ShieldAlert } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 import type {
   DesktopControlPolicy,
   Organization,
@@ -209,10 +209,7 @@ export function DesktopControlSettings() {
       <CardHeader>
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
-            <CardTitle className="flex items-center gap-2">
-              <MonitorPlay className="h-4 w-4 text-muted-foreground" />
-              Desktop Control
-            </CardTitle>
+            <CardTitle>Desktop Control</CardTitle>
             <CardDescription>
               What an AI agent may do with the desktops running on this organization&apos;s
               clusters. Off unless you turn it on.

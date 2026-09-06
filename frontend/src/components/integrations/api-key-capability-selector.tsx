@@ -3,6 +3,7 @@
 import * as React from "react";
 import { ShieldAlert } from "lucide-react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,13 @@ export function ApiKeyCapabilitySelector({
   disabled = false,
 }: ApiKeyCapabilitySelectorProps) {
   const safeList = Array.isArray(capabilities) ? capabilities : [];
+
+  // The server already marks the capabilities that reach inside a running guest, so this reads
+  // that flag rather than keeping a second copy of the list. Ticking one here is only half of
+  // what they need: without it, the first call meets a 403 nothing on this form warned about.
+  const needsOrgConsent = safeList.some(
+    (capability) => capability?.never_inherited && selected.includes(capability.name),
+  );
 
   return (
     <div className="space-y-2">
@@ -88,6 +96,16 @@ export function ApiKeyCapabilitySelector({
           })
         )}
       </div>
+      {needsOrgConsent && (
+        <Alert>
+          <ShieldAlert className="h-4 w-4" aria-hidden="true" />
+          <AlertDescription>
+            Granting this on the key is not enough on its own. Reaching inside a running guest also
+            needs the organization&apos;s own consent, set on the Desktop Control card in this tab,
+            and a cluster shared with another organization needs every one of them to agree.
+          </AlertDescription>
+        </Alert>
+      )}
       <p className="text-xs text-muted-foreground">
         Selected: {selected.length} of {safeList.length} capability(s)
       </p>
