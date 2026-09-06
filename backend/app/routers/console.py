@@ -314,23 +314,32 @@ async def query_session_audit_logs(
     instance_name: Optional[str] = Query(None, description="Filter by instance name"),
     event_type: Optional[str] = Query(None, description="Filter by event type (connect/disconnect)"),
     scope: str = Query("self", description="self = own sessions (default); org = all sessions on your organization's clusters (incl. admin break-glass)"),
-    limit: int = Query(100, ge=1, le=1000, description="Max results to return"),
+    limit: int = Query(100, ge=1, le=1000, description="Page size"),
+    offset: int = Query(0, ge=0, description="Rows to skip, for paging"),
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """
-    Query session audit logs.
+    Query session audit logs, one page at a time.
 
     scope=self (default): the caller's own sessions only (data minimization).
     scope=org: every session on clusters in the caller's organization scope, including
     a platform admin's break-glass console/terminal access - the tenant-visible
     accountability trail. Isolation is the caller's own get_user_allowed_clusters set,
     so no other organization's sessions leak.
+
+    important: `limit` used to truncate with no way past it. The trail held 660 rows while the
+    page asked for 500, so the oldest 160 were unreachable and the pager in the UI was paging a
+    set it had already lost the tail of. An audit trail that silently drops its oldest entries
+    is the one kind of list where truncation is not a display choice. `total` is counted over
+    the same filters as the page, so a caller can tell a short last page from a lost one.
     """
-    from sqlalchemy import select, desc
+    from sqlalchemy import select, desc, func
     from app.core.org_scope import get_current_allowed_clusters
 
     async with async_session_maker() as db:
-        query = select(SessionAuditLog).order_by(desc(SessionAuditLog.created_at))
+        # Built as a list so the count and the page cannot drift onto different filters, which
+        # would report a total the caller can never page to.
+        conditions = []
 
         if scope == "org":
             # important: the request-scoped set, which org_scope_dependency has already
@@ -342,22 +351,34 @@ async def query_session_audit_logs(
             allowed = get_current_allowed_clusters()
             if allowed is not None:
                 # restrict to the caller's own clusters (host == cluster_id); empty -> nothing
-                query = query.where(SessionAuditLog.host.in_(allowed or {"__none__"}))
+                conditions.append(SessionAuditLog.host.in_(allowed or {"__none__"}))
             # admin (allowed is None): no cluster filter
         else:
             # default: own sessions only (data minimization / GDPR)
-            query = query.where(SessionAuditLog.user_email == _rbac.email)
+            conditions.append(SessionAuditLog.user_email == _rbac.email)
 
         if instance_name:
-            query = query.where(SessionAuditLog.instance_name == instance_name)
+            conditions.append(SessionAuditLog.instance_name == instance_name)
         if event_type:
-            query = query.where(SessionAuditLog.event_type == event_type)
+            conditions.append(SessionAuditLog.event_type == event_type)
 
-        query = query.limit(limit)
+        total = (
+            await db.execute(
+                select(func.count()).select_from(SessionAuditLog).where(*conditions)
+            )
+        ).scalar_one()
+
+        query = (
+            select(SessionAuditLog)
+            .where(*conditions)
+            .order_by(desc(SessionAuditLog.created_at))
+            .offset(offset)
+            .limit(limit)
+        )
         result = await db.execute(query)
         logs = result.scalars().all()
 
-        return [
+        rows = [
             {
                 "id": log.id,
                 "session_id": log.session_id,
@@ -380,6 +401,14 @@ async def query_session_audit_logs(
             }
             for log in logs
         ]
+
+        return {
+            "logs": rows,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(rows) < total,
+        }
 
 
 @router.get(

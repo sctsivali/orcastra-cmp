@@ -67,7 +67,10 @@ export function AgentActivityBadge({
           headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
         });
         if (!res.ok) return;
-        const rows: AuditRow[] = await res.json();
+        // note: the endpoint returns a page envelope, not a bare array. This badge only wants
+        // the newest matching row, so one page of 50 is still the whole question it asks.
+        const payload: { logs?: AuditRow[] } = await res.json();
+        const rows: AuditRow[] = Array.isArray(payload?.logs) ? payload.logs : [];
         const newest = rows
           .filter(
             (row) =>

@@ -60,6 +60,8 @@ import { cn, formatLabel } from "@/lib/utils";
 import { getAccessToken } from "@/lib/api";
 import { BreakGlassPanel } from "@/components/break-glass/break-glass-panel";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { PartialReadNotice } from "@/components/ui/partial-read-notice";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -258,12 +260,18 @@ function ActiveSessionsTab() {
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
+  const resetPage = useCallback(() => setPage(1), []);
 
-  const filters = useTableFilters(ACTIVE_SESSIONS, sessions);
+  const filters = useTableFilters(ACTIVE_SESSIONS, sessions, {
+    onFilterChange: resetPage,
+  });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     ACTIVE_SESSIONS.sortAccessors,
     ACTIVE_SESSIONS.defaultSort.field,
     ACTIVE_SESSIONS.defaultSort.direction,
+    resetPage,
   );
 
   const fetchSessions = useCallback(async (showLoading = false) => {
@@ -305,6 +313,13 @@ function ActiveSessionsTab() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+
+  // important: clamped on read, not corrected in an effect. This list polls every 5s and a
+  // session ending shrinks it under the operator, so the page they are on can stop existing
+  // between two frames. An effect would fire only after the empty frame had already painted.
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedSessions = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const totalDlRate = sessions.reduce((sum, s) => sum + s.bandwidth.download_rate_bps, 0);
   const totalUlRate = sessions.reduce((sum, s) => sum + s.bandwidth.upload_rate_bps, 0);
@@ -404,31 +419,64 @@ function ActiveSessionsTab() {
           ) : loading && sessions.length === 0 ? (
             <EmptyState icon={Loader2} title="Loading sessions..." iconClassName="animate-spin" />
           ) : sorted.length === 0 ? (
-            <EmptyState
-              icon={Terminal}
-              title={sessions.length === 0 ? "No active sessions" : "No matching sessions"}
-              description={sessions.length === 0 ? "Sessions appear here when you connect to a console or terminal." : "Try adjusting your filter."}
-            />
+            sessions.length > 0 && filters.activeFilterCount > 0 ? (
+              <EmptyState
+                icon={Terminal}
+                title="No session matches the current filters"
+                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${sessions.length} session${sessions.length === 1 ? "" : "s"}.`}
+                action={
+                  <Button size="sm" variant="outline" onClick={() => filters.clearAll()}>
+                    Clear filters
+                  </Button>
+                }
+              />
+            ) : (
+              <EmptyState
+                icon={Terminal}
+                title="No active sessions"
+                description="Sessions appear here when you connect to a console or terminal."
+              />
+            )
           ) : (
-            <div className="rounded-md border overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[200px]" />
-                    <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Duration" field="duration" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Bandwidth" field="bandwidth" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Rate" field="rate" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[100px]" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sorted.map((s) => (
-                    <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} scope={scope} />
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <>
+              <div className="rounded-md border overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[200px]" />
+                      <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableTableHead label="Duration" field="duration" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableTableHead label="Bandwidth" field="bandwidth" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableTableHead label="Rate" field="rate" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                      <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[100px]" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {pagedSessions.map((s) => (
+                      <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} scope={scope} />
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {/* Absent rather than disabled when everything fits on one page. */}
+              {totalPages > 1 && (
+                <div className="mt-4">
+                  <DataTablePagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    pageSize={pageSize}
+                    pageSizeOptions={[...TABLE_PAGE_SIZES]}
+                    totalItems={sorted.length}
+                    onPageChange={setPage}
+                    onPageSizeChange={(size) => {
+                      setPageSize(size);
+                      setPage(1);
+                    }}
+                  />
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
@@ -473,9 +521,31 @@ const SESSION_HISTORY = defineTable<AuditLogEntry>()({
     { field: "node", label: "Node", facet: (l) => l.host, facetSpec: { role: "node",} },
   ] });
 
+/**
+ * One request's worth of trail. The endpoint caps a page at 1000.
+ *
+ * important: this used to be the whole read. The page asked for 500 rows of a trail that held
+ * 660, so the oldest 160 were unreachable and the pager below was slicing a set that had
+ * already lost its tail. The three counters above the table were wrong for the same reason:
+ * they sum whatever was fetched, so they under-reported every session past the cap.
+ */
+const AUDIT_PAGE = 500;
+
+/**
+ * Where the read stops even if the trail continues.
+ *
+ * Filtering, search and sort all run in the browser over the whole fetched set, which is what
+ * makes this table useful and what server-side paging alone would take away. That trade only
+ * holds while the set fits in a browser, so it is bounded, and the boundary is stated on screen
+ * rather than left to look like the end of the trail.
+ */
+const AUDIT_CEILING = 5000;
+
 function SessionHistoryTab() {
   const [selectedSession, setSelectedSession] = useState<SessionRecord | null>(null);
   const [logs, setLogs] = useState<AuditLogEntry[]>([]);
+  // What the server says the whole trail holds, which is not always what we fetched.
+  const [trailTotal, setTrailTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -499,11 +569,32 @@ function SessionHistoryTab() {
       const token = getAccessToken();
       // scope has always been supported here and the page never sent it, so the
       // organisation trail the backend maintains was unreachable from the UI.
-      const params = new URLSearchParams({ limit: "500", scope });
-      const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
-      setLogs(await res.json());
+      const collected: AuditLogEntry[] = [];
+      let offset = 0;
+      let total = 0;
+
+      for (;;) {
+        const params = new URLSearchParams({
+          limit: String(AUDIT_PAGE),
+          offset: String(offset),
+          scope,
+        });
+        const res = await fetch(`${API_URL}/api/v1/console/sessions/audit?${params}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {} });
+        if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
+        const payload = await res.json();
+        const rows: AuditLogEntry[] = Array.isArray(payload?.logs) ? payload.logs : [];
+        collected.push(...rows);
+        total = typeof payload?.total === "number" ? payload.total : collected.length;
+        offset += rows.length;
+        // note: the empty-page break is the one that matters. has_more is computed from a count
+        // taken before the page was read, so a row deleted between the two would otherwise
+        // leave this asking for an offset that never returns anything.
+        if (!payload?.has_more || rows.length === 0 || collected.length >= AUDIT_CEILING) break;
+      }
+
+      setLogs(collected);
+      setTrailTotal(total);
       setLastRefresh(new Date());
       setError(null);
     } catch (err) {
@@ -598,6 +689,15 @@ function SessionHistoryTab() {
           <TableToolbar filters={filters} noun="log entries" />
         </CardHeader>
         <CardContent>
+          {trailTotal > logs.length && (
+            <div className="mb-3">
+              <PartialReadNotice>
+                Showing the {logs.length.toLocaleString()} most recent entries of{" "}
+                {trailTotal.toLocaleString()}. Narrow the scope or the filters to reach older
+                sessions.
+              </PartialReadNotice>
+            </div>
+          )}
           {error && logs.length > 0 && (
             <div className="mb-3 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
               <WifiOff className="h-3.5 w-3.5 shrink-0 text-warning" />
