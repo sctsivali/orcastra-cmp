@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_key_expiry import now_utc, utc_isoformat
@@ -91,6 +91,24 @@ class SubscriptionSecretResponse(BaseModel):
     subscription_id: int
     signing_secret: str
     secret_fingerprint: str
+
+
+class DeliveryPage(BaseModel):
+    """One page of the delivery log, and the two different totals a reader needs.
+
+    important: `total` counts what the current state filter matches, because that is what a pager
+    divides by. `counts` is the breakdown over every delivery on the installation, ignoring the
+    filter, because the health panel answers how much has failed overall. Reducing over the rows in
+    hand answered neither question honestly once the list was capped: it reported the last page as
+    though it were the whole history.
+    """
+
+    deliveries: List[Dict[str, Any]]
+    total: int
+    counts: Dict[str, int]
+    limit: int
+    offset: int
+    has_more: bool
 
 
 def _to_response(row: WebhookSubscription) -> SubscriptionResponse:
@@ -367,6 +385,7 @@ async def delete_subscription(
 
 @router.get(
     "/installations/{install_id}/deliveries",
+    response_model=DeliveryPage,
     summary="What was delivered, and what happened",
     description=(
         "The answer to 'what did this add-on get told about my organization'. The signing secret "
@@ -376,10 +395,18 @@ async def delete_subscription(
 async def list_deliveries(
     install_id: int,
     state: Optional[str] = Query(None),
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
     user: AuthenticatedUser = Depends(require_partner()),
     db: AsyncSession = Depends(get_db),
-) -> List[Dict[str, Any]]:
+) -> DeliveryPage:
+    """A page of the log, newest first.
+
+    This was a cap rather than a page: 50 rows with no offset, so the fifty-first delivery was
+    unreachable and nothing said so. Delivery is at-least-once and every retry writes a row, so the
+    log outgrows any cap quickly, and filtering by state then narrowed a set that had already been
+    cut, which is a misleading answer rather than a slow one.
+    """
     await _install_for(db, install_id, user)
     subscription_ids = [
         row[0]
@@ -392,35 +419,69 @@ async def list_deliveries(
         ).all()
     ]
     if not subscription_ids:
-        return []
+        return DeliveryPage(
+            deliveries=[], total=0, counts={}, limit=limit, offset=offset, has_more=False
+        )
 
-    query = (
-        select(WebhookDelivery)
-        .where(WebhookDelivery.subscription_id.in_(subscription_ids))
-        .order_by(WebhookDelivery.id.desc())
-        .limit(limit)
+    mine = WebhookDelivery.subscription_id.in_(subscription_ids)
+
+    # Unfiltered on purpose: this is what the health panel reads, and it asks about the whole
+    # installation rather than about whichever state the operator is currently looking at.
+    counts = {
+        row[0]: row[1]
+        for row in (
+            await db.execute(
+                select(WebhookDelivery.state, func.count())
+                .where(mine)
+                .group_by(WebhookDelivery.state)
+            )
+        ).all()
+    }
+
+    window = mine if not state else and_(mine, WebhookDelivery.state == state)
+    total = (
+        await db.execute(select(func.count()).select_from(WebhookDelivery).where(window))
+    ).scalar_one()
+
+    rows = (
+        (
+            await db.execute(
+                select(WebhookDelivery)
+                .where(window)
+                .order_by(WebhookDelivery.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
     )
-    if state:
-        query = query.where(WebhookDelivery.state == state)
 
-    return [
-        {
-            "id": row.id,
-            "subscription_id": row.subscription_id,
-            "event_id": row.event_id,
-            "event_type": row.event_type,
-            "state": row.state,
-            "attempt": row.attempt,
-            "response_status": row.response_status,
-            "response_ms": row.response_ms,
-            "response_excerpt": row.response_excerpt,
-            "last_error": row.last_error,
-            "next_attempt_at": row.next_attempt_at,
-            "created_at": row.created_at,
-            "payload": row.payload,
-        }
-        for row in (await db.execute(query)).scalars().all()
-    ]
+    return DeliveryPage(
+        deliveries=[
+            {
+                "id": row.id,
+                "subscription_id": row.subscription_id,
+                "event_id": row.event_id,
+                "event_type": row.event_type,
+                "state": row.state,
+                "attempt": row.attempt,
+                "response_status": row.response_status,
+                "response_ms": row.response_ms,
+                "response_excerpt": row.response_excerpt,
+                "last_error": row.last_error,
+                "next_attempt_at": row.next_attempt_at,
+                "created_at": row.created_at,
+                "payload": row.payload,
+            }
+            for row in rows
+        ],
+        total=total,
+        counts=counts,
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(rows) < total,
+    )
 
 
 @router.post(
