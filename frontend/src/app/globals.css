@@ -363,6 +363,29 @@
   }
 }
 
+/* A table that scrolls sideways says so at the edge it can still travel towards.
+   data-scroll-x is written by components/ui/table.tsx.
+
+   Painted as an inset shadow on the scroll container, which stays on the border box while the
+   rows move underneath it. A pseudo-element would have been positioned against the padding box
+   and scrolled away with the content, which is the same class of mistake as putting a scrollbar
+   on a box that is taller than the viewport. The colour is a token, so it inverts with the theme
+   instead of being a black shadow nobody can see on the dark ground. No keyframes, so there is
+   nothing here for prefers-reduced-motion to guard. */
+[data-slot="table-container"][data-scroll-x="start"] {
+  box-shadow: inset -12px 0 10px -10px hsl(var(--foreground) / 0.28);
+}
+
+[data-slot="table-container"][data-scroll-x="middle"] {
+  box-shadow:
+    inset 12px 0 10px -10px hsl(var(--foreground) / 0.28),
+    inset -12px 0 10px -10px hsl(var(--foreground) / 0.28);
+}
+
+[data-slot="table-container"][data-scroll-x="end"] {
+  box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

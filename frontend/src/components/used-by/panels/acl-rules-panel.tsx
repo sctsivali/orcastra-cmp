@@ -113,49 +113,47 @@ function AclRulesPanelContent({ ingress, egress }: { ingress?: AclRule[]; egress
   return (
     <div className="space-y-3">
       <TableToolbar filters={filters} noun="rules" />
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <SortableTableHead label="Direction" field="direction" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Action" field="action" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Source" field="source" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Destination" field="destination" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {pagedRules.length === 0 ? (
-              <TableEmptyRow
-                colSpan={6}
-                icon={Shield}
-                title="No rules match the current filters"
-                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${rules.length} rules.`}
-                action={
-                  <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
-                    Clear filters
-                  </Button>
-                }
-              />
-            ) : (
-              pagedRules.map((rule) => (
-                <TableRow key={`${rule.direction}-${rule.index}`}>
-                  <TableCell>{rule.direction}</TableCell>
-                  <TableCell>{rule.action ? formatLabel(rule.action) : <TableEmptyValue label="No action" />}</TableCell>
-                  <TableCell>
-                    {rule.protocol || <TableEmptyValue label="Any protocol" />}
-                    {ports(rule) ? <span className="block text-xs text-muted-foreground">{ports(rule)}</span> : null}
-                  </TableCell>
-                  <TableCell className="font-mono">{rule.source || <TableEmptyValue label="Any source" />}</TableCell>
-                  <TableCell className="font-mono">{rule.destination || <TableEmptyValue label="Any destination" />}</TableCell>
-                  <TableCell>{rule.description || <TableEmptyValue label="No description" />}</TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <SortableTableHead label="Direction" field="direction" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Action" field="action" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Source" field="source" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Destination" field="destination" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {pagedRules.length === 0 ? (
+            <TableEmptyRow
+              colSpan={6}
+              icon={Shield}
+              title="No rules match the current filters"
+              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${rules.length} rules.`}
+              action={
+                <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+            pagedRules.map((rule) => (
+              <TableRow key={`${rule.direction}-${rule.index}`}>
+                <TableCell>{rule.direction}</TableCell>
+                <TableCell>{rule.action ? formatLabel(rule.action) : <TableEmptyValue label="No action" />}</TableCell>
+                <TableCell>
+                  {rule.protocol || <TableEmptyValue label="Any protocol" />}
+                  {ports(rule) ? <span className="block text-xs text-muted-foreground">{ports(rule)}</span> : null}
+                </TableCell>
+                <TableCell className="font-mono">{rule.source || <TableEmptyValue label="Any source" />}</TableCell>
+                <TableCell className="font-mono">{rule.destination || <TableEmptyValue label="Any destination" />}</TableCell>
+                <TableCell>{rule.description || <TableEmptyValue label="No description" />}</TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
       {/* Absent rather than disabled when everything fits on one page. No mt-4 wrapper: the
           panel is already a space-y-3 stack, whose gap wins over a margin on the child. */}
       {totalPages > 1 && (

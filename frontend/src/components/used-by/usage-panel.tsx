@@ -196,29 +196,27 @@ function UsagePanelContent({ usedBy, node, view, onViewChange, onCopied }: Usage
         </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <SortableTableHead label="Resource" field="resource" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Type" field="kind" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Reference" field="reference" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {pageRows.length === 0 ? (
-              <TableEmptyRow
-                colSpan={4}
-                title="No references match the current filters"
-                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active`}
-              />
-            ) : (
-              rows
-            )}
-          </TableBody>
-        </Table>
-      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <SortableTableHead label="Resource" field="resource" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Type" field="kind" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Reference" field="reference" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {pageRows.length === 0 ? (
+            <TableEmptyRow
+              colSpan={4}
+              title="No references match the current filters"
+              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active`}
+            />
+          ) : (
+            rows
+          )}
+        </TableBody>
+      </Table>
 
       <DataTablePagination
         currentPage={page}

@@ -439,25 +439,23 @@ function ActiveSessionsTab() {
             )
           ) : (
             <>
-              <div className="rounded-md border overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[200px]" />
-                      <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Duration" field="duration" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Bandwidth" field="bandwidth" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Rate" field="rate" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[100px]" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pagedSessions.map((s) => (
-                      <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} scope={scope} />
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              <Table containerClassName="rounded-md border">
+                <TableHeader>
+                  <TableRow>
+                    <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[200px]" />
+                    <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Duration" field="duration" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Bandwidth" field="bandwidth" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Rate" field="rate" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[100px]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pagedSessions.map((s) => (
+                    <ActiveRow key={s.session_id} session={s} onSelect={setSelectedSession} scope={scope} />
+                  ))}
+                </TableBody>
+              </Table>
 
               {/* Absent rather than disabled when everything fits on one page. */}
               {totalPages > 1 && (
@@ -720,25 +718,23 @@ function SessionHistoryTab() {
             />
           ) : (
             <>
-              <div className="rounded-md border overflow-hidden">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <SortableTableHead label="Event" field="event" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[200px]" />
-                      <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Duration" field="duration" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Transfer" field="transfer" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                      <SortableTableHead label="Time" field="time" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {paginated.map((log) => (
-                      <HistoryRow key={`${log.id}-${log.event_type}`} log={log} onSelect={setSelectedSession} scope={scope} />
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              <Table containerClassName="rounded-md border">
+                <TableHeader>
+                  <TableRow>
+                    <SortableTableHead label="Event" field="event" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} className="w-[200px]" />
+                    <SortableTableHead label="Protocol" field="protocol" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Duration" field="duration" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Transfer" field="transfer" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                    <SortableTableHead label="Time" field="time" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paginated.map((log) => (
+                    <HistoryRow key={`${log.id}-${log.event_type}`} log={log} onSelect={setSelectedSession} scope={scope} />
+                  ))}
+                </TableBody>
+              </Table>
               <DataTablePagination
                 currentPage={currentPage}
                 totalPages={totalPages}

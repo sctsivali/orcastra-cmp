@@ -2233,64 +2233,68 @@ function InstanceCreateFormContent() {
                 onChange={(e) => setImgSearch(e.target.value)}
                 placeholder="Search an image"
               />
-              <div className="overflow-auto border rounded-lg flex-1 min-h-0">
-                <Table className="min-w-[760px]">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Distribution</TableHead>
-                      <TableHead>Release</TableHead>
-                      <TableHead>Variant</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Alias</TableHead>
-                      <TableHead>Source</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {imagesLoading ? (
-                      <TableEmptyRow
-                        colSpan={7}
-                        icon={Loader2}
-                        iconClassName="animate-spin"
-                        title="Loading images"
-                      />
-                    ) : filteredImageRows.length === 0 ? (
-                      <TableEmptyRow
-                        colSpan={7}
-                        icon={ImageIcon}
-                        title="No images match the filters"
-                        description="Widen the filters, or pick a different node."
-                      />
-                    ) : (
-                      pagedImageRows.map((row) => (
-                        <TableRow key={row.key}>
-                          <TableCell>{row.distribution}</TableCell>
-                          <TableCell>{row.release || <TableEmptyValue label="No release" />}</TableCell>
-                          <TableCell>{row.variant || <TableEmptyValue label="No variant" />}</TableCell>
-                          <TableCell>{row.type}</TableCell>
-                          <TableCell>{row.alias}</TableCell>
-                          <TableCell>
-                            {row.source}
-                            {row.cached && row.source !== "Local" ? (
-                              <span className="text-muted-foreground"> · cached</span>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => selectImage(row)}
-                            >
-                              Select
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
+              <Table
+                className="min-w-[760px]"
+                containerClassName="flex-1 min-h-0 rounded-lg border"
+                density="compact"
+                stickyHeader
+                scrollLabel="Base image catalogue"
+              >
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Distribution</TableHead>
+                    <TableHead>Release</TableHead>
+                    <TableHead>Variant</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Alias</TableHead>
+                    <TableHead>Source</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {imagesLoading ? (
+                    <TableEmptyRow
+                      colSpan={7}
+                      icon={Loader2}
+                      iconClassName="animate-spin"
+                      title="Loading images"
+                    />
+                  ) : filteredImageRows.length === 0 ? (
+                    <TableEmptyRow
+                      colSpan={7}
+                      icon={ImageIcon}
+                      title="No images match the filters"
+                      description="Widen the filters, or pick a different node."
+                    />
+                  ) : (
+                    pagedImageRows.map((row) => (
+                      <TableRow key={row.key}>
+                        <TableCell>{row.distribution}</TableCell>
+                        <TableCell>{row.release || <TableEmptyValue label="No release" />}</TableCell>
+                        <TableCell>{row.variant || <TableEmptyValue label="No variant" />}</TableCell>
+                        <TableCell>{row.type}</TableCell>
+                        <TableCell>{row.alias}</TableCell>
+                        <TableCell>
+                          {row.source}
+                          {row.cached && row.source !== "Local" ? (
+                            <span className="text-muted-foreground"> · cached</span>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => selectImage(row)}
+                          >
+                            Select
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
               {/* note: this replaced a hard `.slice(0, 500)` and the words "(showing first 500)".
                   The remote catalogue runs to thousands of rows, so image 501 was reachable only
                   by guessing a search term that narrowed the list under the cap. */}

@@ -429,7 +429,6 @@ function WarningsContent() {
             </div>
           ) : (
             <>
-            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -503,7 +502,6 @@ function WarningsContent() {
                 ))}
               </TableBody>
             </Table>
-            </div>
             {/* Absent rather than disabled when everything fits on one page. Outside the
                 horizontal scroller, so the controls stay put when a wide table scrolls. */}
             {platformTotalPages > 1 && (
@@ -570,7 +568,6 @@ function WarningsContent() {
                 )
               ) : (
                 <>
-                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -634,7 +631,6 @@ function WarningsContent() {
                     })}
                   </TableBody>
                 </Table>
-                </div>
                 {certTotalPages > 1 && (
                   <div className="mt-4">
                     <DataTablePagination
@@ -695,7 +691,6 @@ function WarningsContent() {
                 )
               ) : (
                 <>
-                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -748,7 +743,6 @@ function WarningsContent() {
                     ))}
                   </TableBody>
                 </Table>
-                </div>
                 {nodeTotalPages > 1 && (
                   <div className="mt-4">
                     <DataTablePagination

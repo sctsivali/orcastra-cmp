@@ -382,92 +382,90 @@ function MyKeysContent() {
             </div>
           ) : (
             <>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Access Level" field="auth_level" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Created" field="created" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Expires" field="expires" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagedKeys.map((key: KeyInfo) => (
-                    <TableRow key={key.id}>
-                      <TableCell className="font-medium">{key.name}</TableCell>
-                      <TableCell>
-                        {key.node}
-                      </TableCell>
-                      <TableCell>
-                        {key.project}
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant={
-                            key.auth_level === "admin"
-                              ? "default"
-                              : "outline"
-                          }
-                          className="gap-1"
-                        >
-                          <Shield className="h-3 w-3" />
-                          {key.auth_level === "admin"
-                            ? "Admin"
-                            : "Standard"}
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Access Level" field="auth_level" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Created" field="created" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Expires" field="expires" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {pagedKeys.map((key: KeyInfo) => (
+                  <TableRow key={key.id}>
+                    <TableCell className="font-medium">{key.name}</TableCell>
+                    <TableCell>
+                      {key.node}
+                    </TableCell>
+                    <TableCell>
+                      {key.project}
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          key.auth_level === "admin"
+                            ? "default"
+                            : "outline"
+                        }
+                        className="gap-1"
+                      >
+                        <Shield className="h-3 w-3" />
+                        {key.auth_level === "admin"
+                          ? "Admin"
+                          : "Standard"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {new Date(key.created_at).toLocaleDateString('en-GB')}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {key.expires_at
+                        ? new Date(key.expires_at).toLocaleDateString('en-GB')
+                        : "Never"}
+                    </TableCell>
+                    <TableCell>
+                      {key.is_expired ? (
+                        <Badge variant="destructive" className="gap-1">
+                          <AlertCircle className="h-3 w-3" />
+                          Expired
                         </Badge>
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {new Date(key.created_at).toLocaleDateString('en-GB')}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {key.expires_at
-                          ? new Date(key.expires_at).toLocaleDateString('en-GB')
-                          : "Never"}
-                      </TableCell>
-                      <TableCell>
-                        {key.is_expired ? (
-                          <Badge variant="destructive" className="gap-1">
-                            <AlertCircle className="h-3 w-3" />
-                            Expired
-                          </Badge>
-                        ) : (
-                          <Badge variant="default" className="gap-1 bg-green-600">
-                            <CheckCircle className="h-3 w-3" />
-                            Active
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleDownload(key.id)}
-                            title="Download PFX"
-                          >
-                            <Download className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={() => handleDeleteClick(key.id, key.name)}
-                            title={isReadOnly ? "Disabled in read-only mode" : "Delete Key"}
-                            disabled={isReadOnly}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                      ) : (
+                        <Badge variant="default" className="gap-1 bg-green-600">
+                          <CheckCircle className="h-3 w-3" />
+                          Active
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleDownload(key.id)}
+                          title="Download PFX"
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => handleDeleteClick(key.id, key.name)}
+                          title={isReadOnly ? "Disabled in read-only mode" : "Delete Key"}
+                          disabled={isReadOnly}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
             {/* Absent rather than disabled when everything fits on one page. Outside the
                 horizontal scroller, so the controls stay put when a wide table scrolls. */}
             {totalPages > 1 && (

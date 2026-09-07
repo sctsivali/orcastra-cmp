@@ -388,7 +388,6 @@ function CertificatesContent() {
             </div>
           ) : (
             <>
-            <div className="overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -531,7 +530,6 @@ function CertificatesContent() {
               )}
               </TableBody>
             </Table>
-            </div>
 
             {/* Absent rather than disabled when everything fits on one page. Outside the
                 horizontal scroller so it does not slide away with a wide table. */}

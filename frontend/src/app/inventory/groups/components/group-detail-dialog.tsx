@@ -91,61 +91,59 @@ function PermissionsPanelContent({ group }: { group: any }) {
   return (
     <div className="space-y-3">
       <TableToolbar filters={filters} noun="permissions" />
-      <div className="overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <SortableTableHead label="Entity Type" field="entity_type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Resource" field="url" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-              <SortableTableHead label="Entitlement" field="entitlement" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {pagedPermissions.length === 0 ? (
-              <TableEmptyRow
-                colSpan={3}
-                icon={Shield}
-                title="No permissions match the current filters"
-                description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${permissions.length} permissions.`}
-                action={
-                  <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
-                    Clear filters
-                  </Button>
-                }
-              />
-            ) : (
-              pagedPermissions.map((permission: any, index: number) => {
-                const reference = parseLxdReference(permission.url ?? "");
-                const kind = referenceKind(reference);
-                const href = kind.href?.(reference, group?.node);
-                const name = reference.name ?? permission.url;
-                return (
-                  <TableRow key={`${permission.url}-${permission.entitlement}-${index}`}>
-                    <TableCell>{formatLabel(permission.entity_type ?? "")}</TableCell>
-                    <TableCell>
-                      {/* The table used to print the raw URL and stop there, so a permission
-                          named a resource the reader could not follow or even identify. */}
-                      {href ? (
-                        <TableLink href={href} title={`Open ${name} in ${kind.label}s`}>
-                          {name}
-                        </TableLink>
-                      ) : (
-                        <OverflowText value={name} label={`${kind.label} name`} />
-                      )}
-                      {/* important: the URL is what the permission actually grants against, so a
-                          reader who cannot see all of it cannot audit the grant. */}
-                      <TableSubText wrap>
-                        <OverflowText value={permission.url} label={`permission target for ${name}`} mono />
-                      </TableSubText>
-                    </TableCell>
-                    <TableCell>{formatLabel(permission.entitlement ?? "")}</TableCell>
-                  </TableRow>
-                );
-              })
-            )}
-          </TableBody>
-        </Table>
-      </div>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <SortableTableHead label="Entity Type" field="entity_type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Resource" field="url" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+            <SortableTableHead label="Entitlement" field="entitlement" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {pagedPermissions.length === 0 ? (
+            <TableEmptyRow
+              colSpan={3}
+              icon={Shield}
+              title="No permissions match the current filters"
+              description={`${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active on ${permissions.length} permissions.`}
+              action={
+                <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : (
+            pagedPermissions.map((permission: any, index: number) => {
+              const reference = parseLxdReference(permission.url ?? "");
+              const kind = referenceKind(reference);
+              const href = kind.href?.(reference, group?.node);
+              const name = reference.name ?? permission.url;
+              return (
+                <TableRow key={`${permission.url}-${permission.entitlement}-${index}`}>
+                  <TableCell>{formatLabel(permission.entity_type ?? "")}</TableCell>
+                  <TableCell>
+                    {/* The table used to print the raw URL and stop there, so a permission
+                        named a resource the reader could not follow or even identify. */}
+                    {href ? (
+                      <TableLink href={href} title={`Open ${name} in ${kind.label}s`}>
+                        {name}
+                      </TableLink>
+                    ) : (
+                      <OverflowText value={name} label={`${kind.label} name`} />
+                    )}
+                    {/* important: the URL is what the permission actually grants against, so a
+                        reader who cannot see all of it cannot audit the grant. */}
+                    <TableSubText wrap>
+                      <OverflowText value={permission.url} label={`permission target for ${name}`} mono />
+                    </TableSubText>
+                  </TableCell>
+                  <TableCell>{formatLabel(permission.entitlement ?? "")}</TableCell>
+                </TableRow>
+              );
+            })
+          )}
+        </TableBody>
+      </Table>
       {/* Absent rather than disabled when everything fits on one page. No mt-4 wrapper: the
           panel is already a space-y-3 stack, whose gap wins over a margin on the child. */}
       {totalPages > 1 && (

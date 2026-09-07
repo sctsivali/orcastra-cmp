@@ -211,6 +211,15 @@ jobs:
       - name: Prose typography
         run: node scripts/checks/check-prose-typography.mjs .
 
+      # The image picker's row list scrolled vertically in one box and horizontally in another,
+      # so its horizontal scrollbar was painted below the last row and only appeared once the
+      # list was scrolled all the way down. Every column to the right was unreachable at any
+      # other position. Table already owns a scroll container, so a second scrolling wrapper is
+      # what splits the axes. Clipping wrappers are deliberately still allowed: they cannot bury
+      # a scrollbar.
+      - name: Table scroll containers
+        run: node scripts/checks/check-table-scroll.mjs .
+
   commit-format:
     name: Conventional commits
     runs-on: ubuntu-latest

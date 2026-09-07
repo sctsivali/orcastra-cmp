@@ -266,6 +266,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@cd frontend && npx tsc --noEmit
 	@echo "$(COLOR_GREEN)Checking submit guards...$(COLOR_RESET)"
 	@node scripts/checks/check-submit-guards.mjs
+	@echo "$(COLOR_GREEN)Checking table scroll containers...$(COLOR_RESET)"
+	@node scripts/checks/check-table-scroll.mjs .
 	@echo "$(COLOR_GREEN)Checking table typography...$(COLOR_RESET)"
 	@node scripts/checks/check-table-typography.mjs
 	@echo "$(COLOR_GREEN)Checking unreachable-cluster banners...$(COLOR_RESET)"
