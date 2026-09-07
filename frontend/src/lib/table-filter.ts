@@ -43,7 +43,7 @@ export const RESERVED_QUERY_KEYS = ["q", "sort", "dir", "show", "tab"] as const;
 export type FilterKind = "enum" | "number" | "date" | "text";
 
 /** Chooses how a bound is formatted and typed. Never affects the stored value. */
-export type NumberUnit = "count" | "bytes" | "seconds" | "days" | "bps";
+export type NumberUnit = "count" | "bytes" | "percent" | "seconds" | "days" | "bps";
 
 export interface NumberPreset {
   label: string;

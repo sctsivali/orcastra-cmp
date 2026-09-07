@@ -24,6 +24,19 @@ export interface UsageTone {
 export const USAGE_CRITICAL_PERCENT = 90;
 export const USAGE_ELEVATED_PERCENT = 75;
 
+/**
+ * A reading as a percentage of its total, clamped to the range a bar can draw.
+ *
+ * note: lives next to the ramp because every caller of one calls the other, and a total of
+ * zero has to answer 0 rather than NaN or Infinity. Thin provisioning can put used above
+ * total, which clamps to 100: the bar cannot draw past its track, and the used-of-total text
+ * beside it still says what actually happened.
+ */
+export function usagePercent(used: number, total: number): number {
+  if (!Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return 0;
+  return Math.min(100, Math.max(0, (used / total) * 100));
+}
+
 export function usageTone(percent: number): UsageTone {
   if (percent >= USAGE_CRITICAL_PERCENT) {
     return { text: "text-status-offline", fill: "bg-destructive" };

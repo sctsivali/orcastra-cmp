@@ -161,6 +161,7 @@ function serialiseState(state: FilterState): string | null {
 /** Formats a bound for display only. The stored value is always the base unit. */
 export function formatBound(value: number, unit: string): string {
   if (unit === "bytes") return formatBytes(value);
+  if (unit === "percent") return `${Math.round(value * 10) / 10}%`;
   if (unit === "seconds") {
     if (value < 60) return `${Math.round(value)}s`;
     if (value < 3600) return `${Math.round(value / 60)}m`;

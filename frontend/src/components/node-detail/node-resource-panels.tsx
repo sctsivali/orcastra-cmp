@@ -15,7 +15,8 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { formatBytes, formatLabel, formatMemory} from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
-import { UsageMeter, usagePercent } from "./usage-meter";
+import { UsageMeter } from "./usage-meter";
+import { usagePercent } from "@/lib/usage-tone";
 
 /**
  * The four tabs that read NodeResources.

@@ -19,12 +19,10 @@ import {
   Table,
   TableBody,
   TableCell,
-  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
-import { TableLink } from "@/components/ui/table-link";
+import { TableEmptyRow } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import { Database } from "lucide-react";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -35,6 +33,7 @@ import { useStoragePools } from "@/hooks/use-lxd";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { PoolCapacityCell, poolCapacity, type PoolCapacity } from "./components/pool-capacity-cell";
 
 interface PoolInfo {
   name: string;
@@ -46,7 +45,15 @@ interface PoolInfo {
   node?: string;
 }
 
-const POOLS = defineTable<PoolInfo>()({
+// note: /storage/pools and /storage/pools/resources-all are two calls merged by useStoragePools,
+// so usage reaches the page on a blob keyed "{node}-{name}" rather than on the pool. A sort
+// accessor is only ever handed the row (see TableColumn.sort in lib/table-filter.ts), so the
+// reading is folded onto the row before the table is built rather than looked up per cell.
+interface PoolRow extends PoolInfo {
+  capacity: PoolCapacity;
+}
+
+const POOLS = defineTable<PoolRow>()({
   searchPlaceholder: "Search storage pools",
   defaultSort: { field: "name", direction: "asc" },
   searchExtra: (p) => [p.description],
@@ -86,6 +93,25 @@ const POOLS = defineTable<PoolInfo>()({
       facetSpec: { role: "project", emptyLabel: "(no project)" },
     },
     {
+      // The size column was rendered but never declared, so it was the one column on this page
+      // that could be neither sorted nor filtered. It shows used of total with a bar, so a click
+      // on the header orders by how full a pool is rather than by how large it is: "which one is
+      // about to fill up" is the question the column exists to answer.
+      field: "utilisation",
+      // note: "Capacity Used", not "Utilisation", because this page already carries a "Usage"
+      // facet meaning "has volumes attached". Two controls one letter apart in the same menu,
+      // measuring different things, is a worse answer than a longer label.
+      label: "Capacity Used",
+      sort: (p) => p.capacity.percent,
+      filter: fromSort("number", {
+        unit: "percent",
+        presets: [
+          { label: "Over 75%", min: 75, max: null },
+          { label: "Over 90%", min: 90, max: null },
+        ],
+      }),
+    },
+    {
       field: "usage",
       label: "Usage",
       facet: (p) => (p.used_by?.length ? "In use" : "Unused"),
@@ -123,7 +149,16 @@ function StoragePoolsContent() {
   // One dialog for the page, opened from either cell. See components/used-by.
   const usedBy = useUsedByDialog();
 
-  const filters = useTableFilters(POOLS, pools as PoolInfo[], {
+  const rows: PoolRow[] = useMemo(
+    () =>
+      (pools as PoolInfo[]).map((pool) => ({
+        ...pool,
+        capacity: poolCapacity(poolResources[`${pool.node}-${pool.name}`]?.space),
+      })),
+    [pools, poolResources],
+  );
+
+  const filters = useTableFilters(POOLS, rows, {
     onFilterChange: resetPage,
     availableFields,
   });
@@ -134,14 +169,6 @@ function StoragePoolsContent() {
     POOLS.defaultSort.direction,
     resetPage,
   );
-
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1000; // decimal: the label says KB/MB/GB, not KiB
-    const sizes = ["B", "KB", "MB", "GB", "TB", "PB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
-  };
 
   const sortedPools = useMemo(
     () => sortItems(filters.filteredRows),
@@ -192,7 +219,7 @@ function StoragePoolsContent() {
                 {nodes.length > 0 && (
                   <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
-                <TableHead>Size (Used / Total)</TableHead>
+                <SortableTableHead label="Size (Used / Total)" field="utilisation" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
@@ -211,10 +238,9 @@ function StoragePoolsContent() {
                   }
                 />
               ) : (
-                paginatedPools.map((pool: any, idx: number) => {
+                paginatedPools.map((pool: PoolRow, idx: number) => {
                   const poolKey = `${pool.node}-${pool.name}`;
-                  const resources = poolResources[poolKey];
-                  
+
                   return (
                     <TableRow key={`${poolKey}-${idx}`}>
                       <TableCell className="font-medium">{pool.name}</TableCell>
@@ -227,16 +253,11 @@ function StoragePoolsContent() {
                         </TableCell>
                       )}
                       <TableCell>
-                        {resources ? (
-                          <TableLink
-                            onClick={() => usedBy.openPanel(poolSubject(pool, poolResources), "capacity")}
-                            aria-label={`Show the capacity breakdown for ${pool.name}`}
-                          >
-                            {`${formatBytes(resources.space.used)} / ${formatBytes(resources.space.total)}`}
-                          </TableLink>
-                        ) : (
-                          <TableEmptyValue label="Usage unavailable" />
-                        )}
+                        <PoolCapacityCell
+                          capacity={pool.capacity}
+                          poolName={pool.name}
+                          onOpen={() => usedBy.openPanel(poolSubject(pool, poolResources), "capacity")}
+                        />
                       </TableCell>
                       <TableCell>
                         <Badge variant={pool.status === "Created" ? "default" : "secondary"}>
