@@ -15,7 +15,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { formatBytes, formatLabel, formatMemory} from "@/lib/utils";
 import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
-import { UsageMeter } from "./usage-meter";
+import { UsageMeter } from "@/components/ui/usage-meter";
 import { usagePercent } from "@/lib/usage-tone";
 
 /**

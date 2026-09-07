@@ -41,6 +41,58 @@ export function formatMemory(bytes: number, decimals = 2): string {
 }
 
 /**
+ * A span of CPU time, from LXD's cumulative nanosecond counter.
+ *
+ * important: zero is a real reading, not an absent one, so it formats as "0s" rather than the
+ * placeholder. An instance whose guest reports nothing genuinely has no CPU time to show, and
+ * that is the signal worth seeing. This is why formatUptime in the metrics tab is not reused:
+ * it returns undefined for 0 and floors at whole minutes, so 45 seconds of CPU time would read
+ * "0m" and a genuine zero would vanish behind the missing-value dash.
+ */
+export function formatCpuTime(nanoseconds: number | null | undefined): string {
+  if (nanoseconds === null || nanoseconds === undefined) return EMPTY_VALUE;
+  if (!Number.isFinite(nanoseconds) || nanoseconds < 0) return EMPTY_VALUE;
+
+  const seconds = Math.floor(nanoseconds / 1e9);
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
+}
+
+/**
+ * How many cores a `limits.cpu` value claims.
+ *
+ * important: LXD accepts a count ("4"), a pinned range ("0-3") and a pinned set ("1,3"), and
+ * parseInt handles only the first. It reads "0-3" as 0, so a four-core instance counted as
+ * none, and "1,3" as 1, so a two-core instance counted as one. Mirrors parse_cpu_limit in
+ * backend/app/services/lxd/member_resources.py, except that an absent limit returns null here
+ * rather than 1: that backend rule is a capacity-accounting convention, and a display that
+ * turns "no limit set" into "1 core" is the same class of lie this file just removed.
+ */
+export function parseCpuLimit(limitsCpu: string | null | undefined): number | null {
+  if (limitsCpu === null || limitsCpu === undefined) return null;
+  const raw = String(limitsCpu).trim();
+  if (raw === "") return null;
+
+  if (raw.includes("-")) {
+    const [low, high] = raw.split("-", 2).map((part) => Number.parseInt(part, 10));
+    if (!Number.isFinite(low) || !Number.isFinite(high) || high < low) return null;
+    return high - low + 1;
+  }
+  if (raw.includes(",")) {
+    const parts = raw.split(",").filter((part) => part.trim() !== "");
+    return parts.length > 0 ? parts.length : null;
+  }
+  const count = Number.parseInt(raw, 10);
+  return Number.isFinite(count) && count > 0 ? count : null;
+}
+
+/**
  * CPU or link frequency, given in MHz.
  *
  * Lives here rather than in a component because formatBytes taught this codebase the lesson

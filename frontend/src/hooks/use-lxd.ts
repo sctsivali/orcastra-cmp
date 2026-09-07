@@ -1205,12 +1205,21 @@ export function useInstances(host?: string, opts?: { realtime?: boolean }) {
 //
 // important: `enabled` is re-asserted AFTER the spread. ON_DEMAND_CONFIG sets enabled false by
 // design, so spreading it last would silently disable every caller.
-export function useInstance(name: string, host: string, enabled = true) {
+export function useInstance(name: string, host: string, enabled = true, project?: string) {
   return useQuery({
-    queryKey: ["instance", name, host],
-    queryFn: () => api.instances.get(name, host),
+    queryKey: ["instance", name, host, project ?? null],
+    queryFn: () => api.instances.get(name, host, project),
     ...ON_DEMAND_CONFIG,
     enabled: enabled && !!name && !!host,
+    // important: both re-asserted after the spread, and staleTime is the one that does the work.
+    // ON_DEMAND_CONFIG holds a reading for five minutes, and the dialog does not unmount when it
+    // closes: `enabled` flips while the observer stays alive, so refetchOnMount alone never
+    // fires and reopening redrew the bar from a five-minute-old sample. A stale reading is
+    // tolerable as a static number and misleading as a bar, and the section tells the operator
+    // it is a reading taken on open, so it has to actually be one. The cached value still paints
+    // immediately while the fresh one lands, because gcTime keeps it.
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 }
 

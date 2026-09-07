@@ -6,10 +6,16 @@
 export type VMStatus = "Running" | "Stopped" | "Frozen" | "Error" | "Unknown";
 
 // Resource Usage
+// Every field is named after the LXD key it carries. The two that were not (`cpu_usage` held
+// cumulative nanoseconds while claiming to be a percentage, `memory_limit` held a peak-usage
+// high-water mark every VM reports as 0) are why this card printed raw counters and a zero
+// limit. A live percentage lives on InstanceMetrics, which samples over time.
 export interface ResourceUsage {
-  cpu_usage: number | null;
+  /** Cumulative CPU time consumed since the instance started, in nanoseconds. Not a percentage. */
+  cpu_time_ns: number | null;
   memory_usage: number | null;
-  memory_limit: number | null;
+  /** Memory the instance can reach, in bytes. The denominator for a usage bar. */
+  memory_total: number | null;
   disk_usage: Record<string, number> | null;
   network_counters: Record<
     string,

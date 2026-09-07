@@ -200,12 +200,19 @@ async def list_vms(
 async def get_vm(
     vm_name: str,
     host: str = Query(..., description="LXD host node where the VM resides"),
+    project: Optional[str] = Query(
+        None,
+        description=(
+            "LXD project the VM belongs to. A name is unique per project, not per host, so "
+            "omitting this searches every project and returns the first match."
+        ),
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get detailed information about a specific VM."""
     verify_cluster_access(host)
     try:
-        vm = await lxd_service.get_vm(vm_name, host)
+        vm = await lxd_service.get_vm(vm_name, host, project)
         
         if not vm:
             raise HTTPException(

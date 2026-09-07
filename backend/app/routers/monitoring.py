@@ -103,7 +103,10 @@ def _fetch_instance_state(client, instance_name: str, project: str, host: str) -
             cpu_usage_ns = state_data['cpu'].get('usage', 0)
         
         memory_usage = state_data.get('memory', {}).get('usage', 0)
-        memory_peak = state_data.get('memory', {}).get('usage_peak', 0)
+        # important: `total`, not `usage_peak`. usage_peak is a high-water mark every VM
+        # reports as 0, so memory_limit_bytes below was 0 for the whole fleet. `total` is
+        # the memory the instance can reach, matching services/lxd/resources.py.
+        memory_total = state_data.get('memory', {}).get('total', 0)
         
         disk_usage = {}
         if state_data.get('disk'):
@@ -126,7 +129,7 @@ def _fetch_instance_state(client, instance_name: str, project: str, host: str) -
             'project': project,
             'cpu_usage_ns': cpu_usage_ns,  # Cumulative nanoseconds
             'memory_usage': memory_usage,
-            'memory_peak': memory_peak,
+            'memory_total': memory_total,
             'disk_usage': sum(disk_usage.values()),
             'network_rx': network_rx,
             'network_tx': network_tx,
@@ -638,7 +641,7 @@ async def get_monitoring_dashboard(
                 status="Running",
                 cpu_usage=metrics.get('cpu_percent', 0),  # Now using calculated percentage
                 memory_usage_bytes=metrics.get('memory_usage', 0),
-                memory_limit_bytes=metrics.get('memory_peak', 0),
+                memory_limit_bytes=metrics.get('memory_total', 0),
                 disk_usage_bytes=metrics.get('disk_usage', 0),
                 network_rx_bytes=metrics.get('network_rx', 0),
                 network_tx_bytes=metrics.get('network_tx', 0),

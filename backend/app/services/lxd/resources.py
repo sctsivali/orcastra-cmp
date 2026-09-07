@@ -104,15 +104,22 @@ class ResourceManager:
                 return None
             
             resources = ResourceUsage()
-            
-            # CPU usage
+
+            # important: cumulative nanoseconds of CPU time, which is what LXD's cpu.usage is.
+            # It was typed and documented as a percentage, so the detail card rendered a
+            # 15-digit counter under the label "CPU Usage". A percentage needs two samples and
+            # is computed by get_instance_metrics below.
             if state.cpu:
-                resources.cpu_usage = state.cpu.get("usage")
-            
-            # Memory usage
+                resources.cpu_time_ns = state.cpu.get("usage")
+
+            # important: `total`, not `usage_peak`. usage_peak is a cgroup high-water mark that
+            # every VM reports as 0, so reading it as the limit put "Memory Limit 0" on every VM
+            # detail and left the usage figure with no denominator. `total` is the memory the
+            # instance can actually reach, and is the denominator get_instance_metrics already
+            # divides by at the bottom of this file.
             if state.memory:
                 resources.memory_usage = state.memory.get("usage")
-                resources.memory_limit = state.memory.get("usage_peak")
+                resources.memory_total = state.memory.get("total")
             
             # Disk usage
             if state.disk:
@@ -496,7 +503,10 @@ class ResourceManager:
                 return metrics
             
             # CPU usage - calculate from cumulative nanoseconds delta
-            if state.cpu and state.cpu.get("usage"):
+            # important: `is not None`, not truthiness. A cumulative usage of exactly 0 is
+            # falsy, which skipped the whole block: no percentage, and no baseline sample stored,
+            # so an instance idling at zero never began accumulating history at all.
+            if state.cpu and state.cpu.get("usage") is not None:
                 current_usage_ns = state.cpu.get("usage")
                 current_time = time.time()
                 

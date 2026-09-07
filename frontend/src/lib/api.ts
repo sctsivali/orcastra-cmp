@@ -1050,8 +1050,13 @@ export const instanceAPI = {
     return fetchRead<VMListResponse>(endpoint, opts);
   },
 
-  get: async (name: string, host: string): Promise<VMInfo> => {
-    return fetchAPI<VMInfo>(`/instances/${name}?host=${encodeURIComponent(host)}`);
+  // important: `project` is optional but should be passed whenever the caller knows it. An
+  // instance name is unique per project, not per host, so without it the backend searches every
+  // project and returns the first match, which can be a different instance of the same name.
+  get: async (name: string, host: string, project?: string): Promise<VMInfo> => {
+    const params = new URLSearchParams({ host });
+    if (project) params.set("project", project);
+    return fetchAPI<VMInfo>(`/instances/${name}?${params.toString()}`);
   },
 
   getMetrics: async (name: string, host: string): Promise<InstanceMetrics> => {

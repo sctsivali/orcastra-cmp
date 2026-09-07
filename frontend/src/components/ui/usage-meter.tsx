@@ -16,6 +16,9 @@ export interface UsageMeterProps {
 /**
  * One labelled capacity bar: the reading on the right, the bar underneath.
  *
+ * Lives in ui/ rather than beside the node detail panels because the instance detail dialog
+ * needs the same label-row-over-bar shape, which is the trigger that moved UsageBar here too.
+ *
  * The bar itself is components/ui/usage-bar.tsx, shared with the storage pools table, which
  * needs the same track without this label row. The four bars this replaced were hand-rolled
  * with bg-gray-200 dark:bg-gray-700 tracks under bg-blue-600, bg-green-600 and bg-orange-600

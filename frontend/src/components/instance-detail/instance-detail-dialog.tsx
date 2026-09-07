@@ -40,10 +40,19 @@ export function InstanceDetailDialog({
   // important: the LIST payload sets resources to null, so this is the only way to show them.
   // Everything else below is already on the row, which is why the dialog paints immediately and
   // only this one section can be pending.
-  const { data: fetched } = useInstance(
+  //
+  // important: the project is passed through. A name is unique per project, not per host, so
+  // without it the backend searches every project and returns the first match, which on a host
+  // running the same name in two projects is a different instance than the row that was clicked.
+  const {
+    data: fetched,
+    isLoading: isLoadingDetail,
+    isError: isDetailError,
+  } = useInstance(
     instance?.name ?? "",
     instance?.host ?? "",
     isOpen && !!instance,
+    instance?.project ?? undefined,
   );
 
   // important: gated on the tab, not just on the dialog. The modal this replaces started a
@@ -82,7 +91,17 @@ export function InstanceDetailDialog({
       defaultTab={defaultTab}
       size="2xl"
       tabs={[
-        { value: "overview", label: "Overview", content: <InstanceOverviewTab instance={detail} /> },
+        {
+          value: "overview",
+          label: "Overview",
+          content: (
+            <InstanceOverviewTab
+              hasResourcesError={isDetailError}
+              instance={detail}
+              isLoadingResources={isLoadingDetail}
+            />
+          ),
+        },
         {
           value: "metrics",
           label: "Metrics",
@@ -98,9 +117,10 @@ export function InstanceDetailDialog({
         { value: "devices", label: "Devices", content: <InstanceDevicesTab instance={detail} /> },
       ]}
       // note: no whole-dialog skeleton. The row is a complete VMInfo minus `resources`, so
-      // everything paints at once and only the resources block in Overview can be pending.
-      // `isLoadingDetail` is deliberately unused here rather than passed as a condition that
-      // can never be true.
+      // everything paints at once and only the resources block in Overview can be pending, which
+      // is exactly where isLoadingDetail is now spent. It used to be dropped, so that block was
+      // absent and then popped in, and a failed fetch was indistinguishable from a stopped
+      // instance because both rendered as no section at all.
     />
   );
 }

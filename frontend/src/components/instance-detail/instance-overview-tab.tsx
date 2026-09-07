@@ -5,12 +5,22 @@ import { Badge } from "@/components/ui/badge";
 import { TableLink } from "@/components/ui/table-link";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { TagBadge } from "@/components/tag-manager";
+import { InstanceResourcesSection } from "./instance-resources-section";
 import { formatDateTime, formatInstanceType } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
 
 // Everything the row already knew and the old modal never showed: description, architecture,
 // project, timestamps, profiles, tags, the cluster member, and the image the instance came from.
-export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
+export function InstanceOverviewTab({
+  instance,
+  isLoadingResources = false,
+  hasResourcesError = false,
+}: {
+  instance: VMInfo;
+  /** The detail fetch that carries `resources`; the row this opens from never has them. */
+  isLoadingResources?: boolean;
+  hasResourcesError?: boolean;
+}) {
   const baseImage = instance.config?.["volatile.base_image"];
 
   return (
@@ -88,18 +98,11 @@ export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
         </DetailGrid>
       </DetailSection>
 
-      {instance.resources ? (
-        <DetailSection
-          title="Resources"
-          description="Reported by the cluster for this instance, not by the metrics poll."
-        >
-          <DetailGrid cols={3}>
-            <DetailField label="CPU Usage" value={instance.resources.cpu_usage} />
-            <DetailField label="Memory Usage" value={instance.resources.memory_usage} />
-            <DetailField label="Memory Limit" value={instance.resources.memory_limit} />
-          </DetailGrid>
-        </DetailSection>
-      ) : null}
+      <InstanceResourcesSection
+        hasError={hasResourcesError}
+        instance={instance}
+        isLoading={isLoadingResources}
+      />
     </div>
   );
 }

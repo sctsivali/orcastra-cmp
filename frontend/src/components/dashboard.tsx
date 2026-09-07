@@ -16,6 +16,7 @@ import { TagManager, TagFilter } from "@/components/tag-manager";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
+import { parseCpuLimit } from "@/lib/utils";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { SortSelect } from "@/components/ui/sort-select";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -577,10 +578,12 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
     let storageUsedBytes = 0;
 
     instances.forEach((vm) => {
-      // count CPU
-      const vmCpu = vm.config?.["limits.cpu"];
+      // important: parseCpuLimit, not parseInt. LXD accepts a pinned range ("0-3") and a pinned
+      // set ("1,3") as well as a count, and parseInt read those as 0 and 1, so a four-core
+      // instance contributed nothing to the fleet total and a two-core one contributed half.
+      const vmCpu = parseCpuLimit(vm.config?.["limits.cpu"]);
       if (vmCpu) {
-        cpuUsed += parseInt(vmCpu) || 0;
+        cpuUsed += vmCpu;
       }
 
       // count RAM

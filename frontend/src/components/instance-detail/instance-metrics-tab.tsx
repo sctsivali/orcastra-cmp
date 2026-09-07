@@ -3,7 +3,7 @@
 import * as React from "react";
 import { Activity, Cpu, HardDrive, Network } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { Progress } from "@/components/ui/progress";
+import { UsageMeter } from "@/components/ui/usage-meter";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { LoadingLottieMedium } from "@/components/loading-lottie";
@@ -14,8 +14,8 @@ import type { InstanceMetrics, VMInfo } from "@/types/api";
 // The live-metrics half of the instance dialog, carried over from instance-monitoring-modal
 // with four corrections rather than a rewrite:
 //   - formatBytes comes from lib/utils; the modal had its own fifth copy of it.
-//   - the meters are Progress, not a hand-rolled div with bg-green-500. A raw palette step is
-//     banned in this codebase and the semantic tokens exist for exactly this.
+//   - the meters come from the house primitives, not a hand-rolled div with bg-green-500. A raw
+//     palette step is banned in this codebase and the semantic tokens exist for exactly this.
 //   - absent values render the shared placeholder instead of the string "N/A".
 //   - `architecture` never goes through formatLabel, which turns x86_64 into "X86 64".
 export function InstanceMetricsTab({
@@ -82,14 +82,19 @@ export function InstanceMetricsTab({
           <Activity className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <h3 className="font-semibold">Memory</h3>
         </div>
-        <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">Used of total</span>
-          <span className="font-medium">
-            {`${formatMemory(metrics.memory_used_bytes)} / ${formatMemory(metrics.memory_total_bytes)}`}
-          </span>
-        </div>
-        <Progress value={memoryPercent} />
-        <div className="text-right text-sm font-medium">{memoryPercent.toFixed(1)}%</div>
+        {/* important: UsageMeter, not Progress. The Overview tab draws the same field with the
+            usageTone severity ramp, and a bare Progress here painted the product accent instead,
+            so one dialog showed the same 92 percent in two colours that mean different things.
+            Progress also ships no accessible name, so this bar announced only "progress bar, 92
+            percent" without saying what was at 92 percent. */}
+        <UsageMeter
+          label="Memory"
+          total={metrics.memory_total_bytes}
+          used={metrics.memory_used_bytes}
+          value={`${formatMemory(metrics.memory_used_bytes)} / ${formatMemory(
+            metrics.memory_total_bytes,
+          )} (${memoryPercent.toFixed(1)}%)`}
+        />
       </Card>
 
       {disks.length > 0 && (

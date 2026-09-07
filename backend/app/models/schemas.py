@@ -30,10 +30,19 @@ class VMStatus(str, Enum):
 
 
 class ResourceUsage(BaseModel):
-    """VM resource usage information."""
-    cpu_usage: Optional[float] = Field(None, description="CPU usage percentage")
-    memory_usage: Optional[int] = Field(None, description="Memory usage in bytes")
-    memory_limit: Optional[int] = Field(None, description="Memory limit in bytes")
+    """What the cluster reports for one running instance, straight from its state endpoint.
+
+    important: every field here is named after the LXD key it carries, because the two that
+    were not spent this model's whole life describing something they never held. A percentage
+    needs two samples over time and lives on InstanceMetrics instead.
+    """
+    cpu_time_ns: Optional[int] = Field(
+        None, description="Cumulative CPU time consumed since the instance started, in nanoseconds"
+    )
+    memory_usage: Optional[int] = Field(None, description="Memory in use, in bytes")
+    memory_total: Optional[int] = Field(
+        None, description="Memory the instance can reach, in bytes. The denominator for a usage bar"
+    )
     disk_usage: Optional[Dict[str, int]] = Field(None, description="Disk usage by device")
     network_counters: Optional[Dict[str, Dict[str, int]]] = Field(
         None, 

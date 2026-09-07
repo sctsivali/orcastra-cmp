@@ -172,12 +172,19 @@ async def list_instances(
 async def get_instance(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    project: Optional[str] = Query(
+        None,
+        description=(
+            "LXD project the instance belongs to. A name is unique per project, not per host, "
+            "so omitting this searches every project and returns the first match."
+        ),
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific instance."""
     verify_cluster_access(host)
     try:
-        vm = await lxd_service.get_vm(instance_name, host)
+        vm = await lxd_service.get_vm(instance_name, host, project)
         if not vm:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
         # enforce tenant ACL on individual instance access
