@@ -5,6 +5,7 @@ import type { StoragePoolInfo } from "@/types/api";
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -128,6 +129,11 @@ function StoragePoolsContent() {
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+
+  // The capacity read fans out to every cluster and is the likelier of the two calls to fail.
+  // It no longer takes the list with it, so the rows are here and every reading is absent, which
+  // looks exactly like a fleet that reports nothing. Say which one it is.
+  const capacityFailed: boolean = Boolean((data as any)?.capacityFailed);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setCurrentPage(1);
@@ -204,6 +210,13 @@ function StoragePoolsContent() {
       </div>
 
       <UnreachableNodesBanner noun="storage pools" nodes={unreachableNodes} />
+
+      {capacityFailed && (
+        <PartialReadNotice>
+          Capacity could not be read from the fleet, so every pool below shows its usage as
+          unavailable. The pools themselves are listed correctly.
+        </PartialReadNotice>
+      )}
 
       <Card>
         <CardHeader className="space-y-4">

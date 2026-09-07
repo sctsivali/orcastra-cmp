@@ -904,12 +904,13 @@ function invalidateStoragePools(queryClient: ReturnType<typeof useQueryClient>) 
   STORAGE_POOL_KEYS.forEach((key) => queryClient.invalidateQueries({ queryKey: [key] }));
 }
 
-// important: `useStoragePools` resolves the per-node list and `resources-all` in one
-// Promise.all, so a slow or failing fan-out across every cluster takes the pool list down with
-// it, and TanStack reports that error state identically to "this node has no pools". The create
-// form builds `devices.root` from the resolved pool, so it read an unrelated cluster's timeout
-// as "no storage here" and refused a create it could have made. Anything that only needs the
-// list should use this; the storage-pools page still uses the combined hook for its usage bars.
+// important: `useStoragePools` used to resolve the per-node list and `resources-all` in one
+// unguarded Promise.all, so a slow or failing fan-out across every cluster took the pool list
+// down with it, and TanStack reported that error state identically to "this node has no pools".
+// The create form builds `devices.root` from the resolved pool, so it read an unrelated
+// cluster's timeout as "no storage here" and refused a create it could have made. Anything that
+// only needs the list should still use this hook, which never pays for the capacity read at
+// all; the combined hook below now degrades instead of failing.
 export function useStoragePoolList(host?: string) {
   return useRefreshableQuery({
     queryKey: [STORAGE_POOL_LIST_KEY, host],
@@ -922,13 +923,22 @@ export function useStoragePools(host?: string) {
   return useRefreshableQuery({
     queryKey: ["storagePools", host],
     queryFn: async ({ fresh }) => {
+      // important: the capacity read is secondary and must not be able to fail the list. It
+      // fans out to every cluster, so it is the likelier of the two to time out, and losing it
+      // used to blank the whole page under "No storage pools found" while the list itself had
+      // answered. An operator reading that would look for pools that were never gone.
+      // `capacityFailed` is what lets the surface say which of the two happened, instead of
+      // rendering an absent reading the same way as a reading of nothing.
       const [poolsData, resourcesData] = await Promise.all([
         api.storagePools.list(host, { fresh }) as Promise<Record<string, unknown>>,
-        api.storagePools.getResourcesAll({ fresh }) as Promise<Record<string, unknown> | null>,
+        (api.storagePools.getResourcesAll({ fresh }) as Promise<Record<string, unknown> | null>)
+          .then((value) => ({ ok: true as const, value }))
+          .catch(() => ({ ok: false as const, value: null })),
       ]);
       return {
         ...poolsData,
-        resources: (resourcesData as Record<string, unknown>)?.resources || {},
+        capacityFailed: !resourcesData.ok,
+        resources: (resourcesData.value as Record<string, unknown>)?.resources || {},
       };
     },
     // Always enabled - fetches all pools when host is undefined
