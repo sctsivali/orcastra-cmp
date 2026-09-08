@@ -260,7 +260,10 @@ async def create_instance(
             }
         )
         
-        schedule_orcahub_event("instance.created", request.host, None, request.name, "Running" if request.start_on_create else "Stopped")
+        # note: instance.created is NOT announced here. The create is still queued at this
+        # point, so announcing it would tell OrcaHub an instance exists moments before LXD may
+        # refuse it, with no correction to follow. It is emitted from _judge_create_operation
+        # instead, beside the add-on event that already moved there for the same reason.
         # Non-blocking: create_vm returns the operation id; the instance pulls/
         # creates in the background and appears via the polling instance list.
         # Readers hold a cached list; without this the change is invisible until the TTL.

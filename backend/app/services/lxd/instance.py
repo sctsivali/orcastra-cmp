@@ -33,6 +33,23 @@ from .audit import audit_operation
 
 logger = logging.getLogger(__name__)
 
+
+def _announce_instance_created(host: str, project: str, name: str) -> None:
+    """Tell OrcaHub an instance exists, once it actually does.
+
+    important: paired with the add-on event above it and emitted for the same reason. The router
+    announced this the moment LXD accepted the request, so a create LXD then refused still told
+    OrcaHub an instance existed, with no correction to follow. On a cluster owned by two
+    organisations it said so twice. Proven live: a create that failed with "Image not provided
+    for instance creation" emitted instance.created to org 122 and org 6 seventy milliseconds
+    later.
+
+    Fire-and-forget by contract, so a webhook problem cannot fail a create that worked.
+    """
+    from app.services.orcahub_webhook import schedule_orcahub_event
+
+    schedule_orcahub_event("instance.created", host, project, name)
+
 # The pooled client is built for fast failure detection (3s connect / 8s read).
 # That read timeout is shorter than the graceful-shutdown waits callers ask for,
 # so the HTTP read would expire before LXD's own operation timeout -- making the
@@ -1244,6 +1261,7 @@ class InstanceManager:
         """
         if not operation_id:
             # Nothing queued to wait on. The synchronous path already answered.
+            _announce_instance_created(host, project, name)
             return True
 
         from app.services.activity_logger import get_activity_logger
@@ -1297,6 +1315,7 @@ class InstanceManager:
             project=project,
             operation_id=operation_id,
         )
+        _announce_instance_created(host, project, name)
         return True
 
     async def _watch_create_operation(self, client, name: str, operation_id: Optional[str],
