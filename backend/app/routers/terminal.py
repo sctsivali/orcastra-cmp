@@ -448,8 +448,8 @@ async def terminal_websocket(
     await set_org_scope_for_ws(user)
 
     # important: the console WebSocket added this and the terminal one never had it, so the
-    # organisation boundary here rested entirely on the break-glass gate below and on a flag that
-    # is off by default. verify_cluster_access appeared seventeen times in console.py and not
+    # organisation boundary here rested entirely on the break-glass gate below and on a flag whose
+    # default was off. verify_cluster_access appeared seventeen times in console.py and not
     # once here, which is why this file was blanket-exempt from the cluster-scope ratchet; that
     # exemption is gone now, so the ratchet enforces this call. Closing rather than raising,
     # since HTTPException is meaningless once the socket is being negotiated.

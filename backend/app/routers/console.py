@@ -488,14 +488,14 @@ async def create_console_session(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Create a graphics console session."""
-    # Per-project enforcement (flag-gated so the deploy is a no-op until flipped): today console has
-    # no cluster/ACL check at all beyond break-glass. verify_cluster_access + verify_tenant_permission
-    # are no-ops for admin/partner (allowed=None / acl=None) and enforce for tenants.
+    # Per-project enforcement. Before this, console had no cluster or ACL check at all beyond
+    # break-glass. verify_cluster_access and verify_tenant_permission are no-ops for admin and
+    # partner (allowed=None / acl=None) and enforce for tenants.
     from app.core.org_scope import verify_cluster_access, verify_tenant_permission
     from app.core.config import get_settings
     # important: cluster membership is the organisation boundary and is enforced unconditionally,
-    # as it is on every other router. Only the per-project ACL stays behind the flag, which is
-    # off by default until every active project carries a policy.
+    # as it is on every other router. Only the per-project ACL sits behind the flag, and that flag
+    # now defaults to on: an install that wants the old behaviour has to ask for it by name.
     verify_cluster_access(host)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(host, project, instance_name, "console")

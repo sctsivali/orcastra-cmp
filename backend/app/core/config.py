@@ -152,12 +152,27 @@ class Settings(BaseSettings):
         description="Hard cap on a break-glass grant lifetime (minutes)"
     )
 
-    # Per-project tenant permission enforcement on power/console/terminal routes.
-    # Default OFF: today those routes gate on cluster membership only. Turn ON only after every
-    # ACTIVE project has a policy carrying the required perms, or a policy-less active tenant is
-    # denied by default. Flipping requires a container restart (settings are lru_cache'd).
+    # Per-project tenant permission enforcement on power, console, metrics, tags and rebuild.
+    #
+    # important: default ON. It was OFF while those routes gated on cluster membership alone and
+    # the grants that would activate had been pushed by the upstream sync for a long time without
+    # anything enforcing them, so turning them all on at once had to be deliberate. That reasoning
+    # has expired: the grants are enforced here, the routes they gate now check the instance rather
+    # than only its cluster, and a deployment that simply forgets the environment variable is the
+    # dangerous case rather than the safe one.
+    #
+    # note: this gates the routes that ACT, not the ones that read. Listings, the single-instance
+    # read and the project list narrow by the ACL unconditionally, so the flag does not widen what
+    # a tenant can SEE. What it changes is sharper than that and easy to misread from the name:
+    # with it off, a tenant who cannot see an instance can still stop it, provided they hold any
+    # policy on its cluster. Measured on a two-project fixture, not inferred.
+    #
+    # An install that genuinely wants the old behaviour now says so out loud by setting
+    # TENANT_PERM_ENFORCEMENT_ENABLED=false, which is a decision someone can find and question.
+    #
+    # Flipping either way requires a container restart, because settings are lru_cache'd.
     tenant_perm_enforcement_enabled: bool = Field(
-        default=False,
+        default=True,
         alias="TENANT_PERM_ENFORCEMENT_ENABLED",
         description="Enforce per-project tenant ACL (operate/console) on power and console routes, not just cluster access."
     )
