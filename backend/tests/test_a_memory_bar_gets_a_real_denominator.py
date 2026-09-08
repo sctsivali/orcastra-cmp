@@ -134,6 +134,34 @@ def test_an_idle_instance_still_records_a_cpu_baseline(manager, monkeypatch):
 
     metrics = manager.get_instance_metrics(object(), "nuc2", "fixture")
 
-    assert "nuc2:fixture" in manager._cpu_history, "a zero reading must still seed the history"
-    assert manager._cpu_history["nuc2:fixture"]["usage_ns"] == 0
+    # note: the key carries the project. A name is unique per project, not per host.
+    assert "nuc2:default:fixture" in manager._cpu_history, "a zero reading must still seed the history"
+    assert manager._cpu_history["nuc2:default:fixture"]["usage_ns"] == 0
     assert metrics.cpu_usage_percent == 0.0
+
+
+def test_two_instances_of_one_name_in_different_projects_keep_separate_baselines(
+    manager, monkeypatch
+):
+    """The baseline is cumulative CPU nanoseconds, so a shared key subtracts the wrong reading.
+
+    Keyed on host and name alone, `default/web-01` and `acme/web-01` on one host wrote into the
+    same slot. Each poll then computed its delta against the other instance's counter, which
+    produces a percentage belonging to neither and can be negative.
+    """
+    busy = _instance(ATLAS)
+
+    monkeypatch.setattr(
+        resources_module, "find_instance_in_projects", lambda *a, **k: (busy, "default")
+    )
+    manager.get_instance_metrics(object(), "nuc2", "web-01", "default")
+
+    monkeypatch.setattr(
+        resources_module, "find_instance_in_projects", lambda *a, **k: (busy, "acme")
+    )
+    manager.get_instance_metrics(object(), "nuc2", "web-01", "acme")
+
+    assert "nuc2:default:web-01" in manager._cpu_history
+    assert "nuc2:acme:web-01" in manager._cpu_history, (
+        "the second project must not have written into the first one's slot"
+    )

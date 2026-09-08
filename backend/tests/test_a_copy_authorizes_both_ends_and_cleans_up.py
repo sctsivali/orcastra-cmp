@@ -288,3 +288,51 @@ def test_a_settled_copy_says_it_finished_rather_than_that_it_started():
         assert "copied to" in response.json()["message"]
     finally:
         client._cleanup()
+
+
+def test_an_unsettled_copy_announces_nothing_upstream(monkeypatch):
+    """`instance.created` says a resource EXISTS, and the upstream product meters what it is told.
+
+    Emitting it on the unsettled branch announced an instance whose transfer had been accepted and
+    might still fail. That is the same "reported before it happened" defect the settle check was
+    added to remove, one step further downstream. A slow copy that does complete is picked up by
+    that product's own inventory sweep, so waiting costs a delay; announcing early costs a
+    resource in a ledger that never appeared.
+    """
+    from app.routers import instance_mobility
+
+    emitted = []
+    monkeypatch.setattr(
+        instance_mobility, "schedule_orcahub_event", lambda **kw: emitted.append(kw)
+    )
+
+    node = FakeInstanceNode()
+    node.operation_status = "Running"  # accepted, still working
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        response = _copy(client)
+        assert response.status_code == 202, response.text
+    finally:
+        client._cleanup()
+
+    assert emitted == [], f"an unsettled copy announced a resource that may never appear: {emitted}"
+
+
+def test_a_settled_copy_does_announce(monkeypatch):
+    """The guard must not stop the announcement it exists to make honest."""
+    from app.routers import instance_mobility
+
+    emitted = []
+    monkeypatch.setattr(
+        instance_mobility, "schedule_orcahub_event", lambda **kw: emitted.append(kw)
+    )
+
+    node = FakeInstanceNode()
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        assert _copy(client).status_code == 202
+    finally:
+        client._cleanup()
+
+    assert len(emitted) == 1, f"a completed copy must be announced: {emitted}"
+    assert emitted[0]["event_type"] == "instance.created"

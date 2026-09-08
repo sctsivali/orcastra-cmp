@@ -1239,8 +1239,13 @@ export function useStartInstance() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ name, host }: { name: string; host: string }) => 
-      api.vms.start(name, { host }),
+    // important: the project travels with the request. A name is unique per project, not per
+    // host, so a power action that omits it is asking the backend to guess. It used to guess by
+    // searching every project and taking the first hit, which meant the ACL was checked against
+    // `default` while the action ran somewhere else. The backend is now strict, so omitting the
+    // project here would 404 on any instance outside `default`. delete and console already sent it.
+    mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
+      api.vms.start(name, { host, project }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
@@ -1253,8 +1258,8 @@ export function useStopInstance() {
   return useMutation({
     // force power-cycles instead of a graceful ACPI shutdown (needed for a VM
     // with no OS installed / sitting at a boot menu, which can't answer ACPI).
-    mutationFn: ({ name, host, force }: { name: string; host: string; force?: boolean }) =>
-      api.vms.stop(name, { host, force, timeout: 30 }),
+    mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
+      api.vms.stop(name, { host, force, timeout: 30, project }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
@@ -1265,8 +1270,8 @@ export function useRestartInstance() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ name, host, force }: { name: string; host: string; force?: boolean }) =>
-      api.vms.restart(name, { host, force, timeout: 30 }),
+    mutationFn: ({ name, host, force, project }: { name: string; host: string; force?: boolean; project?: string }) =>
+      api.vms.restart(name, { host, force, timeout: 30, project }),
     onSuccess: () => {
       refreshInstanceQueries(queryClient);
     },
@@ -1892,6 +1897,12 @@ export function useRestoreSnapshot() {
       invalidateSnapshots(queryClient);
       // A restore rolls the instance back, so its own row is stale too.
       queryClient.invalidateQueries({ queryKey: ["instances"] });
+      // important: and the DETAIL query, which is keyed ["instance", ...] singular. React Query
+      // matches by prefix, so invalidating ["instances"] does not touch it: the list behind the
+      // dialog refreshed while the dialog the operator was looking at kept painting the state the
+      // restore had just discarded.
+      queryClient.invalidateQueries({ queryKey: ["instance"] });
+      queryClient.invalidateQueries({ queryKey: ["instanceMetrics"] });
     },
   });
 }

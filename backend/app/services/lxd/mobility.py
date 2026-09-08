@@ -157,9 +157,11 @@ def is_unreachable_error(exc: Exception) -> bool:
     """Whether a failed migration means the target could not open the source.
 
     There is no LXD call that answers "can you reach this host", so reachability is not probed:
-    it is learned from the attempt. A migration that fails this way is retried on the streaming
-    transport, and any other failure is reported as itself rather than being silently downgraded
-    to a slower route that would fail the same way.
+    it is learned from the attempt.
+
+    note: this used to select a streaming fallback. That transport is no longer reachable, so the
+    classification now only shapes the message: a failure on this link is the one an operator
+    cannot diagnose from the raw text, because it is the link the control plane never uses itself.
     """
     text = str(exc).lower()
     return any(

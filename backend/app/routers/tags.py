@@ -20,7 +20,8 @@ import logging
 
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.config import get_settings
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, verify_tenant_permission
 from app.services.tag_service import TagService
 from app.services.lxd_service import get_lxd_service
 from app.models.schemas import (
@@ -36,6 +37,23 @@ from app.models.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+def _verify_instance_access(host: str, project: str, instance_name: str, permission: str = "view") -> None:
+    """Authorize an action on ONE instance, not merely on its cluster.
+
+    `verify_cluster_access` answers "may this caller reach this cluster", which for a tenant
+    scoped to a single instance is true of every instance their neighbours run on the same one.
+    Behind the same flag as the rest of the tenant ACL.
+
+    important: `project` is used AS GIVEN. The helper used to normalise it with `or "default"`,
+    which reintroduced the very split it exists to close: an empty `?project=` authorized
+    `default` here while the service saw a falsy value and searched every project. The caller
+    normalises once and passes the same value to the action, so there is exactly one project in
+    play per request.
+    """
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(host, project, instance_name, permission)
+
 
 router = APIRouter(
     prefix="/tags",
@@ -243,6 +261,15 @@ async def get_resource_tags(
     """Get tags for a resource."""
     if host:
         verify_cluster_access(host)
+    # important: an instance's tags are its owner's metadata: cost centre, environment, owner,
+    # whatever a partner attached. A cluster check alone let a tenant read them for any instance
+    # on a cluster they can reach, including their neighbours'.
+    if resource_type == "instance" and host:
+        # note: normalised for the CHECK only. The reader below matches on the stored
+        # resource_project, and a row written without one is matched by None rather than by
+        # "default", so the two are deliberately not the same value here. That asymmetry is a
+        # pre-existing property of the tag store, recorded in the rbac document.
+        _verify_instance_access(host, project or "default", resource_id, "view")
     if resource_type not in ["node", "project", "instance"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -457,6 +484,7 @@ async def get_instance_tags_legacy(
 ):
     """Get tags for an instance (legacy endpoint)."""
     verify_cluster_access(host)
+    _verify_instance_access(host, project or "default", instance_name, "view")
     return await tag_service.get_resource_tags(
         resource_type="instance",
         resource_id=instance_name,

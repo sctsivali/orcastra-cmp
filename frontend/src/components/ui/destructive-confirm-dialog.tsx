@@ -14,6 +14,8 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 
 export interface ConfirmDependents {
   /** Heading above the list, ex; `2 instances were created from this image`. */
@@ -40,7 +42,7 @@ interface DestructiveConfirmDialogProps {
   preparing?: boolean;
   /** What to say while `preparing`. */
   preparingLabel?: string;
-  onConfirm: () => void;
+  onConfirm: (reason?: string) => void;
   /** Present when something depends on the target. Rendered above the acknowledgement. */
   dependents?: ConfirmDependents;
   /**
@@ -48,6 +50,14 @@ interface DestructiveConfirmDialogProps {
    * where proceeding overrides a real refusal, never as generic friction.
    */
   acknowledgeLabel?: string;
+  /**
+   * When set, the operator must type a justification and it travels to `onConfirm`. Use it with
+   * `acknowledgeLabel` where the action is recorded as a deliberate, attributable override: a tick
+   * box says someone accepted a consequence, and only words say why. A canned reason written by
+   * the caller is worse than none, because it fills an audit field with something no human meant.
+   */
+  reasonLabel?: string;
+  reasonPlaceholder?: string;
   /** Surfaced above the footer when an attempt failed but the dialog stayed open. */
   error?: string | null;
 }
@@ -68,6 +78,12 @@ const NAMES_SHOWN = 8;
  * The acknowledgement is a checkbox, not a typed confirmation. Typing belongs to cascading
  * deletions that destroy data. An image is a re-uploadable artifact, and a 64-character
  * fingerprint to type produces copy-paste without reading.
+ *
+ * `reasonLabel` is a third thing again, and only for actions recorded as an override. A typed
+ * confirmation proves the operator read WHICH target; a checkbox proves they accepted a
+ * consequence; a reason is the only one that says WHY, and it is the one an audit trail is read
+ * for. It is never composed by the caller: a canned sentence fills that field with something no
+ * human meant, which is worse than leaving it empty.
  */
 export function DestructiveConfirmDialog({
   open,
@@ -82,18 +98,29 @@ export function DestructiveConfirmDialog({
   onConfirm,
   dependents,
   acknowledgeLabel,
+  reasonLabel,
+  reasonPlaceholder,
   error,
 }: DestructiveConfirmDialogProps) {
   const [acknowledged, setAcknowledged] = React.useState(false);
+  const [reason, setReason] = React.useState("");
   const acknowledgeId = React.useId();
+  const reasonId = React.useId();
 
   // Reset on close so the next row does not inherit the previous row's tick. Tied to `open`
   // rather than to the target, because the caller keeps the target alive through the fade.
   React.useEffect(() => {
-    if (!open) setAcknowledged(false);
+    if (!open) {
+      setAcknowledged(false);
+      setReason("");
+    }
   }, [open]);
 
-  const blocked = (!!acknowledgeLabel && !acknowledged) || pending || !!preparing;
+  const blocked =
+    (!!acknowledgeLabel && !acknowledged) ||
+    (!!reasonLabel && reason.trim().length === 0) ||
+    pending ||
+    !!preparing;
   const shown = dependents?.names.slice(0, NAMES_SHOWN) ?? [];
   const hidden = (dependents?.names.length ?? 0) - shown.length;
 
@@ -129,6 +156,21 @@ export function DestructiveConfirmDialog({
                 <li className="text-xs text-muted-foreground">and {hidden} more</li>
               )}
             </ul>
+          </div>
+        )}
+
+        {reasonLabel && (
+          <div className="space-y-2">
+            <Label htmlFor={reasonId}>{reasonLabel}</Label>
+            <Textarea
+              id={reasonId}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={reasonPlaceholder}
+              maxLength={280}
+              rows={3}
+              disabled={pending}
+            />
           </div>
         )}
 
@@ -168,7 +210,7 @@ export function DestructiveConfirmDialog({
             onClick={(e) => {
               e.preventDefault();
               if (blocked) return;
-              onConfirm();
+              onConfirm(reasonLabel ? reason.trim() : undefined);
             }}
             disabled={blocked}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"

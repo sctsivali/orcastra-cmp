@@ -366,15 +366,24 @@ async def start_vm(
 ):
     """Start a VM."""
     verify_cluster_access(request.host)
+    # important: ONE project value is authorized and acted on. This checked the ACL against
+    # `request.project or "default"` and then handed `request.project` to the service, which
+    # searches EVERY project when it is None and returns the first hit. A caller holding
+    # `operate` on `default` was authorized there while the action ran against whichever project
+    # LXD listed first, which on a shared cluster is another tenant's instance.
+    #
+    # note: this router is the one the console actually drives. The identical routes under
+    # /instances carry the same fix, and fixing only those would have left the live path open.
+    project = request.project or "default"
     # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
+        verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
         vm = await lxd_service.start_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -446,15 +455,24 @@ async def stop_vm(
 ):
     """Stop a VM."""
     verify_cluster_access(request.host)
+    # important: ONE project value is authorized and acted on. This checked the ACL against
+    # `request.project or "default"` and then handed `request.project` to the service, which
+    # searches EVERY project when it is None and returns the first hit. A caller holding
+    # `operate` on `default` was authorized there while the action ran against whichever project
+    # LXD listed first, which on a shared cluster is another tenant's instance.
+    #
+    # note: this router is the one the console actually drives. The identical routes under
+    # /instances carry the same fix, and fixing only those would have left the live path open.
+    project = request.project or "default"
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
+        verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
         vm = await lxd_service.stop_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -543,15 +561,24 @@ async def restart_vm(
 ):
     """Restart a VM."""
     verify_cluster_access(request.host)
+    # important: ONE project value is authorized and acted on. This checked the ACL against
+    # `request.project or "default"` and then handed `request.project` to the service, which
+    # searches EVERY project when it is None and returns the first hit. A caller holding
+    # `operate` on `default` was authorized there while the action ran against whichever project
+    # LXD listed first, which on a shared cluster is another tenant's instance.
+    #
+    # note: this router is the one the console actually drives. The identical routes under
+    # /instances carry the same fix, and fixing only those would have left the live path open.
+    project = request.project or "default"
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", vm_name, "operate")
+        verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
         vm = await lxd_service.restart_vm(
             name=vm_name,
             host=request.host,
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -732,6 +759,11 @@ async def get_instance_metrics(
 ):
     """Get real-time metrics for an instance."""
     verify_cluster_access(host)
+    # important: this route had no tenant check at all, and it is the one the console calls. A
+    # cluster check says the caller may reach the host, which for a tenant scoped to one instance
+    # is true of every instance their neighbours run on it, so any of them could be read by name.
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(host, project or "default", instance_name, "view")
     try:
         metrics = await lxd_service.get_instance_metrics(
             host=host,

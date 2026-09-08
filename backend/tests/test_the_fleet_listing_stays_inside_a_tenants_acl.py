@@ -133,3 +133,29 @@ def test_the_listing_carries_the_sources_schedule_so_the_gate_can_be_satisfied(f
     assert rows[THEIRS]["source_externally_managed"] is True
     assert rows[THEIRS]["source_schedule"] == "@daily"
     assert rows[MINE]["source_externally_managed"] is False
+
+
+# A tenant holding `snapshot` on one instance and only `view` on another. The project-level gate
+# passes on the first, and the listing must still withhold the second.
+MIXED_ACL = {HOST: {(PROJECT, MINE): {"view", "snapshot"}, (PROJECT, THEIRS): {"view"}}}
+
+
+def test_a_view_only_grant_does_not_come_with_the_snapshots(fake):
+    """The filter has to ask about the snapshot permission, not about "has any rule here".
+
+    filter_instances_by_acl, which this route used first, ignores the permissions on a rule
+    entirely. A tenant with `view` on one instance and `snapshot` on another therefore passed the
+    project-level gate on the second and was handed the first one's snapshots too, which is the
+    same leak the filter was added to close.
+    """
+    client = _client(service(fake), acl=MIXED_ACL)
+    try:
+        response = _fleet(client)
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 200, response.text
+    sources = {row["source_name"] for row in response.json()["items"]}
+    assert sources == {MINE}, (
+        f"a view-only instance leaked its snapshots into the listing: {sources}"
+    )

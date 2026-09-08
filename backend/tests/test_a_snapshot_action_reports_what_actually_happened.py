@@ -178,3 +178,127 @@ def test_the_gate_runs_outside_the_handlers_try_so_a_refusal_is_not_a_500():
     assert not [c for c in node.recorded if c[0] in ("create_snapshot", "put_instance")], (
         "a refused action must not have written anything"
     )
+
+
+# ── the wait has to outlast itself ─────────────────────────────────────────────────────────
+
+
+def test_the_settle_socket_window_outlasts_the_wait_it_asks_lxd_for():
+    """A wait whose socket dies first reports "still running" for an operation that already failed.
+
+    The pooled client reads for 8 seconds. `wait_for_operation` asks the daemon to hold the
+    response for 20, so without an explicit socket timeout the read expired first on every call
+    that did not settle almost immediately, `_settle` swallowed the ReadTimeout as
+    `settled: False`, and the 502-on-failure branch became unreachable for anything slower than
+    8 seconds. The rule is stated at guest_output.py:120-122 and was simply not applied here.
+    """
+    node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+    assert _delete(node).status_code == 200
+
+    waits = [c for c in node.recorded if c[0] == "wait_operation"]
+    assert waits, "the delete must wait on its operation"
+    params, socket_timeout = waits[0][1], waits[0][2]
+
+    asked_of_lxd = int(params.get("timeout", 0))
+    assert asked_of_lxd > 0, f"no wait was requested of the daemon: {params}"
+    assert socket_timeout is not None, (
+        "no socket timeout was passed, so the pooled client's 8 second read applies and the wait "
+        "cannot outlast itself"
+    )
+    _connect, read = socket_timeout
+    assert read > asked_of_lxd, (
+        f"the socket window ({read}s) must outlast the wait asked of LXD ({asked_of_lxd}s), "
+        "or the read dies first and a real failure is reported as still running"
+    )
+
+
+@pytest.mark.parametrize("terminal_status", ["Failure", "Cancelled"])
+def test_every_settled_non_success_is_reported_as_one(terminal_status):
+    """Cancelled is settled and is not success. It used to be reported as done.
+
+    The daemon cancels an operation on a restart mid-queue, and an operator can cancel one by hand.
+    The handlers compared against "Failure" alone, so the caller was told the snapshot was created,
+    deleted or restored when it had not been.
+    """
+    # A separate node per action: the delete removes the snapshot from the fake, and the restore
+    # would then legitimately 404 on the existence check rather than on the operation outcome.
+    for action in (_delete, _restore):
+        node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+        node.operation_status = terminal_status
+        node.operation_err = "operation did not complete"
+        assert action(node).status_code == 502, f"{action.__name__} on {terminal_status}"
+
+
+def test_a_running_operation_is_not_treated_as_a_failure():
+    """The guard must not turn "still working" into an error."""
+    node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+    node.operation_status = "Running"
+    assert _delete(node).status_code == 200
+
+
+# ── the name that was checked is the name that is used ─────────────────────────────────────
+
+
+def test_a_name_carrying_a_newline_never_reaches_the_daemon_in_that_form():
+    """A trailing newline is normalised away and the daemon is addressed with the clean name.
+
+    note: the anchor in `_NAME_RE` is `\\Z` rather than `$` because Python's `$` matches before a
+    trailing newline. That is defence in depth rather than the operative guard here: the validator
+    strips first, so the newline is gone before the pattern is applied either way. What this
+    asserts is the part that was actually broken, which is that the daemon is addressed with the
+    validated form.
+    """
+    node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+    response = _delete(node, name=TARGET + "\n")
+    assert response.status_code == 200, response.text
+    deletes = [c for c in node.recorded if c[0] == "delete_snapshot"]
+    assert deletes and deletes[0][1] == TARGET, (
+        f"the daemon was addressed with {deletes[0][1] if deletes else None!r}"
+    )
+
+
+def test_the_daemon_is_addressed_with_the_name_that_was_validated():
+    """The validator normalises before it checks, so its return value is the approved form.
+
+    Discarding it meant a name was approved as `ops-target` and then sent as `" ops-target "`,
+    which is a 404 on a snapshot that is really there.
+    """
+    node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+    response = _delete(node, name=f"  {TARGET}  ")
+    assert response.status_code == 200, response.text
+
+    deletes = [c for c in node.recorded if c[0] == "delete_snapshot"]
+    assert deletes, "the delete must have reached the daemon"
+    assert deletes[0][1] == TARGET, (
+        f"the daemon was addressed with {deletes[0][1]!r}, not the validated {TARGET!r}"
+    )
+
+
+# ── accepted, but with nothing to wait on ──────────────────────────────────────────────────
+
+
+def test_an_accepted_response_naming_no_operation_is_not_reported_as_done():
+    """A 202 whose body names no operation means the work is running and unverifiable.
+
+    `_operation_id` returned None for that case and for a genuinely synchronous 200 alike, and the
+    caller treats None as "nothing to wait for, so it is finished". Every fake in this suite
+    hardcoded an operation id, so the branch that makes that decision was unreachable from any
+    test while a real cluster answering oddly would have been reported as success.
+    """
+    node = FakeInstanceNode(snapshots=[{"name": TARGET}])
+    node.omit_operation = True
+
+    response = _delete(node)
+    assert response.status_code == 502, response.text
+    assert "no operation" in response.text, response.text
+
+
+def test_a_create_the_cluster_accepts_without_an_operation_is_not_a_201():
+    node = FakeInstanceNode()
+    node.omit_operation = True
+    client = _client(service(FakeClient(node)))
+    response = client.post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "unverifiable"},
+    )
+    assert response.status_code >= 400, response.text

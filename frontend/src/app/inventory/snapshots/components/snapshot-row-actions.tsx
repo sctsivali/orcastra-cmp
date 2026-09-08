@@ -81,7 +81,7 @@ export function SnapshotRowActions({
 
   // disabled={pending} is React state and only reaches the DOM on the next render, so two
   // clicks inside one tick both fire. The ref is what actually blocks the second.
-  const handleDelete = async () => {
+  const handleDelete = async (reason?: string) => {
     if (submitInFlightRef.current) return;
     submitInFlightRef.current = true;
     setDeleteError(null);
@@ -91,10 +91,13 @@ export function SnapshotRowActions({
         snapshotName: snapshot.name,
         host,
         project,
-        // Deleting lowers the storage the external schedule is measured on, but the rule an
-        // operator holds is "anything on a billing-linked instance is acknowledged". A rule with
-        // an exception is one people have to remember the shape of.
-        reason: billingLinked ? "Operator removing a snapshot this console created" : undefined,
+        // important: the reason is typed by the operator, never composed here. Deleting lowers the
+        // storage the external schedule is measured on, but the rule an operator holds is
+        // "anything on a billing-linked instance is acknowledged", and a rule with an exception is
+        // one people have to remember the shape of. This path used to send a canned sentence, so
+        // every forced delete wrote the same machine-authored justification into an audit record
+        // whose whole purpose is attribution.
+        reason: billingLinked ? reason : undefined,
         acknowledgeBillingImpact: billingLinked || undefined,
       });
       toast({
@@ -136,6 +139,8 @@ export function SnapshotRowActions({
             ? "I accept the effect on the schedule this instance is billed under"
             : undefined
         }
+        reasonLabel={billingLinked ? "Reason" : undefined}
+        reasonPlaceholder="Why this snapshot is being removed right now"
       />
 
       <RestoreSnapshotDialog

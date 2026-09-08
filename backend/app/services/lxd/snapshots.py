@@ -47,7 +47,13 @@ MAX_OPS_SNAPSHOTS_PER_INSTANCE = 5
 
 # LXD instance/snapshot names: letters, digits and dashes, 63 characters at most. Enforced here
 # rather than left to LXD because the name is interpolated into a request path.
-_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$")
+#
+# note: `\Z` rather than `$`, because Python's `$` matches before a trailing newline. Defence in
+# depth, not the operative guard: `assert_operator_snapshot_name` strips before it matches, so the
+# newline is gone by then either way. It matters if that normalisation is ever removed. The
+# request-boundary pattern in core/lxd_names.py is evaluated by a different engine whose `$` is
+# already end-of-text.
+_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}\Z")
 
 # How many snapshot-holding instances get a second read for accurate sizes on the fleet view.
 _SIZE_ENRICHMENT_LIMIT = 40
@@ -72,6 +78,10 @@ class SnapshotNameError(ValueError):
 
 class SnapshotLimitError(RuntimeError):
     """The per-instance operator snapshot cap would be exceeded."""
+
+
+class LXDOperationUnreadable(RuntimeError):
+    """The daemon accepted the request but named no operation, so completion is unverifiable."""
 
 
 def _utc_now() -> datetime:
@@ -332,25 +342,55 @@ def wait_for_operation(client, operation_id: str, project: str, timeout: int = 2
     A timeout is not a failure. On a copy-on-write pool a snapshot is instant; on a `dir` pool it
     is a full copy of the instance and can legitimately outlast any sensible request budget. The
     caller is handed the operation to poll rather than a lie in either direction.
+
+    important: the socket window has to outlast the wait this asks LXD for. The pooled client is
+    built with a read timeout of 8 seconds, so asking the daemon to hold the response for 20 and
+    saying nothing about the socket meant the read died first, every time, and the caller was told
+    "still running" for an operation that had in fact already failed. The 502-on-failure branch
+    could then only ever catch a failure that surfaced inside 8 seconds. Same rule, and the same
+    reason, as guest_output.py:120-122 and the proxy's own client factory.
     """
     response = client.api.operations[operation_id].wait.get(
-        params=_project_params(project, timeout=timeout)
+        params=_project_params(project, timeout=timeout),
+        timeout=(3, int(timeout) + 10),
     )
     metadata = _metadata(response) or {}
+    status = metadata.get("status")
     return {
-        "status": metadata.get("status"),
+        "status": status,
         "err": metadata.get("err") or None,
-        "settled": metadata.get("status") in ("Success", "Failure", "Cancelled"),
+        "settled": status in ("Success", "Failure", "Cancelled"),
+        # important: Cancelled is a settled non-success. Handlers used to compare against
+        # "Failure" alone, so an operation the daemon cancelled (a restart mid-queue, or an
+        # operator running `lxc operation delete`) was reported to the caller as done.
+        "failed": status in ("Failure", "Cancelled"),
     }
 
 
 def _operation_id(response: Any) -> Optional[str]:
-    """The LXD operation id of an async (202) response, or None when synchronous."""
+    """The LXD operation id of an async (202) response, or None when synchronous.
+
+    important: `None` means "there is nothing to wait for", and the caller acts on that by
+    reporting the action complete. That is right for a synchronous 200, where the work really is
+    done, and wrong for a 202 whose body we could not read: the daemon accepted work that is still
+    running and the caller would announce success. So an accepted response that yields no id is
+    raised rather than silently flattened into the synchronous case.
+    """
+    status = getattr(response, "status_code", None)
     try:
         body = response.json()
-    except Exception:  # noqa: BLE001 - a body we cannot read is simply not an operation
+    except Exception as exc:  # noqa: BLE001
+        if status == 202:
+            raise LXDOperationUnreadable(
+                "The cluster accepted the request but its response could not be read, so there is "
+                "no operation to wait on."
+            ) from exc
         return None
     if not isinstance(body, dict):
+        if status == 202:
+            raise LXDOperationUnreadable(
+                "The cluster accepted the request but answered with no operation to wait on."
+            )
         return None
     operation = body.get("operation")
     if isinstance(operation, str) and operation:
@@ -358,6 +398,11 @@ def _operation_id(response: Any) -> Optional[str]:
     metadata = body.get("metadata")
     if isinstance(metadata, dict) and isinstance(metadata.get("id"), str):
         return metadata["id"]
+    if status == 202:
+        raise LXDOperationUnreadable(
+            "The cluster accepted the request but named no operation, so completion cannot be "
+            "confirmed."
+        )
     return None
 
 

@@ -162,6 +162,7 @@ function SnapshotsContent() {
         nodesError={nodePicker.isError}
         projects={projectsQuery.data?.projects ?? []}
         projectsLoading={projectsQuery.isLoading}
+        projectsError={projectsQuery.isError}
       />
 
       <UnreachableNodesBanner noun="snapshots" nodes={unreachableNodes} />

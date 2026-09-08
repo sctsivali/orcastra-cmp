@@ -18,9 +18,9 @@ Three rules follow from that split and are load-bearing:
   product can see it.
 """
 import logging
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.core.config import get_settings
 from app.core.dependencies import (
@@ -28,6 +28,7 @@ from app.core.dependencies import (
     check_read_only_mode,
     require_tenant,
 )
+from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.lxd_errors import lxd_http_error
 from app.core.org_scope import (
     org_scope_dependency,
@@ -114,15 +115,20 @@ def _enforce_snapshot_access(
         verify_tenant_permission(host, project, instance_name, "operate")
 
 
-def _assert_operator_target(snapshot_name: str) -> None:
-    """Refuse a name this surface does not own, before it reaches a request path.
+def _assert_operator_target(snapshot_name: str) -> str:
+    """Refuse a name this surface does not own, and return the form that was actually validated.
 
     important: this is input validation as much as an ownership rule. pylxd interpolates the name
     into the LXD URL with no escaping (`_APINode.__getitem__`), and the prefix test this replaces
     checked the first four characters and let everything after them through.
+
+    important: the RETURN VALUE is what the caller must use. The validator normalises before it
+    checks, so discarding it meant a name was approved in one form and sent to the daemon in
+    another: `" ops-target "` was validated as `ops-target` and then addressed with its spaces
+    intact, which is a 404 on a snapshot that exists.
     """
     try:
-        snapshots_service.assert_operator_snapshot_name(snapshot_name)
+        return snapshots_service.assert_operator_snapshot_name(snapshot_name)
     except snapshots_service.SnapshotNameError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -220,7 +226,10 @@ def _audit(action: str, instance_name: str, host: str, project: str, **kwargs: A
 
 @router.get("/{instance_name}/snapshots", response_model=SnapshotListResponse)
 async def list_snapshots(
-    instance_name: str,
+    instance_name: Annotated[
+        str,
+        Path(pattern=LXD_NAME_PATTERN, description=f"Instance to act on. {LXD_NAME_DESCRIPTION}"),
+    ],
     host: str = Query(..., description="Cluster the instance lives on"),
     project: str = Query("default", description="LXD project the instance lives in"),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -254,7 +263,10 @@ async def list_snapshots(
 
 @router.post("/{instance_name}/snapshots", response_model=SnapshotActionResponse, status_code=201)
 async def create_snapshot(
-    instance_name: str,
+    instance_name: Annotated[
+        str,
+        Path(pattern=LXD_NAME_PATTERN, description=f"Instance to act on. {LXD_NAME_DESCRIPTION}"),
+    ],
     body: SnapshotCreateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
@@ -304,6 +316,11 @@ async def create_snapshot(
                 outcome = await _settle(client, operation_id, body.project)
             except HTTPException:
                 raise
+            except snapshots_service.LXDOperationUnreadable as exc:
+                # The daemon took the work and told us nothing we can wait on. That is an upstream
+                # problem, not a bad request, and reporting success would be the exact failure this
+                # surface exists to avoid.
+                raise HTTPException(status_code=502, detail=str(exc))
             except snapshots_service.SnapshotLimitError as exc:
                 _audit(
                     "instance.snapshot.create", instance_name, body.host, body.project,
@@ -321,7 +338,7 @@ async def create_snapshot(
     finally:
         release_lock(lock_key)
 
-    if outcome.get("status") == "Failure":
+    if outcome.get("failed"):
         # The daemon refused after accepting the request. Reporting 201 here would be the exact
         # defect this feature exists to avoid: a control that says it worked and did not.
         _audit(
@@ -376,7 +393,10 @@ async def create_snapshot(
 
 @router.delete("/{instance_name}/snapshots/{snapshot_name}", response_model=SnapshotActionResponse)
 async def delete_snapshot(
-    instance_name: str,
+    instance_name: Annotated[
+        str,
+        Path(pattern=LXD_NAME_PATTERN, description=f"Instance to act on. {LXD_NAME_DESCRIPTION}"),
+    ],
     snapshot_name: str,
     host: str = Query(..., description="Cluster the instance lives on"),
     project: str = Query("default", description="LXD project the instance lives in"),
@@ -399,7 +419,7 @@ async def delete_snapshot(
     # This surface only manages what it made. A snapshot belonging to the paid product is
     # visible here and deliberately not deletable, so an operator cannot silently remove a
     # restore point a tenant is paying to keep.
-    _assert_operator_target(snapshot_name)
+    snapshot_name = _assert_operator_target(snapshot_name)
 
     client = await _client(lxd_service, host)
     # Deleting lowers the storage the external schedule is measured on rather than raising it,
@@ -424,6 +444,10 @@ async def delete_snapshot(
         outcome = await _settle(client, operation_id, project)
     except HTTPException:
         raise
+    except snapshots_service.LXDOperationUnreadable as exc:
+        # The daemon took the work and told us nothing we can wait on. Upstream problem, not a bad
+        # request, and reporting success would be the exact failure this surface exists to avoid.
+        raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         _audit(
             "instance.snapshot.delete", instance_name, host, project,
@@ -431,7 +455,7 @@ async def delete_snapshot(
         )
         raise lxd_http_error(exc, "Snapshot", snapshot_name)
 
-    if outcome.get("status") == "Failure":
+    if outcome.get("failed"):
         # The daemon accepted the request and then refused it. Answering 200 "deleted" here would
         # tell an operator a restore point is gone while it is still on the cluster.
         _audit(
@@ -483,7 +507,10 @@ async def delete_snapshot(
     response_model=SnapshotActionResponse,
 )
 async def restore_snapshot(
-    instance_name: str,
+    instance_name: Annotated[
+        str,
+        Path(pattern=LXD_NAME_PATTERN, description=f"Instance to act on. {LXD_NAME_DESCRIPTION}"),
+    ],
     snapshot_name: str,
     body: SnapshotRestoreRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -501,7 +528,7 @@ async def restore_snapshot(
     # Restore is held to the same ownership rule as delete. Rolling an instance onto a snapshot
     # the paid product owns discards everything written since a restore point this console did not
     # create, on a schedule a tenant is paying for.
-    _assert_operator_target(snapshot_name)
+    snapshot_name = _assert_operator_target(snapshot_name)
 
     client = await _client(lxd_service, body.host)
     # Gated before the safety snapshot, not after: a refused restore must not leave a snapshot
@@ -556,6 +583,10 @@ async def restore_snapshot(
         outcome = await _settle(client, operation_id, body.project)
     except HTTPException:
         raise
+    except snapshots_service.LXDOperationUnreadable as exc:
+        # The daemon took the work and told us nothing we can wait on. Upstream problem, not a bad
+        # request, and reporting success would be the exact failure this surface exists to avoid.
+        raise HTTPException(status_code=502, detail=str(exc))
     except Exception as exc:  # noqa: BLE001
         _audit(
             "instance.snapshot.restore", instance_name, body.host, body.project,
@@ -565,7 +596,7 @@ async def restore_snapshot(
         )
         raise lxd_http_error(exc, "Snapshot", snapshot_name)
 
-    if outcome.get("status") == "Failure":
+    if outcome.get("failed"):
         # A restore stops the instance before rolling it back, so a daemon-side failure can leave
         # it stopped. Reporting success would send the operator away from a broken instance.
         _audit(

@@ -18,9 +18,9 @@ through the control plane is drafted in the service layer and deliberately not r
 here; see documentation/instances/operator-snapshots-and-mobility.md for why.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, Field
 
 from app.core.blocking import run_blocking
@@ -31,6 +31,7 @@ from app.core.dependencies import (
     require_partner,
     require_tenant,
 )
+from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.lxd_errors import lxd_http_error
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.activity_logger import get_activity_logger
@@ -174,7 +175,10 @@ async def _settle_copy(client, operation_url: Optional[str], project: str) -> Di
 
 @router.get("/{instance_name}/move-preflight", response_model=MovePreflight)
 async def move_preflight(
-    instance_name: str,
+    instance_name: Annotated[
+        str,
+        Path(pattern=LXD_NAME_PATTERN, description=f"Instance to act on. {LXD_NAME_DESCRIPTION}"),
+    ],
     host: str = Query(..., description="Cluster the instance lives on"),
     project: str = Query("default", description="LXD project the instance lives in"),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -281,7 +285,10 @@ def _pools_with_headroom(client, pools: List[str]) -> List[Dict[str, Any]]:
 
 @router.post("/{instance_name}/copy", response_model=MoveResponse, status_code=202)
 async def copy_instance(
-    instance_name: str,
+    instance_name: Annotated[
+        str,
+        Path(pattern=LXD_NAME_PATTERN, description=f"Instance to act on. {LXD_NAME_DESCRIPTION}"),
+    ],
     body: MoveRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
@@ -324,6 +331,11 @@ async def copy_instance(
             operation_client = target
     except HTTPException:
         raise
+    except snapshots_service.LXDOperationUnreadable as exc:
+        # Accepted with nothing to wait on. Upstream problem, and a copy reported as started when
+        # its completion cannot be confirmed is the defect this path was rewritten to remove.
+        _audit_move(instance_name, body, transport, result="failure", error=str(exc))
+        raise HTTPException(status_code=502, detail=str(exc))
     except mobility.MobilityError as exc:
         _audit_move(instance_name, body, transport, result="failure", error=str(exc))
         raise HTTPException(status_code=409, detail=str(exc))
@@ -334,7 +346,7 @@ async def copy_instance(
     operation_id = (operation or "").rsplit("/", 1)[-1] or None
     outcome = await _settle_copy(operation_client, operation, body.target_project)
 
-    if outcome.get("status") == "Failure":
+    if outcome.get("failed"):
         detail = outcome.get("err") or "unknown error"
         if mobility.is_unreachable_error(Exception(detail)):
             # The one failure an operator cannot diagnose from the raw message, because the link
@@ -361,16 +373,24 @@ async def copy_instance(
             "copy", instance_name, body.host, body.project, policy, justification,
             user.email or user.user_id,
         )
-    # A new instance exists on the destination, so both the reader's cache and OrcaHub's ledger
-    # are now behind. Without the event the copy is invisible to OrcaHub until its next sweep.
+    # The reader's cache is invalidated either way: something is happening on the destination and
+    # a stale list is wrong in both cases.
     get_cache_manager().invalidate_instance_cache()
-    schedule_orcahub_event(
-        event_type="instance.created",
-        cluster_id=body.target_host,
-        project=body.target_project,
-        resource_type="INSTANCE",
-        name=body.target_name,
-    )
+    if outcome.get("settled"):
+        # important: announced only once the operation settled. `instance.created` tells the
+        # upstream product a resource EXISTS, and it meters what it is told about. Emitting on the
+        # unsettled branch announced an instance whose transfer had been accepted and might still
+        # fail, which is the same "reported before it happened" defect the settle check was added
+        # to remove, one step further downstream. An unsettled copy that does complete is picked
+        # up by that product's own inventory sweep, so the cost of waiting is a delay rather than
+        # a miss, while the cost of announcing early is a resource in a ledger that never appeared.
+        schedule_orcahub_event(
+            event_type="instance.created",
+            cluster_id=body.target_host,
+            project=body.target_project,
+            resource_type="INSTANCE",
+            name=body.target_name,
+        )
     return MoveResponse(
         success=True,
         instance_name=instance_name,

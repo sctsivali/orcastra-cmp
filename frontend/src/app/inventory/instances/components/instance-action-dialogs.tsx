@@ -24,6 +24,8 @@ export interface ConfirmActionState {
   action: "stop" | "restart" | null;
   name: string;
   host: string;
+  /** A name is unique per project, not per host, so the action carries the row's project. */
+  project: string;
   force: boolean;
 }
 

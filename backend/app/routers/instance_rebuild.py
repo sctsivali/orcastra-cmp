@@ -31,7 +31,8 @@ from app.core.dependencies import (
     require_partner,
     AuthenticatedUser,
 )
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.config import get_settings
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, verify_tenant_permission
 from app.models.db_models import RebuildJob
 from app.services.lxd_service import (
     LXDService,
@@ -45,6 +46,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
+
+def _verify_instance_access(host: str, project: str, instance_name: str, permission: str = "view") -> None:
+    """Authorize an action on ONE instance, not merely on its cluster.
+
+    `verify_cluster_access` answers "may this caller reach this cluster", which for a tenant
+    scoped to a single instance is true of every instance their neighbours run on the same one.
+    Behind the same flag as the rest of the tenant ACL.
+
+    important: `project` is used AS GIVEN. The helper used to normalise it with `or "default"`,
+    which reintroduced the very split it exists to close: an empty `?project=` authorized
+    `default` here while the service saw a falsy value and searched every project. The caller
+    normalises once and passes the same value to the action, so there is exactly one project in
+    play per request.
+    """
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(host, project, instance_name, permission)
+
 
 router = APIRouter(
     prefix="/instances",
@@ -287,8 +305,16 @@ async def rebuild_preflight(
     """Read-only pre-check for the rebuild dialog: current status, snapshots (the
     block condition), the custom volumes that will survive, and the base image."""
     verify_cluster_access(host)
+    # The preflight returns the instance's snapshot names, its custom volumes, its base image and
+    # its status. A cluster check alone handed all of that to any tenant who could reach the host.
+    #
+    # important: normalised once, here, and the SAME value goes to the resolver. `?project=` is
+    # falsy, and the service reads a falsy project as "search every project", so authorizing the
+    # raw value and resolving the raw value are only the same thing once it is normalised.
+    scoped_project = project or "default"
+    _verify_instance_access(host, scoped_project, instance_name, "view")
     try:
-        pf = await lxd_service.get_rebuild_preflight(instance_name, host, project)
+        pf = await lxd_service.get_rebuild_preflight(instance_name, host, scoped_project)
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
@@ -318,6 +344,9 @@ async def get_rebuild_job(
     if row is None or row.instance_name != instance_name:
         raise HTTPException(status_code=404, detail="Rebuild job not found")
     verify_cluster_access(row.cluster_id)
+    # The row records which project the instance was in, so the check is against the instance
+    # rather than against the cluster it happens to live on.
+    _verify_instance_access(row.cluster_id, row.project or "default", row.instance_name, "view")
     return _job_payload(row)
 
 
@@ -338,4 +367,7 @@ async def get_latest_rebuild_job(
     ).scalar_one_or_none()
     if row is None:
         return {"job": None}
+    # Checked after the read, because the project the instance lived in is on the row rather than
+    # in the request. A rebuild job carries the instance's status, its error and its timings.
+    _verify_instance_access(row.cluster_id, row.project or "default", row.instance_name, "view")
     return {"job": _job_payload(row)}

@@ -345,15 +345,21 @@ async def start_instance(
 ):
     """Start an instance."""
     verify_cluster_access(request.host)
+    # important: ONE project value is authorized and acted on. This checked the ACL against
+    # `request.project or "default"` and then handed `request.project` to the service, which
+    # searches EVERY project when it is None and returns the first hit. A caller holding
+    # `operate` on `default` was therefore authorized there while the action ran against
+    # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
+    project = request.project or "default"
     # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
+        verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
         vm = await lxd_service.start_vm(
             instance_name,
             request.host,
             force=False,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -424,15 +430,21 @@ async def stop_instance(
 ):
     """Stop an instance."""
     verify_cluster_access(request.host)
+    # important: ONE project value is authorized and acted on. This checked the ACL against
+    # `request.project or "default"` and then handed `request.project` to the service, which
+    # searches EVERY project when it is None and returns the first hit. A caller holding
+    # `operate` on `default` was therefore authorized there while the action ran against
+    # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
+    project = request.project or "default"
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
+        verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
         await lxd_service.stop_vm(
             instance_name, 
             request.host, 
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -503,15 +515,21 @@ async def restart_instance(
 ):
     """Restart an instance."""
     verify_cluster_access(request.host)
+    # important: ONE project value is authorized and acted on. This checked the ACL against
+    # `request.project or "default"` and then handed `request.project` to the service, which
+    # searches EVERY project when it is None and returns the first hit. A caller holding
+    # `operate` on `default` was therefore authorized there while the action ran against
+    # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
+    project = request.project or "default"
     if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(request.host, request.project or "default", instance_name, "operate")
+        verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
         await lxd_service.restart_vm(
             instance_name,
             request.host,
             force=request.force,
             timeout=request.timeout,
-            project=request.project,
+            project=project,
         )
         get_cache_manager().invalidate_instance_cache()
         
@@ -681,12 +699,27 @@ async def delete_instance(
 async def get_instance_metrics(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    project: Optional[str] = Query(
+        None,
+        description=(
+            "LXD project the instance lives in. A name is unique per project, not per host, so "
+            "omitting this reads the instance of that name in `default`."
+        ),
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get metrics for a specific instance."""
     verify_cluster_access(host)
+    # important: this route had no tenant check at all, and the reader behind it discarded the
+    # project and searched every one of them. A tenant scoped to a single instance on a shared
+    # cluster could therefore read any other tenant's live CPU, memory, disk and network by
+    # asking for their instance by name. Authorized and read on ONE project value, like the
+    # power routes above.
+    scoped_project = project or "default"
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(host, scoped_project, instance_name, "view")
     try:
-        metrics = await lxd_service.get_instance_metrics(host, instance_name)
+        metrics = await lxd_service.get_instance_metrics(host, instance_name, scoped_project)
         if not metrics:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
         return metrics

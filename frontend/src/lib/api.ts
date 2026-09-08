@@ -368,6 +368,16 @@ async function _fetchAPIInternal<T>(
         errorMessage = `HTTP ${response.status}`;
       } else if (typeof errorDetail === 'string') {
         errorMessage = errorDetail;
+      } else if (
+        typeof errorDetail === 'object' &&
+        errorDetail !== null &&
+        typeof (errorDetail as { message?: unknown }).message === 'string'
+      ) {
+        // important: a structured refusal already carries a sentence written for a human. The
+        // billing-impact gate and the break-glass service both answer with `{error, message, ...}`
+        // so the caller can act on the machine-readable part, and stringifying the whole object
+        // put a raw JSON blob in front of the operator instead of the sentence inside it.
+        errorMessage = (errorDetail as { message: string }).message;
       } else {
         errorMessage = JSON.stringify(errorDetail);
       }

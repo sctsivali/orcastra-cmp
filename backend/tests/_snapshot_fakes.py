@@ -42,6 +42,8 @@ class FakeSnapshots:
         entry = dict(json or {})
         entry.setdefault("created_at", "2026-09-08T00:00:00Z")
         self._owner.snapshots.append(entry)
+        if self._owner.omit_operation:
+            return _Response({}, 202)
         return _Response({"operation": "/1.0/operations/op-create"}, 202)
 
     def __getitem__(self, name):
@@ -56,6 +58,8 @@ class _SnapshotNode:
     def delete(self, params=None):
         self._owner.recorded.append(("delete_snapshot", self._name, dict(params or {})))
         self._owner.snapshots = [s for s in self._owner.snapshots if s.get("name") != self._name]
+        if self._owner.omit_operation:
+            return _Response({}, 202)
         return _Response({"operation": "/1.0/operations/op-delete"}, 202)
 
 
@@ -71,6 +75,11 @@ class FakeInstanceNode:
         self.profiles: List[str] = ["default"]
         self.operation_status = "Success"
         self.operation_err = None
+        # When set, every accepted (202) response names no operation. Without this the fakes
+        # always hand back an id, so the branch that decides what "no operation" means was
+        # unreachable from any test and an accepted-but-unconfirmable action looked like a
+        # completed one.
+        self.omit_operation = False
 
     @property
     def snapshots_api(self):
@@ -212,7 +221,10 @@ class _OperationNode:
     def wait(self):
         return self
 
-    def get(self, params=None):
+    def get(self, params=None, timeout=None):
+        # Recorded so a test can assert the socket window outlasts the wait asked of LXD. Without
+        # that, the read dies first and every slow operation reports "still running".
+        self._node.recorded.append(("wait_operation", dict(params or {}), timeout))
         return _Response(
             {"metadata": {"status": self._node.operation_status, "err": self._node.operation_err}}
         )

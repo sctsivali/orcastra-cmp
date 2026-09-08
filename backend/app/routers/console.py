@@ -19,7 +19,7 @@ Endpoints:
 
 import asyncio
 import logging
-from typing import Optional, List
+from typing import Dict, List, Optional
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends, Response
 from pydantic import BaseModel, Field
 import websockets
@@ -27,7 +27,14 @@ from websockets import State as WebSocketState
 from websockets.exceptions import ConnectionClosed
 
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
-from app.core.org_scope import org_scope_dependency, set_org_scope_for_ws, verify_cluster_access
+from app.core.config import get_settings
+from app.core.org_scope import (
+    check_tenant_permission,
+    org_scope_dependency,
+    set_org_scope_for_ws,
+    verify_cluster_access,
+    verify_tenant_permission,
+)
 from app.services.console_service import get_console_service, public_session_info
 from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
@@ -38,6 +45,29 @@ from app.models.db_models import SessionAuditLog
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
+
+def _verify_instance_access(host: str, project: str, instance_name: str, permission: str = "view") -> None:
+    """Authorize a console action on ONE instance, not merely on its cluster.
+
+    important: `verify_cluster_access` answers "may this caller reach this cluster", which for a
+    tenant scoped to a single instance is true of every instance their neighbours run on it. The
+    per-instance console reads were gated on that alone, so a tenant could ask whether another
+    tenant's instance exists, whether it supports VGA, what ISO is attached and where it came
+    from, and who is connected to it. None of that is theirs.
+
+    Behind the same flag as the rest of the tenant ACL, because the grants it reads were pushed by
+    an upstream sync long before anything enforced them and turning them all on at once is a
+    deliberate act, not a side effect of a bug fix.
+
+    important: `project` is used AS GIVEN. The helper used to normalise it with `or "default"`,
+    which reintroduced the very split it exists to close: an empty `?project=` authorized
+    `default` here while the service saw a falsy value and searched every project. The caller
+    normalises once and passes the same value to the action, so there is exactly one project in
+    play per request.
+    """
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(host, project, instance_name, permission)
+
 
 router = APIRouter(
     prefix="/console",
@@ -426,6 +456,7 @@ async def get_capabilities(
 ):
     """Get console capabilities for an instance."""
     verify_cluster_access(host)
+    _verify_instance_access(host, project or "default", instance_name, "view")
     console_service = get_console_service()
     
     caps, error = await console_service.get_instance_capabilities(
@@ -543,11 +574,28 @@ async def get_startup_order(
     
     if error:
         return StartupOrderResponse(success=False, error=error)
-    
-    return StartupOrderResponse(
-        success=True,
-        entries=[StartupOrderEntry(**e.to_dict()) for e in entries]
-    )
+
+    # important: this is a PROJECT-wide listing, and the cluster check above says nothing about
+    # which instances in it are the caller's. On a cluster where several tenants share a project
+    # it returned the full roster: every neighbour's instance name, its boot order and its delay.
+    # Admin and Partner carry no ACL, so this is a no-op for an operator.
+    # important: narrowed by the permission the caller actually holds, not by "has any rule here".
+    # The helper this replaces ignores the permissions on a rule entirely, so a tenant holding only
+    # `console` on one instance was still shown every instance they hold any rule for. Asking the
+    # same question the per-instance routes ask is what makes the two agree. Admin and Partner
+    # carry no ACL and check_tenant_permission answers True for them, so an operator read is
+    # unfiltered.
+    scoped = project or "default"
+    rows = [StartupOrderEntry(**e.to_dict()) for e in entries]
+    seen: Dict[str, bool] = {}
+    visible = []
+    for r in rows:
+        if r.instance_name not in seen:
+            seen[r.instance_name] = check_tenant_permission(host, scoped, r.instance_name, "view")
+        if seen[r.instance_name]:
+            visible.append(r)
+
+    return StartupOrderResponse(success=True, entries=visible)
 
 
 @router.put(
@@ -623,6 +671,7 @@ async def get_attached_iso(
 ):
     """Get attached ISO for an instance."""
     verify_cluster_access(host)
+    _verify_instance_access(host, project or "default", instance_name, "view")
     console_service = get_console_service()
     
     attached, error = await console_service.get_instance_iso(
@@ -664,6 +713,7 @@ async def attach_iso(
 ):
     """Attach an ISO to an instance."""
     verify_cluster_access(host)
+    _verify_instance_access(host, project or "default", instance_name, "operate")
     console_service = get_console_service()
     
     success, message = await console_service.attach_iso(
@@ -699,6 +749,7 @@ async def eject_iso(
 ):
     """Eject an ISO from an instance."""
     verify_cluster_access(host)
+    _verify_instance_access(host, project or "default", instance_name, "operate")
     console_service = get_console_service()
     
     success, message = await console_service.eject_iso(
@@ -736,6 +787,7 @@ async def check_active_sessions(
     Useful for warning users before opening a new console.
     """
     verify_cluster_access(host)
+    _verify_instance_access(host, project or "default", instance_name, "view")
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -805,6 +857,9 @@ async def kill_all_sessions(
 ):
     """Kill all active console sessions for an instance."""
     verify_cluster_access(host)
+    # note: no per-instance check. This route is require_partner(), and a Partner or Admin
+    # carries no tenant ACL, so the check would be inert. It also takes no project, and an
+    # instance name is unique per project: adding one would be an API change, not a guard.
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
@@ -867,6 +922,9 @@ async def kill_active_session(
 ):
     """Kill an active console session by cancelling the operation."""
     verify_cluster_access(host)
+    # note: no per-instance check. This route is require_partner(), and a Partner or Admin
+    # carries no tenant ACL, so the check would be inert. It also takes no project, and an
+    # instance name is unique per project: adding one would be an API change, not a guard.
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()

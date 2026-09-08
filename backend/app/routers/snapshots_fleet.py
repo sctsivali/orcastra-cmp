@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.core.lxd_errors import lxd_http_error
 from app.core.org_scope import (
-    filter_instances_by_acl,
+    check_tenant_permission,
     org_scope_dependency,
     verify_cluster_access,
 )
@@ -77,17 +77,25 @@ async def list_fleet_snapshots(
     except Exception as exc:  # noqa: BLE001
         raise lxd_http_error(exc, "Project", project)
 
-    # important: this is a PROJECT-level read, and check_tenant_permission merges permissions
-    # from every rule matching the project when it is given no instance name. A tenant holding
-    # `snapshot` on one instance therefore passes the check above, and without this filter the
-    # listing would hand them every snapshot of every instance in the project. Admin and Partner
-    # carry no ACL, so filter_instances_by_acl returns the rows untouched for them.
-    allowed = set(
-        filter_instances_by_acl(
-            host, project, sorted({row.get("source_name") or "" for row in rows})
-        )
-    )
-    visible = [row for row in rows if (row.get("source_name") or "") in allowed]
+    # important: this is a PROJECT-level read, and check_tenant_permission merges permissions from
+    # every rule matching the project when it is given no instance name. A tenant holding
+    # `snapshot` on one instance therefore passes the check above, so the rows have to be narrowed
+    # again per source.
+    #
+    # important: narrowed by the SNAPSHOT permission, not by "has any rule here". filter_instances_
+    # by_acl ignores the permissions on a rule entirely, so a tenant holding `view` on one instance
+    # and `snapshot` on another passed the project gate on the second and was then shown the first
+    # one's snapshots as well. Asking the same question the per-instance routes ask is what closes
+    # it. Admin and Partner carry no ACL and check_tenant_permission answers True for them, so an
+    # operator read is unfiltered.
+    seen: Dict[str, bool] = {}
+    visible = []
+    for row in rows:
+        source = row.get("source_name") or ""
+        if source not in seen:
+            seen[source] = check_tenant_permission(host, project, source, "snapshot")
+        if seen[source]:
+            visible.append(row)
 
     for row in visible:
         row["host"] = host

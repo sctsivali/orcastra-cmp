@@ -202,8 +202,9 @@ function InstancesContent() {
     action: "stop" | "restart" | null;
     name: string;
     host: string;
+    project: string;
     force: boolean;
-  }>({ open: false, action: null, name: "", host: "", force: false });
+  }>({ open: false, action: null, name: "", host: "", project: "", force: false });
   const router = useRouter();
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
@@ -267,6 +268,7 @@ function InstancesContent() {
   const handleAction = (
     instanceName: string,
     host: string,
+    project: string,
     action: "start" | "stop" | "restart"
   ) => {
     if (isReadOnly) {
@@ -278,15 +280,16 @@ function InstancesContent() {
       return;
     }
     if (action === "start") {
-      runAction(instanceName, host, action);
+      runAction(instanceName, host, project, action);
       return;
     }
-    setConfirmAction({ open: true, action, name: instanceName, host, force: false });
+    setConfirmAction({ open: true, action, name: instanceName, host, project, force: false });
   };
 
   const runAction = async (
     instanceName: string,
     host: string,
+    project: string,
     action: "start" | "stop" | "restart",
     force = false
   ) => {
@@ -294,11 +297,11 @@ function InstancesContent() {
       setActionLoading(`${instanceName}-${action}`);
 
       if (action === "start") {
-        await startInstance.mutateAsync({ name: instanceName, host });
+        await startInstance.mutateAsync({ name: instanceName, host, project });
       } else if (action === "stop") {
-        await stopInstance.mutateAsync({ name: instanceName, host, force });
+        await stopInstance.mutateAsync({ name: instanceName, host, project, force });
       } else {
-        await restartInstance.mutateAsync({ name: instanceName, host, force });
+        await restartInstance.mutateAsync({ name: instanceName, host, project, force });
       }
 
       toast({
@@ -346,7 +349,13 @@ function InstancesContent() {
 
   const confirmActionRun = () => {
     if (confirmAction.action) {
-      runAction(confirmAction.name, confirmAction.host, confirmAction.action, confirmAction.force);
+      runAction(
+        confirmAction.name,
+        confirmAction.host,
+        confirmAction.project,
+        confirmAction.action,
+        confirmAction.force,
+      );
     }
     setConfirmAction((prev) => ({ ...prev, open: false }));
   };
@@ -578,7 +587,7 @@ function InstancesContent() {
                           size="sm"
                           variant="outline"
                           onClick={() =>
-                            handleAction(instance.name, instance.host, "start")
+                            handleAction(instance.name, instance.host, instance.project || "default", "start")
                           }
                           disabled={actionLoading === `${instance.name}-start` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
                           aria-label={`Start instance ${instance.name}`}
@@ -593,7 +602,7 @@ function InstancesContent() {
                             size="sm"
                             variant="outline"
                             onClick={() =>
-                              handleAction(instance.name, instance.host, "stop")
+                              handleAction(instance.name, instance.host, instance.project || "default", "stop")
                             }
                             disabled={actionLoading === `${instance.name}-stop` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
                             aria-label={`Stop instance ${instance.name}`}
@@ -605,7 +614,7 @@ function InstancesContent() {
                             size="sm"
                             variant="outline"
                             onClick={() =>
-                              handleAction(instance.name, instance.host, "restart")
+                              handleAction(instance.name, instance.host, instance.project || "default", "restart")
                             }
                             disabled={actionLoading === `${instance.name}-restart` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
                             aria-label={`Restart instance ${instance.name}`}

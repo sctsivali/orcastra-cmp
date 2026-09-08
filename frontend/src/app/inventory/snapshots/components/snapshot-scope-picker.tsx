@@ -21,6 +21,8 @@ interface SnapshotScopePickerProps {
   nodesError?: boolean;
   projects: Array<{ name: string }>;
   projectsLoading: boolean;
+  /** Same rule as nodesError: a failed read must not render as a one-project cluster. */
+  projectsError?: boolean;
 }
 
 /**
@@ -40,6 +42,7 @@ export function SnapshotScopePicker({
   nodesError = false,
   projects,
   projectsLoading,
+  projectsError = false,
 }: SnapshotScopePickerProps) {
   const projectOptions = projects.map((p) => ({ value: p.name, label: p.name }));
 
@@ -76,12 +79,33 @@ export function SnapshotScopePicker({
           id="snapshot-project"
           value={project}
           onValueChange={onProjectChange}
-          options={projectOptions.length > 0 ? projectOptions : [{ value: "default", label: "default" }]}
-          placeholder={projectsLoading ? "Loading projects" : "Choose a project"}
+          // important: the fallback is only for a cluster that genuinely reports no projects. On a
+          // FAILED read the list is empty for a different reason, and offering "default" as the
+          // one option states something the console does not know. That is the same defect the
+          // cluster field above was fixed for.
+          options={
+            projectsError
+              ? []
+              : projectOptions.length > 0
+                ? projectOptions
+                : [{ value: "default", label: "default" }]
+          }
+          placeholder={
+            projectsLoading
+              ? "Loading projects"
+              : projectsError
+                ? "Projects unavailable"
+                : "Choose a project"
+          }
           searchPlaceholder="Search projects"
-          emptyText="No project available"
-          disabled={!host || projectsLoading}
+          emptyText={projectsError ? "The project list could not be read" : "No project available"}
+          disabled={!host || projectsLoading || projectsError}
         />
+        {projectsError && (
+          <p className="text-sm text-destructive">
+            The project list could not be read, so this is not a cluster with one project.
+          </p>
+        )}
       </div>
     </div>
   );
