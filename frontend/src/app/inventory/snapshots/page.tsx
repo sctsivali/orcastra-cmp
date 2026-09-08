@@ -159,6 +159,7 @@ function SnapshotsContent() {
         }}
         nodeOptions={nodePicker.options}
         nodesLoading={nodePicker.isLoading}
+        nodesError={nodePicker.isError}
         projects={projectsQuery.data?.projects ?? []}
         projectsLoading={projectsQuery.isLoading}
       />
@@ -238,6 +239,7 @@ function SnapshotsContent() {
                             snapshot={snapshot}
                             host={host}
                             project={project}
+                            billingLinked={snapshot.source_externally_managed ?? false}
                           />
                         </TableCell>
                       </TableRow>

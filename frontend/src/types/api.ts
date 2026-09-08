@@ -2525,6 +2525,14 @@ export interface SnapshotInfo {
   host?: string;
   project?: string;
   source_status?: string | null;
+  /**
+   * Whether the SOURCE instance carries an upstream snapshot schedule. Fleet listing only, where
+   * it is the one fact the billing gate acts on: without it the row actions cannot offer the
+   * acknowledgement the backend requires, and every delete or restore from that page is refused.
+   */
+  source_externally_managed?: boolean;
+  source_schedule?: string | null;
+  source_expiry?: string | null;
 }
 
 /** The LXD-native schedule on a source. Read only here: it belongs to the upstream product. */
@@ -2629,6 +2637,9 @@ export interface MoveRequest {
   target_name: string;
   target_member?: string | null;
   target_pool?: string | null;
+  /** Required when the source carries an upstream schedule, alongside a reason. */
+  acknowledge_billing_impact?: boolean;
+  reason?: string;
 }
 
 export interface MoveResponse {

@@ -34,6 +34,7 @@ from app.core.org_scope import (
     verify_cluster_access,
     verify_tenant_permission,
 )
+from app.core.single_flight import rebuild_lock, release_lock
 from app.core.snapshot_billing_gate import audit_billing_override, enforce_billing_impact
 from app.core.tenant_visibility import tenant_acl_active
 from app.core.blocking import run_blocking
@@ -111,6 +112,73 @@ def _enforce_snapshot_access(
         # Restore stops the instance and discards everything written since the snapshot. That is
         # a lifecycle action, so it needs the lifecycle permission on top of the snapshot one.
         verify_tenant_permission(host, project, instance_name, "operate")
+
+
+def _assert_operator_target(snapshot_name: str) -> None:
+    """Refuse a name this surface does not own, before it reaches a request path.
+
+    important: this is input validation as much as an ownership rule. pylxd interpolates the name
+    into the LXD URL with no escaping (`_APINode.__getitem__`), and the prefix test this replaces
+    checked the first four characters and let everything after them through.
+    """
+    try:
+        snapshots_service.assert_operator_snapshot_name(snapshot_name)
+    except snapshots_service.SnapshotNameError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+async def _read_policy(client, instance_name: str, project: str) -> Dict[str, Any]:
+    """Read the source's snapshot policy, mapping a cluster failure to a real status.
+
+    Separate from the handler body so the billing gate can run outside the handler's try. A 403
+    raised inside one is caught by the generic except and re-raised as a 500.
+    """
+    try:
+        return await _blocking(
+            snapshots_service.read_instance_policy,
+            client,
+            instance_name,
+            project,
+            label="snapshots.policy",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise lxd_http_error(exc, "Instance", instance_name)
+
+
+def _gate_billing(
+    policy: Dict[str, Any],
+    action: str,
+    instance_name: str,
+    host: str,
+    project: str,
+    *,
+    acknowledged: bool,
+    reason: Optional[str],
+) -> Optional[str]:
+    """Apply the billing gate and record a refusal.
+
+    important: a refusal is audited. Being stopped on a billing-linked instance is the event most
+    worth alerting on, and it used to travel out through `except HTTPException: raise` leaving no
+    trace anywhere.
+    """
+    try:
+        return enforce_billing_impact(
+            policy, instance_name, acknowledged=acknowledged, reason=reason,
+        )
+    except HTTPException:
+        _audit(
+            f"instance.snapshot.{action}", instance_name, host, project,
+            result="denied",
+            error_message="billing_impact_acknowledgement_required",
+            details={
+                "snapshot_action": action,
+                "external_schedule": policy.get("schedule"),
+                "external_expiry": policy.get("expiry"),
+            },
+        )
+        raise
 
 
 async def _settle(client, operation_id: Optional[str], project: str) -> Dict[str, Any]:
@@ -196,58 +264,62 @@ async def create_snapshot(
     _enforce_snapshot_access(body.host, body.project, instance_name)
 
     client = await _client(lxd_service, body.host)
+    policy = await _read_policy(client, instance_name, body.project)
+    justification = _gate_billing(
+        policy, "create", instance_name, body.host, body.project,
+        acknowledged=body.acknowledge_billing_impact, reason=body.reason,
+    )
+
+    snapshot_name = snapshots_service.build_operator_snapshot_name(body.label)
+    expires_at = snapshots_service.default_expiry(body.expiry_days)
+
+    # important: the cap is read from the cluster and then acted on, which is two round trips.
+    # Without this lock, concurrent creates for one instance all read the same pre-cap count and
+    # all proceed. Scoped to one worker process like every lock in this codebase, so under
+    # WEB_CONCURRENCY=4 the bound is the cap plus three rather than the cap exactly. That is a
+    # guardrail against accumulation, not a security boundary, and each snapshot carries its own
+    # expires_at, so LXD prunes the overshoot without help.
+    lock_key = f"snapshot-create:{body.host}/{body.project}/{instance_name}"
+    lock = rebuild_lock(lock_key)
     try:
-        policy = await _blocking(
-            snapshots_service.read_instance_policy,
-            client,
-            instance_name,
-            body.project,
-            label="snapshots.policy",
-        )
-        justification = enforce_billing_impact(
-            policy,
-            instance_name,
-            acknowledged=body.acknowledge_billing_impact,
-            reason=body.reason,
-        )
-
-        await _blocking(
-            snapshots_service.assert_capacity,
-            client,
-            instance_name,
-            body.project,
-            label="snapshots.capacity",
-        )
-        snapshot_name = snapshots_service.build_operator_snapshot_name(body.label)
-        expires_at = snapshots_service.default_expiry(body.expiry_days)
-
-        operation_id = await _blocking(
-            snapshots_service.create_instance_snapshot,
-            client,
-            instance_name,
-            body.project,
-            snapshot_name,
-            stateful=body.stateful,
-            expires_at=expires_at,
-            label="snapshots.create",
-        )
-        outcome = await _settle(client, operation_id, body.project)
-    except HTTPException:
-        raise
-    except snapshots_service.SnapshotLimitError as exc:
-        _audit(
-            "instance.snapshot.create", instance_name, body.host, body.project,
-            result="denied", error_message=str(exc),
-        )
-        raise HTTPException(status_code=409, detail=str(exc))
-    except snapshots_service.SnapshotNameError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except Exception as exc:  # noqa: BLE001
-        _audit(
-            "instance.snapshot.create", instance_name, body.host, body.project,
-            result="failure", error_message=str(exc),
-        )
-        raise lxd_http_error(exc, "Instance", instance_name)
+        async with lock:
+            try:
+                await _blocking(
+                    snapshots_service.assert_capacity,
+                    client,
+                    instance_name,
+                    body.project,
+                    label="snapshots.capacity",
+                )
+                operation_id = await _blocking(
+                    snapshots_service.create_instance_snapshot,
+                    client,
+                    instance_name,
+                    body.project,
+                    snapshot_name,
+                    stateful=body.stateful,
+                    expires_at=expires_at,
+                    label="snapshots.create",
+                )
+                outcome = await _settle(client, operation_id, body.project)
+            except HTTPException:
+                raise
+            except snapshots_service.SnapshotLimitError as exc:
+                _audit(
+                    "instance.snapshot.create", instance_name, body.host, body.project,
+                    result="denied", error_message=str(exc),
+                )
+                raise HTTPException(status_code=409, detail=str(exc))
+            except snapshots_service.SnapshotNameError as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            except Exception as exc:  # noqa: BLE001
+                _audit(
+                    "instance.snapshot.create", instance_name, body.host, body.project,
+                    result="failure", error_message=str(exc),
+                )
+                raise lxd_http_error(exc, "Instance", instance_name)
+    finally:
+        release_lock(lock_key)
 
     if outcome.get("status") == "Failure":
         # The daemon refused after accepting the request. Reporting 201 here would be the exact
@@ -327,35 +399,20 @@ async def delete_snapshot(
     # This surface only manages what it made. A snapshot belonging to the paid product is
     # visible here and deliberately not deletable, so an operator cannot silently remove a
     # restore point a tenant is paying to keep.
-    if not snapshots_service.is_operator_snapshot(snapshot_name):
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"'{snapshot_name}' is not an operator snapshot. Only "
-                f"'{snapshots_service.OPS_PREFIX}' snapshots can be deleted from this console."
-            ),
-        )
+    _assert_operator_target(snapshot_name)
 
     client = await _client(lxd_service, host)
-    try:
-        # Deleting lowers the storage the external schedule is measured on rather than raising it,
-        # so this is the gentlest of the three actions. It is gated anyway: the rule an operator
-        # has to hold is "anything on a billing-linked instance is acknowledged", and a rule with
-        # an exception is one people have to remember the shape of.
-        policy = await _blocking(
-            snapshots_service.read_instance_policy,
-            client,
-            instance_name,
-            project,
-            label="snapshots.policy",
-        )
-        justification = enforce_billing_impact(
-            policy,
-            instance_name,
-            acknowledged=acknowledge_billing_impact,
-            reason=reason,
-        )
+    # Deleting lowers the storage the external schedule is measured on rather than raising it,
+    # so this is the gentlest of the three actions. It is gated anyway: the rule an operator
+    # has to hold is "anything on a billing-linked instance is acknowledged", and a rule with
+    # an exception is one people have to remember the shape of.
+    policy = await _read_policy(client, instance_name, project)
+    justification = _gate_billing(
+        policy, "delete", instance_name, host, project,
+        acknowledged=acknowledge_billing_impact, reason=reason,
+    )
 
+    try:
         operation_id = await _blocking(
             snapshots_service.delete_instance_snapshot,
             client,
@@ -364,7 +421,7 @@ async def delete_snapshot(
             snapshot_name,
             label="snapshots.delete",
         )
-        await _settle(client, operation_id, project)
+        outcome = await _settle(client, operation_id, project)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -374,10 +431,27 @@ async def delete_snapshot(
         )
         raise lxd_http_error(exc, "Snapshot", snapshot_name)
 
+    if outcome.get("status") == "Failure":
+        # The daemon accepted the request and then refused it. Answering 200 "deleted" here would
+        # tell an operator a restore point is gone while it is still on the cluster.
+        _audit(
+            "instance.snapshot.delete", instance_name, host, project,
+            result="failure", error_message=outcome.get("err"),
+            details={"snapshot": snapshot_name},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"The cluster refused the deletion: {outcome.get('err') or 'unknown error'}",
+        )
+
     _audit(
         "instance.snapshot.delete", instance_name, host, project,
-        result="accepted",
-        details={"snapshot": snapshot_name, "requester": user.email or user.user_id},
+        result="success" if outcome.get("settled") else "accepted",
+        details={
+            "snapshot": snapshot_name,
+            "requester": user.email or user.user_id,
+            "settled": outcome.get("settled"),
+        },
     )
     if justification:
         audit_billing_override(
@@ -396,7 +470,11 @@ async def delete_snapshot(
         instance_name=instance_name,
         snapshot=snapshot_name,
         operation_id=operation_id,
-        message=f"Snapshot {snapshot_name} deleted.",
+        message=(
+            f"Snapshot {snapshot_name} deleted."
+            if outcome.get("settled")
+            else f"Snapshot {snapshot_name} is being removed."
+        ),
     )
 
 
@@ -420,24 +498,37 @@ async def restore_snapshot(
             status_code=422, detail="Confirmation name does not match the instance name"
         )
 
+    # Restore is held to the same ownership rule as delete. Rolling an instance onto a snapshot
+    # the paid product owns discards everything written since a restore point this console did not
+    # create, on a schedule a tenant is paying for.
+    _assert_operator_target(snapshot_name)
+
     client = await _client(lxd_service, body.host)
+    # Gated before the safety snapshot, not after: a refused restore must not leave a snapshot
+    # behind on a source whose storage someone else is billed for.
+    policy = await _read_policy(client, instance_name, body.project)
+    justification = _gate_billing(
+        policy, "restore", instance_name, body.host, body.project,
+        acknowledged=body.acknowledge_billing_impact, reason=body.reason,
+    )
+
     safety_name: Optional[str] = None
     try:
-        # Gated before the safety snapshot, not after: a refused restore must not leave a snapshot
-        # behind on a source whose storage someone else is billed for.
-        policy = await _blocking(
-            snapshots_service.read_instance_policy,
+        # important: the target has to exist before anything is written. Restoring a name that is
+        # not on the instance fails at the daemon, and because the safety copy was taken first it
+        # left a snapshot behind on a billed source for a restore that never ran.
+        existing = await _blocking(
+            snapshots_service.list_instance_snapshots,
             client,
             instance_name,
             body.project,
-            label="snapshots.policy",
+            label="snapshots.list",
         )
-        justification = enforce_billing_impact(
-            policy,
-            instance_name,
-            acknowledged=body.acknowledge_billing_impact,
-            reason=body.reason,
-        )
+        if not any(row.get("name") == snapshot_name for row in existing):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Snapshot '{snapshot_name}' does not exist on {instance_name}.",
+            )
 
         # The safety copy is taken first and its failure aborts the restore. Taken afterwards it
         # would capture the already-rolled-back state and protect nothing.
@@ -462,6 +553,7 @@ async def restore_snapshot(
             snapshot_name,
             label="snapshots.restore",
         )
+        outcome = await _settle(client, operation_id, body.project)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -473,13 +565,30 @@ async def restore_snapshot(
         )
         raise lxd_http_error(exc, "Snapshot", snapshot_name)
 
+    if outcome.get("status") == "Failure":
+        # A restore stops the instance before rolling it back, so a daemon-side failure can leave
+        # it stopped. Reporting success would send the operator away from a broken instance.
+        _audit(
+            "instance.snapshot.restore", instance_name, body.host, body.project,
+            result="failure", error_message=outcome.get("err"),
+            details={"snapshot": snapshot_name, "safety_snapshot": safety_name},
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"The cluster refused the restore: {outcome.get('err') or 'unknown error'}."
+                + (f" Safety snapshot {safety_name} was taken and is still present." if safety_name else "")
+            ),
+        )
+
     _audit(
         "instance.snapshot.restore", instance_name, body.host, body.project,
-        result="accepted",
+        result="success" if outcome.get("settled") else "accepted",
         details={
             "snapshot": snapshot_name,
             "safety_snapshot": safety_name,
             "requester": user.email or user.user_id,
+            "settled": outcome.get("settled"),
         },
     )
     if justification:
@@ -493,7 +602,11 @@ async def restore_snapshot(
         snapshot=snapshot_name,
         operation_id=operation_id,
         message=(
-            f"Restoring {instance_name} to {snapshot_name}."
+            (
+                f"{instance_name} restored to {snapshot_name}."
+                if outcome.get("settled")
+                else f"Restoring {instance_name} to {snapshot_name}."
+            )
             + (f" Safety snapshot {safety_name} taken first." if safety_name else "")
         ),
     )

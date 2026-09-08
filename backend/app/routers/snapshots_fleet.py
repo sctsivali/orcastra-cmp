@@ -15,7 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from app.core.lxd_errors import lxd_http_error
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import (
+    filter_instances_by_acl,
+    org_scope_dependency,
+    verify_cluster_access,
+)
 from app.core.dependencies import require_tenant
 from app.services.lxd import snapshots as snapshots_service
 from app.services.lxd.lazy_client import client_for
@@ -55,7 +59,6 @@ async def list_fleet_snapshots(
     verify_cluster_access(host)
     _enforce_snapshot_access(host, project, None)
 
-    unreachable: List[str] = []
     client = await client_for(lxd_service, host, label="snapshots.fleet")
     if client is None:
         # Not an error and not an empty project. The caller is told which node went unread so the
@@ -74,8 +77,22 @@ async def list_fleet_snapshots(
     except Exception as exc:  # noqa: BLE001
         raise lxd_http_error(exc, "Project", project)
 
-    for row in rows:
+    # important: this is a PROJECT-level read, and check_tenant_permission merges permissions
+    # from every rule matching the project when it is given no instance name. A tenant holding
+    # `snapshot` on one instance therefore passes the check above, and without this filter the
+    # listing would hand them every snapshot of every instance in the project. Admin and Partner
+    # carry no ACL, so filter_instances_by_acl returns the rows untouched for them.
+    allowed = set(
+        filter_instances_by_acl(
+            host, project, sorted({row.get("source_name") or "" for row in rows})
+        )
+    )
+    visible = [row for row in rows if (row.get("source_name") or "") in allowed]
+
+    for row in visible:
         row["host"] = host
+    # unreachable_nodes is populated on the early return above, which is the only case that can
+    # produce one: this route reads a single cluster, so a partial read is not representable.
     return FleetSnapshotListResponse(
-        total=len(rows), items=rows, unreachable_nodes=unreachable
+        total=len(visible), items=visible, unreachable_nodes=[]
     )

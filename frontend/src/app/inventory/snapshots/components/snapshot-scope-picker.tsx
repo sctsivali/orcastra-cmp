@@ -17,6 +17,8 @@ interface SnapshotScopePickerProps {
   onProjectChange: (project: string) => void;
   nodeOptions: NodeOption[];
   nodesLoading: boolean;
+  /** A failed cluster read must not render as an empty fleet. */
+  nodesError?: boolean;
   projects: Array<{ name: string }>;
   projectsLoading: boolean;
 }
@@ -35,6 +37,7 @@ export function SnapshotScopePicker({
   onProjectChange,
   nodeOptions,
   nodesLoading,
+  nodesError = false,
   projects,
   projectsLoading,
 }: SnapshotScopePickerProps) {
@@ -49,11 +52,22 @@ export function SnapshotScopePicker({
           value={host}
           onValueChange={onHostChange}
           options={nodeOptions}
-          placeholder={nodesLoading ? "Loading clusters" : "Choose a cluster"}
+          placeholder={
+            nodesLoading
+              ? "Loading clusters"
+              : nodesError
+                ? "Clusters unavailable"
+                : "Choose a cluster"
+          }
           searchPlaceholder="Search clusters"
-          emptyText="No cluster available"
-          disabled={nodesLoading}
+          emptyText={nodesError ? "The cluster list could not be read" : "No cluster available"}
+          disabled={nodesLoading || nodesError}
         />
+        {nodesError && (
+          <p className="text-sm text-destructive">
+            The cluster list could not be read, so this is not an empty fleet. Retry shortly.
+          </p>
+        )}
       </div>
 
       <div className="space-y-2 min-w-[220px]">

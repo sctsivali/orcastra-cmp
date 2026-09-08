@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { ArrowRight, Info } from "lucide-react";
+import { AlertTriangle, ArrowRight, Info } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -13,10 +13,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { Textarea } from "@/components/ui/textarea";
 import { useCopyInstance, useMovePreflight } from "@/hooks/use-lxd";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useToast } from "@/hooks/use-toast";
 import { formatBytes } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
@@ -48,7 +51,16 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
   const [targetProject, setTargetProject] = React.useState("");
   const [targetPool, setTargetPool] = React.useState("");
   const [targetName, setTargetName] = React.useState("");
+  const [reason, setReason] = React.useState("");
+  const [acknowledged, setAcknowledged] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const { isReadOnly } = useReadOnlyMode();
+
+  // The source's own schedule, straight off the row. A copy duplicates an instance whose storage
+  // another product meters, so it carries the same acknowledgement as a snapshot rather than an
+  // exception an operator has to remember.
+  const externalSchedule = instance.config?.["snapshots.schedule"] || null;
+  const billingLinked = !!externalSchedule;
   const submitInFlightRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -97,8 +109,15 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
   const nameValid = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$/.test(targetName);
   const sameTarget =
     targetHost === instance.host && targetProject === project && targetName === instance.name;
+  const overrideReady = !billingLinked || (acknowledged && reason.trim().length > 0);
   const canSubmit =
-    !!targetHost && !!targetProject && nameValid && !sameTarget && !copyInstance.isPending;
+    !!targetHost &&
+    !!targetProject &&
+    nameValid &&
+    !sameTarget &&
+    !isReadOnly &&
+    overrideReady &&
+    !copyInstance.isPending;
 
   const handleSubmit = async () => {
     if (submitInFlightRef.current) return;
@@ -114,6 +133,8 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
           target_project: targetProject,
           target_name: targetName,
           target_pool: targetPool || null,
+          reason: reason.trim() || undefined,
+          acknowledge_billing_impact: billingLinked ? acknowledged : undefined,
         },
       });
       toast({ title: "Copy started", description: result.message });
@@ -241,6 +262,49 @@ export function MoveInstanceDialog({ open, onOpenChange, instance }: MoveInstanc
                   <Info className="h-4 w-4 shrink-0 mt-0.5 text-muted-foreground" aria-hidden />
                   <p className="text-sm text-muted-foreground">{transportLabel}</p>
                 </div>
+              )}
+
+              {billingLinked && (
+                <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+                  <div className="flex gap-3">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" aria-hidden />
+                    <p className="text-sm">
+                      This instance is snapshotted on a schedule another product bills, currently
+                      {" "}
+                      <span className="font-mono">{externalSchedule}</span>. Copying it duplicates
+                      a workload someone else is accounting for.
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="move-reason">Reason</Label>
+                    <Textarea
+                      id="move-reason"
+                      value={reason}
+                      onChange={(e) => setReason(e.target.value)}
+                      placeholder="Why this instance needs to be copied right now"
+                      maxLength={280}
+                      rows={3}
+                    />
+                  </div>
+
+                  <div className="flex items-start gap-3">
+                    <Checkbox
+                      id="move-acknowledge"
+                      checked={acknowledged}
+                      onCheckedChange={(checked) => setAcknowledged(checked === true)}
+                    />
+                    <Label htmlFor="move-acknowledge" className="font-normal">
+                      I accept the effect on the schedule this instance is billed under
+                    </Label>
+                  </div>
+                </div>
+              )}
+
+              {isReadOnly && (
+                <p className="text-sm text-muted-foreground">
+                  The dashboard is in read-only mode, so no copy can be started.
+                </p>
               )}
 
               {error && <p className="text-sm text-destructive">{error}</p>}

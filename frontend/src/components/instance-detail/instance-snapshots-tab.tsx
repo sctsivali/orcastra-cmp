@@ -3,7 +3,6 @@
 import * as React from "react";
 import { Camera, History, Info } from "lucide-react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
@@ -91,7 +90,16 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
           {operatorCount} operator snapshot{operatorCount === 1 ? "" : "s"} of {snapshots.length}{" "}
           total
         </div>
-        <Button size="sm" onClick={() => setCreating(true)} disabled={isReadOnly}>
+        <Button
+          size="sm"
+          onClick={() => setCreating(true)}
+          disabled={isReadOnly}
+          title={
+            isReadOnly
+              ? "Action disabled in read-only mode"
+              : "Take an operator snapshot of this instance"
+          }
+        >
           <Camera className="h-4 w-4 mr-2" aria-hidden />
           Take snapshot
         </Button>

@@ -572,10 +572,6 @@ class InstanceManager:
                                 location=_cluster_member(instance_data.get('location')),
                             )
                             
-                            if vm_info.config is None:
-                                vm_info.config = {}
-                            vm_info.config['project'] = project_name
-                            
                             vms.append(vm_info)
                         except Exception as e:
                             logger.error(f"Error processing instance on {node_name}: {e}")
@@ -612,9 +608,14 @@ class InstanceManager:
                 return None
             
             vm_info = self._instance_to_vm_info(instance, host, endpoint)
-            if vm_info.config is None:
-                vm_info.config = {}
-            vm_info.config['project'] = project_name
+            # important: the resolved project goes on the model, not into the config map. It used
+            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
+            # the bound client's project. So every single-instance read of an instance outside
+            # `default` answered project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
+            # the wrong project. The list path has always set it correctly, which is why only the
+            # detail reads were affected.
+            vm_info.project = project_name
             
             return vm_info
             
@@ -658,9 +659,14 @@ class InstanceManager:
                 logger.info(f"Started VM {name} on {host} (project: {project_name})")
                 vm_info = self._instance_to_vm_info(started, host, endpoint)
             
-            if vm_info.config is None:
-                vm_info.config = {}
-            vm_info.config['project'] = project_name
+            # important: the resolved project goes on the model, not into the config map. It used
+            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
+            # the bound client's project. So every single-instance read of an instance outside
+            # `default` answered project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
+            # the wrong project. The list path has always set it correctly, which is why only the
+            # detail reads were affected.
+            vm_info.project = project_name
             
             return vm_info
             
@@ -772,9 +778,14 @@ class InstanceManager:
                 logger.info(f"Stopped VM {name} on {host} (project: {project_name})")
                 vm_info = self._instance_to_vm_info(target, host, endpoint)
 
-            if vm_info.config is None:
-                vm_info.config = {}
-            vm_info.config['project'] = project_name
+            # important: the resolved project goes on the model, not into the config map. It used
+            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
+            # the bound client's project. So every single-instance read of an instance outside
+            # `default` answered project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
+            # the wrong project. The list path has always set it correctly, which is why only the
+            # detail reads were affected.
+            vm_info.project = project_name
 
             return vm_info
 
@@ -829,9 +840,14 @@ class InstanceManager:
             logger.info(f"Restarted VM {name} on {host} (project: {project_name})")
             vm_info = self._instance_to_vm_info(target, host, endpoint)
 
-            if vm_info.config is None:
-                vm_info.config = {}
-            vm_info.config['project'] = project_name
+            # important: the resolved project goes on the model, not into the config map. It used
+            # to be written as a synthetic config key that nothing reads, while VMInfo.project kept
+            # the bound client's project. So every single-instance read of an instance outside
+            # `default` answered project="default", and callers that trust the field (the detail
+            # dialog's Snapshots tab, and the tenant ACL check in the instances router) acted on
+            # the wrong project. The list path has always set it correctly, which is why only the
+            # detail reads were affected.
+            vm_info.project = project_name
 
             return vm_info
 

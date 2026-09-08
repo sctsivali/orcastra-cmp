@@ -9,12 +9,15 @@ Copy, never move. The source instance survives every path through this router, s
 that turns out wrong is recoverable and the operator decides when to remove the original.
 
 Transport is chosen by the server, not the caller, because the caller cannot know which one a
-given pair of endpoints supports. `force_transport` exists only so the streaming fallback can be
-exercised deliberately in QA: a path that only runs on an unusual network topology would
-otherwise ship having never executed, which is this codebase's most expensive recurring defect.
+given pair of endpoints supports: `copy` inside one cluster, native pull `migration` between two.
+
+A cross-cluster migration requires the TARGET to open a connection to the SOURCE. LXD offers no
+call that answers "can you reach this host", so that is not probed in advance: it is learned from
+the attempt, which is why the operation is polled rather than assumed. A streaming transport
+through the control plane is drafted in the service layer and deliberately not reachable from
+here; see documentation/instances/operator-snapshots-and-mobility.md for why.
 """
 import logging
-import secrets
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -31,7 +34,9 @@ from app.core.dependencies import (
 from app.core.lxd_errors import lxd_http_error
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.activity_logger import get_activity_logger
+from app.core.snapshot_billing_gate import audit_billing_override
 from app.services.lxd import mobility
+from app.services.lxd import snapshots as snapshots_service
 from app.services.lxd.availability import require_client
 from app.services.lxd.lazy_client import client_for
 from app.services.lxd.proxy import PROXY_MAX_IN_FLIGHT, proxy_executor
@@ -48,9 +53,6 @@ router = APIRouter(
 )
 
 _LXD_CALL_TIMEOUT = 60
-# The transfer artifact is named so it can never collide with a backup someone else made, and so
-# an abandoned one is identifiable as ours during a sweep.
-_TRANSFER_BACKUP_PREFIX = "ops-xfer-"
 
 
 def _blocking(fn, *args, label: str, timeout: int = _LXD_CALL_TIMEOUT, **kwargs):
@@ -86,9 +88,12 @@ class MoveRequest(BaseModel):
     target_name: str = Field(..., min_length=1, max_length=63, description="Name for the copy on the destination")
     target_member: Optional[str] = Field(None, description="Cluster member to place the copy on, for a clustered host")
     target_pool: Optional[str] = Field(None, description="Storage pool for the copy's root disk")
-    force_transport: Optional[str] = Field(
-        None,
-        description="QA only. Force 'migration' or 'stream' instead of letting the server choose",
+    acknowledge_billing_impact: bool = Field(
+        False,
+        description="Proceed when the source's snapshots are billed elsewhere. Requires a reason",
+    )
+    reason: Optional[str] = Field(
+        None, max_length=280, description="Why the copy is being made. Required on a billed source"
     )
 
 
@@ -105,6 +110,66 @@ class MoveResponse(BaseModel):
 
 async def _client(lxd_service: LXDService, host: str):
     return require_client(await client_for(lxd_service, host, label="mobility"), host)
+
+
+async def _read_source_policy(source, instance_name: str, project: str) -> Dict[str, Any]:
+    try:
+        return await _blocking(
+            snapshots_service.read_instance_policy,
+            source,
+            instance_name,
+            project,
+            label="mobility.policy",
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise lxd_http_error(exc, "Instance", instance_name)
+
+
+def _gate_copy(policy: Dict[str, Any], instance_name: str, body: "MoveRequest") -> Optional[str]:
+    """Apply the billing gate outside the handler's try, and record a refusal."""
+    from app.core.snapshot_billing_gate import enforce_billing_impact
+
+    try:
+        return enforce_billing_impact(
+            policy,
+            instance_name,
+            acknowledged=body.acknowledge_billing_impact,
+            reason=body.reason,
+        )
+    except HTTPException:
+        _audit_move(instance_name, body, "none", result="denied",
+                    error="billing_impact_acknowledgement_required")
+        raise
+
+
+async def _settle_copy(client, operation_url: Optional[str], project: str) -> Dict[str, Any]:
+    """Wait briefly on the copy operation so a 202 is not the last thing anyone hears.
+
+    important: a cross-cluster migration is accepted by the target before any bytes move, so the
+    202 says only that the request was understood. Every way the transfer can fail afterwards
+    (the target cannot open the source, the pool fills, the secrets are refused) lands in the
+    operation and nowhere else. Without this the copy is reported as started and its failure is
+    never surfaced anywhere an operator looks.
+
+    A large instance legitimately outlasts the window, which is reported as unsettled rather than
+    as either outcome, the same contract the snapshot surface uses.
+    """
+    operation_id = (operation_url or "").rsplit("/", 1)[-1]
+    if not operation_id:
+        return {"status": None, "err": None, "settled": True}
+    try:
+        return await _blocking(
+            snapshots_service.wait_for_operation,
+            client,
+            operation_id,
+            project,
+            label="mobility.wait",
+        )
+    except Exception as exc:  # noqa: BLE001 - a failed wait is not a failed operation
+        logger.debug("Could not wait on copy operation %s: %s", operation_id, exc)
+        return {"status": None, "err": None, "settled": False}
 
 
 @router.get("/{instance_name}/move-preflight", response_model=MovePreflight)
@@ -227,18 +292,16 @@ async def copy_instance(
     verify_cluster_access(body.host)
     verify_cluster_access(body.target_host)
 
-    if body.force_transport and body.force_transport not in (
-        mobility.TRANSPORT_MIGRATION,
-        mobility.TRANSPORT_STREAM,
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail="force_transport must be 'migration' or 'stream' when supplied.",
-        )
-
     source = await _client(lxd_service, body.host)
     target = await _client(lxd_service, body.target_host)
-    transport = body.force_transport or mobility.choose_transport(body.host, body.target_host)
+
+    # A copy reads the source and duplicates it. That does not move the storage the external
+    # schedule is measured on, but the rule an operator carries is "anything on a billing-linked
+    # instance is acknowledged", and a rule with an exception is one nobody remembers the shape of.
+    policy = await _read_source_policy(source, instance_name, body.project)
+    justification = _gate_copy(policy, instance_name, body)
+
+    transport = mobility.choose_transport(body.host, body.target_host)
 
     try:
         if transport == mobility.TRANSPORT_COPY:
@@ -253,10 +316,12 @@ async def copy_instance(
                 target_member=body.target_member,
                 target_pool=body.target_pool,
             )
+            # A same-cluster copy is one LXD call, so the operation lives on the source server.
+            operation_client = source
         else:
-            operation, transport = await _cross_cluster(
-                source, target, instance_name, body, transport
-            )
+            operation = await _cross_cluster(source, target, instance_name, body)
+            # A pull migration is driven by the destination, so its operation is the target's.
+            operation_client = target
     except HTTPException:
         raise
     except mobility.MobilityError as exc:
@@ -267,7 +332,35 @@ async def copy_instance(
         raise lxd_http_error(exc, "Instance", instance_name)
 
     operation_id = (operation or "").rsplit("/", 1)[-1] or None
-    _audit_move(instance_name, body, transport, result="accepted", operation_id=operation_id)
+    outcome = await _settle_copy(operation_client, operation, body.target_project)
+
+    if outcome.get("status") == "Failure":
+        detail = outcome.get("err") or "unknown error"
+        if mobility.is_unreachable_error(Exception(detail)):
+            # The one failure an operator cannot diagnose from the raw message, because the link
+            # that broke is the one this control plane never uses.
+            detail = (
+                f"{detail}. A cross-cluster copy is pulled by the destination, so "
+                f"{body.target_host} has to open a connection to {body.host} directly. It could not."
+            )
+        _audit_move(
+            instance_name, body, transport, result="failure", error=detail,
+            operation_id=operation_id,
+        )
+        raise HTTPException(
+            status_code=502, detail=f"The copy failed after it was accepted: {detail}"
+        )
+
+    _audit_move(
+        instance_name, body, transport,
+        result="success" if outcome.get("settled") else "accepted",
+        operation_id=operation_id,
+    )
+    if justification:
+        audit_billing_override(
+            "copy", instance_name, body.host, body.project, policy, justification,
+            user.email or user.user_id,
+        )
     # A new instance exists on the destination, so both the reader's cache and OrcaHub's ledger
     # are now behind. Without the event the copy is invisible to OrcaHub until its next sweep.
     get_cache_manager().invalidate_instance_cache()
@@ -287,161 +380,72 @@ async def copy_instance(
         transport=transport,
         operation_id=operation_id,
         message=(
-            f"Copying {instance_name} to {body.target_host}/{body.target_project} "
-            f"as {body.target_name} using the {transport} transport."
+            (
+                f"{instance_name} copied to {body.target_host}/{body.target_project} "
+                f"as {body.target_name}."
+            )
+            if outcome.get("settled")
+            else (
+                f"Copying {instance_name} to {body.target_host}/{body.target_project} "
+                f"as {body.target_name} using the {transport} transport."
+            )
         ),
     )
 
 
-async def _cross_cluster(source, target, instance_name: str, body: MoveRequest, transport: str):
-    """Run the cross-cluster copy, preferring native migration.
+async def _cross_cluster(source, target, instance_name: str, body: MoveRequest):
+    """Run the cross-cluster copy over LXD's native pull migration.
 
-    Migration is attempted first and the streaming fallback is used only when the failure says
-    the target could not open the source. Any other failure is raised as itself: silently
-    downgrading a permissions or state error to the slow path would fail the same way, minutes
-    later, having consumed pool space on the source in the meantime.
+    The source stands up a migration and hands back one-time secrets; the target pulls with them.
+    That means the TARGET opens the connection to the SOURCE, a link this control plane never
+    uses itself and therefore cannot test in advance: LXD exposes no call that answers "can you
+    reach this host". A failure on that link surfaces in the target's operation, which is why the
+    caller polls it rather than trusting the 202.
+
+    A streaming transport that would carry the bytes through this control plane instead exists in
+    the service layer and is deliberately not wired up here. It has never executed, and making it
+    production-grade needs a queued job with its own worker pool and bounded disk rather than an
+    hour-long hold on the pool that also serves console and terminal traffic.
     """
-    if transport == mobility.TRANSPORT_MIGRATION:
-        try:
-            certificate = await _blocking(
-                mobility.server_certificate, source, label="mobility.cert"
-            )
-            definition = await _blocking(
-                mobility.read_instance_definition,
-                source,
-                instance_name,
-                body.project,
-                label="mobility.definition",
-            )
-            operation_url, secrets_map = await _blocking(
-                mobility.begin_source_migration,
-                source,
-                label="mobility.begin",
-                instance_name=instance_name,
-                project=body.project,
-            )
-            operation = await _blocking(
-                mobility.accept_migration_on_target,
-                target,
-                label="mobility.accept",
-                target_name=body.target_name,
-                target_project=body.target_project,
-                source_operation_url=operation_url,
-                source_certificate=certificate,
-                secrets=secrets_map,
-                target_member=body.target_member,
-                target_pool=body.target_pool,
-                definition=definition,
-            )
-            return operation, mobility.TRANSPORT_MIGRATION
-        except Exception as exc:  # noqa: BLE001
-            if not mobility.is_unreachable_error(exc):
-                raise
-            logger.warning(
-                "Native migration unavailable between %s and %s (%s); using the stream transport",
-                body.host, body.target_host, exc,
-            )
-
-    return await _stream_copy(source, target, instance_name, body), mobility.TRANSPORT_STREAM
-
-
-async def _stream_copy(source, target, instance_name: str, body: MoveRequest):
-    """Export on the source, feed the bytes to the target's import, always clean up.
-
-    The backup object is a real artifact on someone's storage pool. It is deleted on every path
-    out of this function, including the failure ones, because an abandoned export is invisible
-    in the UI and silently consumes the pool until someone notices it is full.
-    """
-    footprint = await _blocking(
-        mobility.instance_footprint, source, instance_name, body.project,
-        label="mobility.footprint",
+    certificate = await _blocking(
+        mobility.server_certificate, source, label="mobility.cert"
     )
-    if footprint and footprint > mobility.STREAM_MAX_BYTES:
-        raise mobility.MobilityError(
-            f"{instance_name} uses {footprint // 10**9} GB, above the "
-            f"{mobility.STREAM_MAX_BYTES // 10**9} GB ceiling for a streamed copy. "
-            "Give the destination cluster a network path to the source and retry, which uses "
-            "the direct transport and does not pass through this control plane."
-        )
-
-    backup_name = f"{_TRANSFER_BACKUP_PREFIX}{secrets.token_hex(6)}"
+    definition = await _blocking(
+        mobility.read_instance_definition,
+        source,
+        instance_name,
+        body.project,
+        label="mobility.definition",
+    )
+    operation_url, secrets_map = await _blocking(
+        mobility.begin_source_migration,
+        source,
+        label="mobility.begin",
+        instance_name=instance_name,
+        project=body.project,
+    )
     try:
-        await _blocking(
-            mobility.create_backup,
-            source,
-            label="mobility.backup",
-            timeout=900,
-            instance_name=instance_name,
-            project=body.project,
-            backup_name=backup_name,
-        )
         return await _blocking(
-            _pipe_backup_to_target,
-            source,
+            mobility.accept_migration_on_target,
             target,
-            instance_name,
-            body.project,
-            backup_name,
-            body.target_name,
-            body.target_project,
-            body.target_pool,
-            label="mobility.stream",
-            timeout=mobility.TRANSFER_READ_TIMEOUT,
+            label="mobility.accept",
+            target_name=body.target_name,
+            target_project=body.target_project,
+            source_operation_url=operation_url,
+            source_certificate=certificate,
+            secrets=secrets_map,
+            target_member=body.target_member,
+            target_pool=body.target_pool,
+            definition=definition,
         )
-    finally:
-        await _blocking(
-            mobility.delete_backup,
-            source,
-            label="mobility.cleanup",
-            instance_name=instance_name,
-            project=body.project,
-            backup_name=backup_name,
-        )
-
-
-def _pipe_backup_to_target(
-    source,
-    target,
-    instance_name: str,
-    project: str,
-    backup_name: str,
-    target_name: str,
-    target_project: str,
-    target_pool: Optional[str],
-):
-    """Stream the export straight into the import, never holding the whole tarball.
-
-    important: the import POST goes through a session that does not retry. The pooled session
-    retries POST on 5xx, and a retried import would create the instance twice, which for a
-    multi-gigabyte transfer means two half-built instances and a full pool.
-    """
-    response = mobility.open_backup_stream(
-        source, instance_name=instance_name, project=project, backup_name=backup_name
-    )
-    response.raise_for_status()
-
-    headers = {
-        "Content-Type": "application/octet-stream",
-        "X-LXD-name": target_name,
-    }
-    if target_pool:
-        headers["X-LXD-pool"] = target_pool
-
-    session = mobility.non_retrying_session(target)
-    url = f"{mobility.api_base(target)}/instances"
-    result = session.post(
-        url,
-        params={"project": target_project or "default"},
-        headers=headers,
-        data=mobility.iter_chunks(response),
-        timeout=(mobility.TRANSFER_CONNECT_TIMEOUT, mobility.TRANSFER_READ_TIMEOUT),
-    )
-    if result.status_code >= 400:
-        raise mobility.MobilityError(
-            f"The destination refused the import ({result.status_code}): {result.text[:300]}"
-        )
-    body = result.json() if result.content else {}
-    return body.get("operation") if isinstance(body, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        if mobility.is_unreachable_error(exc):
+            raise mobility.MobilityError(
+                f"{body.target_host} could not reach {body.host} to pull {instance_name}. "
+                "A cross-cluster copy is pulled by the destination, so the two clusters need a "
+                "direct network path between them."
+            ) from exc
+        raise
 
 
 def _audit_move(

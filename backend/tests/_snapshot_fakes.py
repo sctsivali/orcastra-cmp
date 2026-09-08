@@ -164,9 +164,30 @@ class _Instances:
     def __init__(self, node: FakeInstanceNode):
         self._node = node
         self.created: List[tuple] = []
+        # The recursion=2 project listing the fleet route reads. Left as None so the default is
+        # derived from the single node, and set explicitly by a test that needs several sources.
+        self.project_listing: Optional[List[Dict[str, Any]]] = None
 
     def __getitem__(self, name):
         return _InstanceProxy(self._node)
+
+    def get(self, params=None):
+        """`recursion=2` folds each instance's snapshots into the instance listing."""
+        self._node.recorded.append(("list_project", dict(params or {})))
+        if self.project_listing is not None:
+            return _Response({"metadata": self.project_listing})
+        return _Response(
+            {
+                "metadata": [
+                    {
+                        "name": INSTANCE,
+                        "status": "Running",
+                        "config": self._node.config,
+                        "snapshots": list(self._node.snapshots),
+                    }
+                ]
+            }
+        )
 
     def post(self, json=None, params=None):
         self.created.append((dict(json or {}), dict(params or {})))

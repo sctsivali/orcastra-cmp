@@ -59,7 +59,10 @@ export function SnapshotRowActions({
       label: `Restore Instance to This Snapshot${billingNote}`,
       icon: RotateCcw,
       onSelect: () => setShowRestore(true),
-      unavailableReason: isReadOnly ? "The dashboard is in read-only mode" : undefined,
+      // Same rule as delete. Rolling an instance onto a snapshot this console did not create
+      // discards everything written since a restore point someone upstream is paid to keep, and
+      // the backend refuses it, so offering the item here only produced a 403 after the typing.
+      unavailableReason,
     },
     {
       id: "delete",

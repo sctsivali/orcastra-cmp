@@ -209,10 +209,17 @@ def list_project_snapshots(client, project: str) -> List[Dict[str, Any]]:
         snapshots = instance.get("snapshots") or []
         if snapshots:
             holders.append(source_name)
+        # recursion=2 already carries each instance's config, so the source's schedule costs
+        # nothing extra here. Without it the fleet view cannot tell which rows sit on a source
+        # someone else bills, which is the one fact the billing gate acts on.
+        source_policy = _policy_from_config(instance.get("config") or {})
         for entry in snapshots:
             row = _normalize(entry, source_name)
             row["project"] = project
             row["source_status"] = instance.get("status")
+            row["source_externally_managed"] = source_policy["externally_managed"]
+            row["source_schedule"] = source_policy["schedule"]
+            row["source_expiry"] = source_policy["expiry"]
             rows.append(row)
 
     # The bulk listing answers `size: -1` for every snapshot, so a fleet view built on it alone

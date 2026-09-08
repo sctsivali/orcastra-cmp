@@ -106,55 +106,39 @@ def test_a_same_cluster_copy_names_the_source_project_and_targets_the_destinatio
         client._cleanup()
 
 
-def test_a_streamed_copy_deletes_its_backup_even_when_the_transfer_fails(monkeypatch):
+def test_the_streaming_transport_is_not_reachable_from_the_router():
+    """The stream path has never executed and cannot work as written, so nothing may reach it.
+
+    It stayed in the service layer as a starting point for a queued transfer job. What must not
+    come back is a request-scoped route into it: it held a worker from the pool that also serves
+    console and terminal traffic for up to an hour, and it never awaited the backup operation it
+    read from. This asserts the absence, because a reachable half-built data path is worse than
+    no data path.
+    """
+    import inspect
+
     from app.routers import instance_mobility
 
-    node = FakeInstanceNode()
-    fake = FakeClient(node)
-
-    def _boom(*args, **kwargs):
-        raise RuntimeError("the destination refused the import")
-
-    monkeypatch.setattr(instance_mobility, "_pipe_backup_to_target", _boom)
-
-    client = _client(service(fake, hosts=(HOST, OTHER_HOST)), allowed_clusters=None)
-    try:
-        response = _copy(client, target_host=OTHER_HOST, force_transport="stream")
-        assert response.status_code >= 400, response.text
-    finally:
-        client._cleanup()
-
-    created = [c for c in node.recorded if c[0] == "create_backup"]
-    deleted = [c for c in node.recorded if c[0] == "delete_backup"]
-    assert created, "the streaming transport should have created a backup"
-    assert deleted, "a failed transfer must still delete the backup it made"
-    assert deleted[0][1] == created[0][1]["name"], "it must delete the backup it created"
-
-
-def test_an_oversized_instance_is_refused_before_a_backup_is_created():
-    from app.services.lxd import mobility
-
-    node = FakeInstanceNode()
-    node.state_usage = mobility.STREAM_MAX_BYTES + 1
-    fake = FakeClient(node)
-
-    client = _client(service(fake, hosts=(HOST, OTHER_HOST)), allowed_clusters=None)
-    try:
-        response = _copy(client, target_host=OTHER_HOST, force_transport="stream")
-        assert response.status_code == 409, response.text
-    finally:
-        client._cleanup()
-
-    assert not [c for c in node.recorded if c[0] == "create_backup"], (
-        "the size ceiling must be checked before consuming pool space"
+    assert "force_transport" not in instance_mobility.MoveRequest.model_fields, (
+        "force_transport is what let any Partner reach the stream path over the raw API"
     )
+    for gone in ("_stream_copy", "_pipe_backup_to_target"):
+        assert not hasattr(instance_mobility, gone), f"{gone} is reachable again"
+
+    source = inspect.getsource(instance_mobility)
+    assert "TRANSPORT_STREAM" not in source, "the router must not name the stream transport"
 
 
-def test_force_transport_only_accepts_the_two_real_transports():
+def test_an_unknown_transport_hint_cannot_select_a_transport():
+    """An extra field is ignored rather than honoured, so the server still chooses."""
     node = FakeInstanceNode()
     client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
     try:
-        assert _copy(client, force_transport="carrier-pigeon").status_code == 422
+        response = _copy(client, force_transport="stream")
+        assert response.status_code == 202, response.text
+        assert response.json()["transport"] == "copy", (
+            "a same-cluster copy must stay on the copy transport whatever the body asks for"
+        )
     finally:
         client._cleanup()
 
@@ -212,3 +196,95 @@ def test_a_target_pool_overrides_only_the_root_pool():
     body, _ = fake.api.instances.created[0]
     assert body["devices"]["root"]["pool"] == "nvme"
     assert body["devices"]["root"]["size"] == "2GiB", "overriding the pool must not drop the size"
+
+
+# ── the billing gate, and the operation actually settling ──────────────────────────────────
+
+
+def test_a_copy_of_a_billed_instance_is_refused_without_an_acknowledgement():
+    """A copy duplicates a workload whose storage another product meters and bills."""
+    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        response = _copy(client)
+        assert response.status_code == 403, response.text
+        detail = response.json()["detail"]
+        assert detail["error"] == "billing_impact_acknowledgement_required"
+        assert detail["acknowledge_field"] == "acknowledge_billing_impact"
+    finally:
+        client._cleanup()
+
+    assert not [c for c in node.recorded if c[0] == "post_instance"], (
+        "a refused copy must not reach the daemon"
+    )
+
+
+def test_an_acknowledged_copy_of_a_billed_instance_proceeds_and_records_the_override(monkeypatch):
+    from app.core import snapshot_billing_gate
+
+    rows = []
+    monkeypatch.setattr(
+        snapshot_billing_gate.activity_logger, "log_activity", lambda **kw: rows.append(kw)
+    )
+
+    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        response = _copy(
+            client, acknowledge_billing_impact=True, reason="moving off a failing node"
+        )
+        assert response.status_code == 202, response.text
+    finally:
+        client._cleanup()
+
+    overrides = [r for r in rows if r["action"] == "instance.snapshot.billing_override"]
+    assert overrides, f"a forced copy must be separately alertable: {rows}"
+    assert overrides[0]["details"]["overridden_action"] == "copy"
+    assert overrides[0]["details"]["reason"] == "moving off a failing node"
+
+
+def test_an_acknowledgement_without_a_reason_is_still_refused():
+    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        assert _copy(client, acknowledge_billing_impact=True).status_code == 403
+    finally:
+        client._cleanup()
+
+
+def test_an_unscheduled_instance_needs_no_acknowledgement():
+    node = FakeInstanceNode()
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        assert _copy(client).status_code == 202
+    finally:
+        client._cleanup()
+
+
+def test_a_copy_the_cluster_fails_after_accepting_is_not_reported_as_started():
+    """The 202 says the request was understood. Everything that can go wrong happens after it."""
+    node = FakeInstanceNode()
+    node.operation_status = "Failure"
+    node.operation_err = "Failed to connect to source: connection refused"
+
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        response = _copy(client)
+        assert response.status_code == 502, response.text
+        detail = response.json()["detail"]
+        assert "connection refused" in detail
+        # The one failure an operator cannot read off the raw message.
+        assert "open a connection" in detail, detail
+    finally:
+        client._cleanup()
+
+
+def test_a_settled_copy_says_it_finished_rather_than_that_it_started():
+    node = FakeInstanceNode()
+    client = _client(service(FakeClient(node), hosts=(HOST,)), allowed_clusters=None)
+    try:
+        response = _copy(client)
+        assert response.status_code == 202, response.text
+        assert "copied to" in response.json()["message"]
+    finally:
+        client._cleanup()
