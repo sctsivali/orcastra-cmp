@@ -55,6 +55,14 @@ import {
   PolicyAssignment,
   AssignmentCreateRequest,
   MyAccessResponse,
+  SnapshotListResponse,
+  FleetSnapshotListResponse,
+  SnapshotCreateRequest,
+  SnapshotRestoreRequest,
+  SnapshotActionResponse,
+  MovePreflight,
+  MoveRequest,
+  MoveResponse,
 } from "@/types";
 
 const API_PREFIX = "/api/v1";
@@ -1925,6 +1933,89 @@ const breakGlassAPI = {
   },
 };
 
+const snapshotAPI = {
+  /** Snapshots on one instance, with the source's schedule for context. */
+  list: async (
+    instanceName: string,
+    host: string,
+    project = "default",
+    opts: ReadOptions = {},
+  ): Promise<SnapshotListResponse> => {
+    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
+    return fetchRead<SnapshotListResponse>(
+      `/instances/${encodeURIComponent(instanceName)}/snapshots?${qs}`,
+      opts,
+    );
+  },
+  /** Every snapshot in one project, in a single upstream call. */
+  listFleet: async (
+    host: string,
+    project = "default",
+    opts: ReadOptions = {},
+  ): Promise<FleetSnapshotListResponse> => {
+    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
+    return fetchRead<FleetSnapshotListResponse>(`/snapshots?${qs}`, opts);
+  },
+  create: async (
+    instanceName: string,
+    body: SnapshotCreateRequest,
+  ): Promise<SnapshotActionResponse> => {
+    return fetchAPI<SnapshotActionResponse>(
+      `/instances/${encodeURIComponent(instanceName)}/snapshots`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  },
+  remove: async (
+    instanceName: string,
+    snapshotName: string,
+    host: string,
+    project = "default",
+  ): Promise<SnapshotActionResponse> => {
+    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
+    return fetchAPI<SnapshotActionResponse>(
+      `/instances/${encodeURIComponent(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}?${qs}`,
+      { method: "DELETE" },
+    );
+  },
+  restore: async (
+    instanceName: string,
+    snapshotName: string,
+    body: SnapshotRestoreRequest,
+  ): Promise<SnapshotActionResponse> => {
+    return fetchAPI<SnapshotActionResponse>(
+      `/instances/${encodeURIComponent(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}/restore`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  },
+};
+
+const mobilityAPI = {
+  /** Where this instance may be copied, with pool headroom, so the UI never offers an impossible move. */
+  preflight: async (
+    instanceName: string,
+    host: string,
+    project = "default",
+    opts: ReadOptions = {},
+  ): Promise<MovePreflight> => {
+    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
+    return fetchRead<MovePreflight>(
+      `/instances/${encodeURIComponent(instanceName)}/move-preflight?${qs}`,
+      opts,
+      90000,
+    );
+  },
+  copy: async (instanceName: string, body: MoveRequest): Promise<MoveResponse> => {
+    // A cross-cluster copy holds the request while the upstream operation is set up, which is
+    // slower than an ordinary write but still bounded: the transfer itself runs as an operation
+    // the caller polls, not inside this request.
+    return fetchAPI<MoveResponse>(
+      `/instances/${encodeURIComponent(instanceName)}/copy`,
+      { method: "POST", body: JSON.stringify(body) },
+      120000,
+    );
+  },
+};
+
 // Consolidated API export
 export const api = {
   vms: vmAPI,
@@ -1956,6 +2047,8 @@ export const api = {
   integrations: integrationsAPI,
   regions: regionsAPI,
   breakGlass: breakGlassAPI,
+  snapshots: snapshotAPI,
+  mobility: mobilityAPI,
   clusterMembers: {
     list: async (node: string, opts: ReadOptions = {}) => {
       return fetchRead<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`, opts);

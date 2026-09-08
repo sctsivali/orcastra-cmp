@@ -1059,12 +1059,34 @@ class NeverQueriedNodesAreNamedTests(unittest.TestCase):
     # router with no seeding at all still fails.
     SEED = "set(lxd_service.get_node_names()) - set("
 
+    # A router that reads exactly one caller-named host has no fleet to under-report: the only
+    # node in scope is the one that was asked for, and it is named directly when its client is
+    # absent. Seeding from get_node_names() there would invent unreachable nodes the caller
+    # never asked about. Listed rather than pattern-matched so a genuine fan-out cannot join by
+    # accident, and each entry carries why.
+    SINGLE_HOST_READS = {
+        # GET /snapshots takes a required host and project and reads that one cluster.
+        "snapshots_fleet.py",
+    }
+
     def _routers_reporting_unreachable(self):
         return sorted(
             path.name
             for path in ROUTERS.glob("*.py")
             if "unreachable_nodes" in path.read_text()
+            and path.name not in self.SINGLE_HOST_READS
         )
+
+    def test_a_single_host_read_still_names_the_host_it_could_not_reach(self):
+        """The exemption above is not a licence to drop the field, only to fill it differently."""
+        for filename in sorted(self.SINGLE_HOST_READS):
+            source = (ROUTERS / filename).read_text()
+            self.assertIn(
+                "unreachable_nodes=[host]",
+                source,
+                f"{filename} is exempt from the fleet seeding, so it must name the one host it "
+                "was asked for when that host has no client",
+            )
 
     def test_every_router_that_reports_unreachable_seeds_the_never_queried(self):
         offenders = [

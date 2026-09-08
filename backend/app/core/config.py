@@ -162,6 +162,18 @@ class Settings(BaseSettings):
         description="Enforce per-project tenant ACL (operate/console) on power and console routes, not just cluster access."
     )
 
+    # Tenant snapshot rights, gated separately from the flag above.
+    # The "snapshot" permission has been in the vocabulary and pushed by OrcaHub for a long time
+    # while nothing enforced it, so grants accumulated: 55 policy rules carry it today and 28 of
+    # them target a live cluster. Wiring enforcement under the existing flag would have turned all
+    # of those on at deploy time, for real tenants, as a side effect of shipping a UI. This flag
+    # keeps that a deliberate act. Partner and Admin are unaffected by it.
+    snapshot_tenant_enforcement_enabled: bool = Field(
+        default=False,
+        alias="SNAPSHOT_TENANT_ENFORCEMENT_ENABLED",
+        description="Honour the per-project tenant 'snapshot' permission. Off means only Partner and Admin may act on snapshots."
+    )
+
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
     # On, with an off switch kept for an operator who wants one.
     #

@@ -2501,3 +2501,129 @@ export interface DesktopControlPolicyRequest {
   allow_clipboard: boolean;
   allow_guest_access: boolean;
 }
+
+// ========== Snapshot Types ==========
+// Operator snapshots, distinct from the metered snapshot product sold upstream. Anything this
+// console creates is prefixed `ops-` and carries an expiry, which is what `operator_managed`
+// reports back so the UI can tell the two apart without re-deriving the rule.
+
+export interface SnapshotInfo {
+  name: string;
+  source_name: string;
+  /** RFC3339. Null when the storage driver did not report one. */
+  created_at?: string | null;
+  /** RFC3339. Null means the snapshot never expires, which only upstream-managed ones do. */
+  expires_at?: string | null;
+  /** Guest memory captured. Needs CRIU on the host and is false across this fleet. */
+  stateful?: boolean | null;
+  /** Bytes. Driver-dependent: a dir pool reports the full copy, zfs reports the delta. */
+  size?: number | null;
+  architecture?: string | null;
+  /** True when this console created it, identified by the ops- prefix. */
+  operator_managed: boolean;
+  /** Present only on the fleet listing. */
+  host?: string;
+  project?: string;
+  source_status?: string | null;
+}
+
+/** The LXD-native schedule on a source. Read only here: it belongs to the upstream product. */
+export interface SnapshotPolicy {
+  schedule?: string | null;
+  schedule_stopped?: string | null;
+  expiry?: string | null;
+  pattern?: string | null;
+  /** A timer other than this operator is creating snapshots on this source. */
+  externally_managed: boolean;
+}
+
+export interface SnapshotListResponse {
+  total: number;
+  items: SnapshotInfo[];
+  policy: SnapshotPolicy;
+}
+
+export interface FleetSnapshotListResponse {
+  total: number;
+  items: SnapshotInfo[];
+  unreachable_nodes: string[];
+}
+
+export interface SnapshotCreateRequest {
+  host: string;
+  project: string;
+  label: string;
+  expiry_days?: number;
+  stateful?: boolean;
+  /** Required when the source carries an externally managed schedule. */
+  reason?: string;
+}
+
+export interface SnapshotRestoreRequest {
+  host: string;
+  project: string;
+  confirm_name: string;
+  safety_snapshot?: boolean;
+}
+
+export interface SnapshotActionResponse {
+  success: boolean;
+  instance_name: string;
+  snapshot: string;
+  operation_id?: string | null;
+  message: string;
+}
+
+// ========== Instance Mobility Types ==========
+
+export interface MoveDestinationPool {
+  name: string;
+  headroom?: { total: number; used: number; free: number } | null;
+}
+
+export interface MoveDestination {
+  host: string;
+  same_cluster: boolean;
+  reachable?: boolean;
+  /** Architectures this host can run. A mismatch is a hard refusal from the hypervisor. */
+  architectures?: string[];
+  /** False when the host cannot run this instance's architecture. */
+  compatible?: boolean;
+  /** Why the destination is unusable, when it is. */
+  reason?: string;
+  projects?: string[];
+  pools?: MoveDestinationPool[];
+}
+
+export interface MovePreflight {
+  instance_name: string;
+  source_host: string;
+  source_project: string;
+  /** Root disk usage in bytes, when the driver reports it. */
+  footprint_bytes?: number | null;
+  architecture?: string | null;
+  destinations: MoveDestination[];
+  blockers: string[];
+}
+
+export interface MoveRequest {
+  host: string;
+  project: string;
+  target_host: string;
+  target_project: string;
+  target_name: string;
+  target_member?: string | null;
+  target_pool?: string | null;
+}
+
+export interface MoveResponse {
+  success: boolean;
+  instance_name: string;
+  target_host: string;
+  target_project: string;
+  target_name: string;
+  /** copy within a cluster, migration between clusters, stream when they cannot reach each other. */
+  transport: "copy" | "migration" | "stream";
+  operation_id?: string | null;
+  message: string;
+}

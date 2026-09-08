@@ -18,7 +18,7 @@ import { TableLink } from "@/components/ui/table-link";
 import { OverflowCell } from "@/components/ui/overflow-cell";
 import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { formatInstanceType } from "@/lib/utils";
-import { Play, Square, RotateCw, RefreshCw, Trash2, Terminal, Monitor, Loader2, Box } from "lucide-react";
+import { Play, Square, RotateCw, RefreshCw, Trash2, Terminal, Monitor, Loader2, Box, Copy } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
 import { TagBadge } from "@/components/tag-manager";
 import { removePendingCreate } from "@/lib/pending-creates";
@@ -50,6 +50,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { Plus } from "lucide-react";
 import { RebuildDialog } from "@/components/rebuild-dialog";
+import { MoveInstanceDialog } from "@/components/instance-detail/move-instance-dialog";
 
 // The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
 // instance's own device; an instance that overrode nothing still has one through its profile,
@@ -181,6 +182,8 @@ function InstancesContent() {
   const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
   // Instance pending rebuild (controls the shared RebuildDialog).
   const [rebuildTarget, setRebuildTarget] = useState<VMInfo | null>(null);
+  // Instance pending a copy to another project, member or cluster.
+  const [copyTarget, setCopyTarget] = useState<VMInfo | null>(null);
   // Radix keeps AlertDialogContent mounted through its ~200ms exit fade, so
   // reading a just-nulled deleteTarget flashes blank name/host. Keep the last
   // target around and render the dialog body from it so it stays populated
@@ -649,6 +652,21 @@ function InstancesContent() {
                         <Button
                           size="sm"
                           variant="outline"
+                          onClick={() => setCopyTarget(instance)}
+                          disabled={
+                            isReadOnly ||
+                            !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
+                          }
+                          aria-label={`Copy instance ${instance.name} elsewhere`}
+                          title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Copy this instance to another project or cluster", "No operate permission")}
+                        >
+                          <Copy className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {canDeleteInstance && (
+                        <Button
+                          size="sm"
+                          variant="outline"
                           onClick={() => setRebuildTarget(instance)}
                           disabled={
                             isReadOnly ||
@@ -707,6 +725,17 @@ function InstancesContent() {
         }}
         project={selectedInstance?.project || "default"}
       />
+
+      {/* Copy elsewhere (shared across rows, controlled by copyTarget) */}
+      {copyTarget && (
+        <MoveInstanceDialog
+          open={!!copyTarget}
+          onOpenChange={(open) => {
+            if (!open) setCopyTarget(null);
+          }}
+          instance={copyTarget}
+        />
+      )}
 
       {/* Rebuild (shared across rows, controlled by rebuildTarget) */}
       {rebuildTarget && (

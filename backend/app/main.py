@@ -639,6 +639,16 @@ Ensure your client certificates are properly configured.
     from app.routers.instance_rebuild import router as instance_rebuild_router
     app.include_router(instance_rebuild_router, prefix=settings.api_prefix)
 
+    # Instance snapshots (JWT): operator rollback points, distinct from OrcaHub's paid product
+    from app.routers.instance_snapshots import router as instance_snapshots_router
+    app.include_router(instance_snapshots_router, prefix=settings.api_prefix)
+    from app.routers.snapshots_fleet import router as snapshots_fleet_router
+    app.include_router(snapshots_fleet_router, prefix=settings.api_prefix)
+
+    # Instance mobility (JWT): copy a workload to another project, member or cluster
+    from app.routers.instance_mobility import router as instance_mobility_router
+    app.include_router(instance_mobility_router, prefix=settings.api_prefix)
+
     # Cluster Registration Router (Vault Integration)
     app.include_router(cluster_registration_router, prefix=settings.api_prefix)
     

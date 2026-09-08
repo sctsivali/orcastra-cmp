@@ -33,6 +33,7 @@ const ROUTER_TO_PAGES = new Map([
   ['profiles.py', ['inventory/profiles/page.tsx']],
   ['storage_pools.py', ['inventory/storage-pools/page.tsx']],
   ['storage_volumes.py', ['inventory/storage-volumes/page.tsx']],
+  ['snapshots_fleet.py', ['inventory/snapshots/page.tsx']],
   // /vms backs the same Instances page as instances.py, which is already covered above.
   ['vms.py', []],
 ]);

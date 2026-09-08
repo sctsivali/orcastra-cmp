@@ -32,6 +32,7 @@ from ..desktop.runtime import (
     DESKTOP_SCREENSHOT_TIMEOUT,
     desktop_executor,
 )
+from . import snapshots as snapshots_service
 from .proxy import (
     EXEC_MAX_IN_FLIGHT,
     EXEC_TIMEOUT,
@@ -569,8 +570,8 @@ def execute_proxy_operation(
         inst = instance()
         if not wait:
             return _accepted(
-                instance_api().snapshots.post(
-                    json={"name": snapshot_name, "stateful": stateful}
+                snapshots_service.create_instance_snapshot_request(
+                    instance_api(), snapshot_name, stateful=stateful
                 )
             )
         inst.snapshots.create(snapshot_name, stateful=stateful, wait=True)

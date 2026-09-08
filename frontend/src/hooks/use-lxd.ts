@@ -16,7 +16,7 @@ import {
   healthCheck,
   api 
 } from "@/lib/api";
-import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse } from "@/types";
+import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse, SnapshotCreateRequest, SnapshotRestoreRequest, MoveRequest } from "@/types";
 import {
   ATTENDED_DATA_CONFIG,
   DYNAMIC_DATA_CONFIG,
@@ -1801,5 +1801,117 @@ export function useRegionDetails(regionId: string) {
     queryFn: () => api.regions.getRegion(regionId),
     enabled: !!regionId,
     staleTime: 60000,
+  });
+}
+
+// Snapshot Hooks
+//
+// Snapshots change only when someone acts on them or LXD's own schedule fires, so they read on
+// the semi-static cadence rather than the dynamic one. `enabled` is the caller's, because the
+// per-instance list lives behind a dialog tab and polling it while the operator reads a
+// different panel is wasted fan-out against the cluster.
+export function useInstanceSnapshots(
+  instanceName: string,
+  host: string,
+  project = "default",
+  enabled = true,
+) {
+  return useRefreshableQuery({
+    queryKey: ["instanceSnapshots", instanceName, host, project],
+    queryFn: ({ fresh }) => api.snapshots.list(instanceName, host, project, { fresh }),
+    ...SEMI_STATIC_DATA_CONFIG,
+    // After the spread on purpose: the preset carries its own `enabled` and would otherwise
+    // re-enable a query the caller gated on the active tab.
+    enabled: enabled && !!instanceName && !!host,
+  });
+}
+
+export function useFleetSnapshots(host?: string, project = "default") {
+  return useRefreshableQuery({
+    queryKey: ["fleetSnapshots", host, project],
+    queryFn: ({ fresh }) => api.snapshots.listFleet(host as string, project, { fresh }),
+    ...SEMI_STATIC_DATA_CONFIG,
+    enabled: !!host,
+  });
+}
+
+/** Every snapshot query, invalidated together: a mutation changes both the per-instance and fleet views. */
+function invalidateSnapshots(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ["instanceSnapshots"] });
+  queryClient.invalidateQueries({ queryKey: ["fleetSnapshots"] });
+}
+
+export function useCreateSnapshot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceName, body }: { instanceName: string; body: SnapshotCreateRequest }) =>
+      api.snapshots.create(instanceName, body),
+    onSuccess: () => invalidateSnapshots(queryClient),
+  });
+}
+
+export function useDeleteSnapshot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      instanceName,
+      snapshotName,
+      host,
+      project,
+    }: {
+      instanceName: string;
+      snapshotName: string;
+      host: string;
+      project?: string;
+    }) => api.snapshots.remove(instanceName, snapshotName, host, project),
+    onSuccess: () => invalidateSnapshots(queryClient),
+  });
+}
+
+export function useRestoreSnapshot() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      instanceName,
+      snapshotName,
+      body,
+    }: {
+      instanceName: string;
+      snapshotName: string;
+      body: SnapshotRestoreRequest;
+    }) => api.snapshots.restore(instanceName, snapshotName, body),
+    onSuccess: () => {
+      invalidateSnapshots(queryClient);
+      // A restore rolls the instance back, so its own row is stale too.
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
+    },
+  });
+}
+
+// Instance Mobility Hooks
+export function useMovePreflight(
+  instanceName: string,
+  host: string,
+  project = "default",
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["movePreflight", instanceName, host, project],
+    queryFn: () => api.mobility.preflight(instanceName, host, project),
+    ...ON_DEMAND_CONFIG,
+    enabled: enabled && !!instanceName && !!host,
+  });
+}
+
+export function useCopyInstance() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ instanceName, body }: { instanceName: string; body: MoveRequest }) =>
+      api.mobility.copy(instanceName, body),
+    onSuccess: () => {
+      // A copy creates an instance on the destination, so the list is behind everywhere.
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
+      queryClient.invalidateQueries({ queryKey: ["vms"] });
+    },
   });
 }

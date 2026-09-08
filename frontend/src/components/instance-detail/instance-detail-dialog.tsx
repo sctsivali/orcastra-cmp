@@ -8,9 +8,10 @@ import { InstanceOverviewTab } from "./instance-overview-tab";
 import { InstanceMetricsTab } from "./instance-metrics-tab";
 import { InstanceConfigTab } from "./instance-config-tab";
 import { InstanceDevicesTab } from "./instance-devices-tab";
+import { InstanceSnapshotsTab } from "./instance-snapshots-tab";
 import type { VMInfo } from "@/types/api";
 
-export type InstanceDetailTab = "overview" | "metrics" | "config" | "devices";
+export type InstanceDetailTab = "overview" | "metrics" | "config" | "devices" | "snapshots";
 
 export interface InstanceDetailDialogProps {
   instance: VMInfo | null;
@@ -115,6 +116,18 @@ export function InstanceDetailDialog({
         },
         { value: "config", label: "Configuration", content: <InstanceConfigTab instance={detail} /> },
         { value: "devices", label: "Devices", content: <InstanceDevicesTab instance={detail} /> },
+        {
+          value: "snapshots",
+          label: "Snapshots",
+          // Gated on the tab for the same reason metrics is: an idle panel must not keep
+          // asking the cluster about an instance the operator is not looking at.
+          content: (
+            <InstanceSnapshotsTab
+              instance={detail}
+              enabled={isOpen && tab === "snapshots"}
+            />
+          ),
+        },
       ]}
       // note: no whole-dialog skeleton. The row is a complete VMInfo minus `resources`, so
       // everything paints at once and only the resources block in Overview can be pending, which

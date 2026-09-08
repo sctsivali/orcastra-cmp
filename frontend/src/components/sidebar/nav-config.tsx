@@ -22,6 +22,7 @@ import {
   Users,
   MapPin,
   Blocks,
+  History,
 } from "lucide-react";
 import type { QueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -55,6 +56,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "consoles", label: "Consoles", icon: Monitor, role: "tenant", render: "console-menu", indent: true },
       { id: "profiles", label: "Profiles", href: "/inventory/profiles", icon: SlidersHorizontal },
       { id: "images", label: "Images", href: "/inventory/images", icon: ImageIcon },
+      // Operator restore points. Partner-gated because this console manages maintenance
+      // snapshots, not the metered snapshot product a tenant buys upstream.
+      { id: "snapshots", label: "Snapshots", href: "/inventory/snapshots", icon: History, role: "partner" },
     ],
   },
   {
