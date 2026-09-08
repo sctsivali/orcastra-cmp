@@ -206,7 +206,15 @@ export function RestoreSnapshotDialog({
             </div>
           )}
 
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          {/* role="alert" so a submit failure is announced. Focus stays on the submit
+              button, which does not move, so without a live region a screen-reader user
+              is told nothing at all and the dialog simply appears not to respond.
+              DestructiveConfirmDialog already does this; these three did not. */}
+          {error && (
+            <p role="alert" className="text-sm text-destructive">
+              {error}
+            </p>
+          )}
         </DialogBody>
 
         <DialogFooter>

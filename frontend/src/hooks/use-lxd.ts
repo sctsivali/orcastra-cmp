@@ -1823,7 +1823,13 @@ export function useInstanceSnapshots(
 ) {
   return useRefreshableQuery({
     queryKey: ["instanceSnapshots", instanceName, host, project],
-    queryFn: ({ fresh }) => api.snapshots.list(instanceName, host, project, { fresh }),
+    // note: `fresh` is deliberately NOT forwarded. It exists to bypass a backend response cache,
+    // and the snapshot routes have none: they read the cluster on every call. Sending it anyway
+    // spent the shared 12-per-minute cache-bypass budget on requests that had nothing to bypass,
+    // so an operator watching a restore and clicking Refresh could exhaust the allowance for the
+    // surfaces that really are cached. The refetch still happens; only the pointless parameter is
+    // gone.
+    queryFn: () => api.snapshots.list(instanceName, host, project),
     ...SEMI_STATIC_DATA_CONFIG,
     // After the spread on purpose: the preset carries its own `enabled` and would otherwise
     // re-enable a query the caller gated on the active tab.
@@ -1834,7 +1840,7 @@ export function useInstanceSnapshots(
 export function useFleetSnapshots(host?: string, project = "default") {
   return useRefreshableQuery({
     queryKey: ["fleetSnapshots", host, project],
-    queryFn: ({ fresh }) => api.snapshots.listFleet(host as string, project, { fresh }),
+    queryFn: () => api.snapshots.listFleet(host as string, project),
     ...SEMI_STATIC_DATA_CONFIG,
     enabled: !!host,
   });
@@ -1919,6 +1925,15 @@ export function useMovePreflight(
     queryFn: () => api.mobility.preflight(instanceName, host, project),
     ...ON_DEMAND_CONFIG,
     enabled: enabled && !!instanceName && !!host,
+    // important: re-asserted after the spread, for the same reason useInstance does it above. A
+    // preflight is a reachability reading taken when the dialog opens, and the preset holds one
+    // for five minutes with refetchOnMount off. The dialog does not unmount when it closes, so
+    // `enabled` flips while the observer stays alive and refetchOnMount alone never fires: a
+    // destination that was down on the first open stayed marked unreachable for five minutes
+    // after ops brought it back, with no control anywhere to say otherwise. The cached value
+    // still paints immediately while the fresh one lands, because gcTime keeps it.
+    staleTime: 0,
+    refetchOnMount: "always" as const,
   });
 }
 

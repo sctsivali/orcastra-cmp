@@ -26,6 +26,7 @@ from app.models.schemas import (
     UserTagVisibilitySettings, UserTagVisibilityResponse,
 )
 from app.core.cache import get_cache_manager
+from app.services.lxd.utils import wait_for_lxd_operation
 
 logger = logging.getLogger(__name__)
 
@@ -1071,11 +1072,17 @@ class TagService:
                 if 'config' not in instance_data:
                     instance_data['config'] = {}
                 instance_data['config']['user.tags'] = tags_str
-                client.api.instances[resource_id].put(
+                put_response = client.api.instances[resource_id].put(
                     json=instance_data,
                     params={'project': resource_project or 'default'}
                 )
-            
+                # important: an instance update is asynchronous. LXD answers 202 and does the work
+                # afterwards, so returning here reported synced_to_lxd=true for a write that could
+                # still fail: the instance mid-operation, the config rejected, the daemon
+                # restarted. The caller shows the tag as live on the cluster while LXD never
+                # applied it, and nothing revisits the discrepancy.
+                wait_for_lxd_operation(client, put_response)
+
             logger.info(f"Synced tags to LXD for {resource_type}:{resource_id}")
             return True
             

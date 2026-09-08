@@ -63,7 +63,11 @@ const SNAPSHOTS = defineTable<SnapshotInfo>()({
     {
       field: "size",
       label: "Size",
-      sort: (s) => s.size ?? 0,
+      // note: null, not 0, exactly as created_at below does for a missing timestamp. The backend
+      // leaves size unenriched past a bounded number of instances and the column renders "Not
+      // reported", so folding that to 0 made a "size at least 1 GB" filter hide the very rows
+      // whose size is unknown, presenting an absent measurement as a small one.
+      sort: (s) => s.size ?? null,
       filter: fromSort("number", { unit: "bytes" }),
     },
     {
