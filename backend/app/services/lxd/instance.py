@@ -77,6 +77,10 @@ _REBUILD_CONNECT_TIMEOUT = 5
 # executor, which is also where FastAPI runs every sync route handler -- a handful of
 # concurrent rebuilds would starve unrelated requests. Own pool, and shed past it rather
 # than queue.
+# A delete tears down the root disk, which on a `dir` pool is a full recursive remove. The pooled
+# client's 8 second read is far short of that, so the wait gets its own window.
+_DELETE_WAIT_SECONDS = 300
+
 _rebuild_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lxd_rebuild")
 _REBUILD_MAX_IN_FLIGHT = 8
 
@@ -861,8 +865,14 @@ class InstanceManager:
         host: str, 
         force: bool = False,
         project: Optional[str] = None,
-    ) -> bool:
-        """Delete a VM (searches all projects)."""
+    ) -> str:
+        """Delete a VM, returning the project it was actually deleted from.
+
+        important: the RESOLVED project, not the requested one. Callers stamp tags, webhooks,
+        upstream events and the audit trail with it, and a caller that passed no project was
+        stamping "default" for an instance deleted from somewhere else entirely, so the audit
+        trail named a project the deletion never touched.
+        """
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
@@ -873,21 +883,31 @@ class InstanceManager:
             if instance is None:
                 raise LXDOperationError(f"VM {name} not found on {host}")
             
+            # important: both waits run OFF the event loop and on a client whose socket window
+            # outlives them. The pooled client reads for 8 seconds; tearing down a root disk on a
+            # `dir` pool, or on a loaded host, takes longer. The read then died first, the
+            # ReadTimeout surfaced as LXDOperationError and the caller was answered 500 for a
+            # delete LXD had in fact completed, so the operator saw a server error and an instance
+            # that was already gone. Same rule as stop and restart beside it, and the same rule the
+            # snapshot wait states: a wait has to outlast what it is waiting for.
+            def _do_delete():
+                target = self._rebind_for_wait(instance, host, project_name, _DELETE_WAIT_SECONDS)
+                if target.status in ("Running", "Frozen"):
+                    target.stop(force=True, wait=True)
+                target.delete(wait=True)
+
             # Stop an active instance before deleting when force is set. A Frozen
             # instance (billing-paused) is still active, so LXD refuses to delete
             # it until it is stopped -- force-stop covers both Running and Frozen.
-            if instance.status in ("Running", "Frozen"):
-                if force:
-                    instance.stop(force=True, wait=True)
-                else:
-                    raise LXDOperationError(
-                        f"VM {name} is {instance.status.lower()}. Stop it first or use force=true"
-                    )
+            if instance.status in ("Running", "Frozen") and not force:
+                raise LXDOperationError(
+                    f"VM {name} is {instance.status.lower()}. Stop it first or use force=true"
+                )
 
-            instance.delete(wait=True)
-            
+            await asyncio.to_thread(_do_delete)
+
             logger.info(f"Deleted VM {name} from {host} (project: {project_name})")
-            return True
+            return project_name
             
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to delete VM: {str(e)}")

@@ -262,6 +262,14 @@ async def lifespan(app: FastAPI):
         from app.routers.image_uploads import start_import_recovery
         start_import_recovery()
         logger.info("Custom-image import recovery loop started")
+
+        # Same guarantee for a rebuild whose driver died with the process it ran in. The job is
+        # an unreferenced asyncio task, so a restart loses it while the row stays mid-flight and
+        # the instance stays stopped, with nothing to revisit either.
+        from app.routers.instance_rebuild import recover_stranded_rebuilds
+        stranded = await recover_stranded_rebuilds()
+        if stranded:
+            logger.warning("Marked %d stranded rebuild job(s) failed at startup", stranded)
     except Exception as recovery_err:
         logger.warning(f"Could not start import recovery loop: {recovery_err}")
 

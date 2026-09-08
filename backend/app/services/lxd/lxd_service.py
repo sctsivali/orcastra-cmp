@@ -433,8 +433,8 @@ class LXDService:
         host: str, 
         force: bool = False,
         project: Optional[str] = None,
-    ) -> bool:
-        """Delete a VM (searches all projects)."""
+    ) -> str:
+        """Delete a VM, returning the project it was actually deleted from."""
         return await self.instance_manager.delete_vm(name, host, force, project)
 
     async def get_rebuild_preflight(self, name: str, host: str, project: Optional[str] = None):

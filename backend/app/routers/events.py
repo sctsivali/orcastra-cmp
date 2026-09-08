@@ -19,6 +19,7 @@ from app.core.org_scope import (
     check_tenant_permission,
 )
 from app.core.config import get_settings
+from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd.events_hub import get_events_hub
 
 logger = logging.getLogger(__name__)
@@ -65,9 +66,21 @@ async def events_websocket(
             # view permission for (mirrors verify_tenant_permission on the REST
             # path). Admins/Partners (no ACL) pass everything.
             instance = payload.get("instance")
-            if instance and not check_tenant_permission(
-                host, payload.get("project") or "default", instance, "view"
-            ):
+            if instance:
+                if not check_tenant_permission(
+                    host, payload.get("project") or "default", instance, "view"
+                ):
+                    continue
+            elif tenant_acl_active():
+                # important: a frame this stream cannot attribute to an instance was forwarded to
+                # everyone, because the filter above only ran when there was a name to check. On a
+                # cluster several tenants share, that is a neighbour's storage-volume create, image
+                # download or project operation arriving in this tenant's feed. A tenant has no
+                # claim to an event that names nothing of theirs, so it is dropped.
+                #
+                # Admin and Partner carry no ACL and still receive the full stream: they are the
+                # audience these cluster-wide frames exist for, and tenant_acl_active is False for
+                # them, so this branch never runs.
                 continue
             await websocket.send_json(payload)
 

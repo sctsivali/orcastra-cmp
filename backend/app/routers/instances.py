@@ -605,7 +605,13 @@ async def delete_instance(
     """Delete an instance."""
     verify_cluster_access(host)
     try:
-        await lxd_service.delete_vm(instance_name, host, force=force, project=project)
+        # important: everything below is stamped with the project the deletion ACTUALLY used.
+        # A caller that named none was resolved across projects and then had its tags, webhook,
+        # upstream event and audit row written against "default", naming a project the deletion
+        # never touched.
+        deleted_project = await lxd_service.delete_vm(
+            instance_name, host, force=force, project=project
+        )
         get_cache_manager().invalidate_instance_cache()
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
@@ -617,7 +623,7 @@ async def delete_instance(
             cluster_id=host,
             resource_type="instance",
             resource_name=instance_name,
-            project=project,
+            project=deleted_project,
         )
 
 
@@ -626,7 +632,7 @@ async def delete_instance(
         try:
             await tag_service.remove_resource_assignments(
                 "instance", instance_name,
-                resource_host=host, resource_project=project or "default",
+                resource_host=host, resource_project=deleted_project,
             )
         except Exception as tag_err:
             logger.warning(
@@ -640,7 +646,7 @@ async def delete_instance(
             target_id=instance_name,
             target_host=host,
             result="success",
-            details={"force": force, "project": project},
+            details={"force": force, "project": deleted_project},
         )
 
         schedule_orcahub_event("instance.deleted", host, project, instance_name)

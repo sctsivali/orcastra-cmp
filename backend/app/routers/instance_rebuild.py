@@ -16,6 +16,7 @@ Kept on the dashboard's ``/instances`` surface (Partner + org-scope). OrcaHub's
 """
 import asyncio
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -371,3 +372,53 @@ async def get_latest_rebuild_job(
     # in the request. A rebuild job carries the instance's status, its error and its timings.
     _verify_instance_access(row.cluster_id, row.project or "default", row.instance_name, "view")
     return {"job": _job_payload(row)}
+
+
+# ── recovery ────────────────────────────────────────────────────────────────────────────────
+
+# A rebuild holds its worker for as long as LXD takes to reinstall the root disk, and the job is
+# driven by a bare `asyncio.create_task` whose handle nobody keeps. A backend restart, which on
+# this box is a routine `make up`, therefore loses the driver while the row stays mid-flight and
+# the instance stays stopped. Nothing ever revisits it, so the operator sees "rebuilding" forever
+# on an instance that is not being rebuilt.
+#
+# The window is deliberately generous: LXD's own rebuild wait is up to 1800s, so anything younger
+# than that could still be a live job on another worker. Only rows older than the longest a real
+# rebuild can take are declared stranded.
+_REBUILD_STRANDED_AFTER_SECONDS = 2 * 3600
+_IN_FLIGHT_STATUSES = ("pending", "stopping", "rebuilding", "starting", "provisioning")
+
+
+async def recover_stranded_rebuilds() -> int:
+    """Fail rebuild jobs no worker can still be driving, so the row stops lying.
+
+    important: marked `failed` with a reason naming what to check, never silently retried. The
+    instance may be stopped with a half-written root disk, and deciding what to do with it is an
+    operator's call, not a sweep's.
+    """
+    from app.core.database import AsyncSessionLocal
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_REBUILD_STRANDED_AFTER_SECONDS)
+    async with AsyncSessionLocal() as db:
+        rows = (
+            await db.execute(
+                select(RebuildJob).where(
+                    RebuildJob.status.in_(_IN_FLIGHT_STATUSES),
+                    RebuildJob.updated_at < cutoff,
+                )
+            )
+        ).scalars().all()
+        for row in rows:
+            row.status = "failed"
+            row.error = (
+                "The rebuild did not finish and no worker is still driving it, most likely a "
+                "backend restart. Check the instance on the cluster before retrying: it may be "
+                "stopped with a partially written root disk."
+            )
+        if rows:
+            await db.commit()
+            logger.warning(
+                "Marked %d stranded rebuild job(s) failed", len(rows),
+                extra={"job_ids": [r.job_id for r in rows]},
+            )
+        return len(rows)

@@ -202,6 +202,12 @@ class InstanceWrapper:
         self.devices = data.get('devices', {})
         self.expanded_devices = data.get('expanded_devices', {})
         self.profiles = data.get('profiles', [])
+        # note: carried for the same reason as devices above. Every single-instance read builds
+        # its VMInfo from this wrapper and read `location` off it with a getattr default, so the
+        # cluster member was None on every detail while the list payload, which reads the LXD
+        # response directly, had it right. On a clustered target the dialog therefore showed the
+        # real member from the row and then blanked it when the detail arrived.
+        self.location = data.get('location')
     
     def start(self, wait=True):
         """Start the instance."""
