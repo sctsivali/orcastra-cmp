@@ -147,6 +147,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                         snapshot={{ ...snapshot, source_name: instance.name }}
                         host={instance.host}
                         project={project}
+                        billingLinked={Boolean(policy?.externally_managed)}
                       />
                     </TableCell>
                   </TableRow>
@@ -172,7 +173,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
         onOpenChange={setCreating}
         instance={instance}
         project={project}
-        requiresReason={Boolean(policy?.externally_managed)}
+        billingLinked={Boolean(policy?.externally_managed)}
       />
     </div>
   );

@@ -70,7 +70,15 @@ def test_restore_never_writes_the_schedule_keys():
     )
     response = _client(service(FakeClient(node))).post(
         f"/instances/{INSTANCE}/snapshots/ops-target-20260908T000000Z/restore",
-        json={"host": HOST, "project": PROJECT, "confirm_name": INSTANCE},
+        json={
+            "host": HOST,
+            "project": PROJECT,
+            "confirm_name": INSTANCE,
+            # The instance is deliberately managed here, so the restore has to pass the gate to
+            # reach the behaviour this test is actually about.
+            "reason": "verifying the schedule keys are never written",
+            "acknowledge_billing_impact": True,
+        },
     )
     assert response.status_code == 200, response.text
 
@@ -81,25 +89,109 @@ def test_restore_never_writes_the_schedule_keys():
             assert not any(k.startswith("snapshots.") for k in body), body
 
 
-def test_a_managed_instance_requires_a_reason_before_an_operator_snapshot():
-    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
-    response = _client(service(FakeClient(node))).post(
+def test_every_action_on_a_managed_instance_is_refused_without_acknowledgement():
+    """A source under a paid schedule is metered by the storage it occupies, not by counting
+    snapshots, so anything this console does there moves a number that can pause a schedule a
+    customer pays for. Default deny, and proceeding is a deliberate, attributable act.
+
+    Refused BEFORE the daemon is touched on every path. A restore that refused after taking its
+    safety snapshot would leave a snapshot behind on storage someone else is billed for, which is
+    the cost the refusal exists to avoid.
+    """
+    managed = {"snapshots.schedule": "@hourly", "snapshots.expiry": "7d"}
+    target = "ops-target-20260908T000000Z"
+
+    node = FakeInstanceNode(config=managed)
+    create = _client(service(FakeClient(node))).post(
         f"/instances/{INSTANCE}/snapshots",
-        json={"host": HOST, "project": PROJECT, "label": "no reason given"},
+        json={"host": HOST, "project": PROJECT, "label": "no acknowledgement"},
     )
-    assert response.status_code == 422, response.text
+    assert create.status_code == 403, create.text
+    body = create.json()["detail"]
+    assert body["error"] == "billing_impact_acknowledgement_required"
+    assert body["schedule"] == "@hourly"
+    assert body["acknowledge_field"] == "acknowledge_billing_impact"
     assert not [r for r in node.recorded if r[0] == "create_snapshot"]
 
-    ok = _client(service(FakeClient(node))).post(
+    node = FakeInstanceNode(config=managed, snapshots=[{"name": target}])
+    restore = _client(service(FakeClient(node))).post(
+        f"/instances/{INSTANCE}/snapshots/{target}/restore",
+        json={"host": HOST, "project": PROJECT, "confirm_name": INSTANCE},
+    )
+    assert restore.status_code == 403, restore.text
+    assert not node.recorded, "a refused restore must not have taken a safety snapshot"
+
+    node = FakeInstanceNode(config=managed, snapshots=[{"name": target}])
+    delete = _client(service(FakeClient(node))).request(
+        "DELETE",
+        f"/instances/{INSTANCE}/snapshots/{target}",
+        params={"host": HOST, "project": PROJECT},
+    )
+    assert delete.status_code == 403, delete.text
+    assert not [r for r in node.recorded if r[0] == "delete_snapshot"]
+
+
+def test_an_acknowledged_action_proceeds_and_is_audited_separately():
+    """The override is one shot and carries its justification, and it gets its own high severity
+    record beside the ordinary one so a forced action is alertable rather than one row among many.
+    """
+    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
+    audited = []
+
+    from app.core import snapshot_billing_gate
+
+    original = snapshot_billing_gate.activity_logger.log_activity
+    snapshot_billing_gate.activity_logger.log_activity = lambda **kw: audited.append(kw)
+    try:
+        response = _client(service(FakeClient(node))).post(
+            f"/instances/{INSTANCE}/snapshots",
+            json={
+                "host": HOST,
+                "project": PROJECT,
+                "label": "emergency",
+                "reason": "kernel upgrade rollback point",
+                "acknowledge_billing_impact": True,
+            },
+        )
+    finally:
+        snapshot_billing_gate.activity_logger.log_activity = original
+
+    assert response.status_code == 201, response.text
+    assert [r for r in node.recorded if r[0] == "create_snapshot"]
+
+    overrides = [r for r in audited if r["action"] == "instance.snapshot.billing_override"]
+    ordinary = [r for r in audited if r["action"] == "instance.snapshot.create"]
+    assert len(overrides) == 1, "exactly one override record, on its own action"
+    assert ordinary, "the ordinary record is still written, so the two are separately queryable"
+    assert overrides[0]["details"]["reason"] == "kernel upgrade rollback point"
+    assert overrides[0]["details"]["overridden_action"] == "create"
+    assert overrides[0]["details"]["external_schedule"] == "@hourly"
+
+
+def test_an_acknowledgement_without_a_reason_is_still_refused():
+    # A tick box with no words is not attribution. The reason is what makes the audit row worth
+    # keeping, so the acknowledgement alone does not open the gate.
+    node = FakeInstanceNode(config={"snapshots.schedule": "@hourly"})
+    response = _client(service(FakeClient(node))).post(
         f"/instances/{INSTANCE}/snapshots",
         json={
             "host": HOST,
             "project": PROJECT,
-            "label": "emergency",
-            "reason": "kernel upgrade rollback point",
+            "label": "no words",
+            "acknowledge_billing_impact": True,
         },
     )
-    assert ok.status_code == 201, ok.text
+    assert response.status_code == 403, response.text
+    assert not node.recorded
+
+
+def test_an_unmanaged_instance_needs_no_acknowledgement():
+    node = FakeInstanceNode()
+    response = _client(service(FakeClient(node))).post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "ordinary"},
+    )
+    assert response.status_code == 201, response.text
 
 
 def test_the_console_refuses_to_delete_a_snapshot_it_did_not_create():

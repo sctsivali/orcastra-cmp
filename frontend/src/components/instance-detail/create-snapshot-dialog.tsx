@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AlertTriangle } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { useCreateSnapshot } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
@@ -27,8 +29,8 @@ interface CreateSnapshotDialogProps {
   onOpenChange: (open: boolean) => void;
   instance: VMInfo;
   project: string;
-  /** The source carries an external schedule, so the reason becomes mandatory. */
-  requiresReason: boolean;
+  /** The source's snapshots are metered and billed by another product. */
+  billingLinked: boolean;
 }
 
 /**
@@ -43,13 +45,14 @@ export function CreateSnapshotDialog({
   onOpenChange,
   instance,
   project,
-  requiresReason,
+  billingLinked,
 }: CreateSnapshotDialogProps) {
   const { toast } = useToast();
   const createSnapshot = useCreateSnapshot();
   const [label, setLabel] = React.useState("");
   const [expiryDays, setExpiryDays] = React.useState(String(DEFAULT_EXPIRY_DAYS));
   const [reason, setReason] = React.useState("");
+  const [acknowledged, setAcknowledged] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const submitInFlightRef = React.useRef(false);
 
@@ -58,6 +61,7 @@ export function CreateSnapshotDialog({
       setLabel("");
       setExpiryDays(String(DEFAULT_EXPIRY_DAYS));
       setReason("");
+      setAcknowledged(false);
       setError(null);
     }
   }, [open]);
@@ -65,8 +69,10 @@ export function CreateSnapshotDialog({
   const days = Number(expiryDays);
   const expiryValid = Number.isInteger(days) && days >= 1 && days <= MAX_EXPIRY_DAYS;
   const labelValid = label.trim().length > 0 && label.trim().length <= 48;
-  const reasonValid = !requiresReason || reason.trim().length > 0;
-  const canSubmit = labelValid && expiryValid && reasonValid && !createSnapshot.isPending;
+  // Both halves are required together. A tick box with no words is not attribution, and words
+  // without the tick are not a decision.
+  const overrideReady = !billingLinked || (acknowledged && reason.trim().length > 0);
+  const canSubmit = labelValid && expiryValid && overrideReady && !createSnapshot.isPending;
 
   const handleCreate = async () => {
     if (submitInFlightRef.current) return;
@@ -81,6 +87,7 @@ export function CreateSnapshotDialog({
           label: label.trim(),
           expiry_days: days,
           reason: reason.trim() || undefined,
+          acknowledge_billing_impact: billingLinked ? acknowledged : undefined,
         },
       });
       toast({ title: "Snapshot taken", description: result.message });
@@ -141,22 +148,39 @@ export function CreateSnapshotDialog({
             )}
           </div>
 
-          {requiresReason && (
-            <div className="space-y-2">
-              <Label htmlFor="snapshot-reason">Reason</Label>
-              <Textarea
-                id="snapshot-reason"
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                placeholder="Why this instance needs an operator snapshot right now"
-                maxLength={280}
-                rows={3}
-              />
-              <p className="text-xs text-muted-foreground">
-                This instance is snapshotted on a schedule owned elsewhere. Your snapshot will
-                appear in that owner&apos;s list and count toward their measured storage, so the
-                reason is recorded in the audit trail.
-              </p>
+          {billingLinked && (
+            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+              <div className="flex gap-3">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-destructive mt-0.5" aria-hidden />
+                <p className="text-sm">
+                  Snapshots on this instance are managed and billed by another product. Taking one
+                  here adds to the storage that schedule is measured on, which can pause it for the
+                  customer paying for it.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="snapshot-reason">Reason</Label>
+                <Textarea
+                  id="snapshot-reason"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Why this instance needs an operator snapshot right now"
+                  maxLength={280}
+                  rows={3}
+                />
+              </div>
+
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  id="snapshot-acknowledge"
+                  checked={acknowledged}
+                  onCheckedChange={(checked) => setAcknowledged(checked === true)}
+                />
+                <Label htmlFor="snapshot-acknowledge" className="font-normal">
+                  I accept the effect on the schedule this instance is billed under
+                </Label>
+              </div>
             </div>
           )}
 
@@ -172,7 +196,11 @@ export function CreateSnapshotDialog({
             Cancel
           </Button>
           <Button onClick={handleCreate} disabled={!canSubmit}>
-            {createSnapshot.isPending ? "Taking snapshot" : "Take snapshot"}
+            {createSnapshot.isPending
+              ? "Taking snapshot"
+              : billingLinked
+                ? "Snapshot anyway"
+                : "Take snapshot"}
           </Button>
         </DialogFooter>
       </DialogContent>

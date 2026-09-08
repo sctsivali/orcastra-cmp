@@ -15,6 +15,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import type { SnapshotInfo } from "@/types/api";
@@ -25,6 +26,8 @@ interface RestoreSnapshotDialogProps {
   snapshot: SnapshotInfo;
   host: string;
   project: string;
+  /** The source's snapshots are metered and billed by another product. */
+  billingLinked?: boolean;
   restore: {
     mutateAsync: (vars: {
       instanceName: string;
@@ -34,6 +37,8 @@ interface RestoreSnapshotDialogProps {
         project: string;
         confirm_name: string;
         safety_snapshot: boolean;
+        reason?: string;
+        acknowledge_billing_impact?: boolean;
       };
     }) => Promise<unknown>;
     isPending: boolean;
@@ -54,11 +59,14 @@ export function RestoreSnapshotDialog({
   snapshot,
   host,
   project,
+  billingLinked = false,
   restore,
 }: RestoreSnapshotDialogProps) {
   const { toast } = useToast();
   const [confirmName, setConfirmName] = useState("");
   const [safety, setSafety] = useState(true);
+  const [reason, setReason] = useState("");
+  const [acknowledged, setAcknowledged] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const submitInFlightRef = useRef(false);
 
@@ -66,12 +74,16 @@ export function RestoreSnapshotDialog({
     if (open) {
       setConfirmName("");
       setSafety(true);
+      setReason("");
+      setAcknowledged(false);
       setError(null);
     }
   }, [open]);
 
   const nameMatches = confirmName.trim() === snapshot.source_name;
-  const canSubmit = nameMatches && !restore.isPending;
+  // Both halves required together, same rule as the create dialog.
+  const overrideReady = !billingLinked || (acknowledged && reason.trim().length > 0);
+  const canSubmit = nameMatches && overrideReady && !restore.isPending;
 
   const handleSubmit = async () => {
     if (submitInFlightRef.current) return;
@@ -86,6 +98,8 @@ export function RestoreSnapshotDialog({
           project,
           confirm_name: snapshot.source_name,
           safety_snapshot: safety,
+          reason: reason.trim() || undefined,
+          acknowledge_billing_impact: billingLinked ? acknowledged : undefined,
         },
       });
       toast({
@@ -160,6 +174,37 @@ export function RestoreSnapshotDialog({
               </p>
             )}
           </div>
+
+          {billingLinked && (
+            <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
+              <p className="text-sm">
+                Snapshots on this instance are managed and billed by another product. A restore
+                changes the storage that schedule is measured on, and stops and starts the instance
+                a customer is paying for.
+              </p>
+              <div className="space-y-2">
+                <Label htmlFor="restore-reason">Reason</Label>
+                <Textarea
+                  id="restore-reason"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  placeholder="Why this instance must be rolled back now"
+                  maxLength={280}
+                  rows={3}
+                />
+              </div>
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  id="restore-acknowledge"
+                  checked={acknowledged}
+                  onCheckedChange={(checked) => setAcknowledged(checked === true)}
+                />
+                <Label htmlFor="restore-acknowledge" className="font-normal">
+                  I accept the effect on the schedule this instance is billed under
+                </Label>
+              </div>
+            </div>
+          )}
 
           {error && <p className="text-sm text-destructive">{error}</p>}
         </DialogBody>

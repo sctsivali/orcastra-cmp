@@ -163,3 +163,23 @@ def test_no_expiry_is_null_rather_than_the_zero_time():
     row = _normalize({"name": "snap-x", "expires_at": "0001-01-01T00:00:00Z"}, "inst")
     assert row["expires_at"] is None
     assert row["operator_managed"] is False
+
+
+def test_the_request_bounds_match_the_service_constants():
+    """The schema declares the expiry bounds as literals, and the service owns the real values.
+
+    They are not imported across, because models/schemas.py loads early and pulling the LXD
+    service package in from there inverts the dependency direction. That leaves them free to
+    drift, so the agreement is asserted instead of assumed: raising the service's ceiling without
+    the schema would keep refusing what the service now allows, silently.
+    """
+    from app.models.schemas import SnapshotCreateRequest
+    from app.services.lxd import snapshots as svc
+
+    field = SnapshotCreateRequest.model_fields["expiry_days"]
+    bounds = {type(m).__name__: getattr(m, "ge", getattr(m, "le", None)) for m in field.metadata}
+    assert field.default == svc.DEFAULT_EXPIRY_DAYS
+    assert bounds.get("Le") == svc.MAX_EXPIRY_DAYS, (
+        f"schema ceiling {bounds.get('Le')} does not match the service's {svc.MAX_EXPIRY_DAYS}"
+    )
+    assert bounds.get("Ge") == 1

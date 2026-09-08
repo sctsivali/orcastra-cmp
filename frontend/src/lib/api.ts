@@ -1970,8 +1970,13 @@ const snapshotAPI = {
     snapshotName: string,
     host: string,
     project = "default",
+    opts: { reason?: string; acknowledgeBillingImpact?: boolean } = {},
   ): Promise<SnapshotActionResponse> => {
-    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
+    // DELETE carries no body, so the acknowledgement travels as a query parameter.
+    const ack = opts.acknowledgeBillingImpact
+      ? `&acknowledge_billing_impact=true&reason=${encodeURIComponent(opts.reason ?? "")}`
+      : "";
+    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}${ack}`;
     return fetchAPI<SnapshotActionResponse>(
       `/instances/${encodeURIComponent(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}?${qs}`,
       { method: "DELETE" },

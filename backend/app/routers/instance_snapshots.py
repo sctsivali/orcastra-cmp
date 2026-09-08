@@ -18,10 +18,9 @@ Three rules follow from that split and are load-bearing:
   product can see it.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.dependencies import (
@@ -35,6 +34,7 @@ from app.core.org_scope import (
     verify_cluster_access,
     verify_tenant_permission,
 )
+from app.core.snapshot_billing_gate import audit_billing_override, enforce_billing_impact
 from app.core.tenant_visibility import tenant_acl_active
 from app.core.blocking import run_blocking
 from app.services.activity_logger import get_activity_logger
@@ -43,6 +43,12 @@ from app.services.lxd.availability import require_client
 from app.services.lxd.lazy_client import client_for
 from app.services.lxd.proxy import PROXY_MAX_IN_FLIGHT, proxy_executor
 from app.services.lxd_service import LXDService, get_lxd_service
+from app.models.schemas import (
+    SnapshotActionResponse,
+    SnapshotCreateRequest,
+    SnapshotListResponse,
+    SnapshotRestoreRequest,
+)
 from app.services.orcahub_webhook import schedule_orcahub_event
 
 logger = logging.getLogger(__name__)
@@ -73,56 +79,6 @@ def _blocking(fn, *args, label: str, **kwargs):
         max_in_flight=PROXY_MAX_IN_FLIGHT,
         **kwargs,
     )
-
-
-class SnapshotInfo(BaseModel):
-    name: str = Field(..., description="Snapshot name as LXD reports it, without the source prefix")
-    source_name: str = Field(..., description="Instance the snapshot belongs to")
-    created_at: Optional[str] = Field(None, description="RFC3339 creation time")
-    expires_at: Optional[str] = Field(None, description="RFC3339 expiry, null when the snapshot never expires")
-    stateful: Optional[bool] = Field(None, description="Whether guest memory was captured, which needs CRIU on the host")
-    size: Optional[int] = Field(None, description="Size in bytes where the storage driver reports it")
-    architecture: Optional[str] = Field(None, description="Instance architecture at capture time")
-    operator_managed: bool = Field(False, description="True when Orcastra created it, identified by the ops- prefix")
-
-
-class SnapshotListResponse(BaseModel):
-    total: int = Field(..., description="Number of snapshots returned")
-    items: List[SnapshotInfo] = Field(default_factory=list, description="The snapshots")
-    policy: Dict[str, Any] = Field(default_factory=dict, description="The source's LXD-native schedule, read only")
-
-
-class SnapshotCreateRequest(BaseModel):
-    host: str = Field(..., description="Cluster the instance lives on")
-    project: str = Field("default", description="LXD project the instance lives in")
-    label: str = Field(..., min_length=1, max_length=48, description="Short human label, folded into the generated ops- name")
-    expiry_days: int = Field(
-        snapshots_service.DEFAULT_EXPIRY_DAYS,
-        ge=1,
-        le=snapshots_service.MAX_EXPIRY_DAYS,
-        description="Days until LXD prunes the snapshot",
-    )
-    stateful: bool = Field(False, description="Capture guest memory. Requires CRIU on the host and usually fails without it")
-    reason: Optional[str] = Field(
-        None,
-        max_length=280,
-        description="Why the snapshot is being taken. Required when the source carries an external snapshot schedule",
-    )
-
-
-class SnapshotActionResponse(BaseModel):
-    success: bool = Field(..., description="Whether the action was accepted")
-    instance_name: str = Field(..., description="The source instance")
-    snapshot: str = Field(..., description="The snapshot acted on")
-    operation_id: Optional[str] = Field(None, description="LXD operation id when the action is asynchronous")
-    message: str = Field(..., description="Operator-facing summary")
-
-
-class SnapshotRestoreRequest(BaseModel):
-    host: str = Field(..., description="Cluster the instance lives on")
-    project: str = Field("default", description="LXD project the instance lives in")
-    confirm_name: str = Field(..., description="Must equal the instance name, echoed back by the caller")
-    safety_snapshot: bool = Field(True, description="Take an automatic ops-pre- snapshot before restoring")
 
 
 def _enforce_snapshot_access(
@@ -248,17 +204,12 @@ async def create_snapshot(
             body.project,
             label="snapshots.policy",
         )
-        # A source under an external schedule is another product's territory. The snapshot is
-        # allowed, because blocking it only pushes the operator back to SSH, but it must carry a
-        # reason so the audit trail explains why someone reached into a managed instance.
-        if policy.get("externally_managed") and not (body.reason or "").strip():
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "This instance has an externally managed snapshot schedule. "
-                    "A reason is required to take an operator snapshot here."
-                ),
-            )
+        justification = enforce_billing_impact(
+            policy,
+            instance_name,
+            acknowledged=body.acknowledge_billing_impact,
+            reason=body.reason,
+        )
 
         await _blocking(
             snapshots_service.assert_capacity,
@@ -324,6 +275,11 @@ async def create_snapshot(
             "settled": outcome.get("settled"),
         },
     )
+    if justification:
+        audit_billing_override(
+            "create", instance_name, body.host, body.project, policy, justification,
+            user.email or user.user_id,
+        )
     # OrcaHub's receiver already understands SNAPSHOT events; emitting means a snapshot taken
     # here is known to it immediately rather than being discovered an hour later by its sweep.
     schedule_orcahub_event(
@@ -352,6 +308,15 @@ async def delete_snapshot(
     snapshot_name: str,
     host: str = Query(..., description="Cluster the instance lives on"),
     project: str = Query("default", description="LXD project the instance lives in"),
+    reason: Optional[str] = Query(
+        None,
+        max_length=280,
+        description="Why the snapshot is being deleted. Required when the source is billed elsewhere",
+    ),
+    acknowledge_billing_impact: bool = Query(
+        False,
+        description="Proceed on a source whose snapshots are billed elsewhere. Requires a reason",
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_tenant()),
@@ -373,6 +338,24 @@ async def delete_snapshot(
 
     client = await _client(lxd_service, host)
     try:
+        # Deleting lowers the storage the external schedule is measured on rather than raising it,
+        # so this is the gentlest of the three actions. It is gated anyway: the rule an operator
+        # has to hold is "anything on a billing-linked instance is acknowledged", and a rule with
+        # an exception is one people have to remember the shape of.
+        policy = await _blocking(
+            snapshots_service.read_instance_policy,
+            client,
+            instance_name,
+            project,
+            label="snapshots.policy",
+        )
+        justification = enforce_billing_impact(
+            policy,
+            instance_name,
+            acknowledged=acknowledge_billing_impact,
+            reason=reason,
+        )
+
         operation_id = await _blocking(
             snapshots_service.delete_instance_snapshot,
             client,
@@ -396,6 +379,11 @@ async def delete_snapshot(
         result="accepted",
         details={"snapshot": snapshot_name, "requester": user.email or user.user_id},
     )
+    if justification:
+        audit_billing_override(
+            "delete", instance_name, host, project, policy, justification,
+            user.email or user.user_id,
+        )
     schedule_orcahub_event(
         event_type="snapshot.deleted",
         cluster_id=host,
@@ -435,6 +423,22 @@ async def restore_snapshot(
     client = await _client(lxd_service, body.host)
     safety_name: Optional[str] = None
     try:
+        # Gated before the safety snapshot, not after: a refused restore must not leave a snapshot
+        # behind on a source whose storage someone else is billed for.
+        policy = await _blocking(
+            snapshots_service.read_instance_policy,
+            client,
+            instance_name,
+            body.project,
+            label="snapshots.policy",
+        )
+        justification = enforce_billing_impact(
+            policy,
+            instance_name,
+            acknowledged=body.acknowledge_billing_impact,
+            reason=body.reason,
+        )
+
         # The safety copy is taken first and its failure aborts the restore. Taken afterwards it
         # would capture the already-rolled-back state and protect nothing.
         if body.safety_snapshot:
@@ -478,6 +482,11 @@ async def restore_snapshot(
             "requester": user.email or user.user_id,
         },
     )
+    if justification:
+        audit_billing_override(
+            "restore", instance_name, body.host, body.project, policy, justification,
+            user.email or user.user_id,
+        )
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,

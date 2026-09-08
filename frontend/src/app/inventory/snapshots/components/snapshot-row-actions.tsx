@@ -16,6 +16,8 @@ interface SnapshotRowActionsProps {
   snapshot: SnapshotInfo;
   host: string;
   project: string;
+  /** The source's snapshots are metered and billed by another product. */
+  billingLinked?: boolean;
 }
 
 /**
@@ -25,7 +27,12 @@ interface SnapshotRowActionsProps {
  * rather than hiding the items. Someone upstream is paying to keep it, and a restore point that
  * silently disappears from a tenant's account is worse than one an operator cannot reach.
  */
-export function SnapshotRowActions({ snapshot, host, project }: SnapshotRowActionsProps) {
+export function SnapshotRowActions({
+  snapshot,
+  host,
+  project,
+  billingLinked = false,
+}: SnapshotRowActionsProps) {
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
   const deleteSnapshot = useDeleteSnapshot();
@@ -34,6 +41,7 @@ export function SnapshotRowActions({ snapshot, host, project }: SnapshotRowActio
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showRestore, setShowRestore] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
   const submitInFlightRef = useRef(false);
 
   const unavailableReason = !snapshot.operator_managed
@@ -42,10 +50,13 @@ export function SnapshotRowActions({ snapshot, host, project }: SnapshotRowActio
       ? "The dashboard is in read-only mode"
       : undefined;
 
+  // Said on the item, not only in the dialog, so an operator learns before opening it.
+  const billingNote = billingLinked ? " (billed elsewhere, needs a reason)" : "";
+
   const actions: RowAction[] = [
     {
       id: "restore",
-      label: "Restore Instance to This Snapshot",
+      label: `Restore Instance to This Snapshot${billingNote}`,
       icon: RotateCcw,
       onSelect: () => setShowRestore(true),
       unavailableReason: isReadOnly ? "The dashboard is in read-only mode" : undefined,
@@ -58,6 +69,7 @@ export function SnapshotRowActions({ snapshot, host, project }: SnapshotRowActio
       separatorBefore: true,
       onSelect: () => {
         setDeleteError(null);
+        setDeleteAcknowledged(false);
         setConfirmDelete(true);
       },
       unavailableReason,
@@ -76,6 +88,11 @@ export function SnapshotRowActions({ snapshot, host, project }: SnapshotRowActio
         snapshotName: snapshot.name,
         host,
         project,
+        // Deleting lowers the storage the external schedule is measured on, but the rule an
+        // operator holds is "anything on a billing-linked instance is acknowledged". A rule with
+        // an exception is one people have to remember the shape of.
+        reason: billingLinked ? "Operator removing a snapshot this console created" : undefined,
+        acknowledgeBillingImpact: billingLinked || undefined,
       });
       toast({
         title: "Snapshot deleted",
@@ -109,6 +126,13 @@ export function SnapshotRowActions({ snapshot, host, project }: SnapshotRowActio
         pending={deleteSnapshot.isPending}
         onConfirm={handleDelete}
         error={deleteError}
+        // The component's own guidance: an acknowledgement belongs where proceeding overrides a
+        // real refusal, never as generic friction. This is that case.
+        acknowledgeLabel={
+          billingLinked
+            ? "I accept the effect on the schedule this instance is billed under"
+            : undefined
+        }
       />
 
       <RestoreSnapshotDialog
@@ -117,6 +141,7 @@ export function SnapshotRowActions({ snapshot, host, project }: SnapshotRowActio
         snapshot={snapshot}
         host={host}
         project={project}
+        billingLinked={billingLinked}
         restore={restoreSnapshot}
       />
     </>

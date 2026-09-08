@@ -1675,3 +1675,75 @@ class UserTagVisibilityResponse(UserTagVisibilitySettings):
 
     class Config:
         from_attributes = True
+
+
+# ========== Instance Snapshot Types ==========
+# Operator snapshots, distinct from the metered snapshot product billed upstream. Everything this
+# console creates carries the ops- prefix and an expiry; `acknowledge_billing_impact` is how an
+# operator proceeds on an instance whose snapshots someone else is paying for.
+
+class SnapshotInfo(BaseModel):
+    name: str = Field(..., description="Snapshot name as LXD reports it, without the source prefix")
+    source_name: str = Field(..., description="Instance the snapshot belongs to")
+    created_at: Optional[str] = Field(None, description="RFC3339 creation time")
+    expires_at: Optional[str] = Field(None, description="RFC3339 expiry, null when the snapshot never expires")
+    stateful: Optional[bool] = Field(None, description="Whether guest memory was captured, which needs CRIU on the host")
+    size: Optional[int] = Field(None, description="Size in bytes where the storage driver reports it")
+    architecture: Optional[str] = Field(None, description="Instance architecture at capture time")
+    operator_managed: bool = Field(False, description="True when Orcastra created it, identified by the ops- prefix")
+
+
+class SnapshotListResponse(BaseModel):
+    total: int = Field(..., description="Number of snapshots returned")
+    items: List[SnapshotInfo] = Field(default_factory=list, description="The snapshots")
+    policy: Dict[str, Any] = Field(default_factory=dict, description="The source's LXD-native schedule, read only")
+
+
+class SnapshotCreateRequest(BaseModel):
+    host: str = Field(..., description="Cluster the instance lives on")
+    project: str = Field("default", description="LXD project the instance lives in")
+    label: str = Field(..., min_length=1, max_length=48, description="Short human label, folded into the generated ops- name")
+    # note: mirrors DEFAULT_EXPIRY_DAYS and MAX_EXPIRY_DAYS in services/lxd/snapshots.py, which
+    # is the source of truth. Not imported: this module is loaded early and pulling the LXD service
+    # package in from here inverts the dependency. test_an_operator_snapshot_carries_its_own_expiry
+    # asserts the two agree, so a change to one that skips the other fails rather than drifts.
+    expiry_days: int = Field(
+        7,
+        ge=1,
+        le=7,
+        description="Days until LXD prunes the snapshot",
+    )
+    stateful: bool = Field(False, description="Capture guest memory. Requires CRIU on the host and usually fails without it")
+    reason: Optional[str] = Field(
+        None,
+        max_length=280,
+        description="Why the snapshot is being taken. Required when the source carries an external snapshot schedule",
+    )
+    acknowledge_billing_impact: bool = Field(
+        False,
+        description="Proceed on a source whose snapshots are billed elsewhere. Requires a reason",
+    )
+
+
+class SnapshotActionResponse(BaseModel):
+    success: bool = Field(..., description="Whether the action was accepted")
+    instance_name: str = Field(..., description="The source instance")
+    snapshot: str = Field(..., description="The snapshot acted on")
+    operation_id: Optional[str] = Field(None, description="LXD operation id when the action is asynchronous")
+    message: str = Field(..., description="Operator-facing summary")
+
+
+class SnapshotRestoreRequest(BaseModel):
+    host: str = Field(..., description="Cluster the instance lives on")
+    project: str = Field("default", description="LXD project the instance lives in")
+    confirm_name: str = Field(..., description="Must equal the instance name, echoed back by the caller")
+    safety_snapshot: bool = Field(True, description="Take an automatic ops-pre- snapshot before restoring")
+    reason: Optional[str] = Field(
+        None,
+        max_length=280,
+        description="Why the restore is being done. Required when the source carries an external snapshot schedule",
+    )
+    acknowledge_billing_impact: bool = Field(
+        False,
+        description="Proceed on a source whose snapshots are billed elsewhere. Requires a reason",
+    )

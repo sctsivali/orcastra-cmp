@@ -2557,6 +2557,8 @@ export interface SnapshotCreateRequest {
   stateful?: boolean;
   /** Required when the source carries an externally managed schedule. */
   reason?: string;
+  /** Proceed on a source whose snapshots are billed elsewhere. Needs a reason with it. */
+  acknowledge_billing_impact?: boolean;
 }
 
 export interface SnapshotRestoreRequest {
@@ -2564,6 +2566,19 @@ export interface SnapshotRestoreRequest {
   project: string;
   confirm_name: string;
   safety_snapshot?: boolean;
+  reason?: string;
+  acknowledge_billing_impact?: boolean;
+}
+
+/** The refusal body when a source's snapshots are metered by another product. */
+export interface BillingImpactRefusal {
+  error: "billing_impact_acknowledgement_required";
+  message: string;
+  instance: string;
+  schedule?: string | null;
+  expiry?: string | null;
+  acknowledge_field: string;
+  reason_field: string;
 }
 
 export interface SnapshotActionResponse {
