@@ -245,8 +245,8 @@ function SnapshotsContent() {
           )}
           {truncated && (
             <p className="text-sm text-warning">
-              This is the first {items.length} snapshots. Choose a cluster or a project to see the
-              rest.
+              This is the first {items.length} snapshots. Choose one cluster and one project to
+              narrow the read and see the rest.
             </p>
           )}
           {sizeNote && <p className="text-sm text-muted-foreground">{sizeNote}</p>}
