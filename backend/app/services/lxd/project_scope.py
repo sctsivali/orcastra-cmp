@@ -152,6 +152,29 @@ def effective_project(
     return project if str(config.get(feature, "false")).lower() == "true" else DEFAULT_PROJECT
 
 
+def resolve_owner(client: Any, collection: str, project: Optional[str]) -> str:
+    """The project that really holds `collection` for a caller asking about `project`.
+
+    Short-circuits before reading the project list when the answer cannot be anything but
+    `default`, so the common case costs no extra round trip.
+    """
+    if not project or project == DEFAULT_PROJECT:
+        return DEFAULT_PROJECT
+    return effective_project(collection, project, list_project_configs(client))
+
+
+def project_params(project: Optional[str], **extra: Any) -> Dict[str, Any]:
+    """Query parameters naming a project, for a raw call on the pooled client.
+
+    note: the pooled client carries no project of its own, so the project has to be named on
+    every request that is not about `default`. Naming it explicitly is also what keeps a write
+    from silently landing in `default`.
+    """
+    params: Dict[str, Any] = dict(extra)
+    params["project"] = project or DEFAULT_PROJECT
+    return params
+
+
 def list_in_project(
     client: Any, collection: str, project: str, recursion: int = 1
 ) -> List[Dict[str, Any]]:
