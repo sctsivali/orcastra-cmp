@@ -118,7 +118,7 @@ def test_a_settled_restore_says_it_finished():
 # ── ownership, on both destructive actions ─────────────────────────────────────────────────
 
 
-def test_restore_refuses_a_snapshot_this_console_did_not_create():
+def test_restore_refuses_an_upstream_snapshot_unacknowledged():
     node = FakeInstanceNode(snapshots=[{"name": FOREIGN}])
     response = _restore(node, name=FOREIGN)
     assert response.status_code == 403, response.text

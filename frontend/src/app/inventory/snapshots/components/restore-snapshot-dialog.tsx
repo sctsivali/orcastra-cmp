@@ -21,6 +21,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { SnapshotInfo } from "@/types/api";
 
 import { snapshotScope } from "./snapshot-format";
+import { acknowledgementLabel, snapshotGates } from "./snapshot-origin";
 
 interface RestoreSnapshotDialogProps {
   open: boolean;
@@ -39,6 +40,7 @@ interface RestoreSnapshotDialogProps {
         safety_snapshot: boolean;
         reason?: string;
         acknowledge_billing_impact?: boolean;
+        acknowledge_upstream_snapshot?: boolean;
       };
     }) => Promise<unknown>;
     isPending: boolean;
@@ -84,7 +86,13 @@ export function RestoreSnapshotDialog({
 
   const nameMatches = confirmName.trim() === snapshot.source_name;
   // Both halves required together, same rule as the create dialog.
-  const overrideReady = !billingLinked || (acknowledged && reason.trim().length > 0);
+  // The same union the delete path uses. A restore can be gated because the SOURCE is billed
+  // elsewhere, because the SNAPSHOT belongs to the upstream product, or both, and the two are
+  // independent facts. The hand-taken class needs no extra field here: this dialog already makes
+  // the operator type the instance name, and a second typed string in one dialog is what
+  // produces copy-paste without reading.
+  const { origin, needsAcknowledgement } = snapshotGates(snapshot, billingLinked);
+  const overrideReady = !needsAcknowledgement || (acknowledged && reason.trim().length > 0);
   const canSubmit = nameMatches && overrideReady && !restore.isPending;
 
   const handleSubmit = async () => {
@@ -102,6 +110,7 @@ export function RestoreSnapshotDialog({
           safety_snapshot: safety,
           reason: reason.trim() || undefined,
           acknowledge_billing_impact: billingLinked ? acknowledged : undefined,
+          acknowledge_upstream_snapshot: origin === "upstream" ? acknowledged : undefined,
         },
       });
       toast({
@@ -177,12 +186,12 @@ export function RestoreSnapshotDialog({
             )}
           </div>
 
-          {billingLinked && (
+          {needsAcknowledgement && (
             <div className="space-y-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
               <p className="text-sm">
-                Snapshots on this instance are managed and billed by another product. A restore
-                changes the storage that schedule is measured on, and stops and starts the instance
-                a customer is paying for.
+                {origin === "upstream"
+                  ? "This restore point belongs to the upstream snapshot product. Rolling onto it acts on something that product owns and a customer may be paying to keep."
+                  : "Snapshots on this instance are managed and billed by another product. A restore changes the storage that schedule is measured on, and stops and starts the instance a customer is paying for."}
               </p>
               <div className="space-y-2">
                 <Label htmlFor="restore-reason">Reason</Label>
@@ -202,7 +211,7 @@ export function RestoreSnapshotDialog({
                   onCheckedChange={(checked) => setAcknowledged(checked === true)}
                 />
                 <Label htmlFor="restore-acknowledge" className="font-normal">
-                  I accept the effect on the schedule this instance is billed under
+                  {acknowledgementLabel(origin, billingLinked)}
                 </Label>
               </div>
             </div>

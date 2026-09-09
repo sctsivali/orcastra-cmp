@@ -2522,6 +2522,13 @@ export interface SnapshotInfo {
   /** True when this console created it, identified by the ops- prefix. */
   operator_managed: boolean;
   /**
+   * Who made it: `operator` through this console, `manual` by hand on the host, `upstream` in
+   * the metered product's reserved namespaces. Optional so an older backend does not break
+   * typing; the console degrades closed when it is absent rather than assuming the
+   * most permissive class.
+   */
+  origin?: "operator" | "manual" | "upstream";
+  /**
    * Whether anyone asked the cluster for this snapshot's size. False and a null `size` mean the
    * read did not measure; true and a null `size` mean it did and the storage driver reported
    * nothing. Rendering both as one placeholder presents an absent measurement as a small value.
@@ -2598,6 +2605,8 @@ export interface SnapshotRestoreRequest {
   safety_snapshot?: boolean;
   reason?: string;
   acknowledge_billing_impact?: boolean;
+  /** Proceed on a snapshot the upstream product owns. Requires a reason. */
+  acknowledge_upstream_snapshot?: boolean;
 }
 
 /** The refusal body when a source's snapshots are metered by another product. */

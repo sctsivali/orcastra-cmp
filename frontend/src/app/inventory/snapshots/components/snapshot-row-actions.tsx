@@ -12,6 +12,7 @@ import type { SnapshotInfo } from "@/types/api";
 
 import { RestoreSnapshotDialog } from "./restore-snapshot-dialog";
 import { snapshotScope } from "./snapshot-format";
+import { acknowledgementLabel, snapshotGates } from "./snapshot-origin";
 
 interface SnapshotRowActionsProps {
   snapshot: SnapshotInfo;
@@ -46,16 +47,28 @@ export function SnapshotRowActions({
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
   const submitInFlightRef = useRef(false);
 
+  // important: origin is no longer a refusal. It used to disable both actions for anything
+  // without the `ops-` prefix, which meant an operator was refused their own hand-taken snapshot
+  // and told it was "managed outside this console". What origin decides now is which gate the
+  // action faces, not whether it is offered.
+  const { origin, needsAcknowledgement, needsTypedName } = snapshotGates(snapshot, billingLinked);
+
   const unavailableReason = !snapshot.host
     ? "This snapshot's cluster is unknown"
-    : !snapshot.operator_managed
-      ? "Managed outside this console"
+    : origin === "unknown"
+      ? "This snapshot's origin could not be read"
       : isReadOnly
         ? "The dashboard is in read-only mode"
         : undefined;
 
   // Said on the item, not only in the dialog, so an operator learns before opening it.
-  const billingNote = billingLinked ? " (billed elsewhere, needs a reason)" : "";
+  const billingNote = needsTypedName
+    ? " (taken on the host, type its name)"
+    : origin === "upstream"
+      ? " (upstream restore point, needs a reason)"
+      : billingLinked
+        ? " (billed elsewhere, needs a reason)"
+        : "";
 
   const actions: RowAction[] = [
     {
@@ -101,8 +114,12 @@ export function SnapshotRowActions({
         // one people have to remember the shape of. This path used to send a canned sentence, so
         // every forced delete wrote the same machine-authored justification into an audit record
         // whose whole purpose is attribution.
-        reason: billingLinked ? reason : undefined,
+        reason: needsAcknowledgement ? reason : undefined,
         acknowledgeBillingImpact: billingLinked || undefined,
+        // important: a distinct field. Reusing the billing acknowledgement would let one tick
+        // assert two unrelated facts, and the backend refuses each on its own.
+        acknowledgeUpstreamSnapshot: origin === "upstream" || undefined,
+        confirmSnapshot: needsTypedName ? snapshot.name : undefined,
       });
       toast({
         title: "Snapshot deleted",
@@ -141,12 +158,15 @@ export function SnapshotRowActions({
         // The component's own guidance: an acknowledgement belongs where proceeding overrides a
         // real refusal, never as generic friction. This is that case.
         acknowledgeLabel={
-          billingLinked
-            ? "I accept the effect on the schedule this instance is billed under"
+          needsAcknowledgement ? acknowledgementLabel(origin, billingLinked) : undefined
+        }
+        reasonLabel={needsAcknowledgement ? "Reason" : undefined}
+        reasonPlaceholder="Why this snapshot is being removed right now"
+        confirmPhrase={
+          needsTypedName
+            ? { prompt: "Type the snapshot's name to confirm", value: snapshot.name }
             : undefined
         }
-        reasonLabel={billingLinked ? "Reason" : undefined}
-        reasonPlaceholder="Why this snapshot is being removed right now"
       />
 
       <RestoreSnapshotDialog

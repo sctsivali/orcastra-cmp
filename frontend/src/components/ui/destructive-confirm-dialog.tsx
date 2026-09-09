@@ -14,6 +14,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -58,6 +59,13 @@ interface DestructiveConfirmDialogProps {
    */
   reasonLabel?: string;
   reasonPlaceholder?: string;
+  /**
+   * When set, the operator must type `value` exactly before the confirm unblocks. Use it where
+   * the operator has to prove WHICH row they are on, not merely that they accepted something.
+   */
+  // note: `prompt`, not `label`. It is an instruction to the operator and reads as a sentence,
+  // and check-heading-case treats every `label:` literal as a title that must be Title Case.
+  confirmPhrase?: { prompt: React.ReactNode; value: string };
   /** Surfaced above the footer when an attempt failed but the dialog stayed open. */
   error?: string | null;
 }
@@ -75,9 +83,17 @@ const NAMES_SHOWN = 8;
  * be dismissed into an unknown state. And the caller holds its display target one render
  * longer than its real target, so the body does not blank during the exit fade.
  *
- * The acknowledgement is a checkbox, not a typed confirmation. Typing belongs to cascading
- * deletions that destroy data. An image is a re-uploadable artifact, and a 64-character
- * fingerprint to type produces copy-paste without reading.
+ * Three affordances, three different proofs, and they are not interchangeable. A typed
+ * confirmation proves the operator read WHICH target; a checkbox proves they accepted a
+ * consequence; a reason is the only one that says WHY.
+ *
+ * note: this docblock used to argue that typing belongs only to cascading deletions, on the
+ * grounds that an image is re-uploadable and a 64-character fingerprint produces copy-paste
+ * without reading. Both of those are true of the case it was written about and neither
+ * generalises. A snapshot taken by hand on the host is not re-uploadable, nothing in this
+ * console will make another one, and its name is short and human. The rule was drawn too wide
+ * from one example, so it is corrected here rather than quietly dropped: type when the mistake
+ * is WHICH ONE, and the target is short enough to be read rather than pasted.
  *
  * `reasonLabel` is a third thing again, and only for actions recorded as an override. A typed
  * confirmation proves the operator read WHICH target; a checkbox proves they accepted a
@@ -100,12 +116,15 @@ export function DestructiveConfirmDialog({
   acknowledgeLabel,
   reasonLabel,
   reasonPlaceholder,
+  confirmPhrase,
   error,
 }: DestructiveConfirmDialogProps) {
   const [acknowledged, setAcknowledged] = React.useState(false);
   const [reason, setReason] = React.useState("");
+  const [typed, setTyped] = React.useState("");
   const acknowledgeId = React.useId();
   const reasonId = React.useId();
+  const confirmId = React.useId();
 
   // Reset on close so the next row does not inherit the previous row's tick. Tied to `open`
   // rather than to the target, because the caller keeps the target alive through the fade.
@@ -113,12 +132,15 @@ export function DestructiveConfirmDialog({
     if (!open) {
       setAcknowledged(false);
       setReason("");
+      setTyped("");
     }
   }, [open]);
 
   const blocked =
     (!!acknowledgeLabel && !acknowledged) ||
     (!!reasonLabel && reason.trim().length === 0) ||
+    // Exact, and trimmed only at the ends. A near miss is a different snapshot.
+    (!!confirmPhrase && typed.trim() !== confirmPhrase.value) ||
     pending ||
     !!preparing;
   const shown = dependents?.names.slice(0, NAMES_SHOWN) ?? [];
@@ -156,6 +178,22 @@ export function DestructiveConfirmDialog({
                 <li className="text-xs text-muted-foreground">and {hidden} more</li>
               )}
             </ul>
+          </div>
+        )}
+
+        {confirmPhrase && (
+          <div className="space-y-2">
+            <Label htmlFor={confirmId}>{confirmPhrase.prompt}</Label>
+            <Input
+              id={confirmId}
+              value={typed}
+              onChange={(e) => setTyped(e.target.value)}
+              placeholder={confirmPhrase.value}
+              autoComplete="off"
+              spellCheck={false}
+              className="font-mono"
+              disabled={pending}
+            />
           </div>
         )}
 

@@ -62,13 +62,25 @@ import { clusterStatusMeta } from "@/lib/cluster-status";
 
 const CLUSTERS = defineTable<any>()({
   searchPlaceholder: "Search clusters",
+  // important: the cluster id is searchable, and it is not part of the Cluster column's own
+  // `search` accessor. Four surfaces link here as `/inventory/clusters?q=<cluster_id>` and every
+  // one of them found nothing, because the row prints the id as sub-text while only the display
+  // name was searchable. `blitzkrieg` renders as "Hetzner", so this is not a near miss.
+  //
+  // Deliberately searchExtra rather than a widened accessor. `search` returns ONE string, so
+  // widening means concatenating, and `q=industrial nuc` would then match across the two values
+  // and correspond to nothing on screen. Each element here is tested on its own.
+  searchExtra: (c) => [c.cluster_id],
   defaultSort: { field: "cluster", direction: "asc" },
   columns: [
     {
       field: "cluster",
       label: "Cluster",
       sort: (c) => c.display_name,
-      search: (c) => c.display_name, filter: fromSort("text") },
+      search: (c) => c.display_name,
+      // The toolbar's own "Cluster contains ..." reads the SORT accessor through fromSort, so it
+      // was blind to the id in the same way. Declared explicitly over both values instead.
+      filter: { kind: "text", value: (c) => [c.display_name, c.cluster_id] } },
     { field: "endpoint", label: "Endpoint", sort: (c) => c.endpoint, search: (c) => c.endpoint, filter: fromSort("text") },
     {
       field: "type",

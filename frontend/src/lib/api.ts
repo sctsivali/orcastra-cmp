@@ -1992,13 +1992,24 @@ const snapshotAPI = {
     snapshotName: string,
     host: string,
     project = "default",
-    opts: { reason?: string; acknowledgeBillingImpact?: boolean } = {},
+    opts: {
+      reason?: string;
+      acknowledgeBillingImpact?: boolean;
+      acknowledgeUpstreamSnapshot?: boolean;
+      confirmSnapshot?: string;
+    } = {},
   ): Promise<SnapshotActionResponse> => {
-    // DELETE carries no body, so the acknowledgement travels as a query parameter.
-    const ack = opts.acknowledgeBillingImpact
-      ? `&acknowledge_billing_impact=true&reason=${encodeURIComponent(opts.reason ?? "")}`
-      : "";
-    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}${ack}`;
+    // DELETE carries no body, so every gate travels as a query parameter. Deliberately not moved
+    // to a body: a DELETE body is not carried through every proxy, and a confirmation something
+    // can silently strip fails open in exactly the direction these gates close.
+    const params = new URLSearchParams({ host, project });
+    if (opts.acknowledgeBillingImpact) params.set("acknowledge_billing_impact", "true");
+    if (opts.acknowledgeUpstreamSnapshot) params.set("acknowledge_upstream_snapshot", "true");
+    if (opts.acknowledgeBillingImpact || opts.acknowledgeUpstreamSnapshot) {
+      params.set("reason", opts.reason ?? "");
+    }
+    if (opts.confirmSnapshot) params.set("confirm_snapshot", opts.confirmSnapshot);
+    const qs = params.toString();
     return fetchAPI<SnapshotActionResponse>(
       `/instances/${encodeURIComponent(instanceName)}/snapshots/${encodeURIComponent(snapshotName)}?${qs}`,
       { method: "DELETE" },

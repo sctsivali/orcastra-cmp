@@ -194,9 +194,12 @@ def test_an_unmanaged_instance_needs_no_acknowledgement():
     assert response.status_code == 201, response.text
 
 
-def test_the_console_refuses_to_delete_a_snapshot_it_did_not_create():
-    # A tenant pays to keep these. An operator removing one from this console would destroy a
-    # restore point silently, and the deletion would look like OrcaHub's own doing.
+def test_the_console_refuses_to_delete_an_upstream_snapshot_unacknowledged():
+    # A tenant pays to keep these. Removing one is now possible, but only behind an
+    # acknowledgement and a typed reason: this request carries neither, so it is still refused
+    # and the daemon is still never asked. A snapshot taken by hand is a different class and
+    # goes through a typed confirmation instead; see
+    # test_a_snapshot_taken_on_the_host_is_the_operators_own.py.
     node = FakeInstanceNode(snapshots=[{"name": "snap-20260908-0200"}])
     response = _client(service(FakeClient(node))).request(
         "DELETE",

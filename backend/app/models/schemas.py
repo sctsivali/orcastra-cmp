@@ -1699,6 +1699,16 @@ class SnapshotInfo(BaseModel):
         None,
         description="Whether the size was actually read from the cluster, as opposed to not measured",
     )
+    # important: must be present on THIS route as well as the fleet one. The console decides
+    # which gate a destructive action faces from this field, and degrades closed when it is
+    # absent, so a per-instance listing without it disables every row on the detail tab.
+    origin: Optional[str] = Field(
+        None,
+        description=(
+            "Who made the snapshot: operator (this console), manual (taken outside it), "
+            "upstream (the metered product's reserved namespaces)"
+        ),
+    )
 
 
 class SnapshotListResponse(BaseModel):
@@ -1754,4 +1764,16 @@ class SnapshotRestoreRequest(BaseModel):
     acknowledge_billing_impact: bool = Field(
         False,
         description="Proceed on a source whose snapshots are billed elsewhere. Requires a reason",
+    )
+    confirm_snapshot: Optional[str] = Field(
+        None,
+        max_length=63,
+        description="The snapshot's own name. Required when it was taken outside this console",
+    )
+    acknowledge_upstream_snapshot: bool = Field(
+        False,
+        description=(
+            "Proceed on a snapshot the upstream product owns. Requires a reason. Deliberately "
+            "separate from the billing acknowledgement: they answer different questions"
+        ),
     )

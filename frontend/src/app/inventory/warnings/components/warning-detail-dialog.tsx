@@ -84,7 +84,7 @@ export function WarningDetailDialog({
         size="md"
         footer={
           <Button asChild size="sm">
-            <IntentLink href={`/inventory/clusters/certificates?renew=${encodeURIComponent(record.cluster_id)}`}>
+            <IntentLink href={`/inventory/clusters/certificates?q=${encodeURIComponent(record.cluster_id)}`}>
               Renew certificate
             </IntentLink>
           </Button>

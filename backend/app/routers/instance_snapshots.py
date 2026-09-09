@@ -38,6 +38,7 @@ from app.core.org_scope import (
 )
 from app.core.single_flight import rebuild_lock, release_lock
 from app.core.snapshot_billing_gate import audit_billing_override, enforce_billing_impact
+from app.core.snapshot_ownership_gate import enforce_snapshot_ownership
 from app.core.tenant_visibility import tenant_acl_active
 from app.core.blocking import run_blocking
 from app.services.activity_logger import get_activity_logger
@@ -126,12 +127,13 @@ def _enforce_snapshot_access(
         verify_tenant_permission(host, project, instance_name, "operate")
 
 
-def _assert_operator_target(snapshot_name: str) -> str:
-    """Refuse a name this surface does not own, and return the form that was actually validated.
+def _validated_target(snapshot_name: str) -> str:
+    """Refuse a name that cannot safely become a request path, and return the validated form.
 
-    important: this is input validation as much as an ownership rule. pylxd interpolates the name
-    into the LXD URL with no escaping (`_APINode.__getitem__`), and the prefix test this replaces
-    checked the first four characters and let everything after them through.
+    important: input validation only. It used to carry the ownership rule too, which is what
+    refused an operator their own hand-taken snapshot; ownership is now `_gate_ownership`. pylxd
+    interpolates the name into the LXD URL with no escaping (`_APINode.__getitem__`), so this
+    applies to every class, not only the ones the console owns.
 
     important: the RETURN VALUE is what the caller must use. The validator normalises before it
     checks, so discarding it meant a name was approved in one form and sent to the daemon in
@@ -139,9 +141,55 @@ def _assert_operator_target(snapshot_name: str) -> str:
     intact, which is a 404 on a snapshot that exists.
     """
     try:
-        return snapshots_service.assert_operator_snapshot_name(snapshot_name)
+        return snapshots_service.assert_snapshot_name(snapshot_name)
     except snapshots_service.SnapshotNameError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "snapshot_name_invalid",
+                "message": str(exc),
+                "field": "snapshot_name",
+            },
+        ) from exc
+
+
+def _gate_ownership(
+    snapshot_name: str,
+    action: str,
+    instance_name: str,
+    host: str,
+    project: str,
+    *,
+    confirm_snapshot: Optional[str] = None,
+    manual_already_confirmed: bool = False,
+    acknowledged_upstream: bool = False,
+    reason: Optional[str] = None,
+) -> Optional[str]:
+    """Ownership decision plus the audit the refusal owes.
+
+    important: a denial here used to be invisible. `_gate_billing` records `result="denied"` and
+    this one raised straight through, so the most alert-worthy refusal on the surface left no
+    trace. Same wrapper shape, for the same reason.
+    """
+    origin = snapshots_service.classify_snapshot_origin(snapshot_name)
+    try:
+        return enforce_snapshot_ownership(
+            snapshot_name,
+            instance_name,
+            action,
+            confirm_snapshot=confirm_snapshot,
+            manual_already_confirmed=manual_already_confirmed,
+            acknowledged_upstream=acknowledged_upstream,
+            reason=reason,
+        )
+    except HTTPException as exc:
+        code = exc.detail.get("error") if isinstance(exc.detail, dict) else "snapshot_refused"
+        _audit(
+            f"instance.snapshot.{action}", instance_name, host, project,
+            result="denied", error_message=code,
+            details={"snapshot": snapshot_name, "snapshot_origin": origin.value},
+        )
+        raise
 
 
 async def _read_policy(client, instance_name: str, project: str) -> Dict[str, Any]:
@@ -424,6 +472,18 @@ async def delete_snapshot(
         False,
         description="Proceed on a source whose snapshots are billed elsewhere. Requires a reason",
     ),
+    confirm_snapshot: Optional[str] = Query(
+        None,
+        max_length=63,
+        description="The snapshot's own name. Required when it was taken outside this console",
+    ),
+    acknowledge_upstream_snapshot: bool = Query(
+        False,
+        description=(
+            "Proceed on a snapshot the upstream product owns. Requires a reason. Deliberately "
+            "NOT the billing acknowledgement: they answer different questions"
+        ),
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_tenant()),
@@ -431,10 +491,17 @@ async def delete_snapshot(
     verify_cluster_access(host)
     _enforce_snapshot_access(host, project, instance_name)
 
-    # This surface only manages what it made. A snapshot belonging to the paid product is
-    # visible here and deliberately not deletable, so an operator cannot silently remove a
-    # restore point a tenant is paying to keep.
-    snapshot_name = _assert_operator_target(snapshot_name)
+    # important: name safety, then ownership, both before a client is opened. Everything
+    # decidable from the request alone is decided before anything touches the cluster, which is
+    # what keeps a refusal free of round trips and stops an acknowledgement bought on one gate
+    # from being spent on another.
+    snapshot_name = _validated_target(snapshot_name)
+    _gate_ownership(
+        snapshot_name, "delete", instance_name, host, project,
+        confirm_snapshot=confirm_snapshot,
+        acknowledged_upstream=acknowledge_upstream_snapshot,
+        reason=reason,
+    )
 
     client = await _client(lxd_service, host)
     # Deleting lowers the storage the external schedule is measured on rather than raising it,
@@ -544,10 +611,17 @@ async def restore_snapshot(
             status_code=422, detail="Confirmation name does not match the instance name"
         )
 
-    # Restore is held to the same ownership rule as delete. Rolling an instance onto a snapshot
-    # the paid product owns discards everything written since a restore point this console did not
-    # create, on a schedule a tenant is paying for.
-    snapshot_name = _assert_operator_target(snapshot_name)
+    # Name safety, then ownership, both before a client is opened and long before anything is
+    # written. Restore already types the INSTANCE name above, which is the confirmation the
+    # hand-taken class needs; the gate below asks for the snapshot's name only on delete, where
+    # what an operator gets wrong is which row they clicked.
+    snapshot_name = _validated_target(snapshot_name)
+    _gate_ownership(
+        snapshot_name, "restore", instance_name, body.host, body.project,
+        manual_already_confirmed=True,
+        acknowledged_upstream=body.acknowledge_upstream_snapshot,
+        reason=body.reason,
+    )
 
     client = await _client(lxd_service, body.host)
     # Gated before the safety snapshot, not after: a refused restore must not leave a snapshot

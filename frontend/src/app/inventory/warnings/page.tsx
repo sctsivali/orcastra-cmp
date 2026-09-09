@@ -101,6 +101,12 @@ const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
 const CERT_WARNINGS = defineTable<CertificateWarning>()({
   id: "certificates",
   searchPlaceholder: "Search certificate issues",
+  // important: the id is searchable too. The accessors below fall back to `cluster_id` only when
+  // there is no display name, so a cluster that HAS one could not be found by the id an operator
+  // reads off every other surface. sort and facet are deliberately left alone: a facet accessor's
+  // return value is both the URL value and the option label, so widening it would rename the
+  // options and break every existing ?node=<display_name> link into this page.
+  searchExtra: (w) => [w.cluster_id],
   defaultSort: { field: "days", direction: "asc" },
   columns: [
     {
@@ -129,6 +135,12 @@ const CERT_WARNINGS = defineTable<CertificateWarning>()({
 const NODE_WARNINGS = defineTable<CertificateWarning>()({
   id: "nodes",
   searchPlaceholder: "Search offline nodes",
+  // important: the id is searchable too. The accessors below fall back to `cluster_id` only when
+  // there is no display name, so a cluster that HAS one could not be found by the id an operator
+  // reads off every other surface. sort and facet are deliberately left alone: a facet accessor's
+  // return value is both the URL value and the option label, so widening it would rename the
+  // options and break every existing ?node=<display_name> link into this page.
+  searchExtra: (w) => [w.cluster_id],
   defaultSort: { field: "cluster", direction: "asc" },
   columns: [
     {
@@ -621,7 +633,7 @@ function WarningsContent() {
                         <TableCell className="whitespace-nowrap">{formatDateTime(warning.expires_at)}</TableCell>
                         <TableCell>
                           <Button asChild size="sm">
-                            <IntentLink href={`/inventory/clusters/certificates?renew=${warning.cluster_id}`}>
+                            <IntentLink href={`/inventory/clusters/certificates?q=${encodeURIComponent(warning.cluster_id)}`}>
                               Renew
                             </IntentLink>
                           </Button>

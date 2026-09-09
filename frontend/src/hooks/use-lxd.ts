@@ -1884,6 +1884,8 @@ export function useDeleteSnapshot() {
       project,
       reason,
       acknowledgeBillingImpact,
+      acknowledgeUpstreamSnapshot,
+      confirmSnapshot,
     }: {
       instanceName: string;
       snapshotName: string;
@@ -1891,10 +1893,14 @@ export function useDeleteSnapshot() {
       project?: string;
       reason?: string;
       acknowledgeBillingImpact?: boolean;
+      acknowledgeUpstreamSnapshot?: boolean;
+      confirmSnapshot?: string;
     }) =>
       api.snapshots.remove(instanceName, snapshotName, host, project, {
         reason,
         acknowledgeBillingImpact,
+        acknowledgeUpstreamSnapshot,
+        confirmSnapshot,
       }),
     onSuccess: () => invalidateSnapshots(queryClient),
   });

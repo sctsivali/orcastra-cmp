@@ -20,10 +20,7 @@ import { formatBytes } from "@/lib/utils";
 
 import { SnapshotRowActions } from "./snapshot-row-actions";
 import { relativeAge, expiryLabel, snapshotScope } from "./snapshot-format";
-
-/** One spelling of the origin vocabulary, so the sort, the facet and the cell cannot drift. */
-export const originLabel = (s: SnapshotInfo) =>
-  s.operator_managed ? "Operator" : "Managed elsewhere";
+import { ORIGIN_LABEL, ORIGIN_ORDER, ORIGIN_RANK, snapshotOrigin } from "./snapshot-origin";
 
 /**
  * The table definition lives beside the rows it renders.
@@ -75,11 +72,21 @@ export const SNAPSHOTS = defineTable<SnapshotInfo>()({
     {
       field: "origin",
       label: "Origin",
-      // The one distinction that changes what an operator may do with a row: this console can
-      // only act on what it created. Everything else belongs to the metered product upstream.
-      sort: originLabel,
-      facet: originLabel,
-      facetSpec: { primary: true },
+      // Three classes, not two. The console used to say "Managed elsewhere" for anything without
+      // the ops- prefix, which lumped a snapshot an operator took by hand in with the ones the
+      // upstream product owns and bills for.
+      //
+      // note: the facet's value is the machine value and `format` supplies the label, the same
+      // split the warnings page uses for severity. Sorting follows ORIGIN_RANK rather than the
+      // alphabet, so the order is "how much of this do we own" rather than an accident of
+      // spelling.
+      sort: (s) => ORIGIN_RANK[snapshotOrigin(s)],
+      facet: (s) => snapshotOrigin(s),
+      facetSpec: {
+        primary: true,
+        format: (v: string) => ORIGIN_LABEL[v as keyof typeof ORIGIN_LABEL] ?? v,
+        order: [...ORIGIN_ORDER],
+      },
     },
     {
       field: "size",
@@ -204,7 +211,7 @@ export function SnapshotsTable({
                   )}
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{snapshot.project || "default"}</TableCell>
-                <TableCell>{originLabel(snapshot)}</TableCell>
+                <TableCell>{ORIGIN_LABEL[snapshotOrigin(snapshot)]}</TableCell>
                 <TableCell>
                   {typeof snapshot.size === "number" ? (
                     formatBytes(snapshot.size)

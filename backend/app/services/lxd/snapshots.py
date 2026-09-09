@@ -22,6 +22,7 @@ recorded at instance.py:87.
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -103,14 +104,48 @@ def _compact_stamp(moment: Optional[datetime] = None) -> str:
     return (moment or _utc_now()).strftime("%Y%m%dT%H%M%SZ")
 
 
+class SnapshotOrigin(str, Enum):
+    """Who made a snapshot, which is three answers rather than two.
+
+    The console recognised only "ours" and "everything else" until an operator pointed out that
+    the second bucket holds two unrelated things. `udesk-semanan` carries three snapshots taken
+    by hand over SSH (`pre-atlas-guacamole-...`, `pre-v4-xrdp-...`, `c35-cia-pre-...`) and this
+    module's own docs name them as the PROBLEM the feature exists to solve, not as anyone else's
+    property. Lumping them in with the upstream product's meant refusing an operator access to
+    their own restore point and telling them it was "managed elsewhere".
+
+    important: `MANUAL` is the fallback, so it is the most permissive class. Anything deciding a
+    gate from this MUST validate the name first; see `assert_snapshot_name`.
+    """
+
+    OPERATOR = "operator"   # ops-*            this console created it
+    MANUAL = "manual"       # anything else    an operator created it, outside this console
+    UPSTREAM = "upstream"   # RESERVED_PREFIXES, the metered product's namespaces
+
+
+def classify_snapshot_origin(name: str) -> SnapshotOrigin:
+    """Total, never raises. Safe on a name LXD handed back, where validation is not the question."""
+    candidate = (name or "").strip()
+    for reserved in RESERVED_PREFIXES:
+        if candidate.startswith(reserved):
+            return SnapshotOrigin.UPSTREAM
+    if candidate.startswith(OPS_PREFIX):
+        return SnapshotOrigin.OPERATOR
+    return SnapshotOrigin.MANUAL
+
+
 def is_operator_snapshot(name: str) -> bool:
-    return (name or "").startswith(OPS_PREFIX)
+    """Whether THIS CONSOLE created it. Still the question the per-instance cap asks."""
+    return classify_snapshot_origin(name) is SnapshotOrigin.OPERATOR
 
 
-def assert_operator_snapshot_name(name: str) -> str:
-    """Validate a name the operator surface is about to create or act on.
+def assert_snapshot_name(name: str) -> str:
+    """Refuse a name that cannot safely become a request path. Returns the validated form.
 
-    Applied by the dashboard router only. The proxy path must keep accepting OrcaHub's names.
+    important: this is the injection guard and it applies to EVERY class. pylxd builds request
+    URLs by string concatenation and escapes nothing, so `ct-victim?` in a path segment ends the
+    path and addresses a different resource. It used to be fused with the ownership rule below,
+    which meant widening ownership would have widened this too.
     """
     candidate = (name or "").strip()
     if not candidate:
@@ -120,13 +155,27 @@ def assert_operator_snapshot_name(name: str) -> str:
             "Snapshot name may contain only letters, digits and dashes, must start with a "
             "letter or digit, and may be at most 63 characters."
         )
-    for reserved in RESERVED_PREFIXES:
-        if candidate.startswith(reserved):
-            raise SnapshotNameError(
-                f"'{reserved}' is reserved for snapshots managed elsewhere. "
-                f"Operator snapshots are named '{OPS_PREFIX}...'."
-            )
-    if not candidate.startswith(OPS_PREFIX):
+    return candidate
+
+
+def assert_operator_snapshot_name(name: str) -> str:
+    """Validate a name this console is about to CREATE.
+
+    note: this used to gate what the console could ACT on as well, which is what refused an
+    operator their own hand-taken snapshot. Acting is now decided by
+    `core/snapshot_ownership_gate.py` from the origin; creating is still ours alone, because a
+    name outside `ops-` would be indistinguishable from a paid one or collide with a namespace
+    OrcaHub's prune physically deletes.
+    """
+    candidate = assert_snapshot_name(name)
+    origin = classify_snapshot_origin(candidate)
+    if origin is SnapshotOrigin.UPSTREAM:
+        reserved = next(p for p in RESERVED_PREFIXES if candidate.startswith(p))
+        raise SnapshotNameError(
+            f"'{reserved}' is reserved for snapshots managed elsewhere. "
+            f"Operator snapshots are named '{OPS_PREFIX}...'."
+        )
+    if origin is not SnapshotOrigin.OPERATOR:
         raise SnapshotNameError(
             f"Operator snapshots must start with '{OPS_PREFIX}'."
         )
@@ -193,6 +242,10 @@ def _normalize(entry: Any, source_name: str) -> Dict[str, Any]:
         "stateful": entry.get("stateful"),
         "size": size,
         "architecture": entry.get("architecture"),
+        # Both, deliberately. `origin` is the three-way answer the console acts on; the boolean
+        # stays because "did this console create it" is still the question the per-instance cap
+        # and several callers ask, and it is not the same question as "may I act on it".
+        "origin": classify_snapshot_origin(raw_name.rsplit("/", 1)[-1]).value,
         "operator_managed": is_operator_snapshot(raw_name.rsplit("/", 1)[-1]),
         # Flipped by measure_snapshot_sizes. False means nobody asked LXD for a size, which is
         # not the same fact as LXD having been asked and answered nothing.
