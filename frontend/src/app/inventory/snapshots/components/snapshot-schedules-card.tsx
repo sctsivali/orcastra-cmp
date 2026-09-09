@@ -8,7 +8,9 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { useSnapshotSchedules } from "@/hooks/use-lxd";
+import { useSnapshotSchedulesEnabled } from "@/hooks/use-read-only-mode";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
+import { APIError } from "@/types/api";
 
 import { SNAPSHOT_SCHEDULES, SnapshotSchedulesTable } from "./snapshot-schedules-table";
 
@@ -57,8 +59,17 @@ function SchedulesCardContent() {
   const [pageSize, setPageSize] = useState(PANEL_PAGE_SIZE);
   const resetPage = () => setCurrentPage(1);
 
-  const { data, isFetching } = useSnapshotSchedules();
+  // Two sources for one fact, and neither is redundant. The settings poll answers before a request
+  // is made, so a deployment that has said no is never asked; the 404 is what a backend too old to
+  // carry the field still tells us, and it is the authoritative one when they disagree.
+  const schedulesEnabled = useSnapshotSchedulesEnabled();
+  const { data, isFetching, isError, error } = useSnapshotSchedules({}, schedulesEnabled !== false);
   const rows = useMemo(() => data?.items ?? [], [data]);
+  // SNAPSHOT_SCHEDULES_ENABLED is off by default and gates both the loop and the router
+  // (main.py:689), so a 404 here is not a failure to read: it is the deployment answering that it
+  // never mounted the routes, every time, forever.
+  const switchedOff =
+    schedulesEnabled === false || (isError && error instanceof APIError && error.status === 404);
 
   const filters = useTableFilters(SNAPSHOT_SCHEDULES, rows, { onFilterChange: resetPage });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
@@ -76,18 +87,37 @@ function SchedulesCardContent() {
     <Card>
       <CardHeader className="space-y-4">
         <CardTitle>Snapshot Schedules</CardTitle>
-        {rows.length > 0 && <TableToolbar filters={filters} noun="schedules" />}
+        {!switchedOff && rows.length > 0 && <TableToolbar filters={filters} noun="schedules" />}
       </CardHeader>
       <CardContent>
         {/*
-          One line rather than a table when there is nothing to show.
+          Four answers, and one line rather than a table for the three that have no rows.
 
           A full empty state here costs about 250px above the primary content of a page called
           Snapshots, on every visit, for a feature most instances will not use. It also renders a
           <tbody> whose only row spans every column, which is a different shape from a data row and
           which anything reading the page positionally would meet first.
+
+          "No schedules yet" used to be printed for all three, so a deployment that never mounted
+          the routes read as a deployment nobody had used yet, and the sentence then sent the
+          operator to a tab whose Schedule button would 404 the moment they submitted. The failed
+          read is separated from the switched-off one for the same reason: an outage an operator
+          could act on is not a deployment decision they cannot.
+
+          The error branch waits for `rows.length === 0` because a refetch can fail while the rows
+          from the last good read are still in hand, and dropping a list the operator can still use
+          is worse than showing it beside the failure.
         */}
-        {rows.length === 0 ? (
+        {switchedOff ? (
+          <p className="text-sm text-muted-foreground">
+            Snapshot schedules are switched off on this deployment. Nothing is scheduled and nothing
+            will run until the feature is turned on. You can still take snapshots by hand.
+          </p>
+        ) : isError && rows.length === 0 ? (
+          <p className="text-sm text-destructive">
+            {error instanceof Error ? error.message : "Could not read schedules."}
+          </p>
+        ) : rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {isFetching
               ? "Reading schedules..."
@@ -108,7 +138,7 @@ function SchedulesCardContent() {
           />
         )}
 
-        {sorted.length > 0 && (
+        {!switchedOff && sorted.length > 0 && (
           <div className="mt-4">
             <DataTablePagination
               currentPage={currentPage}

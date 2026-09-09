@@ -7,6 +7,7 @@ import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
+import { APIError } from "@/types/api";
 import { 
   vmAPI, 
   imageAPI, 
@@ -1881,8 +1882,16 @@ export function useSnapshotSchedules(
     ],
     queryFn: (opts) => api.snapshotSchedules.list(filters, opts),
     ...SEMI_STATIC_DATA_CONFIG,
-    // After the spread on purpose: the preset carries its own `enabled`.
+    // After the spread on purpose: the preset carries its own `enabled` and its own `retry`.
     enabled,
+    // important: a 404 here is the deployment saying the schedule routes are not mounted, which is
+    // the documented default (SNAPSHOT_SCHEDULES_ENABLED is off unless set). The shared preset only
+    // declines to retry 401, 403 and 429, so without this every mount of the snapshots page and of
+    // every instance Snapshots tab costs three requests to learn the same permanent answer.
+    retry: (failureCount: number, error: unknown) =>
+      error instanceof APIError && error.status === 404
+        ? false
+        : SEMI_STATIC_DATA_CONFIG.retry(failureCount, error),
   });
 }
 

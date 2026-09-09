@@ -949,16 +949,8 @@ export const healthCheck = async (): Promise<{ status: string }> => {
 
 // System API
 const systemAPI = {
-  getSettings: async (): Promise<{
-    read_only_mode: boolean;
-    api_version: string;
-    debug: boolean;
-  }> => {
-    return fetchAPI<{
-      read_only_mode: boolean;
-      api_version: string;
-      debug: boolean;
-    }>("/system/settings");
+  getSettings: async (): Promise<SystemSettings> => {
+    return fetchAPI<SystemSettings>("/system/settings");
   },
   getVersion: async () => {
     return fetchAPI<{

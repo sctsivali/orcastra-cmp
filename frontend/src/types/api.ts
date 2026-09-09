@@ -1053,6 +1053,15 @@ export interface SystemSettings {
   read_only_mode: boolean;
   api_version: string;
   debug: boolean;
+  /**
+   * Whether this deployment mounted the snapshot schedule routes.
+   *
+   * important: a capability of the deployment, not a user preference. Optional on the type
+   * because a console can be newer than the backend it is talking to during a rolling deploy,
+   * and `undefined` there must read as "not stated" rather than as "off": a control is only
+   * disabled on an explicit `false`.
+   */
+  snapshot_schedules_enabled?: boolean;
 }
 
 // My Keys

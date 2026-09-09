@@ -17,7 +17,7 @@ import {
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useInstanceSnapshots, useSnapshotSchedules } from "@/hooks/use-lxd";
-import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { useReadOnlyMode, useSnapshotSchedulesEnabled } from "@/hooks/use-read-only-mode";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { formatBytes } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
@@ -54,12 +54,16 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
     enabled,
   );
   const { isReadOnly } = useReadOnlyMode();
+  // Read from the settings poll the console already runs, not probed by firing a request at a
+  // route that may not exist. `undefined` is not yet answered and leaves the button as it was.
+  const schedulesEnabled = useSnapshotSchedulesEnabled();
   const [creating, setCreating] = React.useState(false);
   const [scheduling, setScheduling] = React.useState(false);
-  // Narrowed to this instance, so the tab reads one row rather than the whole fleet's schedules.
+  // Narrowed to this instance, so the tab reads one row rather than the whole fleet's schedules,
+  // and skipped entirely once the deployment has said the routes are not mounted.
   const schedules = useSnapshotSchedules(
     { host: instance.host, project, instance: instance.name },
-    enabled,
+    enabled && schedulesEnabled !== false,
   );
   const ownSchedule = schedules.data?.items?.[0] ?? null;
   const [page, setPage] = React.useState(1);
@@ -153,20 +157,28 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
             already holds `policy.externally_managed`, so the one instance that cannot carry a
             schedule is known before anything is clicked, and the operator reads why in the banner
             instead of meeting a 409 they have to interpret.
+
+            The same argument covers the feature flag. SNAPSHOT_SCHEDULES_ENABLED is off by default
+            and gates the router, so on a stock deployment this button was enabled, opened a dialog,
+            and submitted into a 404 that names nothing an operator can act on.
           */}
           <Button
             size="sm"
             variant="outline"
             onClick={() => setScheduling(true)}
-            disabled={isReadOnly || Boolean(policy?.externally_managed)}
+            disabled={
+              isReadOnly || Boolean(policy?.externally_managed) || schedulesEnabled === false
+            }
             title={
-              policy?.externally_managed
-                ? "The metered product outside this console already schedules this instance"
-                : isReadOnly
-                  ? "Action disabled in read-only mode"
-                  : ownSchedule
-                    ? "Edit the recurring snapshot schedule"
-                    : "Snapshot this instance on a schedule"
+              schedulesEnabled === false
+                ? "Snapshot schedules are switched off on this deployment"
+                : policy?.externally_managed
+                  ? "The metered product outside this console already schedules this instance"
+                  : isReadOnly
+                    ? "Action disabled in read-only mode"
+                    : ownSchedule
+                      ? "Edit the recurring snapshot schedule"
+                      : "Snapshot this instance on a schedule"
             }
           >
             <CalendarClock className="h-4 w-4 mr-2" aria-hidden />
