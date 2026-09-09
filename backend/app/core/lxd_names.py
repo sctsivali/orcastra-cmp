@@ -49,3 +49,31 @@ POLICY_CONFIG_KEYS = (
     "snapshots.expiry",
     "snapshots.pattern",
 )
+
+
+# A storage volume's name, which is a laxer rule than an instance's in two ways.
+#
+# important: this is the same traversal gate as LXD_NAME_PATTERN, not a weaker one. The character
+# class is the security property and it still refuses `/`, `?`, `#`, whitespace and a leading dot,
+# so a bare `..` cannot pass. What it admits is `.` and `_`, because real volume names carry them:
+# this fleet holds `netgate-installer-v1.1.1-RELEASE-amd64.iso` and `qa-pr6-v1.iso`, and the
+# instance rule would make every ISO volume unreachable.
+#
+# The length is a sanity bound rather than a security one, and 63 is the wrong number here. An
+# `image` volume is named by its SHA256 fingerprint, which is 64 characters, so the instance limit
+# refuses every image volume on the fleet. 128 clears that with room for a longer digest without
+# leaving the bound open.
+#
+# note: an instance's own volume snapshots are named `instance/snapshot` by LXD, so they carry a
+# slash and are not addressable through a single path segment at all. That predates this pattern
+# and is not changed by it: those rows are listed, never addressed by name.
+#
+# `routers/iso_uploads.py` has carried this character class since ISO upload shipped, with a comment
+# naming it the IDOR gate. It lives here now so the volume routes beside it read one definition
+# rather than a second copy that can drift.
+LXD_VOLUME_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+
+LXD_VOLUME_NAME_DESCRIPTION = (
+    "Letters, digits, dots, underscores and dashes, starting with a letter or digit, "
+    "at most 128 characters"
+)

@@ -3,8 +3,8 @@ API Router for Storage Volume operations.
 Provides endpoints for managing LXD storage volumes.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict
+from fastapi import APIRouter, HTTPException, Depends, Path, Query, Body
+from typing import Literal, Optional, List, Dict
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +19,11 @@ from app.core.dependencies import check_read_only_mode, require_tenant, require_
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.lxd_errors import lxd_http_error
+from app.core.lxd_names import (
+    LXD_NAME_PATTERN,
+    LXD_VOLUME_NAME_DESCRIPTION,
+    LXD_VOLUME_NAME_PATTERN,
+)
 from app.core.tenant_visibility import (
     filter_visible_lxd_references,
     parse_lxd_reference,
@@ -43,6 +48,22 @@ router = APIRouter(
 _executor = ThreadPoolExecutor(max_workers=5)
 
 
+# The volume types LXD itself defines. A closed vocabulary rather than a pattern, because the set is
+# finite and known: `core/tenant_visibility.py` already owns two of these to tell an instance's own
+# root disk from a custom volume.
+#
+# important: this is a REQUEST-BOUNDARY guard, not decoration. `volume_type`, `volume_name` and
+# `pool` are interpolated into an LXD request path by pylxd, which builds URLs by string
+# concatenation and escapes nothing, so each one is a path segment rather than data. A `?` ends the
+# path and moves the request to a different resource, and `requests` collapses `..` before sending,
+# so a caller controls the path STRUCTURE and not merely one segment. `pool` is the widest of the
+# three: a path segment cannot carry `/`, but a query parameter carries it verbatim.
+#
+# core/lxd_names.py:1-22 records the rule this restores: refuse the name at the boundary, before any
+# client is built, any cluster is contacted, or any authorization decision is made.
+VolumeType = Literal["custom", "container", "virtual-machine", "image"]
+
+
 class StorageVolumeInfo(BaseModel):
     """Storage volume information."""
     name: str = Field(..., description="Volume name")
@@ -57,9 +78,13 @@ class StorageVolumeInfo(BaseModel):
 
 class StorageVolumeCreateRequest(BaseModel):
     """Request body for creating a storage volume."""
-    name: str = Field(..., description="Volume name")
-    pool: str = Field(..., description="Storage pool name")
-    type: str = Field("custom", description="Volume type")
+    name: str = Field(
+        ..., pattern=LXD_VOLUME_NAME_PATTERN, description=f"Volume name. {LXD_VOLUME_NAME_DESCRIPTION}"
+    )
+    pool: str = Field(
+        ..., pattern=LXD_VOLUME_NAME_PATTERN, description=f"Storage pool. {LXD_VOLUME_NAME_DESCRIPTION}"
+    )
+    type: VolumeType = Field("custom", description="Volume type")
     description: str = Field("", description="Volume description")
     config: Dict[str, str] = Field(default_factory=dict, description="Volume configuration")
     content_type: str = Field("filesystem", description="Content type")
@@ -132,8 +157,8 @@ def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter
 )
 @single_flight("storage_volumes:list")
 async def list_storage_volumes(
-    host: Optional[str] = Query(None, description="Filter by specific host node"),
-    pool: Optional[str] = Query(None, description="Filter by storage pool"),
+    host: Optional[str] = Query(None, pattern=LXD_NAME_PATTERN, description="Filter by specific host node"),
+    pool: Optional[str] = Query(None, pattern=LXD_VOLUME_NAME_PATTERN, description="Filter by storage pool"),
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
@@ -215,10 +240,12 @@ async def list_storage_volumes(
     description="Get detailed information about a specific storage volume.",
 )
 async def get_storage_volume(
-    volume_type: str,
-    volume_name: str,
-    host: str = Query(..., description="Target host node"),
-    pool: str = Query(..., description="Storage pool name"),
+    volume_type: VolumeType,
+    volume_name: str = Path(
+        ..., pattern=LXD_VOLUME_NAME_PATTERN, description=LXD_VOLUME_NAME_DESCRIPTION
+    ),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
+    pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific storage volume."""
@@ -259,7 +286,7 @@ async def get_storage_volume(
 )
 async def create_storage_volume(
     request: StorageVolumeCreateRequest,
-    host: str = Query(..., description="Target host node"),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -343,10 +370,12 @@ async def create_storage_volume(
     description="Update an existing storage volume.",
 )
 async def update_storage_volume(
-    volume_type: str,
-    volume_name: str,
-    host: str = Query(..., description="Target host node"),
-    pool: str = Query(..., description="Storage pool name"),
+    volume_type: VolumeType,
+    volume_name: str = Path(
+        ..., pattern=LXD_VOLUME_NAME_PATTERN, description=LXD_VOLUME_NAME_DESCRIPTION
+    ),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
+    pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
     config: Optional[Dict[str, str]] = Body(None),
     description: Optional[str] = Body(None),
     lxd_service: LXDService = Depends(get_lxd_service),
@@ -425,10 +454,12 @@ def _in_use_detail(volume_name: str, references: List[str]) -> str:
     },
 )
 async def delete_storage_volume(
-    volume_type: str,
-    volume_name: str,
-    host: str = Query(..., description="Target host node"),
-    pool: str = Query(..., description="Storage pool name"),
+    volume_type: VolumeType,
+    volume_name: str = Path(
+        ..., pattern=LXD_VOLUME_NAME_PATTERN, description=LXD_VOLUME_NAME_DESCRIPTION
+    ),
+    host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
+    pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
