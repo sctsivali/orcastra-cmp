@@ -28,6 +28,11 @@ class SystemSettings(BaseModel):
     read_only_mode: bool
     api_version: str
     debug: bool
+    # note: a capability, not a preference. The schedule routes are only mounted when the flag is
+    # on (main.py:689), so a console that cannot see the flag offers controls whose submit 404s.
+    # This endpoint is already polled every 60 seconds for read_only_mode, so the console learns
+    # what this deployment can do without a second request or a probe against a missing route.
+    snapshot_schedules_enabled: bool
 
 
 class VersionInfo(BaseModel):
@@ -74,7 +79,8 @@ async def get_system_settings():
     return SystemSettings(
         read_only_mode=settings.read_only_mode,
         api_version=settings.api_version,
-        debug=settings.debug
+        debug=settings.debug,
+        snapshot_schedules_enabled=settings.snapshot_schedules_enabled,
     )
 
 
