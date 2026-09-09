@@ -14,7 +14,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useInstanceSnapshots, useSnapshotSchedules } from "@/hooks/use-lxd";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -28,6 +28,10 @@ import {
   nextRunLabel,
   relativeAge,
 } from "@/app/inventory/snapshots/components/snapshot-format";
+import {
+  ORIGIN_LABEL,
+  snapshotOrigin,
+} from "@/app/inventory/snapshots/components/snapshot-origin";
 import {
   STATE_LABEL,
   scheduleState,
@@ -196,6 +200,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
             <TableHeader>
               <TableRow>
                 <TableHead>Snapshot</TableHead>
+                <TableHead>Origin</TableHead>
                 <TableHead>Size</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Expires</TableHead>
@@ -204,16 +209,23 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
             </TableHeader>
             <TableBody>
               {paginated.length === 0 ? (
-                <TableEmptyRow colSpan={5} icon={History} title="No snapshots on this page" />
+                <TableEmptyRow colSpan={6} icon={History} title="No snapshots on this page" />
               ) : (
                 paginated.map((snapshot) => (
                   <TableRow key={snapshot.name}>
                     <TableCell className="font-medium">
                       <span className="font-mono">{snapshot.name}</span>
-                      {!snapshot.operator_managed && (
-                        <TableSubText>Managed elsewhere</TableSubText>
-                      )}
                     </TableCell>
+                    {/*
+                      The word the fleet table already uses, read from the same map.
+
+                      This cell said "Managed elsewhere" for anything without the `ops-` prefix,
+                      which is exactly the copy the three-class origin model was written to remove:
+                      a snapshot an operator took by hand over SSH is theirs, not another product's.
+                      The rewrite reached the fleet table and stopped there, and both specs that
+                      assert it is gone read the fleet grid, so it survived here.
+                    */}
+                    <TableCell>{ORIGIN_LABEL[snapshotOrigin(snapshot)]}</TableCell>
                     <TableCell>
                       {typeof snapshot.size === "number" ? (
                         formatBytes(snapshot.size)
