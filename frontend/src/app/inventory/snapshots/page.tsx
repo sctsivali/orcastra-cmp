@@ -24,6 +24,7 @@ import { TABLE_PAGE_SIZE } from "@/lib/pagination";
 import { Role } from "@/types/rbac";
 
 import { ALL_CLUSTERS, ALL_PROJECTS, SnapshotScopePicker } from "./components/snapshot-scope-picker";
+import { SnapshotSchedulesCard } from "./components/snapshot-schedules-card";
 import { SNAPSHOTS, SnapshotsTable } from "./components/snapshots-table";
 
 /**
@@ -186,6 +187,10 @@ function SnapshotsContent() {
     return (
       <div className="p-8 space-y-6">
         <SnapshotsHeader onRefresh={refreshNow} lastUpdatedAt={dataUpdatedAt} />
+        {/* Still rendered. Schedules are read from Postgres rather than from a cluster, and a
+            cluster outage is exactly when an operator needs to see what is scheduled against it
+            and stop it. */}
+        <SnapshotSchedulesCard />
         <Card>
           <CardContent className="pt-6">
             <EmptyState
@@ -213,6 +218,10 @@ function SnapshotsContent() {
       <SnapshotsHeader onRefresh={refreshNow} lastUpdatedAt={dataUpdatedAt} />
 
       <UnreachableNodesBanner noun="snapshots" nodes={unreachableNodes} />
+
+      {/* Schedules first: they are the cause of some of the rows below, and stacking rather than
+          tabbing keeps that comparison on one screen. */}
+      <SnapshotSchedulesCard />
 
       <Card>
         <CardHeader className="space-y-4">

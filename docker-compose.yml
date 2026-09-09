@@ -77,6 +77,15 @@ services:
 
       # OpenSearch Archive (optional - for log archive management API)
       - OPENSEARCH_ARCHIVE_ENABLED=${OPENSEARCH_ARCHIVE_ENABLED:-false}
+
+      # Orcastra's own recurring snapshot schedules, and the loop that runs them. Off by default:
+      # a scheduler that starts taking snapshots on live customer clusters as a side effect of a
+      # deploy is not a deliberate act. The flag gates the routes as well as the loop, so a
+      # deployment that has not turned it on has no surface rather than one that answers and
+      # never fires. Runtime only, no rebuild.
+      - SNAPSHOT_SCHEDULES_ENABLED=${SNAPSHOT_SCHEDULES_ENABLED:-false}
+      - SNAPSHOT_SCHEDULE_TICK_SECONDS=${SNAPSHOT_SCHEDULE_TICK_SECONDS:-30}
+      - SNAPSHOT_SCHEDULE_BATCH=${SNAPSHOT_SCHEDULE_BATCH:-8}
       - OPENSEARCH_URL=${OPENSEARCH_URL:-}
       - OPENSEARCH_ADMIN_USER=${OPENSEARCH_ADMIN_USER:-admin}
       - OPENSEARCH_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD:-}

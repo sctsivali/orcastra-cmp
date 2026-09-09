@@ -2549,6 +2549,73 @@ export interface SnapshotInfo {
 }
 
 /** The LXD-native schedule on a source. Read only here: it belongs to the upstream product. */
+export type ScheduleFrequency = "every_6_hours" | "every_12_hours" | "daily" | "weekly";
+
+/**
+ * A recurring snapshot this console owns.
+ *
+ * note: `state` is the stored active/paused only. A failing schedule is still active, and the
+ * console derives that third label from `consecutive_failures` rather than the API inventing a
+ * state the database does not have.
+ */
+export interface SnapshotSchedule {
+  id: number;
+  host: string;
+  project: string;
+  instance_name: string;
+  label: string;
+  frequency: ScheduleFrequency;
+  hour_utc: number;
+  minute_utc: number;
+  weekday: number | null;
+  /** One sentence naming when this fires, composed server side so a log and a screen agree. */
+  summary: string;
+  keep_last: number;
+  expiry_days: number;
+  state: "active" | "paused";
+  paused_reason: string | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_snapshot_name: string | null;
+  last_error: string | null;
+  consecutive_failures: number;
+  missed_runs: number;
+  created_by: string;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface SnapshotScheduleListResponse {
+  total: number;
+  items: SnapshotSchedule[];
+}
+
+export interface SnapshotScheduleActionResponse {
+  success: boolean;
+  message: string;
+  schedule?: SnapshotSchedule | null;
+}
+
+export interface SnapshotScheduleCreateRequest {
+  host: string;
+  project: string;
+  instance_name: string;
+  label: string;
+  frequency: ScheduleFrequency;
+  hour_utc: number;
+  minute_utc: number;
+  weekday?: number | null;
+  keep_last: number;
+  expiry_days: number;
+}
+
+export type SnapshotScheduleUpdateRequest = Partial<
+  Pick<
+    SnapshotScheduleCreateRequest,
+    "label" | "frequency" | "hour_utc" | "minute_utc" | "weekday" | "keep_last" | "expiry_days"
+  >
+>;
+
 export interface SnapshotPolicy {
   schedule?: string | null;
   schedule_stopped?: string | null;

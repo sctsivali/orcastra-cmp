@@ -1865,6 +1865,97 @@ function invalidateSnapshots(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: ["fleetSnapshots"] });
 }
 
+// ── snapshot schedules ─────────────────────────────────────────────────────────────────────────
+
+/** Every schedule the caller's organization can see, optionally narrowed to one instance. */
+export function useSnapshotSchedules(
+  filters: { host?: string; project?: string; instance?: string } = {},
+  enabled = true,
+) {
+  return useRefreshableQuery({
+    queryKey: [
+      "snapshotSchedules",
+      filters.host ?? null,
+      filters.project ?? null,
+      filters.instance ?? null,
+    ],
+    queryFn: (opts) => api.snapshotSchedules.list(filters, opts),
+    ...SEMI_STATIC_DATA_CONFIG,
+    // After the spread on purpose: the preset carries its own `enabled`.
+    enabled,
+  });
+}
+
+function invalidateSchedules(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ["snapshotSchedules"] });
+}
+
+/**
+ * important: every schedule mutation invalidates the SNAPSHOT queries too, not only the schedule
+ * ones. Running a schedule creates a snapshot, and deleting one changes what the list beside it
+ * means. Invalidating only its own key would leave the two halves of one screen disagreeing.
+ */
+function invalidateBoth(queryClient: ReturnType<typeof useQueryClient>) {
+  invalidateSchedules(queryClient);
+  invalidateSnapshots(queryClient);
+}
+
+export function useCreateSnapshotSchedule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: import("@/types/api").SnapshotScheduleCreateRequest) =>
+      api.snapshotSchedules.create(body),
+    onSuccess: () => invalidateBoth(queryClient),
+  });
+}
+
+export function useUpdateSnapshotSchedule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      body,
+    }: {
+      id: number;
+      body: import("@/types/api").SnapshotScheduleUpdateRequest;
+    }) =>
+      api.snapshotSchedules.update(id, body),
+    onSuccess: () => invalidateBoth(queryClient),
+  });
+}
+
+export function usePauseSnapshotSchedule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.snapshotSchedules.pause(id),
+    onSuccess: () => invalidateSchedules(queryClient),
+  });
+}
+
+export function useResumeSnapshotSchedule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.snapshotSchedules.resume(id),
+    onSuccess: () => invalidateSchedules(queryClient),
+  });
+}
+
+export function useRunSnapshotScheduleNow() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.snapshotSchedules.runNow(id),
+    onSuccess: () => invalidateBoth(queryClient),
+  });
+}
+
+export function useDeleteSnapshotSchedule() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => api.snapshotSchedules.remove(id),
+    onSuccess: () => invalidateBoth(queryClient),
+  });
+}
+
 export function useCreateSnapshot() {
   const queryClient = useQueryClient();
   return useMutation({

@@ -57,6 +57,10 @@ import {
   MyAccessResponse,
   SnapshotListResponse,
   FleetSnapshotListResponse,
+  SnapshotScheduleListResponse,
+  SnapshotScheduleActionResponse,
+  SnapshotScheduleCreateRequest,
+  SnapshotScheduleUpdateRequest,
   SnapshotCreateRequest,
   SnapshotRestoreRequest,
   SnapshotActionResponse,
@@ -1943,6 +1947,54 @@ const breakGlassAPI = {
   },
 };
 
+/**
+ * Orcastra's own recurring snapshots, which are a different mechanism from the LXD-native schedule
+ * `SnapshotPolicy` reports and never write it.
+ */
+const snapshotScheduleAPI = {
+  list: async (
+    filters: { host?: string; project?: string; instance?: string } = {},
+    opts: ReadOptions = {},
+  ): Promise<SnapshotScheduleListResponse> => {
+    const qs = new URLSearchParams();
+    // Omitted rather than sent blank, for the reason listFleet records: the backend reads a
+    // present-but-empty name as a caller who named something and got it wrong.
+    if (filters.host) qs.set("host", filters.host);
+    if (filters.project) qs.set("project", filters.project);
+    if (filters.instance) qs.set("instance", filters.instance);
+    const query = qs.toString();
+    return fetchRead<SnapshotScheduleListResponse>(
+      query ? `/snapshot-schedules?${query}` : "/snapshot-schedules",
+      opts,
+    );
+  },
+  create: async (
+    body: SnapshotScheduleCreateRequest,
+  ): Promise<SnapshotScheduleActionResponse> =>
+    fetchAPI<SnapshotScheduleActionResponse>("/snapshot-schedules", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  update: async (
+    id: number,
+    body: SnapshotScheduleUpdateRequest,
+  ): Promise<SnapshotScheduleActionResponse> =>
+    fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  pause: async (id: number): Promise<SnapshotScheduleActionResponse> =>
+    fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}/pause`, { method: "POST" }),
+  resume: async (id: number): Promise<SnapshotScheduleActionResponse> =>
+    fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}/resume`, { method: "POST" }),
+  runNow: async (id: number): Promise<SnapshotScheduleActionResponse> =>
+    fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}/run-now`, {
+      method: "POST",
+    }),
+  remove: async (id: number): Promise<SnapshotScheduleActionResponse> =>
+    fetchAPI<SnapshotScheduleActionResponse>(`/snapshot-schedules/${id}`, { method: "DELETE" }),
+};
+
 const snapshotAPI = {
   /** Snapshots on one instance, with the source's schedule for context. */
   list: async (
@@ -2086,6 +2138,7 @@ export const api = {
   regions: regionsAPI,
   breakGlass: breakGlassAPI,
   snapshots: snapshotAPI,
+  snapshotSchedules: snapshotScheduleAPI,
   mobility: mobilityAPI,
   clusterMembers: {
     list: async (node: string, opts: ReadOptions = {}) => {
