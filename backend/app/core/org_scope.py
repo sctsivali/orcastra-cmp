@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from sqlalchemy import select, or_, and_
+from sqlalchemy import select, or_, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser, get_current_user
@@ -33,6 +33,20 @@ _allowed_clusters_var: contextvars.ContextVar[Optional[set[str]]] = contextvars.
 # format: {cluster_id: {(project_name, instance_name): set[permissions]}}
 _tenant_acl_var: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
     "tenant_acl", default=None
+)
+
+# request-scoped project visibility for clusters that carry more than one organization.
+# format: {cluster_id: set[project_name]}. A cluster absent from the map is unrestricted, and
+# None means nothing is restricted at all.
+#
+# important: this exists because a Partner is scoped by CLUSTER and not by project.
+# get_tenant_acl_rules returns None for Partner as well as Admin, so the used_by filter that
+# protects the network, ACL and profile lists never runs for them. That was harmless only
+# while those lists could not see past the default project. Once they can, a shared cluster
+# would hand one partner another partner's network config, ACL rule bodies and instance
+# inventory.
+_visible_projects_var: contextvars.ContextVar[Optional[dict[str, set[str]]]] = (
+    contextvars.ContextVar("visible_projects", default=None)
 )
 
 
@@ -213,6 +227,22 @@ def filter_projects_by_acl(cluster_id: str, project_names: list[str]) -> list[st
     # filter to allowed projects
     allowed_projects = {proj for (proj, _inst), _perms in cluster_rules.items()}
     return [p for p in project_names if p in allowed_projects]
+
+
+def visible_projects_for(cluster_id: str) -> Optional[set[str]]:
+    """Projects this request may see on a cluster, or None when unrestricted."""
+    mapping = _visible_projects_var.get(None)
+    if not mapping:
+        return None
+    return mapping.get(cluster_id)
+
+
+def project_is_visible(cluster_id: str, project: Optional[str]) -> bool:
+    """Whether a record owned by `project` on `cluster_id` may be shown to this request."""
+    allowed = visible_projects_for(cluster_id)
+    if allowed is None:
+        return True
+    return (project or "default") in allowed
 
 
 def filter_instances_by_acl(
@@ -464,6 +494,96 @@ async def resolve_cluster_orgs(
     return [(row[0], row[1]) for row in (await db.execute(stmt)).all()]
 
 
+async def _query_user_org_ids(user_email: str, db: AsyncSession) -> set[int]:
+    """Organization ids a user belongs to or created."""
+    from app.models.db_models import Organization, OrganizationMember
+
+    stmt = (
+        select(Organization.id)
+        .outerjoin(OrganizationMember, OrganizationMember.organization_id == Organization.id)
+        .where(
+            and_(
+                Organization.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
+                or_(
+                    OrganizationMember.user_email == user_email,
+                    Organization.created_by == user_email,
+                ),
+            )
+        )
+    )
+    return set((await db.execute(stmt)).scalars().all())
+
+
+async def _clusters_with_several_orgs(db: AsyncSession) -> set[str]:
+    """Clusters bound to more than one organization.
+
+    important: resolve_cluster_org answers "which one org do we attribute this to" and takes
+    the lowest id, which is right for a label and wrong for a permission. A cluster can carry
+    more than one binding, and one does on this deployment today.
+    """
+    from app.models.db_models import OrganizationCluster
+
+    stmt = (
+        select(OrganizationCluster.cluster_id)
+        .group_by(OrganizationCluster.cluster_id)
+        .having(func.count(func.distinct(OrganizationCluster.organization_id)) > 1)
+    )
+    return set((await db.execute(stmt)).scalars().all())
+
+
+async def get_visible_projects(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> Optional[dict[str, set[str]]]:
+    """Which LXD projects this user may see, on clusters that carry more than one org.
+
+    Returns None when nothing needs restricting, and otherwise a map of cluster to the set of
+    project names that may be shown. A cluster absent from the map is unrestricted.
+
+    Only Partners need this. A Tenant is already filtered by their ACL on every one of these
+    lists, and an Admin reaching a cluster they do not own is gated by break-glass at the
+    cluster level. A Partner, though, is scoped by cluster alone, so on a cluster shared with
+    another organization the only safe default is the behaviour they have today: the default
+    project, widened by whatever their own policies name.
+    """
+    from app.core.rbac import resolve_roles, get_highest_role, Role
+    from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
+
+    if get_highest_role(resolve_roles(user)) != Role.PARTNER:
+        return None
+
+    shared = await _clusters_with_several_orgs(db)
+    if not shared:
+        return None
+
+    org_ids = await _query_user_org_ids(user.email, db)
+    mapping: dict[str, set[str]] = {}
+    for cluster_id in shared:
+        allowed = {"default"}
+        if org_ids:
+            stmt = (
+                select(TenantPolicyRule.project_name)
+                .join(
+                    TenantAccessPolicy,
+                    TenantAccessPolicy.id == TenantPolicyRule.policy_id,
+                )
+                .where(
+                    and_(
+                        TenantPolicyRule.cluster_id == cluster_id,
+                        TenantAccessPolicy.organization_id.in_(org_ids),
+                    )
+                )
+                .distinct()
+            )
+            named = set((await db.execute(stmt)).scalars().all())
+            if "*" in named:
+                continue  # this org administers the whole cluster; nothing to restrict
+            allowed |= {n for n in named if n}
+        mapping[cluster_id] = allowed
+
+    return mapping or None
+
+
 async def reconcile_personal_clusters(
     db: AsyncSession,
     user_email: str,
@@ -641,6 +761,7 @@ async def org_scope_dependency(
         # dev mode - no filter
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
+        _visible_projects_var.set(None)
         return
 
     allowed = await get_user_allowed_clusters(user, db)
@@ -649,6 +770,10 @@ async def org_scope_dependency(
     # set tenant ACL (None for admin/partner, dict for tenant)
     acl = await get_tenant_acl_rules(user, db)
     _tenant_acl_var.set(acl)
+
+    # a Partner is scoped by cluster alone, so a cluster shared with another organization
+    # needs a project bound as well. See get_visible_projects.
+    _visible_projects_var.set(await get_visible_projects(user, db))
 
     # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
     _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
@@ -668,6 +793,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
     if user is None:
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
+        _visible_projects_var.set(None)
         return
 
     from app.core.rbac import resolve_roles, get_highest_role, Role
@@ -677,6 +803,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
     if highest == Role.ADMIN:
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
+        _visible_projects_var.set(None)
         return
 
     from app.core.database import async_session_maker
@@ -687,6 +814,8 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
 
         acl = await get_tenant_acl_rules(user, db)
         _tenant_acl_var.set(acl)
+
+        _visible_projects_var.set(await get_visible_projects(user, db))
 
         # important: the same narrowing as the HTTP dependency, through the same helper. These
         # were two duplicated blocks, which is how the empty-ACL fallback survived: fixing one
