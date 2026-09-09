@@ -327,6 +327,30 @@ async def lifespan(app: FastAPI):
         # start must not stop the API from serving.
         logger.warning(f"Could not start a background task: {sweep_err}", exc_info=True)
 
+    # important: its own try, not the one above. That block already starts the upload sweeps, the
+    # webhook dispatcher and the reconcile sweep, and its handler once named only the sweeps, which
+    # sent someone debugging a dead dispatcher to the wrong subsystem. A fourth subsystem sharing
+    # it repeats that.
+    try:
+        if settings.snapshot_schedules_enabled:
+            from app.core.database import async_session_maker
+            from app.services.snapshots.schedule_scheduler import start_scheduler
+
+            # Every worker runs this. Rows are claimed with FOR UPDATE SKIP LOCKED, so four workers
+            # pulling from the queue is the parallelism rather than a race, and no leader is
+            # elected: the lease this codebase already has deliberately fails open, so a Redis
+            # outage would make all four believe they lead and every schedule would fire four times.
+            start_scheduler(
+                async_session_maker,
+                get_lxd_service,
+                interval=float(settings.snapshot_schedule_tick_seconds),
+            )
+            logger.info(
+                "Snapshot schedule loop started (%ss)", settings.snapshot_schedule_tick_seconds
+            )
+    except Exception as schedule_err:
+        logger.error("Could not start the snapshot schedule loop: %s", schedule_err, exc_info=True)
+
     # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
     try:
         from app.services.metrics_history_service import load_metrics_history
@@ -432,6 +456,16 @@ async def lifespan(app: FastAPI):
         tracker.stop_publisher()
         await get_session_registry().aclose()
         logger.info("Session tracker cleanup and publisher stopped")
+    except Exception:
+        pass
+
+    # Stop the snapshot schedule loop. A handle is kept for exactly this, unlike the rebuild
+    # driver beside it, so the loop is cancelled rather than left holding a session while the
+    # process tears down.
+    try:
+        from app.services.snapshots.schedule_scheduler import stop_scheduler
+        await stop_scheduler()
+        logger.info("Snapshot schedule loop stopped")
     except Exception:
         pass
 
@@ -652,6 +686,9 @@ Ensure your client certificates are properly configured.
     app.include_router(instance_snapshots_router, prefix=settings.api_prefix)
     from app.routers.snapshots_fleet import router as snapshots_fleet_router
     app.include_router(snapshots_fleet_router, prefix=settings.api_prefix)
+    if settings.snapshot_schedules_enabled:
+        from app.routers.snapshot_schedules import router as snapshot_schedules_router
+        app.include_router(snapshot_schedules_router, prefix=settings.api_prefix)
 
     # Instance mobility (JWT): copy a workload to another project, member or cluster
     from app.routers.instance_mobility import router as instance_mobility_router

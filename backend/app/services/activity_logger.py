@@ -62,6 +62,15 @@ ACTION_CATEGORIES = {
     "instance.snapshot.restore": EventCategory.LXD_INFRA,
     "instance.snapshot.delete": EventCategory.LXD_INFRA,
     "instance.snapshot.billing_override": EventCategory.LXD_INFRA,
+    # Orcastra's own recurring snapshots. Registered explicitly because an unregistered action
+    # falls through to LXD_INFRA/MEDIUM silently, which is a category nobody chose.
+    "instance.snapshot.schedule.create": EventCategory.LXD_INFRA,
+    "instance.snapshot.schedule.update": EventCategory.LXD_INFRA,
+    "instance.snapshot.schedule.delete": EventCategory.LXD_INFRA,
+    "instance.snapshot.schedule.run": EventCategory.LXD_INFRA,
+    "instance.snapshot.schedule.pruned": EventCategory.LXD_INFRA,
+    "instance.snapshot.schedule.paused": EventCategory.LXD_INFRA,
+    "instance.snapshot.schedule.missed": EventCategory.LXD_INFRA,
     "volume.snapshot.create": EventCategory.STORAGE,
     "volume.snapshot.restore": EventCategory.STORAGE,
     "volume.snapshot.delete": EventCategory.STORAGE,
@@ -192,6 +201,11 @@ HIGH_SEVERITY_ACTIONS = {
     "instance.snapshot.restore",
     "instance.snapshot.delete",
     "instance.snapshot.billing_override",
+    # `.pruned` destroys a restore point, so it ranks with instance.snapshot.delete beside it.
+    # `.paused` and `.delete` are how an operator learns their backups stopped.
+    "instance.snapshot.schedule.delete",
+    "instance.snapshot.schedule.pruned",
+    "instance.snapshot.schedule.paused",
     "volume.snapshot.restore",
     "volume.snapshot.delete",
     "vm.delete",

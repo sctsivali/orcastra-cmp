@@ -189,6 +189,29 @@ class Settings(BaseSettings):
         description="Honour the per-project tenant 'snapshot' permission. Off means only Partner and Admin may act on snapshots."
     )
 
+    # Orcastra's own recurring snapshots, which are a different mechanism from the LXD-native
+    # schedule above and never write it.
+    #
+    # important: off by default, for the same reason the flag above is. A scheduler that begins
+    # taking snapshots on live customer clusters as a side effect of a deploy is not a deliberate
+    # act. It gates the loop AND the routes, so a deployment that has not turned it on has no
+    # surface at all rather than one that answers but never fires.
+    snapshot_schedules_enabled: bool = Field(
+        default=False,
+        alias="SNAPSHOT_SCHEDULES_ENABLED",
+        description="Enable operator-owned recurring snapshot schedules, and the loop that runs them."
+    )
+    snapshot_schedule_tick_seconds: int = Field(
+        default=30,
+        alias="SNAPSHOT_SCHEDULE_TICK_SECONDS",
+        description="How often each worker looks for a schedule that has come due."
+    )
+    snapshot_schedule_batch: int = Field(
+        default=8,
+        alias="SNAPSHOT_SCHEDULE_BATCH",
+        description="How many due schedules one worker claims per tick."
+    )
+
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
     # On, with an off switch kept for an operator who wants one.
     #

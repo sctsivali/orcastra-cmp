@@ -23,7 +23,7 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.lxd_names import POLICY_CONFIG_KEYS
 
@@ -529,15 +529,28 @@ def _operation_id(response: Any) -> Optional[str]:
 # ── schedule policy (read only) ────────────────────────────────────────────────────────────
 
 
+def read_instance_config_and_policy(
+    client, instance_name: str, project: str
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """One GET, answering both questions a caller usually has about an instance at once.
+
+    The scheduler needs the raw config as well as the derived policy: `volatile.uuid` is how it
+    tells an instance from a different one wearing the same name, and `snapshots.schedule` is how
+    it tells whether the metered product upstream has claimed the instance since. Two reads for one
+    decision is a second chance to see two different instants.
+    """
+    response = client.api.instances[instance_name].get(params=_project_params(project))
+    config = (_metadata(response) or {}).get("config") or {}
+    return config, _policy_from_config(config)
+
+
 def read_instance_policy(client, instance_name: str, project: str) -> Dict[str, Any]:
     """The LXD-native snapshot schedule on an instance, for display only.
 
     A non-empty `snapshots.schedule` means something else is creating snapshots here on a timer,
     in practice OrcaHub's paid product. The operator surface shows that and never writes it.
     """
-    response = client.api.instances[instance_name].get(params=_project_params(project))
-    config = (_metadata(response) or {}).get("config") or {}
-    return _policy_from_config(config)
+    return read_instance_config_and_policy(client, instance_name, project)[1]
 
 
 def _policy_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
