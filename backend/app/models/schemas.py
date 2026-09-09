@@ -1691,6 +1691,14 @@ class SnapshotInfo(BaseModel):
     size: Optional[int] = Field(None, description="Size in bytes where the storage driver reports it")
     architecture: Optional[str] = Field(None, description="Instance architecture at capture time")
     operator_managed: bool = Field(False, description="True when Orcastra created it, identified by the ops- prefix")
+    # important: the service stamps this on every row, and a model without the field drops it
+    # silently. "Nobody asked the cluster for a size" and "the cluster was asked and reported
+    # none" are different facts, and the console renders them differently; losing the flag here
+    # would make this route the one surface that cannot tell them apart.
+    size_measured: Optional[bool] = Field(
+        None,
+        description="Whether the size was actually read from the cluster, as opposed to not measured",
+    )
 
 
 class SnapshotListResponse(BaseModel):

@@ -73,6 +73,11 @@ function SnapshotsContent() {
 
   const unreachableNodes: string[] = data?.unreachable_nodes ?? [];
   const queriedNodes: string[] = data?.queried_nodes ?? [];
+  // A cluster that answered for only some of its projects is deliberately NOT in
+  // unreachable_nodes, because its rows ARE here. Saying nothing would present an incomplete
+  // list as a complete one, which is the whole failure this response shape exists to describe.
+  const partialNodes: string[] = data?.partial_nodes ?? [];
+  const truncated = data?.truncated ?? false;
   const sizeMeasurement: SizeMeasurement = data?.size_measurement ?? "skipped";
 
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
@@ -155,6 +160,18 @@ function SnapshotsContent() {
             }
           />
           <TableToolbar filters={filters} noun="snapshots" />
+          {partialNodes.length > 0 && (
+            <p className="text-sm text-warning">
+              {partialNodes.join(", ")} answered for only some of their projects, so this list is
+              incomplete for {partialNodes.length === 1 ? "it" : "them"}.
+            </p>
+          )}
+          {truncated && (
+            <p className="text-sm text-warning">
+              This is the first {items.length} snapshots. Choose a cluster or a project to see the
+              rest.
+            </p>
+          )}
           {sizeNote && <p className="text-sm text-muted-foreground">{sizeNote}</p>}
         </CardHeader>
         <CardContent>

@@ -431,12 +431,19 @@ class CacheManager:
         instance with a root volume of type `virtual-machine`, so a create or delete changes the
         volume list too. Without this the volume list served that change from cache for its full
         180s TTL, long enough to create an instance and not find its disk.
+
+        The fleet snapshot listing belongs here for the same reason: deleting an instance takes
+        its snapshots with it on the cluster, and that listing gained a cache without gaining a
+        second reason to be cleared.
         """
         self.delete_pattern("api_responses", "instances:*")
         self.delete_pattern("api_responses", "vms:*")
         self.delete_pattern("api_responses", "monitoring:*")
         self.delete_pattern("api_responses", "storage_volumes:*")
-        logger.info("Cleared instance, VM, monitoring, and storage volume caches")
+        self.delete_pattern("api_responses", "snapshots_fleet:*")
+        logger.info(
+            "Cleared instance, VM, monitoring, storage volume and fleet snapshot caches"
+        )
 
     def invalidate_resource_cache(self, *kinds: str):
         """Drop the cached list responses for the named resource kinds.

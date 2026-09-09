@@ -50,6 +50,7 @@ from app.services.lxd.proxy_operations import (
     PROXY_WAIT_OPERATIONS,
     classify_proxy_error,
     execute_proxy_operation,
+    SNAPSHOT_MUTATIONS,
     fetch_operation_status,
     instance_detail,
     instance_summary,
@@ -3882,6 +3883,12 @@ async def proxy_operation(
                 max_in_flight=_operation_in_flight,
             )
             health.clear(request.cluster_id)
+            if operation in SNAPSHOT_MUTATIONS:
+                # The upstream product mutates snapshots through this proxy rather than through
+                # the dashboard's own routes, and the fleet listing is cached for 30s. Without
+                # this an operator watches a snapshot OrcaHub just took stay invisible, or one it
+                # just deleted stay listed, for the length of the TTL.
+                get_cache_manager().invalidate_resource_cache("snapshots_fleet")
         except BlockingTimeout as timeout_error:
             # important: exec lands HERE, not in the generic handler below, so its audit record
             # and its "still running" message have to be written on this path too. They were only

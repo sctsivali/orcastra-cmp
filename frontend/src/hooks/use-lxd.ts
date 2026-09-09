@@ -1842,12 +1842,13 @@ export function useInstanceSnapshots(
  *
  * Undefined for either argument means "all", which is the page's default. Narrowing to BOTH is
  * what makes the backend measure sizes, so it is the only scope change that costs a request.
+ *
+ * note: no `enabled` gate. This used to be `enabled: !!host`, which was what stopped a tenant's
+ * deep link firing a request before the redirect landed. The page now gates structurally instead,
+ * returning before it mounts the component that calls this at all, so an `enabled` option here
+ * would be a second mechanism for one job and the one nobody reads.
  */
-export function useFleetSnapshots(
-  host?: string,
-  project?: string,
-  options: { enabled?: boolean } = {},
-) {
+export function useFleetSnapshots(host?: string, project?: string) {
   return useRefreshableQuery({
     queryKey: ["fleetSnapshots", host ?? null, project ?? null],
     // note: the read options are forwarded. This used to ignore them, which was harmless while
@@ -1855,10 +1856,6 @@ export function useFleetSnapshots(
     // Refresh button would report success having read the cache it was pressed to bypass.
     queryFn: (opts) => api.snapshots.listFleet(host, project, opts),
     ...SEMI_STATIC_DATA_CONFIG,
-    // After the spread on purpose: the preset carries its own `enabled`. The page gates this on
-    // the role gate having resolved, so a tenant's deep link is redirected before it can fan out
-    // across every cluster.
-    enabled: options.enabled ?? true,
   });
 }
 

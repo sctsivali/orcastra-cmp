@@ -207,6 +207,60 @@ def test_a_blank_host_is_refused_rather_than_widened():
     assert response.status_code == 422, response.text
 
 
+def test_a_blank_project_is_refused_rather_than_read_as_default():
+    """The twin of the blank-host guard, and it was missing while this file claimed to have it.
+
+    A blank project used to reach `_project_params`, which substitutes `default`, so LXD was asked
+    about ONE project while every row was labelled with the empty string. The label is what the
+    tenant ACL is asked about, so the row builder then raised, the per-cluster handler caught it,
+    and a completely healthy fleet answered 200 with every cluster reported unreachable.
+
+    Ablation: drop the pattern from the `project` parameter and this answers 200 with an outage.
+    """
+    svc = service(_cluster([(PROJECT, INSTANCE)]))
+    client = _client(svc)
+    try:
+        wide = client.get("/snapshots?project=")
+        narrow = client.get(f"/snapshots?host={HOST}&project=")
+    finally:
+        client._cleanup()
+
+    assert wide.status_code == 422, wide.text
+    assert narrow.status_code == 422, narrow.text
+
+
+def test_a_read_that_raises_is_not_quietly_relabelled_as_an_outage():
+    """A cluster whose read blew up is still reported, but the log says what really happened.
+
+    The fan-out turns any per-cluster exception into "unreachable", which is right for the caller
+    and wrong for whoever has to debug it. Ablation: drop the exc_info branch and a defect in the
+    read path spends its life looking like a flaky cluster.
+    """
+    import logging
+    from unittest import mock
+
+    broken = _cluster([(PROJECT, INSTANCE)])
+
+    def explode(*_args, **_kwargs):
+        raise ValueError("the read path is broken")
+
+    broken.api.instances.get = explode
+    svc = service(broken)
+    client = _client(svc)
+    try:
+        with mock.patch.object(
+            logging.getLogger("app.routers.snapshots_fleet"), "error"
+        ) as logged:
+            response = client.get("/snapshots")
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["unreachable_nodes"] == [HOST]
+    assert logged.called, "a non-connectivity failure must be logged as an error, with its traceback"
+    assert logged.call_args.kwargs.get("exc_info") is not None
+
+
 def test_a_cluster_that_cannot_be_read_is_named_not_dropped():
     """Ablation: return [] for an absent client and the console cannot tell an outage from empty."""
     reachable = _cluster([(PROJECT, INSTANCE)])

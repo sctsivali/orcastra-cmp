@@ -20,7 +20,7 @@ Keeping the two apart means the filter cannot be wrong even if the offload ever 
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.cache import get_cache_manager
 from app.core.lxd_errors import lxd_http_error
+from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.org_scope import (
     check_tenant_permission,
     get_scope_cache_key,
@@ -137,9 +138,15 @@ async def list_fleet_snapshots(
     host: Optional[str] = Query(
         None, description="Cluster to read. Omit to read every cluster in scope"
     ),
-    project: Optional[str] = Query(
-        None, description="LXD project to read. Omit to read every project"
-    ),
+    project: Annotated[
+        Optional[str],
+        Query(
+            pattern=LXD_NAME_PATTERN,
+            description=(
+                f"LXD project to read. Omit to read every project. {LXD_NAME_DESCRIPTION}"
+            ),
+        ),
+    ] = None,
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
@@ -154,6 +161,13 @@ async def list_fleet_snapshots(
     # important: `is not None`, not truthiness. `?host=` is a caller who named a cluster and got
     # it wrong, and must get the 422 verify_cluster_access already raises for a blank id. Reading
     # it as "absent" would silently widen a narrowed request into a fleet sweep.
+    #
+    # `project` gets the same treatment through its pattern, which refuses a blank one. Without
+    # that, `?project=` read the `default` project (because _project_params substitutes it) while
+    # labelling every row with the empty string, and the resulting SnapshotProjectUnknown was
+    # caught per cluster: a healthy fleet answered 200 with every cluster reported unreachable.
+    # Validating here also keeps an arbitrary string out of the cache and single-flight keys,
+    # where each distinct value would otherwise buy a fresh fan-out that is never cached.
     if host is not None:
         verify_cluster_access(host)
 
@@ -209,7 +223,16 @@ async def list_fleet_snapshots(
                 # A named cluster that answered with a real error is that caller's error, not a
                 # fleet-wide degradation. Answering 200 with an empty list would hide it.
                 raise lxd_http_error(result, "Project", project or "*")
-            logger.info("Snapshot read failed on %s: %s", node, result)
+            if isinstance(result, (LXDConnectionError, BlockingTimeout, BlockingPoolFull)):
+                logger.info("Snapshot read failed on %s: %s", node, result)
+            else:
+                # important: still reported as unreachable, because from the caller's side the
+                # cluster did contribute nothing. But logged as an error with its traceback, so a
+                # defect in the read path cannot spend its life disguised as a flaky cluster.
+                logger.error(
+                    "Snapshot read raised on %s, reporting it unreachable: %s",
+                    node, result, exc_info=result,
+                )
             failed.append(node)
             continue
         node_rows, complete = result
@@ -273,7 +296,9 @@ async def list_fleet_snapshots(
     # cached WITH the payload, so a cached partial read still renders its banner.
     if answered:
         cache.set("api_responses", cache_key, response.model_dump(), ttl=_CACHE_TTL)
-    else:
+    elif nodes_to_query:
         logger.warning("Not caching fleet snapshots: no cluster answered")
+    # else: the caller's scope names no cluster at all, which is a settled answer rather than a
+    # failed read. A tenant whose ACL grants nothing would otherwise warn on every request.
 
     return response

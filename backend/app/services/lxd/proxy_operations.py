@@ -54,6 +54,7 @@ __all__ = [
     "PROXY_WAIT_OPERATIONS",
     "assert_required_params",
     "execute_proxy_operation",
+    "SNAPSHOT_MUTATIONS",
     "fetch_operation_status",
     # Re-exported so the router keeps one import site for the whole proxy vocabulary.
     "instance_detail",
@@ -395,6 +396,14 @@ def assert_required_params(operation: str, params: Dict[str, Any]) -> None:
     """Refuse a malformed request before it costs a connection."""
     for field, what in _REQUIRED_PARAMS.get(operation, ()):
         _required(params, field, what)
+
+
+# Operations that change what the fleet snapshot listing would return. Named here, beside the rest
+# of the operation vocabulary, and acted on by the router: this module runs on a worker and the
+# cache invalidation belongs on the loop with every other one.
+SNAPSHOT_MUTATIONS = frozenset(
+    {"create_snapshot", "restore_snapshot", "delete_snapshot", "delete_instance"}
+)
 
 
 def execute_proxy_operation(
