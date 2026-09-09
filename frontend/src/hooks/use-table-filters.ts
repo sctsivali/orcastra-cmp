@@ -255,6 +255,25 @@ export function useTableFilters<T, F extends string, C = void>(
   const debouncedSearch = useDebouncedValue(searchInput, searchDebounceMs);
   const lastWrittenSearch = useRef(urlSearch);
 
+  /**
+   * The params the last write produced, which is not always what `useSearchParams` reports yet.
+   *
+   * important: `router.replace` schedules a navigation. Two writes landing inside one commit both
+   * start from the same rendered `searchParams`, so the second silently drops whatever the first
+   * added. Typing into the search box and picking a scope in the same second is enough: the
+   * debounced write sets `q`, the select writes `host` from a snapshot taken before `q` existed,
+   * and the typed term is gone from a URL the operator is about to share or reload. Reproduced on
+   * /inventory/snapshots, two runs in three.
+   *
+   * Writes compose onto this ref instead, and the effect below re-seeds it whenever the URL moves
+   * for any other reason: Back, Forward, a deep link, or another component's navigation.
+   */
+  const pendingParams = useRef<string | null>(null);
+
+  useEffect(() => {
+    pendingParams.current = searchParams.toString();
+  }, [searchParams]);
+
   const writeParams = useCallback(
     (mutate: (params: URLSearchParams) => void) => {
       if (!syncUrl) {
@@ -263,9 +282,10 @@ export function useTableFilters<T, F extends string, C = void>(
         setLocalParams(Object.fromEntries(params.entries()));
         return;
       }
-      const params = new URLSearchParams(searchParams.toString());
+      const params = new URLSearchParams(pendingParams.current ?? searchParams.toString());
       mutate(params);
       const query = params.toString();
+      pendingParams.current = query;
       // important: replace, never push. push would leave a history entry behind every checkbox
       // and every debounced keystroke, so Back would walk backwards through the filter session
       // instead of leaving the page. scroll:false keeps the table in place.
