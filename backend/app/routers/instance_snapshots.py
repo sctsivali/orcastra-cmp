@@ -29,6 +29,7 @@ from app.core.dependencies import (
     require_tenant,
 )
 from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
+from app.core.cache import get_cache_manager
 from app.core.lxd_errors import lxd_http_error
 from app.core.org_scope import (
     org_scope_dependency,
@@ -83,6 +84,22 @@ def _blocking(fn, *args, label: str, **kwargs):
     )
 
 
+def _assert_snapshot_surface_enabled() -> None:
+    """Refuse a tenant outright while this deployment has not enabled tenant snapshots.
+
+    Split from _enforce_snapshot_access because the two halves answer different questions and the
+    fleet read needs only this one. Asking the scope-specific half there would 403 a tenant who
+    holds grants on two of five clusters, when the right answer is those two clusters' rows.
+    """
+    if not tenant_acl_active():
+        return
+    if not get_settings().snapshot_tenant_enforcement_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail="Snapshot actions are not enabled for tenant accounts on this deployment.",
+        )
+
+
 def _enforce_snapshot_access(
     host: str,
     project: str,
@@ -101,13 +118,7 @@ def _enforce_snapshot_access(
     by the generic except and re-raised as a 500, which reads as a broken server rather than a
     refusal.
     """
-    if not tenant_acl_active():
-        return
-    if not get_settings().snapshot_tenant_enforcement_enabled:
-        raise HTTPException(
-            status_code=403,
-            detail="Snapshot actions are not enabled for tenant accounts on this deployment.",
-        )
+    _assert_snapshot_surface_enabled()
     verify_tenant_permission(host, project, instance_name, "snapshot")
     if need_operate:
         # Restore stops the instance and discards everything written since the snapshot. That is
@@ -378,6 +389,10 @@ async def create_snapshot(
         resource_type="SNAPSHOT",
         name=snapshot_name,
     )
+    # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
+    # the row is still there when the page refreshes, which reads as a control that did
+    # nothing. Cleared only on the success path: a refused operation changed no listing.
+    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,
@@ -489,6 +504,10 @@ async def delete_snapshot(
         resource_type="SNAPSHOT",
         name=snapshot_name,
     )
+    # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
+    # the row is still there when the page refreshes, which reads as a control that did
+    # nothing. Cleared only on the success path: a refused operation changed no listing.
+    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,
@@ -627,6 +646,10 @@ async def restore_snapshot(
             "restore", instance_name, body.host, body.project, policy, justification,
             user.email or user.user_id,
         )
+    # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
+    # the row is still there when the page refreshes, which reads as a control that did
+    # nothing. Cleared only on the success path: a refused operation changed no listing.
+    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
     return SnapshotActionResponse(
         success=True,
         instance_name=instance_name,

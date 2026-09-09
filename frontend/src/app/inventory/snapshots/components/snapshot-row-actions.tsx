@@ -11,11 +11,10 @@ import { useToast } from "@/hooks/use-toast";
 import type { SnapshotInfo } from "@/types/api";
 
 import { RestoreSnapshotDialog } from "./restore-snapshot-dialog";
+import { snapshotScope } from "./snapshot-format";
 
 interface SnapshotRowActionsProps {
   snapshot: SnapshotInfo;
-  host: string;
-  project: string;
   /** The source's snapshots are metered and billed by another product. */
   billingLinked?: boolean;
 }
@@ -29,10 +28,13 @@ interface SnapshotRowActionsProps {
  */
 export function SnapshotRowActions({
   snapshot,
-  host,
-  project,
   billingLinked = false,
 }: SnapshotRowActionsProps) {
+  // important: the row's own cluster and project, never the page's. The props that used to carry
+  // them are gone rather than corrected: a component that cannot be handed a cluster cannot be
+  // handed the wrong one, which is the same reasoning the unreachable banner records for the
+  // node names it refuses to accept.
+  const { host, project } = snapshotScope(snapshot);
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
   const deleteSnapshot = useDeleteSnapshot();
@@ -44,11 +46,13 @@ export function SnapshotRowActions({
   const [deleteAcknowledged, setDeleteAcknowledged] = useState(false);
   const submitInFlightRef = useRef(false);
 
-  const unavailableReason = !snapshot.operator_managed
-    ? "Managed outside this console"
-    : isReadOnly
-      ? "The dashboard is in read-only mode"
-      : undefined;
+  const unavailableReason = !snapshot.host
+    ? "This snapshot's cluster is unknown"
+    : !snapshot.operator_managed
+      ? "Managed outside this console"
+      : isReadOnly
+        ? "The dashboard is in read-only mode"
+        : undefined;
 
   // Said on the item, not only in the dialog, so an operator learns before opening it.
   const billingNote = billingLinked ? " (billed elsewhere, needs a reason)" : "";
@@ -123,8 +127,10 @@ export function SnapshotRowActions({
         description={
           <>
             <span className="font-mono">{snapshot.name}</span> will be removed from{" "}
-            <span className="font-medium">{snapshot.source_name}</span>. The instance itself is
-            untouched, but this restore point is gone for good.
+            <span className="font-medium">{snapshot.source_name}</span> on{" "}
+            <span className="font-mono">{host}</span> /{" "}
+            <span className="font-mono">{project}</span>. The instance itself is untouched, but
+            this restore point is gone for good.
           </>
         }
         confirmLabel="Delete snapshot"
@@ -147,8 +153,6 @@ export function SnapshotRowActions({
         open={showRestore}
         onOpenChange={setShowRestore}
         snapshot={snapshot}
-        host={host}
-        project={project}
         billingLinked={billingLinked}
         restore={restoreSnapshot}
       />

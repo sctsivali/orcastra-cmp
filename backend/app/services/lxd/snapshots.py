@@ -80,6 +80,17 @@ class SnapshotLimitError(RuntimeError):
     """The per-instance operator snapshot cap would be exceeded."""
 
 
+class SnapshotProjectUnknown(RuntimeError):
+    """An instance listing carried a snapshot but no project to attribute it to.
+
+    important: this is a security signal, not a data-quality one. The project on a row is what
+    `check_tenant_permission` is asked about, so attributing an unlabelled row to "default" would
+    show a tenant holding a grant on `default` the snapshots of every other project on that
+    cluster. The all-projects reader catches this and re-reads the cluster project by project,
+    where the label comes from the request rather than from the response.
+    """
+
+
 class LXDOperationUnreadable(RuntimeError):
     """The daemon accepted the request but named no operation, so completion is unverifiable."""
 
@@ -183,6 +194,9 @@ def _normalize(entry: Any, source_name: str) -> Dict[str, Any]:
         "size": size,
         "architecture": entry.get("architecture"),
         "operator_managed": is_operator_snapshot(raw_name.rsplit("/", 1)[-1]),
+        # Flipped by measure_snapshot_sizes. False means nobody asked LXD for a size, which is
+        # not the same fact as LXD having been asked and answered nothing.
+        "size_measured": False,
     }
 
 
@@ -201,42 +215,66 @@ def list_instance_snapshots(client, instance_name: str, project: str) -> List[Di
     return [_normalize(entry, instance_name) for entry in (_metadata(response) or [])]
 
 
-def list_project_snapshots(client, project: str) -> List[Dict[str, Any]]:
-    """Every snapshot in a project, in one request.
+def rows_from_instance_listing(
+    metadata: Any,
+    project: Optional[str] = None,
+) -> tuple[List[Dict[str, Any]], List[str]]:
+    """Snapshot rows out of an instance listing, plus the sources that hold any.
 
-    `recursion=2` folds each instance's snapshots into the instance listing, so a project of
-    forty instances costs one call rather than forty-one. LXD omits the `snapshots` key entirely
-    for an instance that has none, which is why this reads it defensively rather than expecting
-    an empty list.
+    `project` pins the label for a project-scoped read. Left None, each row takes the project LXD
+    reported on its own instance, which is what an all-projects listing returns and the only thing
+    that can be trusted there.
+
+    important: a row with no project raises rather than defaulting. The label is what the tenant
+    ACL is asked about, so a wrong one is a cross-project leak, not a cosmetic defect.
     """
-    response = client.api.instances.get(params=_project_params(project, recursion=2))
     rows: List[Dict[str, Any]] = []
     holders: List[str] = []
-    for instance in _metadata(response) or []:
+    for instance in metadata or []:
         if not isinstance(instance, dict):
             continue
         source_name = instance.get("name") or ""
         snapshots = instance.get("snapshots") or []
-        if snapshots:
-            holders.append(source_name)
+        if not snapshots:
+            continue
+        row_project = project if project is not None else (instance.get("project") or "").strip()
+        if not row_project:
+            raise SnapshotProjectUnknown(
+                f"instance {source_name!r} carries snapshots but no project"
+            )
+        holders.append(source_name)
         # recursion=2 already carries each instance's config, so the source's schedule costs
         # nothing extra here. Without it the fleet view cannot tell which rows sit on a source
         # someone else bills, which is the one fact the billing gate acts on.
         source_policy = _policy_from_config(instance.get("config") or {})
         for entry in snapshots:
             row = _normalize(entry, source_name)
-            row["project"] = project
+            row["project"] = row_project
             row["source_status"] = instance.get("status")
             row["source_externally_managed"] = source_policy["externally_managed"]
             row["source_schedule"] = source_policy["schedule"]
             row["source_expiry"] = source_policy["expiry"]
             rows.append(row)
+    return rows, holders
 
-    # The bulk listing answers `size: -1` for every snapshot, so a fleet view built on it alone
-    # shows a dash in the one column that tells an operator which snapshot is worth deleting.
-    # Sizes come from a second read per instance THAT HOLDS SNAPSHOTS, which is a far smaller
-    # number than the instance count: on this fleet, one instance in a project of three. Bounded
-    # so a project where everything is snapshotted cannot turn one page load into a fan-out.
+
+def measure_snapshot_sizes(
+    client,
+    rows: List[Dict[str, Any]],
+    holders: List[str],
+    project: str,
+) -> int:
+    """Fill in real sizes from a second read per snapshot-holding instance. Returns how many.
+
+    The bulk listing answers `size: -1` for every snapshot, so a view built on it alone shows a
+    dash in the one column that tells an operator which snapshot is worth deleting. Bounded so a
+    project where everything is snapshotted cannot turn one page load into a fan-out.
+
+    Every row this touches is stamped `size_measured`, including one LXD then reported no size
+    for. "Nobody asked" and "asked, and the storage driver said nothing" are different facts and
+    the console renders them differently.
+    """
+    measured = 0
     for source_name in holders[:_SIZE_ENRICHMENT_LIMIT]:
         try:
             detailed = {
@@ -246,8 +284,12 @@ def list_project_snapshots(client, project: str) -> List[Dict[str, Any]]:
         except Exception as exc:  # noqa: BLE001 - a missing size is not a failed listing
             logger.debug("Could not read snapshot sizes for %s: %s", source_name, exc)
             continue
+        measured += 1
         for row in rows:
-            if row["source_name"] == source_name and row.get("size") is None:
+            if row["source_name"] != source_name:
+                continue
+            row["size_measured"] = True
+            if row.get("size") is None:
                 row["size"] = detailed.get(row["name"])
 
     if len(holders) > _SIZE_ENRICHMENT_LIMIT:
@@ -255,6 +297,30 @@ def list_project_snapshots(client, project: str) -> List[Dict[str, Any]]:
             "Snapshot sizes read for %d of %d instances in %s; the rest report no size",
             _SIZE_ENRICHMENT_LIMIT, len(holders), project,
         )
+    return measured
+
+
+def list_project_snapshots(
+    client,
+    project: str,
+    *,
+    measure_sizes: bool = True,
+) -> List[Dict[str, Any]]:
+    """Every snapshot in a project, in one request.
+
+    `recursion=2` folds each instance's snapshots into the instance listing, so a project of
+    forty instances costs one call rather than forty-one. LXD omits the `snapshots` key entirely
+    for an instance that has none, which is why this reads it defensively rather than expecting
+    an empty list.
+
+    `measure_sizes=False` skips the per-instance second read. The fleet-wide view passes it,
+    because that read is bounded per PROJECT and a fleet sweep multiplies the bound by every
+    project on every cluster.
+    """
+    response = client.api.instances.get(params=_project_params(project, recursion=2))
+    rows, holders = rows_from_instance_listing(_metadata(response), project)
+    if measure_sizes:
+        measure_snapshot_sizes(client, rows, holders, project)
     return rows
 
 
@@ -431,99 +497,3 @@ def _policy_from_config(config: Dict[str, Any]) -> Dict[str, Any]:
         # on this source. If so the surface badges it and warns before creating.
         "externally_managed": bool(values.get("snapshots.schedule")),
     }
-
-
-# ── volume snapshots ───────────────────────────────────────────────────────────────────────
-
-
-def _volume_api(client, pool: str, volume_name: str, volume_type: str = "custom"):
-    return client.api.storage_pools[pool].volumes[volume_type][volume_name]
-
-
-def list_volume_snapshots(
-    client, pool: str, volume_name: str, project: str, volume_type: str = "custom"
-) -> List[Dict[str, Any]]:
-    response = _volume_api(client, pool, volume_name, volume_type).snapshots.get(
-        params=_project_params(project, recursion=1)
-    )
-    return [_normalize(entry, volume_name) for entry in (_metadata(response) or [])]
-
-
-def create_volume_snapshot(
-    client,
-    pool: str,
-    volume_name: str,
-    project: str,
-    snapshot_name: str,
-    *,
-    expires_at: Optional[str] = None,
-    volume_type: str = "custom",
-):
-    body: Dict[str, Any] = {"name": snapshot_name}
-    if expires_at:
-        body["expires_at"] = expires_at
-    response = _volume_api(client, pool, volume_name, volume_type).snapshots.post(
-        json=body, params=_project_params(project)
-    )
-    return _operation_id(response)
-
-
-def restore_volume_snapshot(
-    client,
-    pool: str,
-    volume_name: str,
-    project: str,
-    snapshot_name: str,
-    volume_type: str = "custom",
-):
-    response = _volume_api(client, pool, volume_name, volume_type).put(
-        json={"restore": snapshot_name}, params=_project_params(project)
-    )
-    return _operation_id(response)
-
-
-def delete_volume_snapshot(
-    client,
-    pool: str,
-    volume_name: str,
-    project: str,
-    snapshot_name: str,
-    volume_type: str = "custom",
-):
-    response = (
-        _volume_api(client, pool, volume_name, volume_type)
-        .snapshots[snapshot_name]
-        .delete(params=_project_params(project))
-    )
-    return _operation_id(response)
-
-
-def read_volume_policy(
-    client, pool: str, volume_name: str, project: str, volume_type: str = "custom"
-) -> Dict[str, Any]:
-    response = _volume_api(client, pool, volume_name, volume_type).get(
-        params=_project_params(project)
-    )
-    config = (_metadata(response) or {}).get("config") or {}
-    return _policy_from_config(config)
-
-
-def count_operator_volume_snapshots(
-    client, pool: str, volume_name: str, project: str, volume_type: str = "custom"
-) -> int:
-    return sum(
-        1
-        for snapshot in list_volume_snapshots(client, pool, volume_name, project, volume_type)
-        if is_operator_snapshot(snapshot["name"])
-    )
-
-
-def assert_volume_capacity(
-    client, pool: str, volume_name: str, project: str, volume_type: str = "custom"
-) -> None:
-    held = count_operator_volume_snapshots(client, pool, volume_name, project, volume_type)
-    if held >= MAX_OPS_SNAPSHOTS_PER_INSTANCE:
-        raise SnapshotLimitError(
-            f"{volume_name} already holds {held} operator snapshots, the maximum is "
-            f"{MAX_OPS_SNAPSHOTS_PER_INSTANCE}. Delete one before taking another."
-        )

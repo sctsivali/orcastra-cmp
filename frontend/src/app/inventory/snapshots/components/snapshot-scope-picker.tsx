@@ -1,111 +1,114 @@
 "use client";
 
 import { Label } from "@/components/ui/label";
-import { SearchableSelect } from "@/components/ui/searchable-select";
+import { SearchableSelect, type SearchableSelectOption } from "@/components/ui/searchable-select";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { useSnapshotProjectOptions } from "@/hooks/use-snapshot-project-options";
 
-interface NodeOption {
-  value: string;
-  label: string;
-  disabled?: boolean;
-  description?: string;
-}
+/**
+ * Cluster and project narrow a fleet-wide listing. They are a filter, not a precondition.
+ *
+ * They used to be the read's scope, so the page showed nothing until both were chosen and the
+ * Project select sat disabled through a live per-cluster read. Two defects came out of that
+ * shape and both are fixed here rather than patched:
+ *
+ * Nothing is ever disabled for loading. This is a scope picker, and the house rule for one is
+ * written in components/monitoring/node-filter-select.tsx: an operator opens a page for the
+ * broken cluster more often than for the healthy one, so putting it out of reach defeats the
+ * page. Under the fleet-wide default there is also always a valid choice available before any
+ * request resolves, so a disabled control would be asserting something untrue. Disabled is kept
+ * for a genuine read failure, where there really is nothing to choose from.
+ *
+ * The old "Loading projects" placeholder was unreachable, because SearchableSelect renders a
+ * placeholder only when nothing is selected and the value was never empty. It is deleted rather
+ * than repaired: repairing it means clearing the selection, which brings back the
+ * nothing-chosen state this page exists to remove. A muted line under the field says the same
+ * thing where it can actually be seen.
+ */
+
+/** The absence of a value, which is also how the URL spells it: no key at all. */
+export const ALL_CLUSTERS = "";
+export const ALL_PROJECTS = "";
+
+// Module scope, not inline: `leading` is a useMemo dependency inside useNodePickerOptions, so a
+// fresh array each render rebuilds every option on every keystroke.
+const ALL_CLUSTERS_OPTION: SearchableSelectOption[] = [
+  { value: ALL_CLUSTERS, label: "All Clusters" },
+];
+const ALL_PROJECTS_OPTION: SearchableSelectOption = {
+  value: ALL_PROJECTS,
+  label: "All Projects",
+};
 
 interface SnapshotScopePickerProps {
   host: string;
   project: string;
   onHostChange: (host: string) => void;
   onProjectChange: (project: string) => void;
-  nodeOptions: NodeOption[];
-  nodesLoading: boolean;
-  /** A failed cluster read must not render as an empty fleet. */
-  nodesError?: boolean;
-  projects: Array<{ name: string }>;
-  projectsLoading: boolean;
-  /** Same rule as nodesError: a failed read must not render as a one-project cluster. */
-  projectsError?: boolean;
 }
 
-/**
- * Cluster and project are the read's scope, not a filter over an already-fetched list.
- *
- * The listing is one call per cluster and project on purpose. Sweeping the whole fleet on every
- * page load would fan out across every registered cluster, and a partial failure in that shape
- * reads as an empty result rather than an incomplete one.
- */
 export function SnapshotScopePicker({
   host,
   project,
   onHostChange,
   onProjectChange,
-  nodeOptions,
-  nodesLoading,
-  nodesError = false,
-  projects,
-  projectsLoading,
-  projectsError = false,
 }: SnapshotScopePickerProps) {
-  const projectOptions = projects.map((p) => ({ value: p.name, label: p.name }));
+  const nodePicker = useNodePickerOptions({ leading: ALL_CLUSTERS_OPTION });
+  const projectPicker = useSnapshotProjectOptions(host);
+
+  const projectOptions = [ALL_PROJECTS_OPTION, ...projectPicker.options];
+  // Only while the list is genuinely still just the "All" row, so a warm cache never flashes it.
+  const readingProjects = projectPicker.isLoading && projectOptions.length === 1;
 
   return (
     <div className="flex flex-wrap items-end gap-4">
-      <div className="space-y-2 min-w-[220px]">
+      <div className="min-w-[220px] space-y-2">
         <Label htmlFor="snapshot-cluster">Cluster</Label>
         <SearchableSelect
           id="snapshot-cluster"
           value={host}
           onValueChange={onHostChange}
-          options={nodeOptions}
-          placeholder={
-            nodesLoading
-              ? "Loading clusters"
-              : nodesError
-                ? "Clusters unavailable"
-                : "Choose a cluster"
-          }
+          options={nodePicker.isError ? [] : nodePicker.options}
+          placeholder={nodePicker.isError ? "Clusters unavailable" : "All Clusters"}
           searchPlaceholder="Search clusters"
-          emptyText={nodesError ? "The cluster list could not be read" : "No cluster available"}
-          disabled={nodesLoading || nodesError}
+          emptyText={
+            nodePicker.isError ? "The cluster list could not be read" : "No cluster found"
+          }
+          disabled={nodePicker.isError}
+          ariaLabel="Cluster"
         />
-        {nodesError && (
+        {nodePicker.isError && (
           <p className="text-sm text-destructive">
-            The cluster list could not be read, so this is not an empty fleet. Retry shortly.
+            The cluster list could not be read, so this is not an empty fleet.
           </p>
         )}
       </div>
 
-      <div className="space-y-2 min-w-[220px]">
+      <div className="min-w-[220px] space-y-2">
         <Label htmlFor="snapshot-project">Project</Label>
         <SearchableSelect
           id="snapshot-project"
           value={project}
           onValueChange={onProjectChange}
-          // important: the fallback is only for a cluster that genuinely reports no projects. On a
-          // FAILED read the list is empty for a different reason, and offering "default" as the
-          // one option states something the console does not know. That is the same defect the
-          // cluster field above was fixed for.
-          options={
-            projectsError
-              ? []
-              : projectOptions.length > 0
-                ? projectOptions
-                : [{ value: "default", label: "default" }]
-          }
-          placeholder={
-            projectsLoading
-              ? "Loading projects"
-              : projectsError
-                ? "Projects unavailable"
-                : "Choose a project"
-          }
+          // important: on a failed read the list is empty rather than falling back to a single
+          // option. Offering one project as though it were the only one states something the
+          // console does not know.
+          options={projectPicker.isError ? [] : projectOptions}
+          placeholder={projectPicker.isError ? "Projects unavailable" : "All Projects"}
           searchPlaceholder="Search projects"
-          emptyText={projectsError ? "The project list could not be read" : "No project available"}
-          disabled={!host || projectsLoading || projectsError}
+          emptyText={
+            projectPicker.isError ? "The project list could not be read" : "No project found"
+          }
+          disabled={projectPicker.isError}
+          ariaLabel="Project"
         />
-        {projectsError && (
+        {projectPicker.isError ? (
           <p className="text-sm text-destructive">
             The project list could not be read, so this is not a cluster with one project.
           </p>
-        )}
+        ) : readingProjects ? (
+          <p className="text-sm text-muted-foreground">Reading projects</p>
+        ) : null}
       </div>
     </div>
   );

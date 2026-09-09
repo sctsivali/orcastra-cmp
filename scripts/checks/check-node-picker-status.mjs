@@ -42,6 +42,12 @@ const PICKERS = new Map([
   // Closed. /api/v1/integrations/available-clusters now sends status, reason and checked_at, so
   // the component resolves it like every other picker instead of offering bare names.
   ['components/cluster-access-selector.tsx', 'meta'],
+  // note: this one slipped the check for its whole life by being split across two files. The page
+  // called useNodePickerOptions but rendered no Select, and the picker rendered a Select whose
+  // options arrived as a prop named `nodeOptions`, so neither half matched both halves of the
+  // shape test. Splitting a picker across a component boundary is a way past this guard, which
+  // is worth knowing about the guard.
+  ['app/inventory/snapshots/components/snapshot-scope-picker.tsx', 'hook'],
 ]);
 
 // Not pickers, though they trip the shape test below.

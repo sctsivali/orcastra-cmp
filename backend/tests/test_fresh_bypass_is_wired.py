@@ -1064,10 +1064,11 @@ class NeverQueriedNodesAreNamedTests(unittest.TestCase):
     # absent. Seeding from get_node_names() there would invent unreachable nodes the caller
     # never asked about. Listed rather than pattern-matched so a genuine fan-out cannot join by
     # accident, and each entry carries why.
-    SINGLE_HOST_READS = {
-        # GET /snapshots takes a required host and project and reads that one cluster.
-        "snapshots_fleet.py",
-    }
+    #
+    # note: empty since GET /snapshots became a fan-out. The test below is written so an empty
+    # set still asserts something, because a list of exemptions that has run dry is otherwise
+    # indistinguishable from a test that was quietly disabled.
+    SINGLE_HOST_READS: set = set()
 
     def _routers_reporting_unreachable(self):
         return sorted(
@@ -1078,7 +1079,13 @@ class NeverQueriedNodesAreNamedTests(unittest.TestCase):
         )
 
     def test_a_single_host_read_still_names_the_host_it_could_not_reach(self):
-        """The exemption above is not a licence to drop the field, only to fill it differently."""
+        """The exemption above is not a licence to drop the field, only to fill it differently.
+
+        Stated as a two-way rule so it keeps working while the exempt set is empty: a router may
+        answer with the single-host literal only if it is exempt, and an exempt router must use
+        it. Written the other way round, an empty set would make this pass while asserting
+        nothing, which is the failure mode the exemption list itself was meant to avoid.
+        """
         for filename in sorted(self.SINGLE_HOST_READS):
             source = (ROUTERS / filename).read_text()
             self.assertIn(
@@ -1087,6 +1094,20 @@ class NeverQueriedNodesAreNamedTests(unittest.TestCase):
                 f"{filename} is exempt from the fleet seeding, so it must name the one host it "
                 "was asked for when that host has no client",
             )
+
+        smuggled = sorted(
+            path.name
+            for path in ROUTERS.glob("*.py")
+            if "unreachable_nodes=[host]" in path.read_text()
+            and path.name not in self.SINGLE_HOST_READS
+        )
+        self.assertEqual(
+            smuggled,
+            [],
+            "these routers report only the host they were handed, which under-reports a fan-out. "
+            "Either seed from get_node_names() or add the file to SINGLE_HOST_READS with a "
+            f"reason: {smuggled}",
+        )
 
     def test_every_router_that_reports_unreachable_seeds_the_never_queried(self):
         offenders = [

@@ -1,6 +1,18 @@
 "use client";
 
 import { TableEmptyValue } from "@/components/ui/table-text";
+import type { SnapshotInfo } from "@/types/api";
+
+/**
+ * The cluster and project a snapshot actually lives on.
+ *
+ * important: never the page's scope. The listing spans clusters and projects, so a page-level
+ * host deletes or restores against the wrong one. `host` is optional on the type because the
+ * per-instance listing does not carry it; the fleet route sets it on every row.
+ */
+export function snapshotScope(snapshot: SnapshotInfo): { host: string; project: string } {
+  return { host: snapshot.host ?? "", project: snapshot.project || "default" };
+}
 
 /** Whole units only. A snapshot's age is read to decide whether it is still useful, not to the second. */
 export function relativeAge(iso: string): string {

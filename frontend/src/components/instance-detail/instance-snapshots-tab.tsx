@@ -152,9 +152,16 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                     <TableCell>{expiryLabel(snapshot.expires_at)}</TableCell>
                     <TableCell>
                       <SnapshotRowActions
-                        snapshot={{ ...snapshot, source_name: instance.name }}
-                        host={instance.host}
-                        project={project}
+                        // The per-instance listing carries no host or project, because it was
+                        // read for one already-known scope. Stamping them here keeps every row
+                        // self-describing, which is what lets the actions take their target from
+                        // the row rather than from whichever page happens to render them.
+                        snapshot={{
+                          ...snapshot,
+                          source_name: instance.name,
+                          host: instance.host,
+                          project,
+                        }}
                         billingLinked={Boolean(policy?.externally_managed)}
                       />
                     </TableCell>

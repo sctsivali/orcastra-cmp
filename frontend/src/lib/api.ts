@@ -1957,14 +1957,26 @@ const snapshotAPI = {
       opts,
     );
   },
-  /** Every snapshot in one project, in a single upstream call. */
+  /**
+   * Every snapshot in scope, one upstream call per cluster.
+   *
+   * Both parameters are omitted rather than sent empty when they are not set. The backend reads
+   * a present-but-blank host as a caller who named a cluster and got it wrong, and answers 422,
+   * which is what stops a narrowed request silently widening into a fleet sweep.
+   */
   listFleet: async (
-    host: string,
-    project = "default",
+    host?: string,
+    project?: string,
     opts: ReadOptions = {},
   ): Promise<FleetSnapshotListResponse> => {
-    const qs = `host=${encodeURIComponent(host)}&project=${encodeURIComponent(project)}`;
-    return fetchRead<FleetSnapshotListResponse>(`/snapshots?${qs}`, opts);
+    const qs = new URLSearchParams();
+    if (host) qs.set("host", host);
+    if (project) qs.set("project", project);
+    const query = qs.toString();
+    return fetchRead<FleetSnapshotListResponse>(
+      query ? `/snapshots?${query}` : "/snapshots",
+      opts,
+    );
   },
   create: async (
     instanceName: string,

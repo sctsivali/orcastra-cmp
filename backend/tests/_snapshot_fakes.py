@@ -13,6 +13,10 @@ PROJECT = "cust-qa-abcdef01"
 INSTANCE = "ct-qa-fixture-0001"
 
 
+class LXDAPIException(Exception):
+    """What pylxd raises when the daemon refuses. Named to match so a handler's except reads true."""
+
+
 class _Response:
     def __init__(self, payload: Any, status_code: int = 200):
         self._payload = payload
@@ -80,6 +84,8 @@ class FakeInstanceNode:
         # unreachable from any test and an accepted-but-unconfirmable action looked like a
         # completed one.
         self.omit_operation = False
+        # Projects the fallback path enumerates when a daemon cannot answer about all of them.
+        self.projects: List[str] = [PROJECT]
 
     @property
     def snapshots_api(self):
@@ -176,27 +182,41 @@ class _Instances:
         # The recursion=2 project listing the fleet route reads. Left as None so the default is
         # derived from the single node, and set explicitly by a test that needs several sources.
         self.project_listing: Optional[List[Dict[str, Any]]] = None
+        # The all-projects listing. Entries carry their own `project`, which is what the fleet
+        # reader trusts and what the tenant ACL is then asked about.
+        self.all_projects_listing: Optional[List[Dict[str, Any]]] = None
 
     def __getitem__(self, name):
         return _InstanceProxy(self._node)
 
-    def get(self, params=None):
-        """`recursion=2` folds each instance's snapshots into the instance listing."""
-        self._node.recorded.append(("list_project", dict(params or {})))
+    def get(self, params=None, timeout=None):
+        """`recursion=2` folds each instance's snapshots into the instance listing.
+
+        Honours `all-projects` the way LXD does, including refusing a request that carries both
+        it and `project`. That refusal is not decoration: it is the shape a caller reusing
+        `_project_params` on the fast path would produce, and every cluster would 400 at once.
+        """
+        params = dict(params or {})
+        if "all-projects" in params and "project" in params:
+            raise LXDAPIException("Cannot specify a project when requesting all projects")
+        if "all-projects" in params:
+            self._node.recorded.append(("list_all_projects", params, timeout))
+            return _Response({"metadata": self.all_projects_listing or self._default_listing()})
+        self._node.recorded.append(("list_project", params))
         if self.project_listing is not None:
             return _Response({"metadata": self.project_listing})
-        return _Response(
+        return _Response({"metadata": self._default_listing()})
+
+    def _default_listing(self):
+        return [
             {
-                "metadata": [
-                    {
-                        "name": INSTANCE,
-                        "status": "Running",
-                        "config": self._node.config,
-                        "snapshots": list(self._node.snapshots),
-                    }
-                ]
+                "name": INSTANCE,
+                "project": PROJECT,
+                "status": "Running",
+                "config": self._node.config,
+                "snapshots": list(self._node.snapshots),
             }
-        )
+        ]
 
     def post(self, json=None, params=None):
         self.created.append((dict(json or {}), dict(params or {})))
@@ -230,15 +250,28 @@ class _OperationNode:
         )
 
 
+class _Projects(_Response):
+    """Doubles as the response the mobility code reads and the node the fallback path calls."""
+
+    def __init__(self, node: FakeInstanceNode):
+        super().__init__({"metadata": [f"/1.0/projects/{name}" for name in node.projects]})
+        self._node = node
+
+    def get(self, params=None, timeout=None):
+        self._node.recorded.append(("list_project_names", dict(params or {})))
+        return _Response({"metadata": [f"/1.0/projects/{n}" for n in self._node.projects]})
+
+
 class _Api:
     def __init__(self, node: FakeInstanceNode):
+        self._node = node
         self.instances = _Instances(node)
         self.operations = _Operations(node)
         self._api_endpoint = "https://fake:8443/1.0"
 
     @property
     def projects(self):
-        return _Response({"metadata": [f"/1.0/projects/{PROJECT}"]})
+        return _Projects(self._node)
 
     @property
     def storage_pools(self):
@@ -246,32 +279,66 @@ class _Api:
 
 
 class FakeClient:
-    def __init__(self, node: Optional[FakeInstanceNode] = None):
+    def __init__(
+        self,
+        node: Optional[FakeInstanceNode] = None,
+        supports_all_projects: bool = True,
+    ):
         self.node = node or FakeInstanceNode()
         self.api = _Api(self.node)
         self.host_info = {
             "environment": {
                 "certificate": "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----"
-            }
+            },
+            # Both branches of the fleet reader have to be reachable from a test, so this is a
+            # constructor argument rather than a constant. A daemon predating the extension is
+            # the fallback path's only caller.
+            "api_extensions": ["instance_all_projects"] if supports_all_projects else [],
         }
 
 
 class ConnectionManager:
-    def __init__(self, client, hosts=(HOST,)):
+    """One client for every host, or an explicit per-host mapping.
+
+    important: passing `clients` at all makes it authoritative, INCLUDING an empty one. Falling
+    back to the shared client for a host the mapping omits would make every cluster reachable,
+    which is precisely the condition a test about an unreachable cluster needs to create.
+    """
+
+    def __init__(self, client, hosts=(HOST,), clients=None):
         self._client = client
         self._hosts = list(hosts)
+        self._clients = None if clients is None else dict(clients)
 
     def get_client(self, host, *args, **kwargs):
+        if self._clients is not None:
+            return self._clients.get(host)
         return self._client if host in self._hosts else None
 
     def get_node_names(self):
         return list(self._hosts)
 
 
-def service(client, hosts=(HOST,)):
+class _CertManager:
+    """Only list_clusters is exercised. get_node_names is apply_cluster_filter over it, which is
+    what proves scope on a read that names no host, so a fake without it cannot test the fan-out."""
+
+    def __init__(self, hosts):
+        self._hosts = list(hosts)
+
+    def list_clusters(self):
+        return list(self._hosts)
+
+
+def service(client, hosts=(HOST,), clients=None):
+    """An LXDService over one fake client, or a mapping of host to client for a fan-out test.
+
+    `clients` is what makes a per-cluster assertion possible: with one client shared by every
+    host, two clusters are indistinguishable and a memo that collides across them still passes.
+    """
     from app.services.lxd_service import LXDService
 
     svc = LXDService.__new__(LXDService)
-    svc.connection_manager = ConnectionManager(client, hosts)
-    svc.cert_manager = None
+    svc.connection_manager = ConnectionManager(client, hosts, clients)
+    svc.cert_manager = _CertManager(hosts)
     return svc

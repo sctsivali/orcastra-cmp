@@ -20,12 +20,12 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import type { SnapshotInfo } from "@/types/api";
 
+import { snapshotScope } from "./snapshot-format";
+
 interface RestoreSnapshotDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   snapshot: SnapshotInfo;
-  host: string;
-  project: string;
   /** The source's snapshots are metered and billed by another product. */
   billingLinked?: boolean;
   restore: {
@@ -57,11 +57,13 @@ export function RestoreSnapshotDialog({
   open,
   onOpenChange,
   snapshot,
-  host,
-  project,
   billingLinked = false,
   restore,
 }: RestoreSnapshotDialogProps) {
+  // The row's own cluster and project. Under a fleet-wide listing the page has no single scope
+  // to hand down, and a restore discards every write since the snapshot: aiming it at the wrong
+  // cluster is not recoverable.
+  const { host, project } = snapshotScope(snapshot);
   const { toast } = useToast();
   const [confirmName, setConfirmName] = useState("");
   const [safety, setSafety] = useState(true);
@@ -122,7 +124,7 @@ export function RestoreSnapshotDialog({
         <DialogHeader>
           <DialogTitle>Restore This Instance</DialogTitle>
           <DialogDescription>
-            Roll {snapshot.source_name} back to {snapshot.name}.
+            Roll {snapshot.source_name} back to {snapshot.name} on {host} / {project}.
           </DialogDescription>
         </DialogHeader>
 

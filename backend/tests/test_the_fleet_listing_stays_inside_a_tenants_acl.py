@@ -62,6 +62,14 @@ def _client(svc, *, acl, flag_on: bool = True) -> TestClient:
     object.__setattr__(settings, "snapshot_tenant_enforcement_enabled", flag_on)
     token = org_scope._tenant_acl_var.set(acl)
 
+    # important: the route caches its answer for 30s. Without this every test after the first
+    # reads the first one's rows, and a filter that had stopped working would still look right.
+    # This fixture leaves _allowed_clusters_var unset, which is admin scope, so all of them
+    # share one key.
+    from app.core.cache import get_cache_manager
+
+    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+
     client = TestClient(app, raise_server_exceptions=False)
     client._cleanup = lambda: (
         org_scope._tenant_acl_var.reset(token),

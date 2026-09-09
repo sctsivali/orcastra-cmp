@@ -1,32 +1,101 @@
 """Fleet view of snapshots, at /snapshots.
 
 Separate from the per-instance surface because it answers a different question: not "what can I
-roll this instance back to" but "what snapshots exist in this project, and what are they costing
-me". The per-instance router owns the actions; this one only reads.
+roll this instance back to" but "what snapshots exist, where, and what are they costing me". The
+per-instance router owns the actions; this one only reads.
 
-The read is one LXD call. `recursion=2` folds each instance's snapshots into the instance
-listing, so a project of forty instances costs one request rather than forty-one. LXD omits the
-`snapshots` key entirely for an instance with none, so it is read defensively.
+`host` and `project` are both optional and both mean "all" when absent. This used to be scoped to
+one cluster and one project, on the reasoning that a fleet-wide sweep would fan out across every
+cluster on every page load and that a partial failure must never be cached as if it were empty.
+The first half of that objection is answered by LXD's `instance_all_projects` extension, which
+reads a whole cluster in one call rather than one per project (see services/lxd/snapshot_fleet.py).
+The second half is answered here, and it is not theoretical on this fleet: two of five registered
+clusters reject the control plane's certificate, so every single read is partial.
+
+important: every LXD read happens on a worker thread and every tenant decision happens back on the
+event loop. `check_tenant_permission` reads a context variable that defaults to "no ACL", which
+means it fails OPEN in a thread that did not inherit the caller's context (core/blocking.py:119).
+Keeping the two apart means the filter cannot be wrong even if the offload ever changes shape.
 """
+import asyncio
 import logging
-from typing import Any, Dict, List
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.cache import get_cache_manager
 from app.core.lxd_errors import lxd_http_error
 from app.core.org_scope import (
     check_tenant_permission,
+    get_scope_cache_key,
     org_scope_dependency,
     verify_cluster_access,
 )
+from app.core.single_flight import single_flight
 from app.core.dependencies import require_tenant
-from app.services.lxd import snapshots as snapshots_service
-from app.services.lxd.lazy_client import client_for
-from app.routers.instance_snapshots import _blocking, _enforce_snapshot_access
+from app.services.lxd import snapshot_fleet as fleet_service
+from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.lazy_client import connect_or_get_client
+from app.routers.instance_snapshots import (
+    _assert_snapshot_surface_enabled,
+    _enforce_snapshot_access,
+)
 from app.services.lxd_service import LXDService, get_lxd_service
 
 logger = logging.getLogger(__name__)
+
+# important: NOT proxy_executor. That pool exists so OrcaHub's traffic cannot land where the
+# dashboard's own fan-outs run (services/lxd/proxy.py:40), and the isolation is symmetric: one
+# operator opening this page must not occupy the workers a paid integration is waiting on.
+_FLEET_WORKERS = 12
+_FLEET_MAX_IN_FLIGHT = 24
+_fleet_executor = ThreadPoolExecutor(
+    max_workers=_FLEET_WORKERS, thread_name_prefix="snapshots_fleet"
+)
+
+# Wall clock per cluster. The socket timeout inside the read is what actually frees the worker;
+# this only frees the caller, so the two are set together and this one is the larger.
+_CLUSTER_BUDGET = 40
+
+# An unpaginated fleet read lands in Redis. Measured today the whole fleet holds 33 snapshots, so
+# this is a guard against growth rather than a limit anyone meets, and it is reported rather than
+# applied silently.
+_MAX_ROWS = 5000
+
+_CACHE_TTL = 30
+
+
+class FleetSnapshotListResponse(BaseModel):
+    total: int = Field(..., description="Number of snapshots returned")
+    items: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Snapshots across the requested scope"
+    )
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description="Clusters that could not be read. Distinguishes an empty result from a partial one",
+    )
+    queried_nodes: List[str] = Field(
+        default_factory=list, description="Clusters that answered"
+    )
+    partial_nodes: List[str] = Field(
+        default_factory=list,
+        description="Clusters that answered, but not for every project they hold",
+    )
+    truncated: bool = Field(
+        default=False, description="The row cap was reached and some rows are not present"
+    )
+    size_measurement: str = Field(
+        default="skipped",
+        description=(
+            "measured: every snapshot-holding source was read for sizes. "
+            "partial: the per-project cap was reached. "
+            "skipped: sizes were not measured, which is the fleet-wide case."
+        ),
+    )
+
 
 router = APIRouter(
     prefix="/snapshots",
@@ -35,72 +104,176 @@ router = APIRouter(
 )
 
 
-class FleetSnapshotListResponse(BaseModel):
-    total: int = Field(..., description="Number of snapshots returned")
-    items: List[Dict[str, Any]] = Field(default_factory=list, description="Snapshots across the requested scope")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description="Clusters that could not be read. Distinguishes an empty result from a partial one",
+def _read_one_cluster(
+    lxd_service: LXDService,
+    host: str,
+    project: Optional[str],
+    measure_sizes: bool,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """One cluster's rows, on a worker thread. Raises rather than returning empty on a failure.
+
+    note: connect_or_get_client rather than connection_manager.get_client, so a worker that has
+    not connected to this cluster yet reads it instead of reporting a healthy cluster as absent.
+    """
+    client = connect_or_get_client(lxd_service, host)
+    if client is None:
+        raise LXDConnectionError(f"Could not connect to {host}")
+    return fleet_service.read_cluster_snapshots(
+        client, host, project=project, measure_sizes=measure_sizes
     )
 
 
-@router.get("", response_model=FleetSnapshotListResponse)
+@router.get(
+    "",
+    response_model=FleetSnapshotListResponse,
+    summary="List snapshots across the fleet",
+    description=(
+        "Every snapshot in scope. Omit host to read every cluster, omit project to read every "
+        "project. Sizes are measured only when both are named."
+    ),
+)
+@single_flight("snapshots_fleet:list")
 async def list_fleet_snapshots(
-    host: str = Query(..., description="Cluster to read"),
-    project: str = Query("default", description="LXD project to read"),
+    host: Optional[str] = Query(
+        None, description="Cluster to read. Omit to read every cluster in scope"
+    ),
+    project: Optional[str] = Query(
+        None, description="LXD project to read. Omit to read every project"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
 ):
-    """Every snapshot in one project, in a single LXD call.
+    """Every snapshot in scope, one LXD call per cluster.
 
-    Scoped to one cluster and project deliberately. A fleet-wide sweep would fan out across every
-    cluster on every page load, and this console already learned that lesson: an all-node read
-    that fails partially must never be cached as if it were empty.
+    Sizes are measured only when the read names one cluster AND one project. The measurement is a
+    second read per snapshot-holding instance, bounded per project, so a fleet-wide sweep would
+    multiply that bound by every project on every cluster. The response says which happened rather
+    than leaving the console to infer it from the scope, because a narrowed read can hit the cap
+    too.
     """
-    verify_cluster_access(host)
-    _enforce_snapshot_access(host, project, None)
+    # important: `is not None`, not truthiness. `?host=` is a caller who named a cluster and got
+    # it wrong, and must get the 422 verify_cluster_access already raises for a blank id. Reading
+    # it as "absent" would silently widen a narrowed request into a fleet sweep.
+    if host is not None:
+        verify_cluster_access(host)
 
-    client = await client_for(lxd_service, host, label="snapshots.fleet")
-    if client is None:
-        # Not an error and not an empty project. The caller is told which node went unread so the
-        # UI can say so rather than showing a confident, wrong, empty table.
-        return FleetSnapshotListResponse(total=0, items=[], unreachable_nodes=[host])
+    # The deployment-wide refusal applies to every shape of this read. The scope-specific half
+    # only makes sense when there is a single scope to check, and applied fleet-wide it would
+    # refuse a tenant who legitimately holds grants on some of the clusters being read.
+    _assert_snapshot_surface_enabled()
+    if host is not None and project is not None:
+        _enforce_snapshot_access(host, project, None)
 
-    try:
-        rows = await _blocking(
-            snapshots_service.list_project_snapshots,
-            client,
+    cache = get_cache_manager()
+    cache_key = get_scope_cache_key(f"snapshots_fleet:list:host={host}:project={project}")
+    cached = None if fresh else cache.get("api_responses", cache_key)
+    if cached is not None:
+        return FleetSnapshotListResponse(**cached)
+
+    # When a host is named, scope was proven above. When it is not, the node list itself is the
+    # proof: get_node_names is apply_cluster_filter(list_clusters()), so a cluster outside the
+    # caller's organisation never enters the fan-out.
+    in_scope = sorted(lxd_service.get_node_names())
+    nodes_to_query = [host] if host is not None else in_scope
+
+    measure_sizes = host is not None and project is not None
+
+    async def _gather(node: str):
+        return await run_blocking(
+            _read_one_cluster,
+            lxd_service,
+            node,
             project,
-            label="snapshots.fleet",
+            measure_sizes,
+            timeout=_CLUSTER_BUDGET,
+            label=f"snapshots.fleet[{node}]",
+            executor=_fleet_executor,
+            max_in_flight=_FLEET_MAX_IN_FLIGHT,
         )
-    except HTTPException:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise lxd_http_error(exc, "Project", project)
 
-    # important: this is a PROJECT-level read, and check_tenant_permission merges permissions from
-    # every rule matching the project when it is given no instance name. A tenant holding
-    # `snapshot` on one instance therefore passes the check above, so the rows have to be narrowed
-    # again per source.
+    results = await asyncio.gather(
+        *(_gather(node) for node in nodes_to_query), return_exceptions=True
+    )
+
+    rows: List[Dict[str, Any]] = []
+    answered: List[str] = []
+    partial: List[str] = []
+    failed: List[str] = []
+    for node, result in zip(nodes_to_query, results):
+        if isinstance(result, BaseException):
+            if isinstance(result, HTTPException):
+                raise result
+            if host is not None and not isinstance(
+                result, (LXDConnectionError, BlockingTimeout, BlockingPoolFull)
+            ):
+                # A named cluster that answered with a real error is that caller's error, not a
+                # fleet-wide degradation. Answering 200 with an empty list would hide it.
+                raise lxd_http_error(result, "Project", project or "*")
+            logger.info("Snapshot read failed on %s: %s", node, result)
+            failed.append(node)
+            continue
+        node_rows, complete = result
+        answered.append(node)
+        if not complete:
+            partial.append(node)
+        rows.extend(node_rows)
+
+    # important: keyed by (host, project, source), not by source alone. With one cluster and one
+    # project per request the short key was accidentally sufficient; across clusters it collides,
+    # and the first answer wins for every later instance sharing a name. That is one tenant's
+    # snapshots appearing in another's list.
     #
-    # important: narrowed by the SNAPSHOT permission, not by "has any rule here". filter_instances_
-    # by_acl ignores the permissions on a rule entirely, so a tenant holding `view` on one instance
-    # and `snapshot` on another passed the project gate on the second and was then shown the first
-    # one's snapshots as well. Asking the same question the per-instance routes ask is what closes
-    # it. Admin and Partner carry no ACL and check_tenant_permission answers True for them, so an
-    # operator read is unfiltered.
-    seen: Dict[str, bool] = {}
-    visible = []
+    # important: narrowed by the SNAPSHOT permission, not by "has any rule here".
+    # filter_instances_by_acl ignores the permissions on a rule entirely, so a tenant holding
+    # `view` on one instance and `snapshot` on another passed the project gate on the second and
+    # was then shown the first one's snapshots as well. Admin and Partner carry no ACL and
+    # check_tenant_permission answers True for them, so an operator read is unfiltered.
+    seen: Dict[Tuple[str, str, str], bool] = {}
+    visible: List[Dict[str, Any]] = []
     for row in rows:
-        source = row.get("source_name") or ""
-        if source not in seen:
-            seen[source] = check_tenant_permission(host, project, source, "snapshot")
-        if seen[source]:
+        key = (row.get("host") or "", row.get("project") or "", row.get("source_name") or "")
+        if key not in seen:
+            seen[key] = check_tenant_permission(key[0], key[1], key[2], "snapshot")
+        if seen[key]:
             visible.append(row)
 
-    for row in visible:
-        row["host"] = host
-    # unreachable_nodes is populated on the early return above, which is the only case that can
-    # produce one: this route reads a single cluster, so a partial read is not representable.
-    return FleetSnapshotListResponse(
-        total=len(visible), items=visible, unreachable_nodes=[]
+    truncated = len(visible) > _MAX_ROWS
+    if truncated:
+        logger.warning("Fleet snapshot read returned %d rows, capped at %d", len(visible), _MAX_ROWS)
+        visible = visible[:_MAX_ROWS]
+
+    if not measure_sizes:
+        size_measurement = "skipped"
+    elif any(row.get("size_measured") is False for row in visible):
+        size_measurement = "partial"
+    else:
+        size_measurement = "measured"
+
+    # A cluster registered and in scope that never entered the fan-out is unread, not empty. The
+    # seeding literal is what the structural ratchet scans for, and the shape is deliberate:
+    # set(lxd_service.get_node_names()) - set(nodes_to_query)
+    never_queried = (
+        [] if host is not None else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
     )
+    unreachable_nodes = sorted(set(failed) | set(never_queried))
+
+    response = FleetSnapshotListResponse(
+        total=len(visible),
+        items=visible,
+        unreachable_nodes=unreachable_nodes,
+        queried_nodes=sorted(answered),
+        partial_nodes=sorted(partial),
+        truncated=truncated,
+        size_measurement=size_measurement,
+    )
+
+    # important: do not remember an answer nobody gave. Every cluster failing still returns 200
+    # with an empty list, so caching it would pin emptiness for the whole TTL and, on a forced
+    # refresh, overwrite good data the operator could still see. The degradation labels are
+    # cached WITH the payload, so a cached partial read still renders its banner.
+    if answered:
+        cache.set("api_responses", cache_key, response.model_dump(), ttl=_CACHE_TTL)
+    else:
+        logger.warning("Not caching fleet snapshots: no cluster answered")
+
+    return response

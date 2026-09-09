@@ -2521,6 +2521,12 @@ export interface SnapshotInfo {
   architecture?: string | null;
   /** True when this console created it, identified by the ops- prefix. */
   operator_managed: boolean;
+  /**
+   * Whether anyone asked the cluster for this snapshot's size. False and a null `size` mean the
+   * read did not measure; true and a null `size` mean it did and the storage driver reported
+   * nothing. Rendering both as one placeholder presents an absent measurement as a small value.
+   */
+  size_measured?: boolean;
   /** Present only on the fleet listing. */
   host?: string;
   project?: string;
@@ -2551,10 +2557,26 @@ export interface SnapshotListResponse {
   policy: SnapshotPolicy;
 }
 
+/** How much of a read the caller is actually looking at. */
+export type SizeMeasurement = "measured" | "partial" | "skipped";
+
 export interface FleetSnapshotListResponse {
   total: number;
   items: SnapshotInfo[];
+  /** Clusters in scope that could not be read. Distinguishes an empty fleet from an unread one. */
   unreachable_nodes: string[];
+  /** Clusters that answered. Zero of these with rows expected is an outage, not an empty fleet. */
+  queried_nodes?: string[];
+  /** Answered, but not for every project they hold. Their rows ARE present, unlike unreachable. */
+  partial_nodes?: string[];
+  /** The server-side row cap was reached, so some snapshots are not in `items`. */
+  truncated?: boolean;
+  /**
+   * Sizes cost a second read per snapshot-holding instance, bounded per project, so they are
+   * measured only for a read naming one cluster and one project. Read this rather than inferring
+   * it from the scope: a narrowed read can hit the bound too.
+   */
+  size_measurement?: SizeMeasurement;
 }
 
 export interface SnapshotCreateRequest {

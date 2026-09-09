@@ -1837,12 +1837,28 @@ export function useInstanceSnapshots(
   });
 }
 
-export function useFleetSnapshots(host?: string, project = "default") {
+/**
+ * Snapshots across the fleet, or narrowed to one cluster and project.
+ *
+ * Undefined for either argument means "all", which is the page's default. Narrowing to BOTH is
+ * what makes the backend measure sizes, so it is the only scope change that costs a request.
+ */
+export function useFleetSnapshots(
+  host?: string,
+  project?: string,
+  options: { enabled?: boolean } = {},
+) {
   return useRefreshableQuery({
-    queryKey: ["fleetSnapshots", host, project],
-    queryFn: () => api.snapshots.listFleet(host as string, project),
+    queryKey: ["fleetSnapshots", host ?? null, project ?? null],
+    // note: the read options are forwarded. This used to ignore them, which was harmless while
+    // /snapshots had no response cache and became a real defect the moment it gained one: the
+    // Refresh button would report success having read the cache it was pressed to bypass.
+    queryFn: (opts) => api.snapshots.listFleet(host, project, opts),
     ...SEMI_STATIC_DATA_CONFIG,
-    enabled: !!host,
+    // After the spread on purpose: the preset carries its own `enabled`. The page gates this on
+    // the role gate having resolved, so a tenant's deep link is redirected before it can fan out
+    // across every cluster.
+    enabled: options.enabled ?? true,
   });
 }
 
