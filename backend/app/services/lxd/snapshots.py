@@ -266,7 +266,17 @@ def list_instance_snapshots(client, instance_name: str, project: str) -> List[Di
     response = client.api.instances[instance_name].snapshots.get(
         params=_project_params(project, recursion=1)
     )
-    return [_normalize(entry, instance_name) for entry in (_metadata(response) or [])]
+    rows = [_normalize(entry, instance_name) for entry in (_metadata(response) or [])]
+    # important: stamped HERE, not in `_normalize`. This read is what `measure_snapshot_sizes` calls
+    # to obtain a size, so a null size on this path means the driver reported nothing, not that
+    # nobody asked. `_normalize` defaults it to False because `rows_from_instance_listing` also
+    # calls it, and there the bulk recursion=2 listing genuinely answers -1 for every row.
+    #
+    # Without this the per-instance route called every row unmeasured and the console printed
+    # "Not measured" where the truth was "Not reported": two different facts, one of them wrong.
+    for row in rows:
+        row["size_measured"] = True
+    return rows
 
 
 def rows_from_instance_listing(
