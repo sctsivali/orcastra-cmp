@@ -26,6 +26,8 @@ from urllib.parse import unquote
 
 from fastapi import HTTPException
 
+from app.core.lxd_names import POLICY_CONFIG_KEYS
+
 logger = logging.getLogger(__name__)
 
 # The vocabulary. Values are operator-facing copy: the create dialog and the integrator docs both
@@ -296,6 +298,30 @@ def config_reaches_inside(config: Any, devices: Any) -> Optional[str]:
     return None
 
 
+def policy_keys_in_config(config: Any) -> List[str]:
+    """The snapshot-schedule keys an instance-configuration change would set, if any.
+
+    important: this OBSERVES and never refuses. The four keys belong to the metered snapshot
+    product sold upstream, and `snapshots.schedule` is what the console derives
+    `externally_managed` from, so a write here decides whether an operator's own snapshot actions
+    on that instance are gated. Today any key holding `lxd.proxy` and `write` can set them,
+    because the proxy prices an instance-config change by what it reaches inside the guest and
+    these reach sideways into another product instead.
+
+    Refusing immediately would be the wrong order. Which keys actually write these is not knowable
+    from this repository, and enforcing on an assumption about a live paid product is how an
+    outage happens. So this records who does it, and the refusal is fitted afterwards to what the
+    record shows, gated on an explicit never-inherited capability.
+
+    The console's own create paths do not wait for that: they refuse these keys outright at the
+    request boundary, because no user-authenticated caller has a reason to set them.
+    """
+    if not isinstance(config, dict):
+        return []
+    present = {str(key).lower() for key in config}
+    return [key for key in POLICY_CONFIG_KEYS if key in present]
+
+
 def proxy_path_segments(path: str) -> list:
     """A raw-proxy path as lowercase segments, with the API version and query stripped.
 
@@ -309,6 +335,21 @@ def proxy_path_segments(path: str) -> list:
     if not normalised.startswith("/"):
         normalised = "/" + normalised
     return [segment for segment in normalised.lower().split("/") if segment]
+
+
+def policy_keys_in_raw_body(path: str, body: Any) -> List[str]:
+    """The same observation for the raw proxy, which passes a body nothing inspects.
+
+    Scoped to `/instances`, because that is the only resource family carrying these keys, and
+    read through `proxy_path_segments` so a percent-encoded spelling cannot present a second
+    answer to this classifier than it does to the traversal guard.
+    """
+    segments = proxy_path_segments(path)
+    if not segments or segments[0] != "instances":
+        return []
+    if not isinstance(body, dict):
+        return []
+    return policy_keys_in_config(body.get("config"))
 
 
 # What a destructive raw-proxy call is called in the audit trail, keyed on the resource it

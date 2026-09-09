@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 # note: ClusterStatus lives in cluster_status.py beside derive_status, the one function
 # allowed to produce it. Re-exported here so existing imports from this module still work.
 from app.core.url_safety import normalize_endpoint
+from app.core.lxd_names import POLICY_CONFIG_KEYS
 from app.models.cluster_status import (  # noqa: F401
     AvailabilityReason,
     ClusterStatus,
@@ -178,6 +179,32 @@ class VMCreateRequest(BaseModel):
         default=True, 
         description="Start VM immediately after creation"
     )
+
+    @model_validator(mode="after")
+    def _refuse_snapshot_policy_keys(self):
+        """Refuse the four LXD snapshot-schedule keys on the console's own create paths.
+
+        important: `snapshots.schedule` is the single key `services/lxd/snapshots.py` derives
+        `externally_managed` from. An instance created carrying one is immediately treated as owned
+        by the metered product sold upstream, so the operator's own create, restore, delete and copy
+        on it are refused behind a billing acknowledgement, and every override writes a high
+        severity audit row. Nothing in this console was meant to set that, and until this refusal
+        existed anyone who could create an instance could.
+
+        Deliberately on this model rather than only on InstanceCreateRequest. The note in that
+        subclass about leaving this one untouched is about keeping `image` required for
+        `POST /vms`; it is not a reason to leave that route's `config` open. The API key surface the
+        upstream product actually writes those keys through constructs neither model, so refusing
+        here reaches both console routes and no integration.
+        """
+        present = [key for key in POLICY_CONFIG_KEYS if key in (self.config or {})]
+        if present:
+            raise ValueError(
+                f"{', '.join(present)} cannot be set from this console. A snapshot schedule on this "
+                "instance is either sold and metered upstream, or created here as an operator "
+                "schedule after the instance exists. Remove these keys and create the instance."
+            )
+        return self
 
     class Config:
         json_schema_extra = {

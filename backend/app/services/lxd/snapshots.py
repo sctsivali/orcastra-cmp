@@ -25,6 +25,8 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from app.core.lxd_names import POLICY_CONFIG_KEYS
+
 logger = logging.getLogger(__name__)
 
 # Everything Orcastra creates carries this prefix, so an operator snapshot is identifiable on the
@@ -65,12 +67,11 @@ _NO_EXPIRY_PREFIX = "0001-01-01"
 # The instance config keys that describe an LXD-native snapshot schedule. Orcastra reads these
 # and never writes them: they are OrcaHub's retention mechanism, and a write here would leave its
 # ledger disagreeing with the cluster about a schedule a tenant is paying for.
-POLICY_KEYS = (
-    "snapshots.schedule",
-    "snapshots.schedule.stopped",
-    "snapshots.expiry",
-    "snapshots.pattern",
-)
+#
+# note: one definition, in core/lxd_names.py, so the create request models can refuse these at
+# the request boundary without importing this package. A second copy here is exactly how the
+# refusal and the reader would drift apart.
+POLICY_KEYS = POLICY_CONFIG_KEYS
 
 
 class SnapshotNameError(ValueError):

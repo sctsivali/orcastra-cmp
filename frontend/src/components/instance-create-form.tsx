@@ -455,11 +455,6 @@ function InstanceCreateFormContent() {
     // signed release images carry image.requirements.secureboot=false and cope unaided.
     secSecureboot: "false",
     secCsm: "",
-    // Snapshots
-    snapPattern: "",
-    snapExpiry: "",
-    snapStopped: "",
-    snapSchedule: "",
     // Migration
     migStateful: "",
     migEvacuate: "",
@@ -912,10 +907,6 @@ function InstanceCreateFormContent() {
       setIf("security.secureboot", adv.secSecureboot);
       setIf("security.csm", adv.secCsm);
     }
-    setIf("snapshots.pattern", adv.snapPattern);
-    setIf("snapshots.expiry", adv.snapExpiry);
-    setIf("snapshots.schedule.stopped", adv.snapStopped);
-    setIf("snapshots.schedule", adv.snapSchedule);
     if (form.type === "vm") setIf("migration.stateful", adv.migStateful);
     setIf("cluster.evacuate", adv.migEvacuate);
     setIf("boot.autostart", adv.bootAutostart);
@@ -2050,17 +2041,6 @@ function InstanceCreateFormContent() {
                       images aren&apos;t signed with the Microsoft keys.
                     </p>
                   )}
-                </section>
-
-                {/* Snapshots */}
-                <section className="space-y-3">
-                  <h3 className="text-sm font-semibold">Snapshots</h3>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {advText("Snapshot name pattern", "snapPattern", "snap%d")}
-                    {advText("Expire after", "snapExpiry", "e.g. 1M 2H 3d 4w")}
-                    {advBool("Snapshot stopped instances", "snapStopped")}
-                    {advText("Schedule", "snapSchedule", "cron or @daily")}
-                  </div>
                 </section>
 
                 {/* Migration */}

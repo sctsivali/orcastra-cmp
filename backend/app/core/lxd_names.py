@@ -29,3 +29,23 @@ LXD_NAME_PATTERN = r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$"
 LXD_NAME_DESCRIPTION = (
     "Letters, digits and dashes, starting with a letter or digit, at most 63 characters"
 )
+
+
+# The instance config keys that describe an LXD-native snapshot schedule.
+#
+# important: these belong to the metered snapshot product sold upstream. Orcastra reads them and
+# never writes them, because a write leaves that product's ledger disagreeing with the cluster
+# about a schedule a tenant is paying for. `snapshots.schedule` is also the single key
+# services/lxd/snapshots.py derives `externally_managed` from, so setting one from this console
+# makes an instance report itself as owned by another product and puts the operator's own snapshot
+# actions behind a billing acknowledgement they cannot answer for.
+#
+# They live in this leaf module rather than beside the snapshot service so the create request
+# models can refuse them at the boundary. models/schemas.py is imported early and pulling the LXD
+# service package in from there inverts the dependency; this module imports nothing from the app.
+POLICY_CONFIG_KEYS = (
+    "snapshots.schedule",
+    "snapshots.schedule.stopped",
+    "snapshots.expiry",
+    "snapshots.pattern",
+)

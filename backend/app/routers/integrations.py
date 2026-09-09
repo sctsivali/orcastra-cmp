@@ -66,6 +66,8 @@ from app.core.api_key_expiry import (
 )
 from app.core.api_key_permissions import PERMISSION_LEVELS, assert_cluster_permission
 from app.core.api_key_capabilities import (
+    policy_keys_in_config,
+    policy_keys_in_raw_body,
     ELEVATED_REASONS,
     GUEST_ACCESS_CAPABILITIES,
     assert_explicit_capability,
@@ -3028,6 +3030,54 @@ def _audit_raw_proxy(
     )
 
 
+def _observe_policy_key_write(
+    api_key: Dict[str, Any],
+    keys: List[str],
+    *,
+    cluster_id: str,
+    project: Optional[str],
+    target: str,
+    external_user_email: Optional[str] = None,
+) -> None:
+    """Record a key setting the upstream product's snapshot-schedule keys. Refuse nothing yet.
+
+    important: this is deliberately observation and not a gate. `snapshots.schedule` decides
+    whether the console treats an instance as owned by the metered product sold upstream, which
+    in turn decides whether an operator's own snapshot actions on it are refused. Any key with
+    `lxd.proxy` and `write` can set it today, because the proxy prices an instance-config change
+    by what it reaches inside the guest and these keys reach sideways into another product.
+
+    Which keys legitimately write them is not knowable from this repository, and enforcing on an
+    assumption about a live paid product is how an outage happens. So the record comes first and
+    the refusal is fitted to it: an explicit, never-inherited capability, seeded only for the
+    application type that actually owns the schedules.
+
+    The console's own create paths did not wait for that. They refuse these keys at the request
+    boundary already, because no user-authenticated caller has a reason to set them.
+    """
+    if not keys:
+        return
+    logger.warning(
+        "Policy key write: key %s (%s) set %s on %s/%s/%s",
+        api_key.get("id", "unknown"),
+        api_key.get("app_name", "unknown"),
+        ", ".join(keys),
+        cluster_id,
+        project or "default",
+        target,
+    )
+    _audit_key_action(
+        api_key,
+        action="integration.instance.config.policy_key_write",
+        target_id=target[:512],
+        cluster_id=cluster_id,
+        project=project,
+        result="success",
+        details={"policy_keys": keys},
+        external_user_email=external_user_email,
+    )
+
+
 def _clusters_for_key(api_key: Dict[str, Any], cluster_id: Optional[str]) -> set:
     """The clusters this request may touch: the key's grant, optionally narrowed by one id.
 
@@ -3571,6 +3621,17 @@ async def raw_proxy(
             full_path += "?" + "&".join(f"{k}={v}" for k, v in query_params.items())
         
         full_url = f"{endpoint}{full_path}"
+
+        # The raw path inspects no body at all, so this is the only place a policy-key write
+        # through it is visible to anyone.
+        _observe_policy_key_write(
+            api_key,
+            policy_keys_in_raw_body(request.path, request.body),
+            cluster_id=request.cluster_id,
+            project=project,
+            target=request.path,
+            external_user_email=request.external_user_email,
+        )
         
         # important: this reaches into client.api.session, which bypasses pylxd's _APINode and
         # therefore the timeout _APINode would have injected. The socket timeout is passed
@@ -3779,6 +3840,18 @@ async def proxy_operation(
             # with an open window.
             guest_capability = config_reaches_inside(
                 (request.params or {}).get("config"), (request.params or {}).get("devices")
+            )
+
+        # Observation only, and deliberately outside the capability decision above: these keys do
+        # not reach inside the guest, they reach sideways into another product's ledger.
+        if operation in ("update_instance", "create_instance"):
+            _observe_policy_key_write(
+                api_key,
+                policy_keys_in_config((request.params or {}).get("config")),
+                cluster_id=request.cluster_id,
+                project=request.project,
+                target=str((request.params or {}).get("name") or operation),
+                external_user_email=request.external_user_email,
             )
         if guest_capability:
             from app.core.database import async_session_maker as _org_session

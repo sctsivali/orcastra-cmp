@@ -109,6 +109,9 @@ ACTION_CATEGORIES = {
     "integration.instance.desktop_input": EventCategory.ADMIN,
     "integration.instance.desktop_clipboard": EventCategory.ADMIN,
     "integration.proxy.request": EventCategory.ADMIN,
+    # A key setting the snapshot-schedule config keys. Not refused yet, so the record IS the
+    # control: it is what says which keys write them before a refusal is fitted to the answer.
+    "integration.instance.config.policy_key_write": EventCategory.ADMIN,
     # Credential lifecycle. The actor here is a human operator holding a JWT, not the key,
     # so these carry the operator in `actor` and the key only as an annotation in details.
     "integration.api_key.create": EventCategory.ADMIN,
@@ -200,6 +203,7 @@ HIGH_SEVERITY_ACTIONS = {
     "terminal.session.create",
     "console.session.create",
     "integration.instance.exec",
+    "integration.instance.config.policy_key_write",
     "integration.instance.files",
     "desktop_control.consent.set",
     "integration.instance.desktop_view",
