@@ -289,7 +289,11 @@ async def update_server_config(
     try:
         client = require_client(lxd_service.connection_manager.get_client(node_name), node_name)
         # Update config using PUT method
-        response = client.api['1.0'].put(json={'config': config})
+        # important: client.api is already rooted at <endpoint>/1.0, which is the server
+        # config endpoint itself. Indexing '1.0' again addressed /1.0/1.0, so this PUT
+        # never reached the config it was meant to write. pylxd's own code calls
+        # `self.api.get()` for the same resource.
+        response = client.api.put(json={'config': config})
         if response.status_code in [200, 202]:
             return response.json().get('metadata', {})
         else:
