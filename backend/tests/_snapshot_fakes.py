@@ -48,7 +48,12 @@ class FakeSnapshots:
         self._owner.snapshots.append(entry)
         if self._owner.omit_operation:
             return _Response({}, 202)
-        return _Response({"operation": "/1.0/operations/op-create"}, 202)
+        # A distinct id per create, so a test can say "the safety copy failed and the restore would
+        # not have". No test addresses these by name; they exist to key operation_status.
+        self._owner.create_count += 1
+        return _Response(
+            {"operation": f"/1.0/operations/op-create-{self._owner.create_count}"}, 202
+        )
 
     def __getitem__(self, name):
         return _SnapshotNode(self._owner, name)
@@ -73,6 +78,7 @@ class FakeInstanceNode:
         self.snapshots: List[Dict[str, Any]] = list(snapshots or [])
         self.recorded: List[tuple] = []
         self.create_error: Optional[Exception] = None
+        self.create_count = 0
         self.state_usage = 1_000_000_000
         # How the LXD operation behind an accepted request settles.
         self.devices: Dict[str, Any] = {}
@@ -230,24 +236,44 @@ class _Operations:
         self._node = node
 
     def __getitem__(self, operation_id):
-        return _OperationNode(self._node)
+        # The id is carried, not dropped: it is what lets one operation fail while another settles.
+        return _OperationNode(self._node, operation_id)
 
 
 class _OperationNode:
-    def __init__(self, node):
+    def __init__(self, node, operation_id=None):
         self._node = node
+        self._id = operation_id
+
+    def __getitem__(self, operation_id):
+        return _OperationNode(self._node, operation_id)
 
     @property
     def wait(self):
         return self
 
+    def _outcome(self):
+        """One status for the node, or a different one per operation id.
+
+        important: a dict is what makes "the safety copy failed but the restore would have
+        succeeded" reachable. With a single status for the whole node the two are indistinguishable,
+        so the branch that aborts a restore on a failed safety copy could not be tested at all, and
+        it duly shipped broken. A scalar still works, so every existing test is untouched.
+        """
+        status = self._node.operation_status
+        err = self._node.operation_err
+        if isinstance(status, dict):
+            status = status.get(self._id, status.get("*", "Success"))
+        if isinstance(err, dict):
+            err = err.get(self._id, err.get("*"))
+        return status, err
+
     def get(self, params=None, timeout=None):
         # Recorded so a test can assert the socket window outlasts the wait asked of LXD. Without
         # that, the read dies first and every slow operation reports "still running".
         self._node.recorded.append(("wait_operation", dict(params or {}), timeout))
-        return _Response(
-            {"metadata": {"status": self._node.operation_status, "err": self._node.operation_err}}
-        )
+        status, err = self._outcome()
+        return _Response({"metadata": {"status": status, "err": err}})
 
 
 class _Projects(_Response):

@@ -39,6 +39,7 @@ from app.core.org_scope import (
 from app.core.single_flight import rebuild_lock, release_lock
 from app.core.snapshot_billing_gate import audit_billing_override, enforce_billing_impact
 from app.core.snapshot_ownership_gate import enforce_snapshot_ownership
+from app.core.snapshot_safety_gate import take_safety_snapshot
 from app.core.tenant_visibility import tenant_acl_active
 from app.core.blocking import run_blocking
 from app.services.activity_logger import get_activity_logger
@@ -650,20 +651,22 @@ async def restore_snapshot(
                 detail=f"Snapshot '{snapshot_name}' does not exist on {instance_name}.",
             )
 
-        # The safety copy is taken first and its failure aborts the restore. Taken afterwards it
-        # would capture the already-rolled-back state and protect nothing.
-        if body.safety_snapshot:
-            safety_name = snapshots_service.build_safety_snapshot_name(instance_name)
-            await _blocking(
-                snapshots_service.create_instance_snapshot,
-                client,
-                instance_name,
-                body.project,
-                safety_name,
-                stateful=False,
-                expires_at=snapshots_service.default_expiry(),
-                label="snapshots.safety",
-            )
+        # Its own module beside the ownership and billing gates, because it is a third refusal
+        # with the same shape: it decides whether the action may proceed and says why not.
+        safety_name = await take_safety_snapshot(
+            client,
+            instance_name=instance_name,
+            host=body.host,
+            project=body.project,
+            wanted=body.safety_snapshot,
+            existing=existing,
+            blocking=_blocking,
+            settle=_settle,
+            audit=lambda **kw: _audit(
+                "instance.snapshot.restore", instance_name, body.host, body.project,
+                details={"snapshot": snapshot_name, **kw.pop("details", {})}, **kw
+            ),
+        )
 
         operation_id = await _blocking(
             snapshots_service.restore_instance_snapshot,
