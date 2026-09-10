@@ -6,7 +6,11 @@ Provides endpoints for managing LXD instances (containers and VMs).
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Optional
 from urllib.parse import urlparse
+import asyncio
 import logging
+
+from pydantic import BaseModel, Field
+from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
 from app.models.schemas import (
     VMListResponse,
@@ -33,6 +37,13 @@ from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
+from app.services.lxd.instance_devices import (
+    DeviceNotFound,
+    nic_network_of,
+    resolve_device,
+    set_nic_address_sync,
+)
+from app.services.lxd.nic_preflight import NicPreflightError, check_address_for_network
 from app.routers.tags import get_tag_service_dep
 
 logger = logging.getLogger(__name__)
@@ -654,3 +665,117 @@ async def get_instance_metrics(
     except Exception as e:
         logger.error(f"Error getting metrics for {instance_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class NicAddressRequest(BaseModel):
+    """Set or clear the fixed IPv4 on one network interface."""
+
+    host: str = Field(..., description="Target host node")
+    project: Optional[str] = Field("default", description="LXD project holding the instance")
+    ipv4_address: Optional[str] = Field(
+        None,
+        description=(
+            "The address to reserve for this interface. Empty or null hands the interface "
+            "back to DHCP."
+        ),
+    )
+
+
+@router.patch(
+    "/{instance_name}/devices/{device_name}/address",
+    response_model=dict,
+    summary="Set a network interface's fixed IPv4",
+    description=(
+        "Reserve a specific IPv4 for one of an instance's network interfaces, or clear it "
+        "back to DHCP. Overrides a profile-inherited interface onto the instance."
+    ),
+)
+async def set_instance_nic_address(
+    instance_name: str,
+    device_name: str,
+    request: NicAddressRequest,
+    lxd_service: LXDService = Depends(get_lxd_service),
+    _: None = Depends(check_read_only_mode),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
+):
+    """Pin or release a fixed IPv4 on an instance's interface."""
+    verify_cluster_access(request.host)
+    project = request.project or "default"
+    # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and
+    # re-raised as a 500. Same ordering as start/stop.
+    if get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(request.host, project, instance_name, "operate")
+
+    client = lxd_service.get_client_with_reconnect(request.host)
+    if client is None:
+        raise HTTPException(
+            status_code=503, detail=f"Could not connect to {request.host}"
+        )
+
+    try:
+        current, _inherited = await asyncio.to_thread(
+            _read_instance_device, client, instance_name, project, device_name
+        )
+        check_address_for_network(
+            client, project, nic_network_of(current), request.ipv4_address or ""
+        )
+        written = await asyncio.to_thread(
+            set_nic_address_sync,
+            client,
+            instance_name,
+            project,
+            device_name,
+            request.ipv4_address,
+        )
+    except DeviceNotFound:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Instance '{instance_name}' has no interface called '{device_name}'.",
+        ) from None
+    except NicPreflightError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except (LXDAPIException, ClientConnectionFailed) as exc:
+        logger.error(f"LXD refused the device write on {instance_name}: {exc}")
+        activity_logger.log_activity(
+            action="instance.nic.address",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_message=str(exc),
+        )
+        raise HTTPException(
+            status_code=400, detail=f"The cluster refused the change: {exc}"
+        ) from None
+
+    get_cache_manager().invalidate_instance_cache()
+    activity_logger.log_activity(
+        action="instance.nic.address",
+        target_type="instance",
+        target_id=instance_name,
+        target_host=request.host,
+        result="success",
+        details={
+            "device": device_name,
+            "project": project,
+            "ipv4_address": request.ipv4_address or "",
+        },
+    )
+    return {
+        "success": True,
+        "message": (
+            f"{device_name} now uses {request.ipv4_address}"
+            if request.ipv4_address
+            else f"{device_name} returned to DHCP"
+        ),
+        "device": written,
+    }
+
+
+def _read_instance_device(client, name: str, project: str, device_name: str):
+    """The device as the instance sees it, off the event loop."""
+    params = {"project": project} if project and project != "default" else {}
+    data = client.api.instances[name].get(params=params).json().get("metadata") or {}
+    return resolve_device(data, device_name)
