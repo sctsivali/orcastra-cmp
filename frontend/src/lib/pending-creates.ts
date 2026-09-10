@@ -30,6 +30,29 @@ export interface PendingCreate {
   createdAt: number;
 }
 
+/**
+ * How long a create may sit with no signal before the row stops claiming to be in progress.
+ *
+ * important: this store had no expiry at all, and that is half of BUG-ORC-002. A placeholder
+ * is cleared by an operation frame, a lifecycle frame, or the instance appearing in a list.
+ * A create that LXD refused in the background produces none of the three, and the events feed
+ * is subscribed without a project so a create into a non-default project may not produce them
+ * either. So the row spun on "Creating..." indefinitely and the operator was told nothing.
+ *
+ * Ten minutes is above a slow remote image pull, which is the longest legitimate wait, so this
+ * expires a create that has genuinely lost its signal rather than one that is merely slow.
+ */
+export const PENDING_STALE_MS = 10 * 60 * 1000;
+
+/** Whether this placeholder has waited past the point where it can still be believed. */
+export function isStalePending(
+  p: Pick<PendingCreate, "createdAt" | "status">,
+  now: number = Date.now(),
+): boolean {
+  if (p.status === "Error") return false;
+  return now - p.createdAt > PENDING_STALE_MS;
+}
+
 type Listener = () => void;
 
 let pending: PendingCreate[] = [];
