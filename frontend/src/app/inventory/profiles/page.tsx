@@ -197,8 +197,13 @@ function ProfilesContent() {
                   }
                 />
               ) : (
+                // key: the project is part of a profile's identity, not decoration. Every
+                // LXD project carries its own `default` profile, so once this list spans
+                // projects rather than one, node+name collides on 26 of the 36 rows and React
+                // reuses the wrong row: sorting appended rows instead of reordering them,
+                // 25 -> 47 -> 61 -> 83 over three presses of the Name header.
                 paginatedProfiles.map((profile: any) => (
-                  <TableRow key={`${profile.node}-${profile.name}`}>
+                  <TableRow key={`${profile.node}-${profile.project ?? ""}-${profile.name}`}>
                     <TableCell className="font-medium">{profile.name}</TableCell>
                     <TableCell className="max-w-xs">
                       {profile.description ? (
