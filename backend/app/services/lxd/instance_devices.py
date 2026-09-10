@@ -19,6 +19,7 @@ what `lxc config device override` does and what the console already does at crea
 import logging
 from typing import Any, Dict, Optional, Tuple
 from app.core.lxd_names import safe_segment
+from app.services.lxd.nic_preflight import managed_network_of
 
 logger = logging.getLogger(__name__)
 
@@ -45,9 +46,13 @@ def resolve_device(
 
 
 def nic_network_of(device: Dict[str, str]) -> Optional[str]:
-    """The managed network a NIC names, however it names it."""
-    value = device.get("network") or device.get("parent")
-    return str(value) if value else None
+    """The managed network a NIC names, or None when it names a host interface.
+
+    Delegates to the create-path rule so the two entry points cannot drift: a macvlan NIC on a
+    physical parent has no managed network, and LXD has no fixed-address key for it, so the
+    caller reports that rather than hunting for a subnet the host interface will never have.
+    """
+    return managed_network_of(device)
 
 
 def apply_fixed_address(
