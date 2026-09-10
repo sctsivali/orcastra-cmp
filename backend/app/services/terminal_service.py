@@ -16,6 +16,7 @@ from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
 from app.services.lxd_ssl import create_lxd_ssl_context
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class TerminalService:
                 # pylxd's instances.get() doesn't support project parameter directly
                 if project and project != "default":
                     # Use API directly with project parameter
-                    response = client.api.instances[instance_name].get(params={"project": project})
+                    response = client.api.instances[safe_segment(instance_name)].get(params={"project": project})
                     instance_data = response.json().get("metadata", {})
                     instance_status = instance_data.get("status", "Unknown")
                     instance_type = instance_data.get("type", "container")
@@ -175,12 +176,12 @@ class TerminalService:
             
             # Execute via pylxd raw API (include project parameter for non-default projects)
             if project and project != "default":
-                response = client.api.instances[instance_name].exec.post(
+                response = client.api.instances[safe_segment(instance_name)].exec.post(
                     json=exec_data,
                     params={"project": project}
                 )
             else:
-                response = client.api.instances[instance_name].exec.post(json=exec_data)
+                response = client.api.instances[safe_segment(instance_name)].exec.post(json=exec_data)
             
             # Get operation details
             operation = response.json()

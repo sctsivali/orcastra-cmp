@@ -69,6 +69,7 @@ _history_min_interval: float = 4.0  # Minimum seconds between history stores
 
 # Lock for thread-safe CPU sample access
 import threading
+from app.core.lxd_path import safe_segment
 _cpu_samples_lock = threading.Lock()
 
 
@@ -94,7 +95,7 @@ def format_bytes(bytes_val: int) -> str:
 def _fetch_instance_state(client, instance_name: str, project: str, host: str) -> Optional[Dict[str, Any]]:
     """Fetch instance state from LXD - runs in thread pool."""
     try:
-        state_resp = client.api.instances[instance_name].state.get(params={'project': project})
+        state_resp = client.api.instances[safe_segment(instance_name)].state.get(params={'project': project})
         state_data = state_resp.json().get('metadata', {})
         
         # Extract CPU usage in nanoseconds (cumulative)

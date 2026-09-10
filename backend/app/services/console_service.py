@@ -17,6 +17,7 @@ from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import get_vault_client
 from app.core.config import get_settings
 from app.services.lxd_ssl import create_lxd_ssl_context
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ class ConsoleService:
             # Get instance details
             try:
                 if project and project != "default":
-                    response = client.api.instances[instance_name].get(
+                    response = client.api.instances[safe_segment(instance_name)].get(
                         params={"project": project}
                     )
                     instance_data = response.json().get("metadata", {})
@@ -313,7 +314,7 @@ class ConsoleService:
             # Verify instance exists and is a VM
             try:
                 if project and project != "default":
-                    response = client.api.instances[instance_name].get(
+                    response = client.api.instances[safe_segment(instance_name)].get(
                         params={"project": project}
                     )
                     instance_data = response.json().get("metadata", {})
@@ -348,12 +349,12 @@ class ConsoleService:
             }
             
             if project and project != "default":
-                response = client.api.instances[instance_name].console.post(
+                response = client.api.instances[safe_segment(instance_name)].console.post(
                     json=console_data,
                     params={"project": project}
                 )
             else:
-                response = client.api.instances[instance_name].console.post(
+                response = client.api.instances[safe_segment(instance_name)].console.post(
                     json=console_data
                 )
             
@@ -486,7 +487,7 @@ class ConsoleService:
                 try:
                     # Get current instance config
                     if project and project != "default":
-                        response = client.api.instances[instance_name].get(
+                        response = client.api.instances[safe_segment(instance_name)].get(
                             params={"project": project}
                         )
                         instance_data = response.json().get("metadata", {})
@@ -514,7 +515,7 @@ class ConsoleService:
                     patch_data = {"config": config}
                     
                     if project and project != "default":
-                        client.api.instances[instance_name].patch(
+                        client.api.instances[safe_segment(instance_name)].patch(
                             json=patch_data,
                             params={"project": project}
                         )
@@ -566,7 +567,7 @@ class ConsoleService:
                     try:
                         # Get volumes of type "custom" (where ISOs are stored)
                         # or type "iso" if available
-                        volumes_response = client.api.storage_pools[pool_name].volumes.get(
+                        volumes_response = client.api.storage_pools[safe_segment(pool_name)].volumes.get(
                             params={"recursion": 1}
                         )
                         volumes = volumes_response.json().get("metadata", [])
@@ -671,7 +672,7 @@ class ConsoleService:
             
             try:
                 if project and project != "default":
-                    response = client.api.instances[instance_name].get(
+                    response = client.api.instances[safe_segment(instance_name)].get(
                         params={"project": project}
                     )
                     instance_data = response.json().get("metadata", {})
@@ -746,7 +747,7 @@ class ConsoleService:
             try:
                 # Get current instance
                 if project and project != "default":
-                    response = client.api.instances[instance_name].get(
+                    response = client.api.instances[safe_segment(instance_name)].get(
                         params={"project": project}
                     )
                     instance_data = response.json().get("metadata", {})
@@ -772,7 +773,7 @@ class ConsoleService:
                 patch_data = {"devices": devices}
                 
                 if project and project != "default":
-                    client.api.instances[instance_name].patch(
+                    client.api.instances[safe_segment(instance_name)].patch(
                         json=patch_data,
                         params={"project": project}
                     )
@@ -814,7 +815,7 @@ class ConsoleService:
             
             try:
                 if project and project != "default":
-                    response = client.api.instances[instance_name].get(
+                    response = client.api.instances[safe_segment(instance_name)].get(
                         params={"project": project}
                     )
                     instance_data = response.json().get("metadata", {})
@@ -833,7 +834,7 @@ class ConsoleService:
                 patch_data = {"devices": devices}
                 
                 if project and project != "default":
-                    client.api.instances[instance_name].patch(
+                    client.api.instances[safe_segment(instance_name)].patch(
                         json=patch_data,
                         params={"project": project}
                     )

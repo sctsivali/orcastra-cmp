@@ -31,6 +31,7 @@ from app.services.lxd_service import (
 )
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.org_scope import project_is_visible
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, verify_tenant_permission
 from app.core.config import get_settings
 from app.services.orcahub_webhook import schedule_orcahub_event
@@ -46,6 +47,7 @@ from app.services.lxd.instance_devices import (
 )
 from app.services.lxd.nic_preflight import NicPreflightError, check_address_for_network
 from app.routers.tags import get_tag_service_dep
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -230,6 +232,11 @@ async def create_instance(
 ):
     """Create a new instance."""
     verify_cluster_access(request.host)
+    # important: bound the project before anything reads it. The NIC pre-flight's refusal
+    # names the networks available in the target project, which without this gate turns a
+    # deliberately bad create into an enumeration oracle for another organization's networks.
+    if not project_is_visible(request.host, request.project or "default"):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     _validate_image_server(request.image_server)
     try:
         result = await lxd_service.create_instance(
@@ -786,6 +793,11 @@ async def set_instance_nic_address(
     """Pin or release a fixed IPv4 on an instance's interface."""
     verify_cluster_access(request.host)
     project = request.project or "default"
+    # important: the project bound, not only the cluster one. A Partner is scoped by cluster
+    # alone, so without this a shared cluster lets one organization rewrite a device on
+    # another organization's instance.
+    if not project_is_visible(request.host, project):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and
     # re-raised as a 500. Same ordering as start/stop.
     if get_settings().tenant_perm_enforcement_enabled:
@@ -862,5 +874,5 @@ async def set_instance_nic_address(
 def _read_instance_device(client, name: str, project: str, device_name: str):
     """The device as the instance sees it, off the event loop."""
     params = {"project": project} if project and project != "default" else {}
-    data = client.api.instances[name].get(params=params).json().get("metadata") or {}
+    data = client.api.instances[safe_segment(name)].get(params=params).json().get("metadata") or {}
     return resolve_device(data, device_name)

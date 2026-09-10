@@ -24,12 +24,13 @@ from app.services.lxd.snapshots import (
     _project_params,
     is_operator_snapshot,
 )
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
 
 def _volume_api(client, pool: str, volume_name: str, volume_type: str = "custom"):
-    return client.api.storage_pools[pool].volumes[volume_type][volume_name]
+    return client.api.storage_pools[safe_segment(pool)].volumes[safe_segment(volume_type)][safe_segment(volume_name)]
 
 
 def list_volume_snapshots(

@@ -27,6 +27,7 @@ from app.models.schemas import (
 )
 from app.core.cache import get_cache_manager
 from app.services.lxd.utils import wait_for_lxd_operation
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -1065,14 +1066,14 @@ class TagService:
                 
             elif resource_type == "instance":
                 client = self.lxd_service.connection_manager.get_client(resource_host)
-                response = client.api.instances[resource_id].get(
+                response = client.api.instances[safe_segment(resource_id)].get(
                     params={'project': resource_project or 'default'}
                 )
                 instance_data = response.json()['metadata']
                 if 'config' not in instance_data:
                     instance_data['config'] = {}
                 instance_data['config']['user.tags'] = tags_str
-                put_response = client.api.instances[resource_id].put(
+                put_response = client.api.instances[safe_segment(resource_id)].put(
                     json=instance_data,
                     params={'project': resource_project or 'default'}
                 )
@@ -1126,7 +1127,7 @@ class TagService:
                 
             elif resource_type == "instance":
                 client = self.lxd_service.connection_manager.get_client(resource_host)
-                response = client.api.instances[resource_id].get(
+                response = client.api.instances[safe_segment(resource_id)].get(
                     params={'project': resource_project or 'default'}
                 )
                 instance_data = response.json()['metadata']

@@ -40,6 +40,7 @@ import pylxd
 
 from app.core.blocking import run_blocking
 from app.services.lxd.project_scope import list_instance_records
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ def read_pool_detail(
     client: pylxd.Client, member_name: str, pool_name: str
 ) -> Dict[str, Any]:
     """One pool's own record. Only reached when the list came back without recursion."""
-    response = client.api["storage-pools"][pool_name].get(
+    response = client.api["storage-pools"][safe_segment(pool_name)].get(
         params={"target": member_name}
     )
     return response.json().get("metadata", {}) or {}
@@ -153,7 +154,7 @@ def read_pool_space(
     client: pylxd.Client, member_name: str, pool_name: str
 ) -> Dict[str, int]:
     """One pool's space figures on this member."""
-    response = client.api["storage-pools"][pool_name]["resources"].get(
+    response = client.api["storage-pools"][safe_segment(pool_name)]["resources"].get(
         params={"target": member_name}
     )
     space = (response.json().get("metadata", {}) or {}).get("space", {}) or {}

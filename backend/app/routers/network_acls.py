@@ -31,10 +31,15 @@ from app.services.lxd.project_scope import (
     project_params,
     resolve_owner,
 )
-from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
+from app.core.tenant_visibility import (
+    filter_visible_lxd_references,
+    tenant_acl_active,
+    tenant_may_see_project,
+)
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -207,6 +212,9 @@ async def list_network_acls(
         if tenant_acl_active():
             visible_acls = []
             for acl in all_acls:
+                # ownership as well as usage: see tenant_may_see_project
+                if not tenant_may_see_project(acl.node, acl.project):
+                    continue
                 acl.used_by = filter_visible_lxd_references(acl.node, acl.used_by)
                 if acl.used_by:
                     visible_acls.append(acl)
@@ -251,7 +259,7 @@ async def get_network_acl(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network ACL")
         scope = project_params(owner)
-        response = client.api["network-acls"][acl_name].get(params=scope)
+        response = client.api["network-acls"][safe_segment(acl_name)].get(params=scope)
         
         if response.status_code == 200:
             acl_data = response.json().get('metadata', {})
@@ -387,7 +395,7 @@ async def update_network_acl(
         scope = project_params(owner)
         
         # Get current ACL
-        get_response = client.api["network-acls"][acl_name].get(params=scope)
+        get_response = client.api["network-acls"][safe_segment(acl_name)].get(params=scope)
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
         
@@ -404,7 +412,7 @@ async def update_network_acl(
             acl_data['config'] = config
         
         # Put updated ACL
-        put_response = client.api["network-acls"][acl_name].put(json=acl_data, params=scope)
+        put_response = client.api["network-acls"][safe_segment(acl_name)].put(json=acl_data, params=scope)
         
         if put_response.status_code in [200, 202]:
             return {
@@ -447,7 +455,7 @@ async def delete_network_acl(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network ACL")
         scope = project_params(owner)
-        response = client.api["network-acls"][acl_name].delete(params=scope)
+        response = client.api["network-acls"][safe_segment(acl_name)].delete(params=scope)
         
         if response.status_code in [200, 202]:
             # Log activity for audit trail

@@ -26,6 +26,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.core.lxd_names import POLICY_CONFIG_KEYS
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -263,7 +264,7 @@ def list_instance_snapshots(client, instance_name: str, project: str) -> List[Di
     `recursion=1` asks LXD for whole records instead of URLs. A cluster that refuses recursion
     still answers the plain form, so the caller gets names rather than an error.
     """
-    response = client.api.instances[instance_name].snapshots.get(
+    response = client.api.instances[safe_segment(instance_name)].snapshots.get(
         params=_project_params(project, recursion=1)
     )
     rows = [_normalize(entry, instance_name) for entry in (_metadata(response) or [])]
@@ -436,7 +437,7 @@ def create_instance_snapshot(
     stateful: bool = False,
     expires_at: Optional[str] = None,
 ):
-    response = client.api.instances[instance_name].snapshots.post(
+    response = client.api.instances[safe_segment(instance_name)].snapshots.post(
         json={
             "name": snapshot_name,
             "stateful": bool(stateful),
@@ -448,14 +449,14 @@ def create_instance_snapshot(
 
 
 def restore_instance_snapshot(client, instance_name: str, project: str, snapshot_name: str):
-    response = client.api.instances[instance_name].put(
+    response = client.api.instances[safe_segment(instance_name)].put(
         json={"restore": snapshot_name}, params=_project_params(project)
     )
     return _operation_id(response)
 
 
 def delete_instance_snapshot(client, instance_name: str, project: str, snapshot_name: str):
-    response = client.api.instances[instance_name].snapshots[snapshot_name].delete(
+    response = client.api.instances[safe_segment(instance_name)].snapshots[safe_segment(snapshot_name)].delete(
         params=_project_params(project)
     )
     return _operation_id(response)
@@ -480,7 +481,7 @@ def wait_for_operation(client, operation_id: str, project: str, timeout: int = 2
     could then only ever catch a failure that surfaced inside 8 seconds. Same rule, and the same
     reason, as guest_output.py:120-122 and the proxy's own client factory.
     """
-    response = client.api.operations[operation_id].wait.get(
+    response = client.api.operations[safe_segment(operation_id)].wait.get(
         params=_project_params(project, timeout=timeout),
         timeout=(3, int(timeout) + 10),
     )
@@ -549,7 +550,7 @@ def read_instance_config_and_policy(
     it tells whether the metered product upstream has claimed the instance since. Two reads for one
     decision is a second chance to see two different instants.
     """
-    response = client.api.instances[instance_name].get(params=_project_params(project))
+    response = client.api.instances[safe_segment(instance_name)].get(params=_project_params(project))
     config = (_metadata(response) or {}).get("config") or {}
     return config, _policy_from_config(config)
 

@@ -22,6 +22,7 @@ would be a standing security relationship between two customers' infrastructure.
 
 import logging
 from typing import Any, Dict, List, Optional, Tuple
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ def instance_footprint(client, instance_name: str, project: str) -> Optional[int
     """
     try:
         state = _metadata(
-            client.api.instances[instance_name].state.get(params=_project_params(project))
+            client.api.instances[safe_segment(instance_name)].state.get(params=_project_params(project))
         ) or {}
         disks = state.get("disk") or {}
         total = sum(int(d.get("usage") or 0) for d in disks.values() if isinstance(d, dict))
@@ -94,7 +95,7 @@ def instance_footprint(client, instance_name: str, project: str) -> Optional[int
 
 def pool_headroom(client, pool: str) -> Optional[Dict[str, int]]:
     try:
-        resources = _metadata(client.api.storage_pools[pool].resources.get()) or {}
+        resources = _metadata(client.api.storage_pools[safe_segment(pool)].resources.get()) or {}
         space = resources.get("space") or {}
         total = int(space.get("total") or 0)
         used = int(space.get("used") or 0)
@@ -134,7 +135,7 @@ def architecture_compatible(instance_architecture: Optional[str], target_arches:
 def instance_architecture(client, instance_name: str, project: str) -> Optional[str]:
     try:
         meta = _metadata(
-            client.api.instances[instance_name].get(params=_project_params(project))
+            client.api.instances[safe_segment(instance_name)].get(params=_project_params(project))
         ) or {}
         arch = meta.get("architecture")
         return arch if isinstance(arch, str) else None
@@ -196,7 +197,7 @@ def read_instance_definition(client, instance_name: str, project: str) -> Dict[s
     addresses, and reproducing it would put two instances with the same hardware identity on the
     same network.
     """
-    meta = _metadata(client.api.instances[instance_name].get(params=_project_params(project))) or {}
+    meta = _metadata(client.api.instances[safe_segment(instance_name)].get(params=_project_params(project))) or {}
     config = {
         key: value
         for key, value in (meta.get("config") or {}).items()
@@ -269,7 +270,7 @@ def begin_source_migration(
     The secrets are one-time and scoped to this operation, which is what lets the target pull
     without the two servers trusting each other permanently.
     """
-    response = source_client.api.instances[instance_name].post(
+    response = source_client.api.instances[safe_segment(instance_name)].post(
         json={"migration": True, "live": False, "instance_only": bool(instance_only)},
         params=_project_params(project),
     )
@@ -375,7 +376,7 @@ def create_backup(
     This is a real artifact occupying real pool space on someone's cluster. Whoever calls it owns
     deleting it on every path out, including the one where this process dies.
     """
-    response = source_client.api.instances[instance_name].backups.post(
+    response = source_client.api.instances[safe_segment(instance_name)].backups.post(
         json={
             "name": backup_name,
             "instance_only": bool(instance_only),
@@ -390,7 +391,7 @@ def create_backup(
 def delete_backup(source_client, *, instance_name: str, project: str, backup_name: str) -> None:
     """Best-effort teardown. Never raises: it runs on the failure path too."""
     try:
-        source_client.api.instances[instance_name].backups[backup_name].delete(
+        source_client.api.instances[safe_segment(instance_name)].backups[safe_segment(backup_name)].delete(
             params=_project_params(project)
         )
     except Exception as exc:  # noqa: BLE001
@@ -407,7 +408,7 @@ def open_backup_stream(source_client, *, instance_name: str, project: str, backu
     The adapter only fills in a default when the caller supplies none, so this widens one call
     rather than weakening every LXD read in the process.
     """
-    return source_client.api.instances[instance_name].backups[backup_name].export.get(
+    return source_client.api.instances[safe_segment(instance_name)].backups[safe_segment(backup_name)].export.get(
         params=_project_params(project),
         stream=True,
         timeout=(TRANSFER_CONNECT_TIMEOUT, TRANSFER_READ_TIMEOUT),

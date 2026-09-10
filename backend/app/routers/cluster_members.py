@@ -41,6 +41,7 @@ from app.core.org_scope import (
 )
 from app.core.tenant_visibility import tenant_acl_has_permission
 from app.services.lxd.lazy_client import client_for
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -230,7 +231,7 @@ async def get_cluster_member(
         client = require_client(await client_for(lxd_service, node), node)
         
         # Get specific member
-        response = client.api.cluster.members[member_name].get()
+        response = client.api.cluster.members[safe_segment(member_name)].get()
         member_data = response.json().get("metadata", {})
         
         # Parse roles

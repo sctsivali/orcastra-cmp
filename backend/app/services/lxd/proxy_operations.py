@@ -41,6 +41,7 @@ from .proxy import (
     exec_executor,
     proxy_executor,
 )
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -428,7 +429,7 @@ def execute_proxy_operation(
         return client.instances.get(_required(params, "name", "Instance name"))
 
     def instance_api() -> Any:
-        return client.api.instances[_required(params, "name", "Instance name")]
+        return client.api.instances[safe_segment(_required(params, "name", "Instance name"))]
 
     # ── reads ──────────────────────────────────────────────────────────────────────────────
 

@@ -20,6 +20,7 @@ from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.core.cache import get_cache_manager
 from app.services.lxd.lazy_client import client_for
 from pydantic import BaseModel, Field
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +227,7 @@ async def get_identity(
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        response = client.api["auth"]["identities"][identity_id].get()
+        response = client.api["auth"]["identities"][safe_segment(identity_id)].get()
         
         if response.status_code == 200:
             identity_data = response.json().get('metadata', {})
@@ -389,7 +390,7 @@ async def get_group(
     try:
         client = require_client(await client_for(lxd_service, host), host)
         
-        response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+        response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
         
         if response.status_code == 200:
             group_data = response.json().get('metadata', {})
@@ -571,7 +572,7 @@ async def update_group(
                 clear_data["description"] = request.description
             
             logger.info(f"Step 0: Clearing all existing permissions for group {group_name}")
-            clear_response = client.api.auth.groups[group_name].patch(json=clear_data, timeout=(5, 30))
+            clear_response = client.api.auth.groups[safe_segment(group_name)].patch(json=clear_data, timeout=(5, 30))
             
             if clear_response.status_code not in [200, 202]:
                 error_detail = clear_response.json().get('error', 'Failed to clear permissions')
@@ -589,7 +590,7 @@ async def update_group(
                 
                 # CRITICAL: GET current state right before PATCH
                 await asyncio.sleep(0.3)  # Small delay before GET
-                get_response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+                get_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
                 current_in_lxd = []
                 if get_response.status_code == 200:
                     current_in_lxd = get_response.json().get('metadata', {}).get('permissions', [])
@@ -605,7 +606,7 @@ async def update_group(
                 logger.info(f"Sending PUT with {len(merged_perms)} permissions: {merged_perms}")
                 
                 # Try PUT - which does a complete replacement
-                response = client.api.auth.groups[group_name].put(json=put_data, timeout=(5, 30))
+                response = client.api.auth.groups[safe_segment(group_name)].put(json=put_data, timeout=(5, 30))
                 
                 if response.status_code not in [200, 202]:
                     error_detail = response.json().get('error', f'Failed to add permission at step {idx + 1}')
@@ -623,7 +624,7 @@ async def update_group(
                     verified = False
                     
                     for attempt in range(max_verify_attempts):
-                        verify_response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+                        verify_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
                         if verify_response.status_code == 200:
                             current_perms = verify_response.json().get('metadata', {}).get('permissions', [])
                             
@@ -642,7 +643,7 @@ async def update_group(
                                     # in this scope, so the retry raised NameError the moment a
                                     # permission failed to verify. Nothing exercised it, which is
                                     # why it survived.
-                                    retry_response = client.api.auth.groups[group_name].put(json=put_data, timeout=(5, 30))
+                                    retry_response = client.api.auth.groups[safe_segment(group_name)].put(json=put_data, timeout=(5, 30))
                                     if retry_response.status_code not in [200, 202]:
                                         logger.error(f"Retry PATCH failed: {retry_response.json().get('error', 'Unknown error')}")
                                     await asyncio.sleep(0.5)
@@ -652,7 +653,7 @@ async def update_group(
                         accumulated_perms.pop()
             
             # Final verification
-            final_response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+            final_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
             if final_response.status_code == 200:
                 final_perms = final_response.json().get('metadata', {}).get('permissions', [])
                 logger.info(f"Final state: group {group_name} has {len(final_perms)} permissions")
@@ -676,7 +677,7 @@ async def update_group(
             logger.info(f"Updating group {group_name} description only to: '{update_data.get('description', '')}'")
             
             # Get current group state
-            get_response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+            get_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
             if get_response.status_code == 200:
                 current_group = get_response.json().get('metadata', {})
                 current_perms = current_group.get('permissions', [])
@@ -688,10 +689,10 @@ async def update_group(
                 }
                 
                 # Use PUT to replace the entire group config
-                response = client.api.auth.groups[group_name].put(json=put_data, timeout=(5, 30))
+                response = client.api.auth.groups[safe_segment(group_name)].put(json=put_data, timeout=(5, 30))
             else:
                 # Fallback to PATCH if GET fails
-                response = client.api.auth.groups[group_name].patch(json=update_data, timeout=(5, 30))
+                response = client.api.auth.groups[safe_segment(group_name)].patch(json=update_data, timeout=(5, 30))
         
             if response.status_code in [200, 202]:
                 # Invalidate cache
@@ -730,7 +731,7 @@ async def delete_group(
     try:
         client = require_client(await client_for(lxd_service, host), host)
         
-        response = client.api.auth.groups[group_name].delete(timeout=(5, 30))
+        response = client.api.auth.groups[safe_segment(group_name)].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:
             return {
@@ -769,7 +770,7 @@ async def add_identity_to_group(
         identity_id = request.identity_id
         
         # Navigate using path segments
-        get_response = client.api.auth.identities[auth_type][identity_id].get(timeout=(5, 30))
+        get_response = client.api.auth.identities[safe_segment(auth_type)][safe_segment(identity_id)].get(timeout=(5, 30))
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
         
@@ -790,7 +791,7 @@ async def add_identity_to_group(
         update_data = {"groups": updated_groups}
         
         logger.info(f"Adding identity {identity_id} to group {group_name}. Groups: {updated_groups}")
-        response = client.api.auth.identities[auth_type][identity_id].patch(json=update_data, timeout=(5, 30))
+        response = client.api.auth.identities[safe_segment(auth_type)][safe_segment(identity_id)].patch(json=update_data, timeout=(5, 30))
         
         if response.status_code in [200, 202]:
             # Invalidate cache
@@ -835,7 +836,7 @@ async def remove_identity_from_group(
         auth_type_lower = auth_type.lower()
         
         # Navigate using path segments
-        get_response = client.api.auth.identities[auth_type_lower][identity_id].get(timeout=(5, 30))
+        get_response = client.api.auth.identities[safe_segment(auth_type_lower)][safe_segment(identity_id)].get(timeout=(5, 30))
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
         
@@ -864,7 +865,7 @@ async def remove_identity_from_group(
         update_data = {"groups": updated_groups}
         
         logger.info(f"Removing identity {identity_id} from group {group_name}. Groups: {updated_groups}")
-        response = client.api.auth.identities[auth_type_lower][identity_id].patch(json=update_data, timeout=(5, 30))
+        response = client.api.auth.identities[safe_segment(auth_type_lower)][safe_segment(identity_id)].patch(json=update_data, timeout=(5, 30))
         
         if response.status_code in [200, 202]:
             # Invalidate cache
@@ -908,13 +909,13 @@ async def delete_identity(
         auth_type_lower = auth_type.lower()
         
         # Check if identity exists
-        get_response = client.api.auth.identities[auth_type_lower][identity_id].get(timeout=(5, 30))
+        get_response = client.api.auth.identities[safe_segment(auth_type_lower)][safe_segment(identity_id)].get(timeout=(5, 30))
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
         
         # Delete the identity
         logger.info(f"Deleting identity {identity_id} (type: {auth_type}) from {host}")
-        response = client.api.auth.identities[auth_type_lower][identity_id].delete(timeout=(5, 30))
+        response = client.api.auth.identities[safe_segment(auth_type_lower)][safe_segment(identity_id)].delete(timeout=(5, 30))
         
         if response.status_code in [200, 202]:
             # Invalidate cache

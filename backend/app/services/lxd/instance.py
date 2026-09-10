@@ -31,6 +31,7 @@ from .utils import (
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
 from .audit import audit_operation
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ def _lxd_snapshot_names(client, name: str, project: str) -> List[str]:
     has no pylxd `.snapshots`, so query GET /instances/{name}/snapshots directly.
     """
     try:
-        resp = client.api.instances[name].snapshots.get(params={"project": project})
+        resp = client.api.instances[safe_segment(name)].snapshots.get(params={"project": project})
         meta = resp.json().get("metadata") or []
         return [str(u).rstrip("/").rsplit("/", 1)[-1] for u in meta]
     except Exception as e:  # noqa: BLE001 - absent/uncreatable snapshots -> treat as none
@@ -246,7 +247,7 @@ class InstanceManager:
         """
         ip_addrs = []
         try:
-            state_resp = client.api.instances[instance_name].state.get(
+            state_resp = client.api.instances[safe_segment(instance_name)].state.get(
                 params={'project': project_name},
                 timeout=(1, 3)  # Aggressive timeout for parallel calls
             )
@@ -983,7 +984,7 @@ class InstanceManager:
             # PATCH merges config, so this only sets cloud-init.user-data. The new
             # root disk picks it up on first boot.
             def _set_ci():
-                client.api.instances[name].patch(
+                client.api.instances[safe_segment(name)].patch(
                     json={"config": {"cloud-init.user-data": cloud_init}},
                     params={"project": project_name},
                 )

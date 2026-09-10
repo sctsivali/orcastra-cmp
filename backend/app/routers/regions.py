@@ -42,6 +42,7 @@ from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, re
 from app.core.tenant_visibility import tenant_acl_has_permission
 from app.core.type_utils import resolve_cluster_type, resolve_clustered
 from app.services.lxd.project_scope import list_instance_records
+from app.core.lxd_path import safe_segment
 
 router = APIRouter(
     prefix="/regions",
@@ -303,7 +304,7 @@ async def get_regions_overview(
                                         for pool in pools:
                                             storage_drivers.add(pool.driver)
                                             try:
-                                                pool_resources = client.api.storage_pools[pool.name].resources.get()
+                                                pool_resources = client.api.storage_pools[safe_segment(pool.name)].resources.get()
                                                 pool_data = pool_resources.json().get("metadata", {})
                                                 space = pool_data.get("space", {})
                                                 region_pool_readings.append(PoolReading(

@@ -18,6 +18,7 @@ what `lxc config device override` does and what the console already does at crea
 
 import logging
 from typing import Any, Dict, Optional, Tuple
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ def set_nic_address_sync(
     instance, and ValueError when it is not a NIC.
     """
     params = {"project": project} if project and project != "default" else {}
-    current = client.api.instances[name].get(params=params).json().get("metadata") or {}
+    current = client.api.instances[safe_segment(name)].get(params=params).json().get("metadata") or {}
 
     device, inherited = resolve_device(current, device_name)
     if device.get("type") != "nic":
@@ -101,7 +102,7 @@ def set_nic_address_sync(
     if not payload["architecture"]:
         payload.pop("architecture")
 
-    client.api.instances[name].put(json=payload, params=params)
+    client.api.instances[safe_segment(name)].put(json=payload, params=params)
     if inherited:
         logger.info(
             "Overrode profile-inherited device %s on %s/%s", device_name, project, name

@@ -9,6 +9,7 @@ import pylxd
 from pylxd import exceptions as pylxd_exceptions
 
 from app.models.schemas import VMStatus
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,7 @@ def find_instance_in_projects(
     for project_name in project_names:
         try:
             # Try to get instance from this project using API directly
-            response = client.api.instances[name].get(params={'project': project_name})
+            response = client.api.instances[safe_segment(name)].get(params={'project': project_name})
             
             # If successful, create instance object from the response
             instance_data = response.json()['metadata']
@@ -161,11 +162,11 @@ def wait_for_lxd_operation(
         return
 
     if timeout is not None:
-        wait_response = client.api.operations[operation_id].wait.get(
+        wait_response = client.api.operations[safe_segment(operation_id)].wait.get(
             params={"timeout": timeout}
         )
     else:
-        wait_response = client.api.operations[operation_id].wait.get()
+        wait_response = client.api.operations[safe_segment(operation_id)].wait.get()
 
     try:
         wait_metadata = wait_response.json().get("metadata", {})
@@ -211,7 +212,7 @@ class InstanceWrapper:
     
     def start(self, wait=True):
         """Start the instance."""
-        response = self._client.api.instances[self.name].state.put(
+        response = self._client.api.instances[safe_segment(self.name)].state.put(
             json={'action': 'start'},
             params={'project': self._project}
         )
@@ -220,7 +221,7 @@ class InstanceWrapper:
     
     def stop(self, force=False, wait=True, timeout=30):
         """Stop the instance."""
-        response = self._client.api.instances[self.name].state.put(
+        response = self._client.api.instances[safe_segment(self.name)].state.put(
             json={'action': 'stop', 'force': force, 'timeout': timeout},
             params={'project': self._project}
         )
@@ -229,7 +230,7 @@ class InstanceWrapper:
     
     def restart(self, force=False, wait=True, timeout=30):
         """Restart the instance."""
-        response = self._client.api.instances[self.name].state.put(
+        response = self._client.api.instances[safe_segment(self.name)].state.put(
             json={'action': 'restart', 'force': force, 'timeout': timeout},
             params={'project': self._project}
         )
@@ -238,20 +239,20 @@ class InstanceWrapper:
     
     def delete(self, wait=True):
         """Delete the instance."""
-        response = self._client.api.instances[self.name].delete(params={'project': self._project})
+        response = self._client.api.instances[safe_segment(self.name)].delete(params={'project': self._project})
         if wait:
             wait_for_lxd_operation(self._client, response)
     
     def sync(self):
         """Sync instance data from LXD."""
-        response = self._client.api.instances[self.name].get(params={'project': self._project})
+        response = self._client.api.instances[safe_segment(self.name)].get(params={'project': self._project})
         self._data = response.json()['metadata']
         self.status = self._data.get('status', 'Unknown')
         self.status_code = self._data.get('status_code', 0)
     
     def state(self):
         """Get instance state including metrics."""
-        response = self._client.api.instances[self.name].state.get(params={'project': self._project})
+        response = self._client.api.instances[safe_segment(self.name)].state.get(params={'project': self._project})
         state_data = response.json()['metadata']
         
         # Create a simple object to hold state data

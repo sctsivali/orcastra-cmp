@@ -14,6 +14,7 @@ from app.services.lxd_service import get_lxd_service, LXDService, LXDConnectionE
 from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
 from app.services.activity_logger import get_activity_logger
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def _push_file_to_instance(
     }
 
     # Use raw pylxd API session to push file
-    response = client.api.instances[instance_name].files.post(
+    response = client.api.instances[safe_segment(instance_name)].files.post(
         data=file_data,
         params=params,
         headers=headers,

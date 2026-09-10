@@ -33,7 +33,11 @@ from app.services.lxd.project_scope import (
     project_params,
     resolve_owner,
 )
-from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
+from app.core.tenant_visibility import (
+    filter_visible_lxd_references,
+    tenant_acl_active,
+    tenant_may_see_project,
+)
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
@@ -230,6 +234,7 @@ def validate_network_config(config: Dict[str, str]) -> Dict[str, str]:
 # global 5xx handler and the image and storage-volume delete paths share one definition
 # rather than growing variants that drift.
 from app.core.lxd_errors import lxd_http_error, lxd_transport_error  # noqa: E402
+from app.core.lxd_path import safe_segment
 
 
 def _is_clustered(client) -> bool:
@@ -447,6 +452,9 @@ async def list_networks(
         if tenant_acl_active():
             visible_networks = []
             for network in all_networks:
+                # ownership as well as usage: see tenant_may_see_project
+                if not tenant_may_see_project(network.node, network.project):
+                    continue
                 network.used_by = filter_visible_lxd_references(network.node, network.used_by)
                 if network.used_by:
                     visible_networks.append(network)
@@ -497,7 +505,7 @@ async def get_network(
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
-        data = client.api.networks[network_name].get(
+        data = client.api.networks[safe_segment(network_name)].get(
             params=project_params(owner)
         ).json().get("metadata") or {}
         used_by = filter_visible_lxd_references(host, data.get("used_by") or [])
@@ -622,7 +630,7 @@ async def create_network(
                 },
                 params=scope,
             )
-        created = client.api.networks[request.name].get(params=scope).json().get(
+        created = client.api.networks[safe_segment(request.name)].get(params=scope).json().get(
             "metadata"
         ) or {}
         created.setdefault("project", owner)
@@ -744,7 +752,7 @@ async def update_network(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
         scope = project_params(owner)
-        current = client.api.networks[network_name].get(params=scope).json().get(
+        current = client.api.networks[safe_segment(network_name)].get(params=scope).json().get(
             "metadata"
         ) or {}
         payload = {
@@ -755,7 +763,7 @@ async def update_network(
             payload["config"] = config
         if description is not None:
             payload["description"] = description
-        client.api.networks[network_name].put(json=payload, params=scope)
+        client.api.networks[safe_segment(network_name)].put(json=payload, params=scope)
 
         get_cache_manager().delete_pattern("api_responses", "networks:*")
 
@@ -798,7 +806,7 @@ async def delete_network(
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
-        client.api.networks[network_name].delete(params=project_params(owner))
+        client.api.networks[safe_segment(network_name)].delete(params=project_params(owner))
 
         get_cache_manager().delete_pattern("api_responses", "networks:*")
 
@@ -866,7 +874,7 @@ async def get_network_state(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
         scope = project_params(owner)
-        data = client.api.networks[network_name].get(params=scope).json().get(
+        data = client.api.networks[safe_segment(network_name)].get(params=scope).json().get(
             "metadata"
         ) or {}
 
@@ -880,7 +888,7 @@ async def get_network_state(
         # pydantic cannot serialise, and the failure happens while rendering the response, after
         # this handler has returned, so the except blocks below never see it. The caller got a
         # bare 500 on a perfectly healthy cluster.
-        state = client.api.networks[network_name].state.get(params=scope).json().get(
+        state = client.api.networks[safe_segment(network_name)].state.get(params=scope).json().get(
             "metadata"
         ) or {}
         return {

@@ -32,6 +32,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import HTTPException
 
 from .proxy import FILE_CHUNK_BYTES
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ def _read_bounded(response: Any, limit: int) -> Tuple[bytes, bool]:
 
 
 def _fetch_log(inst: Any, name: str, limit: int) -> Tuple[bytes, bool]:
-    response = inst.api.logs["exec-output"][name].get(
+    response = inst.api.logs["exec-output"][safe_segment(name)].get(
         is_api=False, stream=True, timeout=(3, 30)
     )
     return _read_bounded(response, limit)
@@ -86,7 +87,7 @@ def _fetch_log(inst: Any, name: str, limit: int) -> Tuple[bytes, bool]:
 def _discard_log(inst: Any, name: str) -> None:
     """Best effort. A log left behind is untidy on the host, never a leak inside the guest."""
     try:
-        inst.api.logs["exec-output"][name].delete(timeout=(3, 15))
+        inst.api.logs["exec-output"][safe_segment(name)].delete(timeout=(3, 15))
     except Exception:  # noqa: BLE001
         logger.warning("Could not remove the recorded exec log %s on %s", name, inst.name)
 
@@ -119,8 +120,8 @@ def run_recorded(
 
     # The socket window has to outlast the command's own budget, or the wait expires on a path
     # that does not know the work survived. Same rule the proxy's `_client_for` already applies.
-    inst.client.api.operations[operation_id].wait.get(timeout=(3, int(timeout) + 10))
-    operation = inst.client.api.operations[operation_id].get(timeout=(3, 15)).json()["metadata"]
+    inst.client.api.operations[safe_segment(operation_id)].wait.get(timeout=(3, int(timeout) + 10))
+    operation = inst.client.api.operations[safe_segment(operation_id)].get(timeout=(3, 15)).json()["metadata"]
 
     metadata = operation.get("metadata") or {}
     exit_code = metadata.get("return")
