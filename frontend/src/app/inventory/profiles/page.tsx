@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { Layers } from "lucide-react";
 import { ProfileInfo } from "@/types/api";
 import { useProfiles } from "@/hooks/use-lxd";
@@ -53,13 +53,25 @@ const PROFILES = defineTable<ProfileInfo>()({
     { field: "devices", label: "Devices", sort: (p) => Object.keys(p.devices || {}).length, filter: fromSort("number", { unit: "count" }) },
     { field: "used_by", label: "Used By", sort: (p) => p.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
     {
+      field: "project",
+      label: "Project",
+      // The project that HOLDS this record, which is a different question from the
+      // `projects` column below it: that one answers who consumes it.
+      sort: (p) => p.project ?? "",
+      facet: (p) => p.project ?? "",
+      facetSpec: { role: "project", primary: true },
+    },
+    {
+      // filter-coverage: this is not the project dimension. It answers which projects
+      // CONSUME the record, derived from used_by, while the "project" column above answers
+      // which one holds it, and that is the column carrying the project role.
       field: "projects",
-      label: "Projects",
+      label: "Used By Projects",
       // Was a copy of the used_by accessor, so the header sorted by instance count while the
       // cell displayed a project count. It now sorts by what it displays.
       sort: (p) => projectsFromUsedBy(p.used_by).length,
       facet: (p) => projectsFromUsedBy(p.used_by),
-      facetSpec: { role: "project", primary: true, emptyLabel: "(no project)" },
+      facetSpec: { primary: true, emptyLabel: "(no project)" },
     },
     {
       field: "usage",
@@ -92,7 +104,7 @@ function ProfilesContent() {
   );
 
   // Header, cell and the empty row's width move together; a mismatch renders a short row.
-  const columnCount = nodes.length > 0 ? 6 : 5;
+  const columnCount = nodes.length > 0 ? 7 : 6;
 
   const availableFields = useMemo(
     () =>
@@ -168,7 +180,8 @@ function ProfilesContent() {
                 )}
                 <SortableTableHead label="Devices" field="devices" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -224,6 +237,7 @@ function ProfilesContent() {
                         onOpen={() => usedBy.openUsage(profileSubject(profile))}
                       />
                     </TableCell>
+                    <TableCell>{profile.project || EMPTY_VALUE}</TableCell>
                     <TableCell>
                       <ProjectsCell
                         usedBy={profile.used_by}
