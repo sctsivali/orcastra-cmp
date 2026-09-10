@@ -25,6 +25,7 @@ from .exceptions import LXDOperationError
 from .freshness import LiveRead, read_resources
 
 from app.services.lxd.project_scope import list_instance_records
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,7 @@ class ResourceManager:
                 for pool in pools:
                     try:
                         # use API directly to get pool resources
-                        pool_resources_response = client.api.storage_pools[pool.name].resources.get()
+                        pool_resources_response = client.api.storage_pools[safe_segment(pool.name)].resources.get()
                         pool_resources = pool_resources_response.json().get("metadata", {})
                         space_info = pool_resources.get("space", {})
                         space_total = space_info.get("total", 0)

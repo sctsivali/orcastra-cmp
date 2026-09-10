@@ -116,11 +116,29 @@ def test_a_partner_with_no_policies_on_a_shared_cluster_sees_only_default():
     assert _run(get_visible_projects(_as("partner"), session)) == {"nuc2": {"default"}}
 
 
-def test_a_wildcard_rule_means_the_org_administers_the_whole_cluster():
+def test_a_wildcard_rule_does_not_lift_the_bound():
+    """This test asserted the opposite until a security review pointed out that it was
+    encoding the vulnerability rather than the rule.
+
+    `TenantPolicyRule.project_name` defaults to `"*"` on the model AND on the create schema,
+    so treating a wildcard as "this organization administers everything" switched the control
+    off for any organization that had ever written a single policy. A wildcard also cannot
+    answer the question being asked, which is WHICH projects belong to this organization; on a
+    shared cluster it names the other organization's projects too.
+    """
     session = FakeSession(
         shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": ["*"]}
     )
-    assert _run(get_visible_projects(_as("partner"), session)) is None
+    assert _run(get_visible_projects(_as("partner"), session)) == {"nuc2": {"default"}}
+
+
+def test_a_wildcard_beside_named_projects_contributes_nothing_of_its_own():
+    session = FakeSession(
+        shared_clusters=["nuc2"], org_ids=[6], rules_by_cluster={"nuc2": ["*", "sivali-prod"]}
+    )
+    assert _run(get_visible_projects(_as("partner"), session)) == {
+        "nuc2": {"default", "sivali-prod"}
+    }
 
 
 def test_only_the_shared_cluster_is_restricted_not_the_partners_own_one():

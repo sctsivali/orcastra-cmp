@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
-from sqlalchemy import select, or_, and_, func
+from sqlalchemy import select, or_, and_, func, cast, String
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.auth import AuthenticatedUser, get_current_user
@@ -80,6 +80,12 @@ def get_scope_cache_key(base_key: str) -> str:
     Including ACL in the key prevents cross-tenant cache poisoning where
     two tenants with the same cluster set but different policies would
     otherwise share a cache entry.
+
+    important: the project bound is mixed in for the same reason. A Partner's tenant ACL is
+    always None, so two Partners from different organizations whose allowed-cluster sets match
+    produced an identical key. That was harmless while both saw only the default project's
+    rows; once the lists widened, the bodies differ per organization and whoever filled the
+    entry first decided what the other read for the whole TTL.
     """
     allowed = _allowed_clusters_var.get(None)
     if allowed is None:
@@ -97,9 +103,25 @@ def get_scope_cache_key(base_key: str) -> str:
             for (proj, inst), perms in sorted(acl[cid].items()):
                 acl_parts.append(f"{cid}:{proj}:{inst}:{','.join(sorted(perms))}")
         acl_digest = hashlib.sha256("|".join(acl_parts).encode()).hexdigest()[:12]
-        return f"{base_key}:scope={scope_digest}:acl={acl_digest}"
+        return f"{base_key}:scope={scope_digest}:acl={acl_digest}{_project_bound_suffix()}"
 
-    return f"{base_key}:scope={scope_digest}"
+    return f"{base_key}:scope={scope_digest}{_project_bound_suffix()}"
+
+
+def _project_bound_suffix() -> str:
+    """The per-request project bound, as a cache-key fragment.
+
+    Empty when nothing is bound, so an unrestricted caller keeps the key shape it had.
+    """
+    mapping = _visible_projects_var.get(None)
+    if not mapping:
+        return ""
+    parts = [
+        f"{cluster}:{','.join(sorted(projects))}"
+        for cluster, projects in sorted(mapping.items())
+    ]
+    digest = hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
+    return f":proj={digest}"
 
 
 def verify_cluster_access(cluster_id: str) -> None:
@@ -501,10 +523,20 @@ async def _clusters_with_several_orgs(db: AsyncSession) -> set[str]:
     """
     from app.models.db_models import OrganizationCluster
 
+    # important: organization_id is nullable by design. A cluster a partner registered before
+    # their org was synced is stored with a NULL org and owned through registered_by, and
+    # count(distinct col) in Postgres skips NULLs. Counting the raw column would read
+    # "one org bound plus one unbound registrant" as a single owner and leave the cluster
+    # unrestricted, which is the direction that leaks. coalesce gives every unbound row its
+    # own identity so it counts as another owner.
+    owner_key = func.coalesce(
+        cast(OrganizationCluster.organization_id, String),
+        "unbound:" + cast(OrganizationCluster.id, String),
+    )
     stmt = (
         select(OrganizationCluster.cluster_id)
         .group_by(OrganizationCluster.cluster_id)
-        .having(func.count(func.distinct(OrganizationCluster.organization_id)) > 1)
+        .having(func.count(func.distinct(owner_key)) > 1)
     )
     return set((await db.execute(stmt)).scalars().all())
 
@@ -554,9 +586,13 @@ async def get_visible_projects(
                 .distinct()
             )
             named = set((await db.execute(stmt)).scalars().all())
-            if "*" in named:
-                continue  # this org administers the whole cluster; nothing to restrict
-            allowed |= {n for n in named if n}
+            # important: '*' does NOT lift the bound. project_name defaults to '*' on the
+            # model and on the create schema, so any organization that had ever written a
+            # single tenant policy for this cluster would have been unrestricted, which is the
+            # control switched off by default rather than an edge case. A wildcard also cannot
+            # answer the question being asked here, which is WHICH projects belong to this
+            # organization; on a cluster shared with another org it names theirs too.
+            allowed |= {n for n in named if n and n != "*"}
         mapping[cluster_id] = allowed
 
     return mapping or None

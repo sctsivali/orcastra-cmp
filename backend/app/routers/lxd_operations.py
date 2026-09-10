@@ -18,6 +18,7 @@ from app.services.lxd_service import (
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission
 from pydantic import BaseModel, Field
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,7 @@ async def cancel_operation(
         client = require_client(lxd_service.connection_manager.get_client(host), host)
         # pylxd Operation objects don't have a cancel() method;
         # use the raw API to send DELETE to /1.0/operations/<uuid>
-        client.api.operations[operation_id].delete()
+        client.api.operations[safe_segment(operation_id)].delete()
         
         return {
             "success": True,

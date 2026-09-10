@@ -35,6 +35,7 @@ from app.core.org_scope import (
     get_current_allowed_clusters,
 )
 from app.services.activity_logger import get_activity_logger
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -419,7 +420,7 @@ async def create_key(
         if group_response.status_code not in [200, 201, 202]:
             # Rollback: delete identity
             try:
-                client.api.auth.identities["tls"][identity_id].delete(timeout=(5, 30))
+                client.api.auth.identities["tls"][safe_segment(identity_id)].delete(timeout=(5, 30))
             except:
                 pass
             raise HTTPException(
@@ -431,7 +432,7 @@ async def create_key(
         
         # Verify group was created with permissions
         try:
-            verify_response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+            verify_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
             if verify_response.status_code == 200:
                 verify_data = verify_response.json().get('metadata', {})
                 logger.info(f"Group verification - permissions count: {len(verify_data.get('permissions', []))}")
@@ -442,7 +443,7 @@ async def create_key(
         
         # Add identity to group
         try:
-            group_get_response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+            group_get_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
             if group_get_response.status_code != 200:
                 raise Exception(f"Failed to get group: status={group_get_response.status_code}")
             
@@ -464,7 +465,7 @@ async def create_key(
             # This is the recommended way in LXD API
             
             # Get current identity info
-            identity_response = client.api.auth.identities["tls"][identity_id].get(timeout=(5, 30))
+            identity_response = client.api.auth.identities["tls"][safe_segment(identity_id)].get(timeout=(5, 30))
             if identity_response.status_code != 200:
                 raise Exception(f"Failed to get identity: status={identity_response.status_code}")
             
@@ -481,7 +482,7 @@ async def create_key(
             
             # PATCH identity with updated groups list
             identity_update_data = {"groups": current_groups}
-            identity_patch_response = client.api.auth.identities["tls"][identity_id].patch(
+            identity_patch_response = client.api.auth.identities["tls"][safe_segment(identity_id)].patch(
                 json=identity_update_data,
                 timeout=(5, 30)
             )
@@ -492,7 +493,7 @@ async def create_key(
             logger.info(f"Successfully added group {group_name} to identity {identity_id}")
             
             # Verify identity was added
-            verify_response = client.api.auth.groups[group_name].get(timeout=(5, 30))
+            verify_response = client.api.auth.groups[safe_segment(group_name)].get(timeout=(5, 30))
             if verify_response.status_code == 200:
                 verify_data = verify_response.json().get('metadata', {})
                 final_identities = verify_data.get('identities', {})
@@ -509,8 +510,8 @@ async def create_key(
             logger.error(f"Failed to add identity to group: {e}")
             # Rollback: delete group and identity
             try:
-                client.api.auth.groups[group_name].delete(timeout=(5, 30))
-                client.api.auth.identities["tls"][identity_id].delete(timeout=(5, 30))
+                client.api.auth.groups[safe_segment(group_name)].delete(timeout=(5, 30))
+                client.api.auth.identities["tls"][safe_segment(identity_id)].delete(timeout=(5, 30))
             except:
                 pass
             raise HTTPException(
@@ -761,7 +762,7 @@ async def delete_key(
                     identity_id = key_meta["identity_id"]
                     logger.info(f"Deleting identity: {identity_id}")
                     
-                    identity_response = client.api.auth.identities["tls"][identity_id].delete(timeout=(5, 30))
+                    identity_response = client.api.auth.identities["tls"][safe_segment(identity_id)].delete(timeout=(5, 30))
                     
                     if identity_response.status_code not in [200, 202, 204]:
                         cleanup_errors.append(f"Identity deletion returned status {identity_response.status_code}")
@@ -779,7 +780,7 @@ async def delete_key(
                     group_name = key_meta["group_name"]
                     logger.info(f"Deleting group: {group_name}")
                     
-                    group_response = client.api.auth.groups[group_name].delete(timeout=(5, 30))
+                    group_response = client.api.auth.groups[safe_segment(group_name)].delete(timeout=(5, 30))
                     
                     if group_response.status_code not in [200, 202, 204]:
                         cleanup_errors.append(f"Group deletion returned status {group_response.status_code}")
@@ -913,7 +914,7 @@ async def cleanup_orphaned_groups(
                     if group_name not in valid_groups:
                         try:
                             logger.info(f"Deleting orphaned group: {group_name} from {node}")
-                            delete_response = client.api.auth.groups[group_name].delete(timeout=(5, 30))
+                            delete_response = client.api.auth.groups[safe_segment(group_name)].delete(timeout=(5, 30))
                             
                             if delete_response.status_code in [200, 202, 204]:
                                 deleted_count += 1

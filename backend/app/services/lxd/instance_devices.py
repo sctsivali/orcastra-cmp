@@ -18,6 +18,7 @@ what `lxc config device override` does and what the console already does at crea
 
 import logging
 from typing import Any, Dict, Optional, Tuple
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +76,12 @@ def set_nic_address_sync(
     instance, and ValueError when it is not a NIC.
     """
     params = {"project": project} if project and project != "default" else {}
-    current = client.api.instances[name].get(params=params).json().get("metadata") or {}
+    response = client.api.instances[safe_segment(name)].get(params=params)
+    current = response.json().get("metadata") or {}
+    # LXD hands out an ETag on an instance read and honours If-Match on the write. Without it
+    # a concurrent edit to config or profiles between this read and the PUT below is
+    # overwritten silently, because the PUT replaces the whole object.
+    etag = response.headers.get("ETag") if hasattr(response, "headers") else None
 
     device, inherited = resolve_device(current, device_name)
     if device.get("type") != "nic":
@@ -101,7 +107,10 @@ def set_nic_address_sync(
     if not payload["architecture"]:
         payload.pop("architecture")
 
-    client.api.instances[name].put(json=payload, params=params)
+    put_kwargs = {"json": payload, "params": params}
+    if etag:
+        put_kwargs["headers"] = {"If-Match": etag}
+    client.api.instances[safe_segment(name)].put(**put_kwargs)
     if inherited:
         logger.info(
             "Overrode profile-inherited device %s on %s/%s", device_name, project, name

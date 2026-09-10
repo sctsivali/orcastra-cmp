@@ -25,7 +25,15 @@ from app.models.schemas import (
 from app.services.lxd.gpu import build_gpu_inventory
 from app.services.lxd.project_scope import list_instance_records
 from app.core.dependencies import require_tenant
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    get_scope_cache_key,
+    get_tenant_acl,
+    project_is_visible,
+)
+from app.core.tenant_visibility import tenant_acl_has_permission
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -233,7 +241,7 @@ async def get_cluster_member(
         client = require_client(lxd_service.connection_manager.get_client(node), node)
         
         # Get specific member
-        response = client.api.cluster.members[member_name].get()
+        response = client.api.cluster.members[safe_segment(member_name)].get()
         member_data = response.json().get("metadata", {})
         
         # Parse roles
@@ -332,7 +340,7 @@ async def get_member_resources(
             for pool_name in pool_names:
                 try:
                     # Get detailed info for each pool
-                    pool_response = client.api["storage-pools"][pool_name].get(params={"target": member_name})
+                    pool_response = client.api["storage-pools"][safe_segment(pool_name)].get(params={"target": member_name})
                     pool_data = pool_response.json().get("metadata", {})
                     
                     _pool_config = pool_data.get("config", {})
@@ -340,7 +348,7 @@ async def get_member_resources(
                     
                     # Get pool resources
                     try:
-                        pool_resources = client.api["storage-pools"][pool_name]["resources"].get(params={"target": member_name})
+                        pool_resources = client.api["storage-pools"][safe_segment(pool_name)]["resources"].get(params={"target": member_name})
                         resources_data = pool_resources.json().get("metadata", {})
                         space = resources_data.get("space", {})
                         space_total = space.get("total", 0)
@@ -390,6 +398,30 @@ async def get_member_resources(
             # One recursion=2 all-projects read replaces N+1 requests.
             instances, complete = list_instance_records(client)
             instances_partial = not complete
+
+            # important: this list now spans every project, and it feeds both the counts and
+            # build_gpu_inventory, whose gpu_cards carry `used_by` instance NAMES. This router
+            # is reachable by a Tenant, so without a filter the widening would publish another
+            # organization's instance names on the member panel. Narrow to what this caller may
+            # see, using the captured ACL rather than the contextvar so the rule is the same
+            # whichever thread reads it.
+            acl = get_tenant_acl()
+            if acl is not None:
+                instances = [
+                    i for i in instances
+                    if tenant_acl_has_permission(
+                        acl,
+                        node,
+                        getattr(i, "project", "default") or "default",
+                        getattr(i, "name", None),
+                        "view",
+                    )
+                ]
+            # A Partner is scoped by cluster, not by project, so it needs the project bound too.
+            instances = [
+                i for i in instances
+                if project_is_visible(node, getattr(i, "project", "default") or "default")
+            ]
             for instance in instances:
                 instance_location = getattr(instance, 'location', '')
                 if instance_location == member_name:

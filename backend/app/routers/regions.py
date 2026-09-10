@@ -37,6 +37,7 @@ from app.core.org_scope import org_scope_dependency, get_scope_cache_key, apply_
 import time
 from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
 from app.core.tenant_visibility import tenant_acl_has_permission
+from app.core.lxd_names import safe_segment
 
 router = APIRouter(
     prefix="/regions",
@@ -281,7 +282,7 @@ async def get_regions_overview(
                                         for pool in pools:
                                             storage_drivers.add(pool.driver)
                                             try:
-                                                pool_resources = client.api.storage_pools[pool.name].resources.get()
+                                                pool_resources = client.api.storage_pools[safe_segment(pool.name)].resources.get()
                                                 pool_data = pool_resources.json().get("metadata", {})
                                                 space = pool_data.get("space", {})
                                                 storage_total += space.get("total", 0)

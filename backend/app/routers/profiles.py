@@ -30,11 +30,16 @@ from app.services.lxd.project_scope import (
     project_params,
     resolve_owner,
 )
-from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
+from app.core.tenant_visibility import (
+    filter_visible_lxd_references,
+    tenant_acl_active,
+    tenant_may_see_project,
+)
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -215,6 +220,9 @@ async def list_profiles(
         if tenant_acl_active():
             visible_profiles = []
             for profile in all_profiles:
+                # ownership as well as usage: see tenant_may_see_project
+                if not tenant_may_see_project(profile.node, profile.project):
+                    continue
                 profile.used_by = filter_visible_lxd_references(profile.node, profile.used_by)
                 if profile.used_by:
                     visible_profiles.append(profile)
@@ -265,7 +273,7 @@ async def get_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-        response = client.api["profiles"][profile_name].get(params=project_params(owner))
+        response = client.api["profiles"][safe_segment(profile_name)].get(params=project_params(owner))
         data = response.json().get("metadata") or {}
         used_by = filter_visible_lxd_references(host, data.get("used_by") or [])
         if tenant_acl_active() and not used_by:
@@ -328,7 +336,7 @@ async def create_profile(
             },
             params=project_params(owner),
         )
-        created = client.api["profiles"][request.name].get(
+        created = client.api["profiles"][safe_segment(request.name)].get(
             params=project_params(owner)
         ).json().get("metadata") or {}
         
@@ -405,7 +413,7 @@ async def update_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-        current = client.api["profiles"][profile_name].get(
+        current = client.api["profiles"][safe_segment(profile_name)].get(
             params=project_params(owner)
         ).json().get("metadata") or {}
 
@@ -421,7 +429,7 @@ async def update_profile(
         if description is not None:
             payload["description"] = description
 
-        client.api["profiles"][profile_name].put(
+        client.api["profiles"][safe_segment(profile_name)].put(
             json=payload, params=project_params(owner)
         )
         
@@ -485,7 +493,7 @@ async def delete_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-        client.api["profiles"][profile_name].delete(params=project_params(owner))
+        client.api["profiles"][safe_segment(profile_name)].delete(params=project_params(owner))
         
         # Log activity: profile deletion success
         activity_logger.log_activity(

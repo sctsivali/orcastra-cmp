@@ -35,6 +35,7 @@ from app.services.session_models import new_session_id
 from app.services.session_registry import SESSION_REGISTRY_DEGRADED_HEADER
 from app.core.database import async_session_maker
 from app.models.db_models import SessionAuditLog
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -806,7 +807,7 @@ async def kill_all_sessions(
                     op_id = op.get('id', '')
                     try:
                         # Try to delete/cancel the operation
-                        client.api.operations[op_id].delete()
+                        client.api.operations[safe_segment(op_id)].delete()
                         killed_count += 1
                         logger.info(f"Killed console operation {op_id} for {instance_name}@{host}")
                     except Exception as e:
@@ -850,7 +851,7 @@ async def kill_active_session(
         # For websocket operations, use direct API DELETE
         # operation.cancel() doesn't work for websocket class operations
         try:
-            response = client.api.operations[operation_id].delete()
+            response = client.api.operations[safe_segment(operation_id)].delete()
             if response.status_code in (200, 202):
                 logger.info(f"Deleted console operation {operation_id} for {instance_name}@{host}")
                 return ActionResponse(success=True, message=f"Session {operation_id[:8]}... terminated")

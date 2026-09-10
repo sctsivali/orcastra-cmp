@@ -133,3 +133,22 @@ def tenant_acl_can_view_lxd_used_by(
         tenant_acl_can_view_lxd_reference(acl, cluster_id, reference, required_permission)
         for reference in (references or [])
     )
+
+def tenant_may_see_project(cluster_id: str, project: Optional[str]) -> bool:
+    """Whether a tenant may see a record OWNED by this project.
+
+    A security review pointed out that widening these lists past the default project changed
+    what the `used_by` filter alone protects. `parse_lxd_reference` yields no instance name for
+    a reference like `/1.0/networks/foo`, and `check_tenant_permission` then merges permissions
+    from any rule matching the project, so a tenant holding one instance-level rule in project
+    P could read every project-owned ACL in P, ingress and egress bodies included.
+
+    So ownership is checked as well as usage. `default` stays visible unconditionally: it is
+    the shared project every other one draws its networks and profiles from when it does not
+    isolate them, and hiding it would take away resources the tenant's own instances are
+    attached to.
+    """
+    owner = project or "default"
+    if owner == "default":
+        return True
+    return check_tenant_permission(cluster_id, owner, None, "view")
