@@ -90,13 +90,25 @@ const NETWORKS = defineTable<NetworkInfo>()({
       }),
     },
     {
+      field: "project",
+      label: "Project",
+      // The project that HOLDS this network, which is a different question from the
+      // `projects` column below it: that one answers who consumes it.
+      sort: (n) => n.project ?? "",
+      facet: (n) => n.project ?? "",
+      facetSpec: { role: "project", primary: true },
+    },
+    {
+      // filter-coverage: this is not the project dimension. It answers which projects
+      // CONSUME the record, derived from used_by, while the "project" column above answers
+      // which one holds it, and that is the column carrying the project role.
       field: "projects",
-      label: "Projects",
+      label: "Used By Projects",
       // Was a copy of the used_by accessor, so this column sorted by resource count while the
       // cell showed a project count. It now sorts by what it displays.
       sort: (n) => projectsFromUsedBy(n.used_by).length,
       facet: (n) => projectsFromUsedBy(n.used_by),
-      facetSpec: { role: "project", emptyLabel: "(no project)" },
+      facetSpec: { emptyLabel: "(no project)" },
     },
     {
       field: "usage",
@@ -165,7 +177,7 @@ function NetworksContent() {
 
   // Derived from the headers actually rendered, so the empty row cannot span the wrong width
   // when the conditional Node column is absent.
-  const columnCount = nodes.length > 0 ? 9 : 8;
+  const columnCount = nodes.length > 0 ? 10 : 9;
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -223,7 +235,8 @@ function NetworksContent() {
                 <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Managed" field="managed" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -246,10 +259,16 @@ function NetworksContent() {
                   const ipv6 = !rawIpv6 || rawIpv6 === "none" ? null : rawIpv6;
 
                   return (
-                    <TableRow key={`${network.node}-${network.name}-${idx}`}>
+                    <TableRow
+                      key={`${network.node}-${network.project ?? ""}-${network.name}-${idx}`}
+                    >
                       <TableCell className="font-medium">
                         <TableLink
-                          href={`/inventory/networks/${encodeURIComponent(network.name)}?host=${encodeURIComponent(network.node)}`}
+                          href={`/inventory/networks/${encodeURIComponent(network.name)}?host=${encodeURIComponent(network.node)}${
+                            network.project && network.project !== "default"
+                              ? `&project=${encodeURIComponent(network.project)}`
+                              : ""
+                          }`}
                         >
                           {network.name}
                         </TableLink>
@@ -293,6 +312,7 @@ function NetworksContent() {
                           onOpen={() => usedBy.openUsage(networkSubject(network))}
                         />
                       </TableCell>
+                      <TableCell>{network.project || EMPTY_VALUE}</TableCell>
                       <TableCell>
                         <ProjectsCell
                           usedBy={network.used_by}

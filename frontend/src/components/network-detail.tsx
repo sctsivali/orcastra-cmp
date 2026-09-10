@@ -37,6 +37,8 @@ import { Network, Box, Layers, Trash2, Loader2 } from "lucide-react";
 interface NetworkDetailProps {
   name: string;
   host: string;
+  /** The LXD project holding this network. Omit for the default project. */
+  project?: string;
 }
 
 interface UsedByRef {
@@ -73,15 +75,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function NetworkDetail({ name, host }: NetworkDetailProps) {
+export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
   // note: navigate() rather than a bare push, so the leaving transition raises the
   // global progress bar. These hops follow a mutation and are the slowest in the app.
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
   const [topologyPage, setTopologyPage] = React.useState(1);
-  const { data, isLoading, error } = useNetwork(name, host);
+  const { data, isLoading, error } = useNetwork(name, host, project);
   const network = data as NetworkInfo | undefined;
-  const { data: stateData } = useNetworkState(name, host);
+  const { data: stateData } = useNetworkState(name, host, project);
   const deleteNetwork = useDeleteNetwork();
   const { isReadOnly } = useReadOnlyMode();
   const { hasRole } = usePermissions();
@@ -132,7 +134,9 @@ export function NetworkDetail({ name, host }: NetworkDetailProps) {
 
   const handleDelete = async () => {
     try {
-      await deleteNetwork.mutateAsync({ name, host });
+      // important: with the project. Without it the delete addresses the default project,
+      // where this network either does not exist or is a different one with the same name.
+      await deleteNetwork.mutateAsync({ name, host, project });
       toast({ title: "Network deleted", description: `"${name}" was deleted.` });
       navigate("/inventory/networks");
     } catch (e) {

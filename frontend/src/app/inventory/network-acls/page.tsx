@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow } from "@/components/ui/table";
 import { ShieldCheck } from "lucide-react";
-import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { TableLink } from "@/components/ui/table-link";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -34,17 +34,9 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
-interface ACLInfo {
-  name: string;
-  description: string;
-  ingress: any[];
-  egress: any[];
-  config: Record<string, string>;
-  used_by: string[];
-  node?: string;
-}
-
-const ACLS = defineTable<ACLInfo>()({
+// note: no local ACLInfo. It duplicated NetworkACLInfo and drifted from it, which is how a
+// field the API had started sending stayed invisible to this page.
+const ACLS = defineTable<NetworkACLInfo>()({
   searchPlaceholder: "Search network ACLs",
   defaultSort: { field: "name", direction: "asc" },
   columns: [
@@ -64,13 +56,25 @@ const ACLS = defineTable<ACLInfo>()({
     { field: "egress", label: "Egress Rules", sort: (a) => a.egress?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
     { field: "used_by", label: "Used By", sort: (a) => a.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
     {
+      field: "project",
+      label: "Project",
+      // The project that HOLDS this record, which is a different question from the
+      // `projects` column below it: that one answers who consumes it.
+      sort: (a) => a.project ?? "",
+      facet: (a) => a.project ?? "",
+      facetSpec: { role: "project", primary: true },
+    },
+    {
+      // filter-coverage: this is not the project dimension. It answers which projects
+      // CONSUME the record, derived from used_by, while the "project" column above answers
+      // which one holds it, and that is the column carrying the project role.
       field: "projects",
-      label: "Projects",
+      label: "Used By Projects",
       // Was a copy of the used_by accessor, so the header sorted by resource count while the
       // cell displayed a project count. It now sorts by what it displays.
       sort: (a) => projectsFromUsedBy(a.used_by).length,
       facet: (a) => projectsFromUsedBy(a.used_by),
-      facetSpec: { role: "project", primary: true, emptyLabel: "(no project)" } },
+      facetSpec: { primary: true, emptyLabel: "(no project)" } },
     {
       field: "usage",
       label: "Usage",
@@ -106,7 +110,7 @@ function NetworkACLsContent() {
   // One dialog for the page, opened from either cell. See components/used-by.
   const usedBy = useUsedByDialog();
 
-  const filters = useTableFilters(ACLS, acls as ACLInfo[], {
+  const filters = useTableFilters(ACLS, acls as NetworkACLInfo[], {
     onFilterChange: resetPage,
     availableFields });
 
@@ -167,13 +171,14 @@ function NetworkACLsContent() {
                 <SortableTableHead label="Ingress Rules" field="ingress" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Egress Rules" field="egress" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedACLs.length === 0 ? (
                 <TableEmptyRow
-                  colSpan={nodes.length > 0 ? 7 : 6}
+                  colSpan={nodes.length > 0 ? 8 : 7}
                   icon={ShieldCheck}
                   title="No network ACLs found"
                   description={
@@ -227,6 +232,7 @@ function NetworkACLsContent() {
                         onOpen={() => usedBy.openUsage(aclSubject(acl))}
                       />
                     </TableCell>
+                    <TableCell>{acl.project || EMPTY_VALUE}</TableCell>
                     <TableCell>
                       <ProjectsCell
                         usedBy={acl.used_by}

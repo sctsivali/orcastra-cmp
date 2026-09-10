@@ -13,12 +13,15 @@ function NetworkDetailContent() {
   const searchParams = useSearchParams();
   const name = decodeURIComponent((params?.name as string) || "");
   const host = searchParams.get("host") || "";
+  // A network name is only unique within a project, so the link carries one for anything
+  // outside default.
+  const project = searchParams.get("project") || undefined;
 
   return (
     <div className="p-8">
       <ReadOnlyBanner />
       {host ? (
-        <NetworkDetail name={name} host={host} />
+        <NetworkDetail name={name} host={host} project={project} />
       ) : (
         <div className="space-y-4">
           <BackLink href="/inventory/networks" label="Networks" />

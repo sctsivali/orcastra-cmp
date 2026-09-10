@@ -1073,10 +1073,10 @@ export function useNetwork(name: string, host: string, project?: string) {
   });
 }
 
-export function useNetworkState(name: string, host: string) {
+export function useNetworkState(name: string, host: string, project?: string) {
   return useQuery({
-    queryKey: ["networkState", name, host],
-    queryFn: () => api.networks.getState(name, host),
+    queryKey: ["networkState", name, host, project ?? null],
+    queryFn: () => api.networks.getState(name, host, project),
     enabled: !!name && !!host,
     ...DYNAMIC_DATA_CONFIG,
   });
