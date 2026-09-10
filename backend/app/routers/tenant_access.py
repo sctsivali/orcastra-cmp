@@ -27,7 +27,11 @@ from sqlalchemy.orm import selectinload
 
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.dependencies import require_partner, require_tenant, check_read_only_mode
-from app.core.org_scope import org_scope_dependency, get_current_allowed_clusters
+from app.core.org_scope import (
+    org_scope_dependency,
+    get_current_allowed_clusters,
+    project_is_visible,
+)
 from app.core.rbac import resolve_roles, get_highest_role, Role
 from app.core.database import get_db
 from app.core.cache import get_cache_manager
@@ -339,6 +343,37 @@ async def list_policies(
     )
 
 
+
+def _refuse_a_project_the_caller_cannot_see(rule) -> None:
+    """A policy rule may not name a project the caller is not already allowed to see.
+
+    important: on a cluster carrying more than one organization, `get_visible_projects` builds
+    a Partner's project bound out of exactly these rows. Without this check the party the bound
+    constrains is the party that writes it: a Partner could add a rule naming another
+    organization's project on a cluster their own org legitimately holds, and on the next
+    request that project would be inside their bound, granting read and write on its networks,
+    ACLs, profiles and instance devices.
+
+    `project_is_visible` answers True whenever no bound applies, so this is a no-op for an
+    Admin and on any cluster bound to a single organization. It only bites where the bound is
+    real, and there it refuses to let the bound widen itself.
+
+    The consequence to accept: on a shared cluster a Partner cannot introduce a project that no
+    rule of theirs names yet. An Admin can, because no bound applies to them.
+    """
+    project = (rule.project_name or "").strip()
+    if not project or project == "*":
+        return
+    if not project_is_visible(rule.cluster_id, project):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Project '{project}' is not visible to you on cluster "
+                f"'{rule.cluster_id}', so a rule cannot name it."
+            ),
+        )
+
+
 @router.post(
     "/policies",
     response_model=PolicyResponse,
@@ -373,6 +408,7 @@ async def create_policy(
                 status_code=403,
                 detail=f"You don't have access to cluster '{rule.cluster_id}'",
             )
+        _refuse_a_project_the_caller_cannot_see(rule)
 
     # check name uniqueness
     existing = await db.execute(
@@ -513,6 +549,7 @@ async def update_policy(
                     status_code=403,
                     detail=f"No access to cluster '{rule.cluster_id}'",
                 )
+            _refuse_a_project_the_caller_cannot_see(rule)
 
         # delete old rules and create new ones
         await db.execute(
