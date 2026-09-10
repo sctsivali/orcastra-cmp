@@ -701,7 +701,7 @@ class InstanceManager:
                 host, project_name, (5, timeout + _GRACEFUL_READ_MARGIN_SECONDS)
             )
             if waiting_client is not None:
-                return waiting_client.instances.get(instance.name)
+                return waiting_client.instances.get(safe_segment(instance.name))
         except Exception as e:  # noqa: BLE001 - fall back to the pooled client
             logger.warning(
                 "Could not build a long-timeout client for %s on %s: %s", instance.name, host, e

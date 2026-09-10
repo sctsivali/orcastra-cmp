@@ -118,3 +118,77 @@ def test_no_call_site_puts_a_raw_value_into_an_lxd_path():
     files at once. A new endpoint that indexes a name without safe_segment reopens it."""
     offenders = _offending_subscripts()
     assert offenders == [], "\n".join(offenders)
+
+
+# ── the second way a name reaches the path: pylxd's manager API ────────────────────────────────
+#
+# The ratchet above walks `client.api[...]` subscripts, which is where this codebase builds a
+# path by hand. It is blind to the other route into the same URL. `client.instances.get(name)`
+# looks like an ORM call and is not one:
+#
+#     @classmethod
+#     def get(cls, client, name):
+#         response = client.api[cls._endpoint][name].get()
+#
+# pylxd does the subscripting itself, with the name exactly as handed over. So a manager call
+# carries the identical injection, and the first ratchet reported a clean tree while 31 call
+# sites across 11 files passed an unencoded name. Several were reachable from an unvalidated
+# route parameter: `storage_pools.py` declares `pool_name: str` as a bare Path with no pattern,
+# and the integration proxy takes its instance name from a JSON body.
+
+MANAGER_ATTRS = frozenset(
+    {
+        "instances",
+        "networks",
+        "profiles",
+        "projects",
+        "images",
+        "storage_pools",
+        "certificates",
+        "network_acls",
+        "operations",
+        "virtual_machines",
+        "containers",
+    }
+)
+
+
+def _offending_manager_calls():
+    offenders = []
+    for path in sorted(BACKEND.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover - a broken file fails elsewhere
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or func.attr not in ("get", "delete"):
+                continue
+            owner = func.value
+            if not (isinstance(owner, ast.Attribute) and owner.attr in MANAGER_ATTRS):
+                continue
+            if not node.args:
+                continue
+            first = node.args[0]
+            # a literal is written by us, not by a caller
+            if isinstance(first, ast.Constant):
+                continue
+            if (
+                isinstance(first, ast.Call)
+                and isinstance(first.func, ast.Name)
+                and first.func.id == "safe_segment"
+            ):
+                continue
+            offenders.append(
+                f"{path.relative_to(BACKEND.parent)}:{node.lineno} "
+                f"passes {ast.unparse(first)} to {owner.attr}.{func.attr}() unencoded"
+            )
+    return offenders
+
+
+def test_no_manager_call_passes_a_raw_name_to_pylxd():
+    """pylxd subscripts the name itself, so a manager call is a path build in disguise."""
+    offenders = _offending_manager_calls()
+    assert offenders == [], "\n".join(offenders)

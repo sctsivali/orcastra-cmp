@@ -234,7 +234,7 @@ class ConsoleService:
                     )
                     instance_data = response.json().get("metadata", {})
                 else:
-                    instance = client.instances.get(instance_name)
+                    instance = client.instances.get(safe_segment(instance_name))
                     instance_data = {
                         "type": instance.type,
                         "status": instance.status,
@@ -321,7 +321,7 @@ class ConsoleService:
                     instance_type = instance_data.get("type", "container")
                     instance_status = instance_data.get("status", "Unknown")
                 else:
-                    instance = client.instances.get(instance_name)
+                    instance = client.instances.get(safe_segment(instance_name))
                     instance_type = instance.type
                     instance_status = instance.status
             except Exception:
@@ -492,7 +492,7 @@ class ConsoleService:
                         )
                         instance_data = response.json().get("metadata", {})
                     else:
-                        instance = client.instances.get(instance_name)
+                        instance = client.instances.get(safe_segment(instance_name))
                         instance_data = {
                             "config": dict(instance.config),
                             "devices": dict(instance.devices),
@@ -678,7 +678,7 @@ class ConsoleService:
                     instance_data = response.json().get("metadata", {})
                     devices = instance_data.get("devices", {})
                 else:
-                    instance = client.instances.get(instance_name)
+                    instance = client.instances.get(safe_segment(instance_name))
                     devices = instance.devices
                 
                 # Look for disk devices with cdrom/iso source
@@ -754,7 +754,7 @@ class ConsoleService:
                     devices = dict(instance_data.get("devices", {}))
                     instance_status = instance_data.get("status", "Unknown")
                 else:
-                    instance = client.instances.get(instance_name)
+                    instance = client.instances.get(safe_segment(instance_name))
                     devices = dict(instance.devices)
                     instance_status = instance.status
                 
@@ -821,7 +821,7 @@ class ConsoleService:
                     instance_data = response.json().get("metadata", {})
                     devices = dict(instance_data.get("devices", {}))
                 else:
-                    instance = client.instances.get(instance_name)
+                    instance = client.instances.get(safe_segment(instance_name))
                     devices = dict(instance.devices)
                 
                 if device_name not in devices:

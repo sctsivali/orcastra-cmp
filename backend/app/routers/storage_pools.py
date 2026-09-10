@@ -21,6 +21,7 @@ from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -286,7 +287,7 @@ async def get_storage_pool(
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.get(pool_name)
+        pool = client.storage_pools.get(safe_segment(pool_name))
         # important: this router is mounted with require_tenant(), and the list endpoint both
         # filters used_by and drops a pool with nothing visible left. Without the same two
         # steps here, a tenant could read another organization's instance and volume
@@ -410,7 +411,7 @@ async def update_storage_pool(
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.get(pool_name)
+        pool = client.storage_pools.get(safe_segment(pool_name))
         
         if config is not None:
             pool.config = config
@@ -455,7 +456,7 @@ async def delete_storage_pool(
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.get(pool_name)
+        pool = client.storage_pools.get(safe_segment(pool_name))
         pool.delete()
         
         # Log activity: storage pool deletion success
@@ -589,7 +590,7 @@ async def get_storage_pool_resources(
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.get(pool_name)
+        pool = client.storage_pools.get(safe_segment(pool_name))
         if not tenant_acl_can_view_lxd_used_by(get_tenant_acl(), host, pool.used_by or []):
             raise HTTPException(status_code=403, detail="Access denied to this storage pool")
         resources = pool.resources.get()

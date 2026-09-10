@@ -426,7 +426,7 @@ def execute_proxy_operation(
     client = _client_for(lxd_service, cluster_id, project, operation)
 
     def instance() -> Any:
-        return client.instances.get(_required(params, "name", "Instance name"))
+        return client.instances.get(safe_segment(_required(params, "name", "Instance name")))
 
     def instance_api() -> Any:
         return client.api.instances[safe_segment(_required(params, "name", "Instance name"))]
@@ -502,7 +502,7 @@ def execute_proxy_operation(
 
     if operation == "get_operation":
         return _serialize_operation(
-            client.operations.get(_required(params, "operation_id", "Operation id"))
+            client.operations.get(safe_segment(_required(params, "operation_id", "Operation id")))
         )
 
     # ── writes ─────────────────────────────────────────────────────────────────────────────
@@ -634,7 +634,7 @@ def execute_proxy_operation(
 
     if operation == "delete_network":
         name = _required(params, "name", "Network name")
-        client.networks.get(name).delete()
+        client.networks.get(safe_segment(name)).delete()
         return {"deleted": True, "name": name}
 
     if operation == "create_storage_pool":
@@ -646,7 +646,7 @@ def execute_proxy_operation(
 
     if operation == "delete_storage_pool":
         name = _required(params, "name", "Storage pool name")
-        client.storage_pools.get(name).delete()
+        client.storage_pools.get(safe_segment(name)).delete()
         return {"deleted": True, "name": name}
 
     if operation == "create_project":
@@ -660,7 +660,7 @@ def execute_proxy_operation(
 
     if operation == "delete_project":
         name = _required(params, "name", "Project name")
-        client.projects.get(name).delete()
+        client.projects.get(safe_segment(name)).delete()
         return {"deleted": True, "name": name}
 
     # Unreachable while the contract test passes: an unknown name is refused by the router
@@ -677,4 +677,4 @@ def fetch_operation_status(
     # different one, so an operation id from `default` could be read by a key granted only
     # `tenant-a`, including the resource URLs it names. _client_for raises 503 instead.
     client = _client_for(lxd_service, cluster_id, project, "get_operation")
-    return _serialize_operation(client.operations.get(operation_id))
+    return _serialize_operation(client.operations.get(safe_segment(operation_id)))

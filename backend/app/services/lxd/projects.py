@@ -12,6 +12,7 @@ from pylxd.exceptions import LXDAPIException, NotFound
 from .exceptions import LXDConnectionError, LXDOperationError
 from .connection import LXDConnectionManager
 from .audit import audit_operation
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +142,7 @@ class ProjectManager:
             client.api.projects.post(json=project_data)
             
             # get the created project
-            project = client.projects.get(name)
+            project = client.projects.get(safe_segment(name))
             
             logger.info(f"Created project '{name}' on {host}")
             
@@ -188,7 +189,7 @@ class ProjectManager:
                 raise LXDConnectionError(f"Could not connect to {host}")
             
             # get the current project
-            project = client.projects.get(project_name)
+            project = client.projects.get(safe_segment(project_name))
             
             # update description if provided
             if description is not None:
@@ -246,7 +247,7 @@ class ProjectManager:
                 raise LXDConnectionError(f"Could not connect to {host}")
             
             # get the project first
-            project = client.projects.get(name)
+            project = client.projects.get(safe_segment(name))
             
             # delete the project
             project.delete()

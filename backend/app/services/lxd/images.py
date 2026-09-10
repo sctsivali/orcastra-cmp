@@ -9,6 +9,7 @@ from typing import List, Optional
 from app.models.schemas import ImageInfo
 from .exceptions import LXDConnectionError, LXDOperationError
 from .connection import LXDConnectionManager
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class ImageManager:
         if client is None:
             raise LXDConnectionError(f"Could not connect to {host}")
         try:
-            return client.images.get(fingerprint)
+            return client.images.get(safe_segment(fingerprint))
         except Exception as e:
             # pylxd raises NotFound for a missing fingerprint and the same class hierarchy for
             # a daemon fault, so the message is the only thing that separates them. A miss must

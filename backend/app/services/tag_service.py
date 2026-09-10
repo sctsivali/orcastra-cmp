@@ -1060,7 +1060,7 @@ class TagService:
                 
             elif resource_type == "project":
                 client = self.lxd_service.connection_manager.get_client(resource_host)
-                project = client.projects.get(resource_id)
+                project = client.projects.get(safe_segment(resource_id))
                 project.config["user.tags"] = tags_str
                 project.save()
                 
@@ -1122,7 +1122,7 @@ class TagService:
                 
             elif resource_type == "project":
                 client = self.lxd_service.connection_manager.get_client(resource_host)
-                project = client.projects.get(resource_id)
+                project = client.projects.get(safe_segment(resource_id))
                 tags_str = project.config.get("user.tags", "")
                 
             elif resource_type == "instance":

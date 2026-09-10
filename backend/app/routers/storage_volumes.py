@@ -34,6 +34,7 @@ from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.services.lxd.lazy_client import client_for
+from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -252,7 +253,7 @@ async def get_storage_volume(
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(pool)
+        storage_pool = client.storage_pools.get(safe_segment(pool))
         volume = storage_pool.volumes.get(volume_type, volume_name)
         used_by = filter_visible_lxd_references(host, volume.used_by or [])
         if tenant_acl_active() and not used_by:
@@ -295,7 +296,7 @@ async def create_storage_volume(
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(request.pool)
+        storage_pool = client.storage_pools.get(safe_segment(request.pool))
         
         volume = storage_pool.volumes.create({
             "name": request.name,
@@ -386,7 +387,7 @@ async def update_storage_volume(
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(pool)
+        storage_pool = client.storage_pools.get(safe_segment(pool))
         volume = storage_pool.volumes.get(volume_type, volume_name)
         
         if config is not None:
@@ -468,7 +469,7 @@ async def delete_storage_volume(
     verify_cluster_access(host)
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(pool)
+        storage_pool = client.storage_pools.get(safe_segment(pool))
         volume = storage_pool.volumes.get(volume_type, volume_name)
 
         # important: refuse before asking the daemon. LXD rejects an attached volume anyway,

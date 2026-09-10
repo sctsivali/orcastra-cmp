@@ -135,7 +135,7 @@ class TerminalService:
                     if instance_status != "Running":
                         return None, f"Instance must be running. Current status: {instance_status}"
                 else:
-                    instance = client.instances.get(instance_name)
+                    instance = client.instances.get(safe_segment(instance_name))
                     instance_status = instance.status
                     instance_type = instance.type
                     
