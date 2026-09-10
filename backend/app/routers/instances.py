@@ -48,6 +48,7 @@ from app.services.lxd.instance_devices import (
 from app.services.lxd.nic_preflight import NicPreflightError, check_address_for_network
 from app.routers.tags import get_tag_service_dep
 from app.core.lxd_path import safe_segment
+import requests
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -862,6 +863,28 @@ async def set_instance_nic_address(
         )
         raise HTTPException(
             status_code=400, detail=f"The cluster refused the change: {exc}"
+        ) from None
+    except requests.exceptions.Timeout as exc:
+        # important: a socket timeout on this path means the daemon took too long, not that we
+        # are broken. The write may still be applying, so say that rather than answering 500
+        # and leaving the operator unsure whether to retry.
+        logger.warning(f"Timed out on the device write for {instance_name}: {exc}")
+        activity_logger.log_activity(
+            action="instance.nic.address",
+            target_type="instance",
+            target_id=instance_name,
+            target_host=request.host,
+            result="failure",
+            error_code="LXD_TIMEOUT",
+            error_message=str(exc),
+        )
+        get_cache_manager().invalidate_instance_cache()
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"{request.host} did not finish the change in time. It may still be applying, "
+                "so refresh the instance before retrying."
+            ),
         ) from None
 
     get_cache_manager().invalidate_instance_cache()
