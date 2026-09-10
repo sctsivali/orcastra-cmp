@@ -39,6 +39,7 @@ from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 from app.services.tag_service import TagService
 from app.routers.tags import get_tag_service_dep
+from app.core.org_scope import project_is_visible
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -99,9 +100,16 @@ async def list_vms(
         if status:
             filtered_vms = [vm for vm in filtered_vms if vm.status == status]
 
+        # important: check_tenant_permission alone does not cover a Partner. The tenant ACL is
+        # always None for Admin and Partner, so it passes everything for them, and a Partner is
+        # scoped by cluster rather than by project. This list spans every project, so without
+        # the project bound it named the other organization's instances on a shared cluster.
+        # This is the same gate the /instances list applies; this route is a second, parallel
+        # instance list and was missed when that one was fixed.
         filtered_vms = [
             vm for vm in filtered_vms
-            if check_tenant_permission(vm.host, vm.project or "default", vm.name, "view")
+            if project_is_visible(vm.host, vm.project or "default")
+            and check_tenant_permission(vm.host, vm.project or "default", vm.name, "view")
         ]
         
         # Count LXD vs MicroCloud vs Incus nodes

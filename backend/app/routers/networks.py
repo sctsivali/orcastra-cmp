@@ -43,6 +43,7 @@ from app.core.cache import get_cache_manager
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.activity_logger import get_activity_logger
+from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -755,6 +756,19 @@ async def update_network(
         current = client.api.networks[safe_segment(network_name)].get(params=scope).json().get(
             "metadata"
         ) or {}
+
+        # important: the create path validates the OVN uplink and this one did not, while
+        # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect the audit filed
+        # (BUG-ORC-006) was still reachable through update. Reuse the same validator rather
+        # than growing a second copy of the rule: it reads only .type and .config.
+        if config is not None and "network" in config:
+            merged = {**(current.get("config") or {}), **config}
+            probe = SimpleNamespace(type=current.get("type") or "", config=merged)
+            validate_uplink(
+                probe,
+                _uplink_candidates(client, host),
+                list_project_configs(client).get(owner, {}),
+            )
         payload = {
             "config": current.get("config") or {},
             "description": current.get("description") or "",

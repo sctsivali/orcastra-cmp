@@ -864,10 +864,18 @@ async def set_instance_nic_address(
         raise HTTPException(
             status_code=400, detail=f"The cluster refused the change: {exc}"
         ) from None
-    except requests.exceptions.Timeout as exc:
-        # important: a socket timeout on this path means the daemon took too long, not that we
-        # are broken. The write may still be applying, so say that rather than answering 500
-        # and leaving the operator unsure whether to retry.
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+        # important: ConnectionError is not redundant here, it is the case that actually
+        # happens. The pooled session mounts urllib3 Retry, and with a Retry object mounted a
+        # read timeout surfaces as MaxRetryError, which requests converts to ConnectionError,
+        # NOT to ReadTimeout. Measured against a peer that accepts and never answers: a bare
+        # session raises ReadTimeout, the same call through this repo's adapter raises
+        # ConnectionError. Catching Timeout alone left this clause unreachable and a slow
+        # cluster answering a bare 500.
+        #
+        # A socket timeout on this path means the daemon took too long, not that we are
+        # broken. The write may still be applying, so say that rather than answering 500 and
+        # leaving the operator unsure whether to retry.
         logger.warning(f"Timed out on the device write for {instance_name}: {exc}")
         activity_logger.log_activity(
             action="instance.nic.address",

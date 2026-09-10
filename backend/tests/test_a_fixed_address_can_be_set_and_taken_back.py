@@ -312,3 +312,50 @@ class TestAnInheritedDeviceIsNotDetachedForNothing:
         assert len(client.writes) == 1, "a real change must still be written"
         body, _params = client.writes[0]
         assert body["devices"]["eth0"]["ipv4.address"] == "10.0.5.42"
+
+
+def test_a_slow_cluster_is_answered_as_a_timeout_not_a_server_fault():
+    """The 504 on the NIC address route must catch the shape a timeout really takes here.
+
+    Measured against a peer that accepts the connection and never answers:
+
+        bare requests session          -> requests.exceptions.ReadTimeout   (a Timeout)
+        the same call through this repo's adapter -> requests.exceptions.ConnectionError
+
+    The pooled LXD session mounts a urllib3 Retry, and with a Retry object mounted a read
+    timeout surfaces as MaxRetryError, which requests converts to ConnectionError. That is NOT
+    a subclass of Timeout, so an `except requests.exceptions.Timeout` clause never fires and a
+    slow cluster falls through to a bare 500 with no reason in the body. This pins both halves:
+    the class relationship that makes one clause insufficient, and the route catching both.
+    """
+    import ast
+    import pathlib
+
+    import requests
+
+    # the premise: catching Timeout alone cannot cover the case that actually happens
+    assert not issubclass(
+        requests.exceptions.ConnectionError, requests.exceptions.Timeout
+    ), "if this ever changes, the two-name clause below can be simplified"
+
+    router = pathlib.Path(__file__).resolve().parents[1] / "app" / "routers" / "instances.py"
+    tree = ast.parse(router.read_text())
+    handlers = [
+        fn
+        for fn in ast.walk(tree)
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and fn.name == "set_instance_nic_address"
+    ]
+    assert handlers, "set_instance_nic_address not found, was it renamed?"
+
+    caught = set()
+    for handler in handlers:
+        for node in ast.walk(handler):
+            if isinstance(node, ast.ExceptHandler) and node.type is not None:
+                caught.add(ast.unparse(node.type))
+    joined = " ".join(caught)
+    assert "Timeout" in joined, "no timeout clause on the device write"
+    assert "ConnectionError" in joined, (
+        "the timeout clause omits ConnectionError, which is the shape a read timeout takes "
+        "through this repo's retry policy, so it is unreachable"
+    )
