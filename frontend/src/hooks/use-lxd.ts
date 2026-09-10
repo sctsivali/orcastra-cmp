@@ -1044,10 +1044,17 @@ export function useDeleteStorageVolume() {
 }
 
 // Networks Hooks
-export function useNetworks(host?: string) {
+/**
+ * @param project omit for every project, each row naming the one that holds it. Pass one to
+ *   get the set that project can actually use, which is what a picker needs: a project only
+ *   holds its own networks when it sets features.networks, otherwise it sees default's.
+ */
+export function useNetworks(host?: string, project?: string) {
   return useRefreshableQuery({
-    queryKey: ["networks", host],
-    queryFn: ({ fresh }) => api.networks.list(host, { fresh }),
+    // important: the project belongs in the key. Without it React Query serves one project's
+    // rows to another project's caller from cache.
+    queryKey: ["networks", host, project ?? null],
+    queryFn: ({ fresh }) => api.networks.list(host, project, { fresh }),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
     refetchInterval: jitter(POLL_MS.fleet),
@@ -1057,10 +1064,10 @@ export function useNetworks(host?: string) {
   });
 }
 
-export function useNetwork(name: string, host: string) {
+export function useNetwork(name: string, host: string, project?: string) {
   return useQuery({
-    queryKey: ["network", name, host],
-    queryFn: () => api.networks.get(name, host),
+    queryKey: ["network", name, host, project ?? null],
+    queryFn: () => api.networks.get(name, host, project),
     enabled: !!name && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1079,7 +1086,8 @@ export function useCreateNetwork() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ data, host }: { data: any; host: string }) => api.networks.create(data, host),
+    mutationFn: ({ data, host, project }: { data: any; host: string; project?: string }) =>
+      api.networks.create(data, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["networks"] });
     },
@@ -1090,8 +1098,8 @@ export function useDeleteNetwork() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ name, host }: { name: string; host: string }) => 
-      api.networks.delete(name, host),
+    mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
+      api.networks.delete(name, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["networks"] });
     },
@@ -1099,18 +1107,19 @@ export function useDeleteNetwork() {
 }
 
 // Network ACLs Hooks
-export function useNetworkACLs(host?: string) {
+/** @param project omit for every project. See useNetworks. */
+export function useNetworkACLs(host?: string, project?: string) {
   return useRefreshableQuery({
-    queryKey: ["networkACLs", host],
-    queryFn: ({ fresh }) => api.networkACLs.list(host, { fresh }),
+    queryKey: ["networkACLs", host, project ?? null],
+    queryFn: ({ fresh }) => api.networkACLs.list(host, project, { fresh }),
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
-export function useNetworkACL(name: string, host: string) {
+export function useNetworkACL(name: string, host: string, project?: string) {
   return useQuery({
-    queryKey: ["networkACL", name, host],
-    queryFn: () => api.networkACLs.get(name, host),
+    queryKey: ["networkACL", name, host, project ?? null],
+    queryFn: () => api.networkACLs.get(name, host, project),
     enabled: !!name && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1120,7 +1129,8 @@ export function useCreateNetworkACL() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ data, host }: { data: any; host: string }) => api.networkACLs.create(data, host),
+    mutationFn: ({ data, host, project }: { data: any; host: string; project?: string }) =>
+      api.networkACLs.create(data, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["networkACLs"] });
     },
@@ -1131,28 +1141,55 @@ export function useDeleteNetworkACL() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ name, host }: { name: string; host: string }) => 
-      api.networkACLs.delete(name, host),
+    mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
+      api.networkACLs.delete(name, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["networkACLs"] });
     },
   });
 }
 
+/**
+ * The update half of the ACL surface, which had a route, an API client and no hook, so the
+ * page could create and delete a policy but never correct one.
+ */
+export function useUpdateNetworkACL() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      name,
+      host,
+      data,
+      project,
+    }: {
+      name: string;
+      host: string;
+      data: any;
+      project?: string;
+    }) => api.networkACLs.update(name, host, data, project),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["networkACLs"] });
+      queryClient.invalidateQueries({ queryKey: ["networkACL"] });
+    },
+  });
+}
+
 // Profiles Hooks
-export function useProfiles(host?: string) {
+/** @param project omit for every project. See useNetworks. */
+export function useProfiles(host?: string, project?: string) {
   return useRefreshableQuery({
-    queryKey: ["profiles", host],
-    queryFn: ({ fresh }) => api.profiles.list(host, { fresh }),
+    queryKey: ["profiles", host, project ?? null],
+    queryFn: ({ fresh }) => api.profiles.list(host, project, { fresh }),
     // Always enabled - fetches all profiles when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
-export function useProfile(name: string, host: string) {
+export function useProfile(name: string, host: string, project?: string) {
   return useQuery({
-    queryKey: ["profile", name, host],
-    queryFn: () => api.profiles.get(name, host),
+    queryKey: ["profile", name, host, project ?? null],
+    queryFn: () => api.profiles.get(name, host, project),
     enabled: !!name && !!host,
     ...SEMI_STATIC_DATA_CONFIG,
   });
@@ -1162,7 +1199,8 @@ export function useCreateProfile() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ data, host }: { data: any; host: string }) => api.profiles.create(data, host),
+    mutationFn: ({ data, host, project }: { data: any; host: string; project?: string }) =>
+      api.profiles.create(data, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },
@@ -1173,8 +1211,8 @@ export function useDeleteProfile() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ name, host }: { name: string; host: string }) => 
-      api.profiles.delete(name, host),
+    mutationFn: ({ name, host, project }: { name: string; host: string; project?: string }) =>
+      api.profiles.delete(name, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
     },

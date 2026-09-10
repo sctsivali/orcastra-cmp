@@ -615,12 +615,18 @@ export interface ProfileInfo {
   devices: Record<string, Record<string, string>>;
   used_by: string[];
   node: string;
+  /** The LXD project that holds this record. Not the projects that consume it: see used_by. */
+  project?: string;
 }
 
 export interface ProfileListResponse {
   total: number;
   profiles: ProfileInfo[];
   nodes: string[];
+  /** Nodes that could not be reached; their rows are missing from the list above. */
+  unreachable_nodes?: string[];
+  /** Nodes that answered but could not be read for every project, so their rows may be incomplete. */
+  partial_nodes?: string[];
 }
 
 export interface ProfileCreateRequest {
@@ -641,6 +647,8 @@ export interface NetworkInfo {
   status: string;
   /** Set per row by the fan-out. The backend has always sent it; this type had not. */
   node?: string;
+  /** The LXD project that holds this record. Not the projects that consume it: see used_by. */
+  project?: string;
 }
 
 export interface NetworkListResponse {
@@ -649,6 +657,8 @@ export interface NetworkListResponse {
   nodes: string[];
   /** Nodes that could not be reached; their networks are missing from `networks`. */
   unreachable_nodes?: string[];
+  /** Nodes that answered but could not be read for every project, so their rows may be incomplete. */
+  partial_nodes?: string[];
 }
 
 export interface NetworkCreateRequest {
@@ -667,12 +677,18 @@ export interface NetworkACLInfo {
   config: Record<string, string>;
   used_by: string[];
   node?: string;
+  /** The LXD project that holds this record. Not the projects that consume it: see used_by. */
+  project?: string;
 }
 
 export interface NetworkACLListResponse {
   total: number;
   acls: NetworkACLInfo[];
   nodes: string[];
+  /** Nodes that could not be reached; their rows are missing from the list above. */
+  unreachable_nodes?: string[];
+  /** Nodes that answered but could not be read for every project, so their rows may be incomplete. */
+  partial_nodes?: string[];
 }
 
 export interface NetworkACLCreateRequest {

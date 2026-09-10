@@ -1079,32 +1079,48 @@ export const instanceAPI = {
 };
 
 // Profile Operations
+
+/**
+ * Build `path?a=1&b=2`, dropping anything unset.
+ *
+ * The network, ACL and profile endpoints all carry an optional host and an optional LXD
+ * project, and hand-assembling that in eleven call sites is how one of them ends up omitting
+ * the project and silently reading the default one.
+ */
+function withQuery(path: string, params: Record<string, string | undefined>): string {
+  const query = Object.entries(params)
+    .filter(([, value]) => value !== undefined && value !== "")
+    .map(([key, value]) => `${key}=${encodeURIComponent(value as string)}`)
+    .join("&");
+  return query ? `${path}?${query}` : path;
+}
+
 export const profileAPI = {
-  list: async (host?: string, opts: ReadOptions = {}) => {
-    const endpoint = host ? `/profiles?host=${encodeURIComponent(host)}` : "/profiles";
-    return fetchRead(endpoint, opts);
+  /** Omit `project` to read every project, each row naming the one that holds it. */
+  list: async (host?: string, project?: string, opts: ReadOptions = {}) => {
+    return fetchRead(withQuery("/profiles", { host, project }), opts);
   },
 
-  get: async (name: string, host: string) => {
-    return fetchAPI(`/profiles/${name}?host=${encodeURIComponent(host)}`);
+  get: async (name: string, host: string, project?: string) => {
+    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }));
   },
 
-  create: async (data: any, host: string) => {
-    return fetchAPI(`/profiles?host=${encodeURIComponent(host)}`, {
+  create: async (data: any, host: string, project?: string) => {
+    return fetchAPI(withQuery("/profiles", { host, project }), {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  update: async (name: string, host: string, data: any) => {
-    return fetchAPI(`/profiles/${name}?host=${encodeURIComponent(host)}`, {
+  update: async (name: string, host: string, data: any, project?: string) => {
+    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }), {
       method: "PUT",
       body: JSON.stringify(data),
     });
   },
 
-  delete: async (name: string, host: string) => {
-    return fetchAPI(`/profiles/${name}?host=${encodeURIComponent(host)}`, {
+  delete: async (name: string, host: string, project?: string) => {
+    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }), {
       method: "DELETE",
     });
   },
@@ -1112,35 +1128,35 @@ export const profileAPI = {
 
 // Network Operations
 export const networkAPI = {
-  list: async (host?: string, opts: ReadOptions = {}) => {
-    const endpoint = host ? `/networks?host=${encodeURIComponent(host)}` : "/networks";
-    return fetchRead(endpoint, opts);
+  /** Omit `project` to read every project, each row naming the one that holds it. */
+  list: async (host?: string, project?: string, opts: ReadOptions = {}) => {
+    return fetchRead(withQuery("/networks", { host, project }), opts);
   },
 
-  get: async (name: string, host: string) => {
-    return fetchAPI(`/networks/${name}?host=${encodeURIComponent(host)}`);
+  get: async (name: string, host: string, project?: string) => {
+    return fetchAPI(withQuery(`/networks/${name}`, { host, project }));
   },
 
-  getState: async (name: string, host: string) => {
-    return fetchAPI(`/networks/${name}/state?host=${encodeURIComponent(host)}`);
+  getState: async (name: string, host: string, project?: string) => {
+    return fetchAPI(withQuery(`/networks/${name}/state`, { host, project }));
   },
 
-  create: async (data: any, host: string) => {
-    return fetchAPI(`/networks?host=${encodeURIComponent(host)}`, {
+  create: async (data: any, host: string, project?: string) => {
+    return fetchAPI(withQuery("/networks", { host, project }), {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  update: async (name: string, host: string, data: any) => {
-    return fetchAPI(`/networks/${name}?host=${encodeURIComponent(host)}`, {
+  update: async (name: string, host: string, data: any, project?: string) => {
+    return fetchAPI(withQuery(`/networks/${name}`, { host, project }), {
       method: "PUT",
       body: JSON.stringify(data),
     });
   },
 
-  delete: async (name: string, host: string) => {
-    return fetchAPI(`/networks/${name}?host=${encodeURIComponent(host)}`, {
+  delete: async (name: string, host: string, project?: string) => {
+    return fetchAPI(withQuery(`/networks/${name}`, { host, project }), {
       method: "DELETE",
     });
   },
@@ -1148,31 +1164,31 @@ export const networkAPI = {
 
 // Network ACL Operations
 export const networkACLAPI = {
-  list: async (host?: string, opts: ReadOptions = {}) => {
-    const endpoint = host ? `/network-acls?host=${encodeURIComponent(host)}` : "/network-acls";
-    return fetchUncachedRead(endpoint, opts);
+  /** Omit `project` to read every project, each row naming the one that holds it. */
+  list: async (host?: string, project?: string, opts: ReadOptions = {}) => {
+    return fetchUncachedRead(withQuery("/network-acls", { host, project }), opts);
   },
 
-  get: async (name: string, host: string) => {
-    return fetchAPI(`/network-acls/${name}?host=${encodeURIComponent(host)}`);
+  get: async (name: string, host: string, project?: string) => {
+    return fetchAPI(withQuery(`/network-acls/${name}`, { host, project }));
   },
 
-  create: async (data: any, host: string) => {
-    return fetchAPI(`/network-acls?host=${encodeURIComponent(host)}`, {
+  create: async (data: any, host: string, project?: string) => {
+    return fetchAPI(withQuery("/network-acls", { host, project }), {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  update: async (name: string, host: string, data: any) => {
-    return fetchAPI(`/network-acls/${name}?host=${encodeURIComponent(host)}`, {
+  update: async (name: string, host: string, data: any, project?: string) => {
+    return fetchAPI(withQuery(`/network-acls/${name}`, { host, project }), {
       method: "PUT",
       body: JSON.stringify(data),
     });
   },
 
-  delete: async (name: string, host: string) => {
-    return fetchAPI(`/network-acls/${name}?host=${encodeURIComponent(host)}`, {
+  delete: async (name: string, host: string, project?: string) => {
+    return fetchAPI(withQuery(`/network-acls/${name}`, { host, project }), {
       method: "DELETE",
     });
   },
