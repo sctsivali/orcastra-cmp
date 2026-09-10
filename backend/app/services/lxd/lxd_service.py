@@ -18,7 +18,7 @@ from app.models.schemas import (
 from .availability import require_client
 from .connection import LXDConnectionManager
 from .gpu import GpuInventory, build_gpu_inventory
-from .node_resources import build_node_resources
+from .node_resources import aggregate_microcloud_resources, build_node_resources
 from .freshness import read_resources
 from .resources import ResourceManager
 from .instance import InstanceManager
@@ -312,6 +312,14 @@ class LXDService:
         # and lets the memory figure and the GPU inventory disagree about the same host.
         live = read_resources(client, node_name)
         data = self.resource_manager.get_node_resources(client, node_name, resources=live)
+        # important: a clustered host answers /1.0/resources for the member the connection
+        # landed on. /nodes aggregates every member, so the node dialog opened from that card
+        # contradicted it (2 cores against 6 on a 3-member MicroCloud) and a project quota
+        # was bounded by one member's memory. Same aggregate, same cache, as the card.
+        if (client.host_info.get("environment") or {}).get("server_clustered"):
+            aggregated = aggregate_microcloud_resources(client, node_name, data)
+            if aggregated is not None:
+                return aggregated
         gpu = GpuInventory.empty()
         try:
             gpu = build_gpu_inventory(live.body, list_instance_records(client)[0])

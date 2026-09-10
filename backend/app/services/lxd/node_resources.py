@@ -7,16 +7,18 @@ built here so a new field can never be added to one path and forgotten on anothe
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pylxd
 
 from app.models.schemas import NodeResources
 
 from .gpu import GpuInventory, build_gpu_inventory
+from .storage_model import PoolReading, summarise_cluster_storage
 from .hardware import build_hardware_profile, merge_hardware_profiles
 
 from app.services.lxd.project_scope import list_instance_records
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,52 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
         # note: carried, never minted here. This function runs on the cached path too, and a
         # datetime.now() at this line would stamp a 60s-old body as current.
         collected_at=resources_data.get("collected_at"),
+    )
+
+
+def _list_cluster_pools(client: pylxd.Client, node_name: str) -> List[Tuple[str, str]]:
+    """(name, driver) of every pool on the cluster. A pool is a cluster-wide object."""
+    try:
+        response = client.api.storage_pools.get(params={"recursion": 1})
+        rows = response.json().get("metadata", []) or []
+    except Exception as err:
+        logger.warning(f"Could not list storage pools on {node_name}: {err}")
+        return []
+    pools: List[Tuple[str, str]] = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("name"):
+            pools.append((row["name"], row.get("driver") or "unknown"))
+    return pools
+
+
+def _read_pool_space(
+    client: pylxd.Client,
+    node_name: str,
+    member_name: str,
+    pool_name: str,
+    pool_driver: str,
+) -> Optional[PoolReading]:
+    """One pool's space as one member reports it, or None when that member did not answer.
+
+    note: a pool that cannot be read is logged and skipped, which understates the total. That
+    is the direction a capacity figure may be wrong in; the summed alternative is not.
+    """
+    try:
+        response = client.api.storage_pools[safe_segment(pool_name)].resources.get(
+            params={"target": member_name}
+        )
+        space = (response.json().get("metadata", {}) or {}).get("space", {}) or {}
+    except Exception as err:
+        logger.warning(
+            f"Could not read pool {pool_name} on {node_name}/{member_name}: {err}"
+        )
+        return None
+    return PoolReading(
+        member=member_name,
+        name=pool_name,
+        driver=pool_driver,
+        space_total=int(space.get("total", 0) or 0),
+        space_used=int(space.get("used", 0) or 0),
     )
 
 
@@ -141,9 +189,9 @@ def aggregate_microcloud_resources(
             # now() here would report a cluster as current on the strength of whichever
             # member happened to answer last.
             member_read_times = []
-            total_storage = 0
-            total_storage_available = 0
-            storage_pools_map = {}
+            # Per-member pool readings, folded once after the loop so a shared backing store
+            # is counted once rather than per member. See services/lxd/storage_model.py.
+            pool_readings: List[PoolReading] = []
             
             successful_members = 0
 
@@ -173,6 +221,14 @@ def aggregate_microcloud_resources(
                 # rather than invisibly wrong.
                 return None
             
+            # important: pool SPACE is not in /1.0/resources. That body carries storage.disks,
+            # the physical media, and no `pools` key at all, so the aggregate read an empty
+            # list and every clustered host reported zero storage. Space lives at
+            # /1.0/storage-pools/<pool>/resources and is per member (?target=), which is the
+            # read the single-host path and the member panel already make. A pool is a
+            # cluster-wide object, so its name and driver are listed once for every member.
+            cluster_pools = _list_cluster_pools(client, node_name)
+
             # Get current server name to identify which member we're connected to
             _current_server = environment.get("server_name", "")
             
@@ -217,37 +273,12 @@ def aggregate_microcloud_resources(
                         for card in member_gpu_inv.cards:
                             card.index = base_index + card.index
                         
-                        # Extract storage resources from storage pools
-                        storage_info = member_resources.get("storage", {})
-                        storage_pools_raw = storage_info.get("pools", [])
-                        
-                        member_storage_total = 0
-                        member_storage_available = 0
-                        
-                        for pool in storage_pools_raw:
-                            pool_name = pool.get("name", "")
-                            pool_driver = pool.get("driver", "unknown")
-                            space = pool.get("space", {})
-                            space_total = space.get("total", 0)
-                            space_used = space.get("used", 0)
-                            space_available = space_total - space_used
-                            
-                            member_storage_total += space_total
-                            member_storage_available += space_available
-                            
-                            # Aggregate storage pools
-                            pool_key = f"{pool_name}_{pool_driver}"
-                            if pool_key not in storage_pools_map:
-                                storage_pools_map[pool_key] = {
-                                    "name": pool_name,
-                                    "driver": pool_driver,
-                                    "space_total": 0,
-                                    "space_used": 0,
-                                    "space_available": 0,
-                                }
-                            storage_pools_map[pool_key]["space_total"] += space_total
-                            storage_pools_map[pool_key]["space_used"] += space_used
-                            storage_pools_map[pool_key]["space_available"] += space_available
+                        for pool_name, pool_driver in cluster_pools:
+                            reading = _read_pool_space(
+                                client, node_name, member_name, pool_name, pool_driver
+                            )
+                            if reading is not None:
+                                pool_readings.append(reading)
                         
                         # For CPU sockets, we'll sum them up (each member has its own sockets)
                         cpu_sockets_data = cpu_info.get("sockets", [])
@@ -292,8 +323,6 @@ def aggregate_microcloud_resources(
                         total_cpu_sockets += cpu_sockets
                         total_memory += member_memory_total
                         total_memory_used += member_memory_used
-                        total_storage += member_storage_total
-                        total_storage_available += member_storage_available
                         
                         successful_members += 1
                         logger.debug(
@@ -316,8 +345,14 @@ def aggregate_microcloud_resources(
                 logger.warning(f"No member resources could be aggregated for {node_name}")
                 return None
             
-            # Convert storage pools map to list
-            storage_pools_list = list(storage_pools_map.values())
+            storage = summarise_cluster_storage(pool_readings)
+            if storage.unknown_drivers:
+                logger.info(
+                    "Unclassified storage driver(s) on %s: %s. Counted per member, which "
+                    "understates a shared pool rather than overstating it.",
+                    node_name,
+                    ", ".join(storage.unknown_drivers),
+                )
             
             # Create aggregated NodeResources
             aggregated = NodeResources(
@@ -339,9 +374,9 @@ def aggregate_microcloud_resources(
                 gpu_vendors=cluster_gpu.vendors,
                 gpu_models=cluster_gpu.models,
                 gpu_utilization_supported=cluster_gpu.utilization_supported,
-                storage_total=total_storage,
-                storage_available=total_storage_available,
-                storage_pools=storage_pools_list,
+                storage_total=storage.total,
+                storage_available=storage.available,
+                storage_pools=storage.pools,
                 hardware=merge_hardware_profiles(member_hardware),
                 collected_at=min(member_read_times) if member_read_times else None,
             )
@@ -351,7 +386,9 @@ def aggregate_microcloud_resources(
                 f"Total CPU={total_cpu_cores} cores (used={total_cpu_used}), "
                 f"RAM={total_memory / 1024 / 1024 / 1024:.1f} GB (used={total_memory_used / 1024 / 1024 / 1024:.1f} GB), "
                 f"GPU={cluster_gpu.gpu_total} compute of "
-                f"{cluster_gpu.gpu_cards_total} cards (used={cluster_gpu.gpu_used})"
+                f"{cluster_gpu.gpu_cards_total} cards (used={cluster_gpu.gpu_used}), "
+                f"storage={storage.total / 1024 / 1024 / 1024:.1f} GB usable "
+                f"({storage.raw_total / 1024 / 1024 / 1024:.1f} GB summed per member)"
             )
             
             # Cache the aggregated result

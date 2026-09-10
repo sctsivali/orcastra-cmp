@@ -23,6 +23,7 @@ from app.models.schemas import (
 
 from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
+from app.services.lxd.node_resources import aggregate_microcloud_resources
 
 from app.services.lxd.project_scope import list_instance_records
 
@@ -323,14 +324,41 @@ async def get_regions_overview(
                                         for card in network_cards if card.get("ports")
                                     ]
                             
+                                    gpu_total = gpu_inv.gpu_total
+                                    gpu_cards_total = gpu_inv.gpu_cards_total
+                                    gpu_integrated_total = gpu_inv.gpu_integrated_total
+                                    gpu_vendors, gpu_models = gpu_inv.vendors, gpu_inv.models
+
+                                    # important: a clustered host answers /1.0/resources for
+                                    # the member the connection landed on, and an untargeted
+                                    # pool read the same way. The /nodes card aggregates every
+                                    # member, so this map disagreed with it (2 cores against 6
+                                    # on a 3-member MicroCloud). Same aggregate, same cache.
+                                    if (client.host_info.get("environment") or {}).get("server_clustered"):
+                                        aggregated = aggregate_microcloud_resources(client, cluster_id, {})
+                                        if aggregated is not None:
+                                            cpu_total = aggregated.cpu_total
+                                            cpu_sockets = aggregated.cpu_sockets
+                                            memory_total = aggregated.memory_total
+                                            memory_used = aggregated.memory_used
+                                            gpu_total = aggregated.gpu_total
+                                            gpu_cards_total = aggregated.gpu_cards_total
+                                            gpu_integrated_total = aggregated.gpu_integrated_total
+                                            gpu_vendors, gpu_models = aggregated.gpu_vendors, aggregated.gpu_models
+                                            storage_total = aggregated.storage_total
+                                            storage_used = aggregated.storage_total - aggregated.storage_available
+                                            storage_drivers.update(
+                                                str(p.get("driver")) for p in aggregated.storage_pools if p.get("driver")
+                                            )
+
                                     node_hardware = ExtendedHardwareInfo(
                                         cpu_total=cpu_total, cpu_sockets=cpu_sockets,
                                         cpu_architecture=cpu_architecture, cpu_vendor=cpu_vendor, cpu_model=cpu_model,
                                         memory_total=memory_total, memory_used=memory_used,
-                                        gpu_total=gpu_inv.gpu_total,
-                                        gpu_cards_total=gpu_inv.gpu_cards_total,
-                                        gpu_integrated_total=gpu_inv.gpu_integrated_total,
-                                        gpu_vendors=gpu_inv.vendors, gpu_models=gpu_inv.models,
+                                        gpu_total=gpu_total,
+                                        gpu_cards_total=gpu_cards_total,
+                                        gpu_integrated_total=gpu_integrated_total,
+                                        gpu_vendors=gpu_vendors, gpu_models=gpu_models,
                                         storage_total=storage_total, storage_used=storage_used,
                                         storage_types=storage_types, storage_drivers=list(storage_drivers),
                                         network_interfaces=network_interfaces,
