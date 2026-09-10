@@ -42,10 +42,40 @@ def _nic_devices(devices: Optional[Dict[str, Any]]) -> List[Tuple[str, Dict[str,
     return out
 
 
+# The nictypes whose `parent` names an interface on the HOST rather than a managed LXD
+# network. LXD resolves those itself and they never appear in a project's network list.
+HOST_PARENT_NICTYPES = frozenset(
+    {"macvlan", "physical", "sriov", "ipvlan", "routed", "bridged"}
+)
+
+
+def managed_network_of(dev: Dict[str, Any]) -> Optional[str]:
+    """The managed network a NIC names, or None when it names a host interface instead.
+
+    important: `network` always names a managed LXD network, but `parent` usually does not.
+    For a macvlan, physical, sriov, ipvlan, routed or bridged NIC it names an interface on the
+    host, which is not in the project's network list at all.
+
+    Reading the two as interchangeable is what a display needs and the opposite of what a
+    refusal needs. A stock LXD default profile hands out `eth0` as macvlan on a physical
+    parent, so treating that parent as a missing network refuses every create that inherits it,
+    on a daemon that would have accepted it. Verified against nuc1: the default profile is
+    `{"nictype": "macvlan", "parent": "enp86s0"}` and `enp86s0` is listed by `/1.0/networks`
+    with `managed: false`, so it resolves and then fails the managed test.
+    """
+    value = dev.get("network")
+    if value:
+        return str(value)
+    nictype = str(dev.get("nictype") or "").strip().lower()
+    if nictype in HOST_PARENT_NICTYPES:
+        return None
+    parent = dev.get("parent")
+    return str(parent) if parent else None
+
+
 def _network_of(dev: Dict[str, Any]) -> Optional[str]:
-    """The network a NIC names, however it names it."""
-    value = dev.get("network") or dev.get("parent")
-    return str(value) if value else None
+    """Backwards-compatible alias kept for call sites inside this module."""
+    return managed_network_of(dev)
 
 
 def collect_nics(

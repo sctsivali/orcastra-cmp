@@ -152,12 +152,62 @@ class TestTheCasesTheAuditFiled:
         assert "br-uplink" in str(exc.value)
 
     def test_a_nic_naming_its_network_with_parent_is_checked_too(self):
+        """A bare `parent`, with no nictype, is still read as a network reference."""
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError):
             check_nics(
                 client,
                 "UAT-Hermes",
                 {"eth0": {"type": "nic", "parent": "br-uplink"}},
+                ["default"],
+            )
+
+    @pytest.mark.parametrize(
+        "nictype", ["macvlan", "physical", "sriov", "ipvlan", "routed", "bridged"]
+    )
+    def test_a_parent_that_names_a_host_interface_is_not_a_missing_network(self, nictype):
+        """The regression this pins broke instance create on a stock LXD host.
+
+        A default profile hands out `eth0` as macvlan on a physical parent. `enp86s0` is listed
+        by /1.0/networks with managed:false, so reading `parent` as a network reference made it
+        resolve and then fail the managed test, refusing a create the daemon would have taken.
+        LXD resolves a host parent itself, so there is nothing here to refuse.
+        """
+        client = client_with_isolated_project()
+        check_nics(
+            client,
+            "UAT-Hermes",
+            {"eth0": {"type": "nic", "nictype": nictype, "parent": "enp86s0"}},
+            ["default"],
+        )
+
+    def test_an_inherited_macvlan_nic_does_not_block_a_create(self):
+        """The exact shape nuc1's default profile carries."""
+        client = FakeClient(
+            projects={DEFAULT_PROJECT: {}},
+            networks={DEFAULT_PROJECT: [bridge("lxdbr0", "10.0.5.1/24")]},
+            profiles={
+                DEFAULT_PROJECT: [
+                    {
+                        "name": "default",
+                        "devices": {
+                            "eth0": {"type": "nic", "nictype": "macvlan", "parent": "enp86s0"},
+                            "root": {"type": "disk", "path": "/", "pool": "hdd"},
+                        },
+                    }
+                ]
+            },
+        )
+        check_nics(client, None, {}, ["default"])
+
+    def test_an_explicit_network_is_still_refused_when_the_project_lacks_it(self):
+        """The audit's own case must keep failing: `network=` is a managed reference."""
+        client = client_with_isolated_project()
+        with pytest.raises(NicPreflightError):
+            check_nics(
+                client,
+                "UAT-Hermes",
+                {"eth0": {"type": "nic", "network": "lxdbr0"}},
                 ["default"],
             )
 
