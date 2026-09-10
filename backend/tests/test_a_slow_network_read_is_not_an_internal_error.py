@@ -50,9 +50,33 @@ class _Networks:
         raise self._exc
 
 
+class _ApiNode:
+    """The raw-API shape the network routes address now.
+
+    They used to reach the daemon through `client.networks.get(name)`; naming a project means
+    addressing `client.api.networks[name]` instead, so the failure this file is about is raised
+    from there. The transport error itself is unchanged, which is the point: a timeout is still
+    a timeout however the path is built.
+    """
+
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def __getitem__(self, _segment):
+        return self
+
+    def __getattr__(self, _name):
+        return self
+
+    def get(self, *args, **kwargs):
+        raise self._exc
+
+
 class _Client:
     def __init__(self, exc: Exception) -> None:
         self.networks = _Networks(exc)
+        self.project = None
+        self.api = _ApiNode(exc)
 
 
 def _service(client):

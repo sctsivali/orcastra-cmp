@@ -41,6 +41,7 @@ import time
 from app.core.single_flight import mark_rebuilt, rebuild_lock, rebuilt_since, release_lock
 from app.core.tenant_visibility import tenant_acl_has_permission
 from app.core.type_utils import resolve_cluster_type, resolve_clustered
+from app.services.lxd.project_scope import list_instance_records
 
 router = APIRouter(
     prefix="/regions",
@@ -323,7 +324,10 @@ async def get_regions_overview(
                                     try:
                                         # recursion=1: the attribute reads below are
                                         # one HTTP request each at pylxd's default.
-                                        instances = client.instances.all(recursion=1)
+                                        # every project: the pooled client is bound to default, and the ACL check just below
+                                        # reads instance.project, which a default-scoped
+                                        # listing never carries.
+                                        instances, _ = list_instance_records(client)
                                         visible_instances = [
                                             instance for instance in instances
                                             if tenant_acl_has_permission(

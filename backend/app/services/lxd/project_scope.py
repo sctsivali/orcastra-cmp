@@ -272,3 +272,46 @@ def _walk_projects(
             complete = False
 
     return rows, complete
+
+
+class InstanceRecord:
+    """One instance from an all-projects listing, exposing what the readers duck-type.
+
+    The member, node and region readers all count instances by walking objects and asking for
+    `status`, `location`, `expanded_devices` and `config`. Handing them raw dicts would make
+    every one of those getattr calls miss and report zero, which reads as free capacity rather
+    than as a failure, so the rows are wrapped instead of the readers being rewritten.
+    """
+
+    __slots__ = (
+        "name",
+        "project",
+        "location",
+        "status",
+        "config",
+        "devices",
+        "expanded_config",
+        "expanded_devices",
+        "type",
+    )
+
+    def __init__(self, row: Dict[str, Any]):
+        self.name = row.get("name") or ""
+        self.project = row.get("project") or DEFAULT_PROJECT
+        self.location = row.get("location") or ""
+        self.status = row.get("status") or ""
+        self.type = row.get("type") or ""
+        self.config = row.get("config") or {}
+        self.devices = row.get("devices") or {}
+        self.expanded_config = row.get("expanded_config") or self.config
+        self.expanded_devices = row.get("expanded_devices") or self.devices
+
+
+def list_instance_records(client: Any) -> Tuple[List[InstanceRecord], bool]:
+    """Every instance on the cluster, in every project, with its config expanded.
+
+    recursion=2 because the GPU reader needs `expanded_devices`, which a recursion=1 listing
+    does not carry. Returns (records, complete).
+    """
+    rows, complete = list_across_projects(client, "instances", recursion=2)
+    return [InstanceRecord(row) for row in rows], complete

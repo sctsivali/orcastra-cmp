@@ -33,7 +33,9 @@ class _Endpoint:
     def __init__(self, handler) -> None:
         self._handler = handler
 
-    def get(self, params: Dict[str, Any] = None) -> _Response:
+    def get(self, params: Dict[str, Any] = None, timeout: Any = None) -> _Response:
+        # timeout is accepted because the real _APINode takes one, and the all-projects read
+        # passes it explicitly rather than inheriting the pooled socket budget.
         return _Response(self._handler(params or {}))
 
 
@@ -41,20 +43,35 @@ class FakeClient:
     """The subset of pylxd.Client the aggregation touches."""
 
     def __init__(self, members: List[Dict[str, Any]], per_member: Dict[str, Any], instances: List[Any]) -> None:
-        self.host_info = {"environment": {"server_clustered": True, "server_name": members[0]["server_name"]}}
+        self.host_info = {
+            "environment": {"server_clustered": True, "server_name": members[0]["server_name"]},
+            # the aggregation reads every project in one request where the daemon says it can
+            "api_extensions": ["instance_all_projects"],
+        }
         self._members = members
         self._per_member = per_member
-        # note: the signature is the assertion. pylxd's Instance.all defaults to recursion=0,
-        # which returns names only and makes every later attribute read its own HTTP request,
-        # so a caller that forgets the keyword must fail here rather than quietly work.
-        self.recursions: List[Any] = []
-
-        def _all(recursion: int = 0) -> List[Any]:
-            self.recursions.append(recursion)
-            return list(instances)
-
-        self.instances = SimpleNamespace(all=_all)
+        self._instances = list(instances)
+        self.instance_reads = 0
+        self.recursions: List[int] = []
         self.api = _Api(self)
+
+    def _instance_rows(self, params: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
+        """What GET /1.0/instances?recursion=2&all-projects=true returns."""
+        self.instance_reads += 1
+        self.recursions.append(int((params or {}).get("recursion", 0)))
+        return [
+            {
+                "name": i.name,
+                "project": getattr(i, "project", "default"),
+                "location": i.location,
+                "status": i.status,
+                "config": i.config,
+                "devices": i.devices,
+                "expanded_config": getattr(i, "expanded_config", i.config),
+                "expanded_devices": getattr(i, "expanded_devices", i.devices),
+            }
+            for i in self._instances
+        ]
 
 
 class _Api:
@@ -68,6 +85,8 @@ class _Api:
         )
 
     def __getitem__(self, key: str) -> _Endpoint:
+        if key == "instances":
+            return _Endpoint(lambda params: {"metadata": self._client._instance_rows(params)})
         # storage-pools and friends: nothing this test asserts on
         return _Endpoint(lambda params: {"metadata": []})
 
@@ -164,26 +183,29 @@ def test_an_unclustered_node_is_refused_rather_than_guessed() -> None:
 
 
 def test_the_instance_list_is_fetched_once_for_the_whole_cluster() -> None:
-    """It used to be fetched twice per member, so ten members meant twenty identical calls."""
-    calls = {"n": 0}
+    """It used to be fetched twice per member, so ten members meant twenty identical calls.
+
+    The read is now one all-projects request rather than pylxd's instances.all(), because the
+    latter only ever saw the default project. What has to stay true is the count: one read for
+    the cluster, however many members it has.
+    """
     client = _cluster()
-    real = client.instances.all
-
-    def counting_all(recursion: int = 0):
-        calls["n"] += 1
-        return real(recursion=recursion)
-
-    client.instances = SimpleNamespace(all=counting_all)
 
     nr.aggregate_microcloud_resources(client, "microcloud", {})
 
-    assert calls["n"] == 1, f"instances.all() called {calls['n']} times"
+    assert client.instance_reads == 1, (
+        f"instance list read {client.instance_reads} times"
+    )
 
 
 def test_the_instance_list_is_fetched_with_recursion() -> None:
     """At pylxd's default recursion=0 the list is names only, and every `.location` read below
     turns into its own GET. Costed one request per instance in the whole cluster, sequentially,
-    each under the same 8s socket budget, and nothing at the call site showed it."""
+    each under the same 8s socket budget, and nothing at the call site showed it.
+
+    The read is now one all-projects request rather than pylxd's instances.all(), because that
+    one only ever saw the default project. What has to stay true is that it asks for recursion,
+    and it asks for 2 now because build_gpu_inventory needs expanded_devices."""
     client = _cluster()
     nr.aggregate_microcloud_resources(client, "microcloud", {})
-    assert client.recursions == [1], f"expected one recursion=1 call, got {client.recursions}"
+    assert client.recursions == [2], f"expected one recursion=2 call, got {client.recursions}"

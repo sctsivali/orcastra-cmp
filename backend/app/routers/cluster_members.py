@@ -32,7 +32,14 @@ from app.services.lxd.member_resources import (
     count_member_instances,
 )
 from app.core.dependencies import require_partner
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    get_scope_cache_key,
+    get_tenant_acl,
+    project_is_visible,
+)
+from app.core.tenant_visibility import tenant_acl_has_permission
 from app.services.lxd.lazy_client import client_for
 
 logger = logging.getLogger(__name__)
@@ -307,6 +314,27 @@ async def get_member_resources(
         memory_info = fanout.resources_body.get("memory", {}) or {}
         memory_total = memory_info.get("total", 0) or 0
         memory_used = memory_info.get("used", 0) or 0
+
+        # important: the instance list now spans every project, and it feeds both the counts
+        # and build_gpu_inventory, whose cards carry `used_by` instance NAMES. This router is
+        # reachable by a Tenant, so without a filter the widening publishes another
+        # organization's instance names on the member panel. The captured ACL is used rather
+        # than the contextvar, so the rule is the same whichever thread reads it.
+        acl = get_tenant_acl()
+        if acl is not None:
+            fanout.instances = [
+                i for i in fanout.instances
+                if tenant_acl_has_permission(
+                    acl, node,
+                    getattr(i, "project", "default") or "default",
+                    getattr(i, "name", None), "view",
+                )
+            ]
+        # A Partner is scoped by cluster, not by project, so it needs the project bound too.
+        fanout.instances = [
+            i for i in fanout.instances
+            if project_is_visible(node, getattr(i, "project", "default") or "default")
+        ]
 
         usage = count_member_instances(fanout.instances, member_name)
 

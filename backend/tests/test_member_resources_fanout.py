@@ -91,7 +91,9 @@ class _Node:
     def __getattr__(self, item: str) -> "_Node":
         return _Node(self._client, self._parts + [item])
 
-    def get(self, params: Optional[Dict[str, Any]] = None) -> _Response:
+    def get(self, params: Optional[Dict[str, Any]] = None, timeout: Any = None) -> _Response:
+        # timeout is accepted because the real _APINode takes one and the all-projects read
+        # passes it explicitly rather than inheriting the pooled socket budget.
         return self._client.handle(self._parts, params or {})
 
 
@@ -117,7 +119,12 @@ class FakeClient:
         self.fail_instances = fail_instances
         self.pool_delay = pool_delay
         self.calls: List[str] = []
+        # a real daemon advertises this, and it is what lets the member read cover every
+        # project in one request instead of walking them
+        self.host_info = {"api_extensions": ["instance_all_projects"]}
+        self.project = None
         self.instance_recursions: List[int] = []
+        self.instance_all_projects: List[Any] = []
         self.api = _Node(self, [])
 
         def _all(recursion: int = 0) -> List[Any]:
@@ -133,6 +140,26 @@ class FakeClient:
     def handle(self, parts: List[str], params: Dict[str, Any]) -> _Response:
         key = "/".join(parts) + (f"?{sorted(params.items())}" if params else "")
         self.calls.append(key)
+        if parts == ["instances"]:
+            # The member read asks the raw API for every project at recursion=2. It used to go
+            # through client.instances.all(recursion=1), which pylxd binds to the default
+            # project, so a member running work anywhere else was counted as running almost
+            # nothing.
+            self.instance_recursions.append(int(params.get("recursion", 0)))
+            self.instance_all_projects.append(params.get("all-projects"))
+            if self.fail_instances:
+                raise RuntimeError("instance list refused")
+            if int(params.get("recursion", 0)) == 0:
+                return _Response([{"name": i.name} for i in INSTANCES])
+            return _Response([
+                {
+                    "name": i.name, "project": "default", "location": i.location,
+                    "status": i.status, "config": i.config, "devices": i.devices,
+                    "expanded_config": i.expanded_config,
+                    "expanded_devices": i.expanded_devices,
+                }
+                for i in INSTANCES
+            ])
         if parts == ["resources"]:
             return _Response(RESOURCES)
         if parts == ["storage-pools"]:
@@ -174,8 +201,11 @@ def test_the_fake_reproduces_the_lazy_sync_defect():
 def test_a_member_read_never_lazily_syncs_an_instance():
     client = FakeClient()
     fanout = _collect(client)
-    assert client.instance_recursions == [1], (
+    assert client.instance_recursions == [2], (
         f"the instance list must ask for recursion, got {client.instance_recursions}"
+    )
+    assert client.instance_all_projects == ["true"], (
+        "the member read must span every project, not just the default one"
     )
     # Every object handed on must already carry its attributes.
     for instance in fanout.instances:

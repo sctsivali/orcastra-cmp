@@ -17,6 +17,7 @@ from .gpu import GpuInventory, build_gpu_inventory
 from .hardware import build_hardware_profile, merge_hardware_profiles
 from .member_resources import list_member_pools, read_pool_space
 from .storage_model import PoolReading, summarise_cluster_storage
+from app.services.lxd.project_scope import list_instance_records
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +267,7 @@ def aggregate_microcloud_resources(
                 # name, so the `.location`, `.status` and `.config` reads below each fall into
                 # Model.__getattribute__ -> sync() -> one GET per instance. That is invisible
                 # at the call site and scales with the whole cluster.
-                cluster_instances = client.instances.all(recursion=1)
+                cluster_instances, _ = list_instance_records(client)
             except Exception as inst_err:
                 logger.debug(f"Could not list instances for {node_name}: {inst_err}")
                 cluster_instances = []

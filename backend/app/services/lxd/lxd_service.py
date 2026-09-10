@@ -30,6 +30,7 @@ from .exceptions import LXDConnectionError, LXDLocalStorageError
 from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import VaultClient
 from app.core.config import get_settings
+from app.services.lxd.project_scope import list_instance_records
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +370,7 @@ class LXDService:
         try:
             # recursion=1: build_gpu_inventory reads location, status and the expanded
             # config off each instance, which at recursion=0 is a request apiece.
-            gpu = build_gpu_inventory(live.body, client.instances.all(recursion=1))
+            gpu = build_gpu_inventory(live.body, list_instance_records(client)[0])
         except Exception as e:
             logger.debug(f"Could not read GPU inventory for {node_name}: {e}")
         return resources_for_host(

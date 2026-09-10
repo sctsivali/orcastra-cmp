@@ -39,6 +39,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import pylxd
 
 from app.core.blocking import run_blocking
+from app.services.lxd.project_scope import list_instance_records
 
 logger = logging.getLogger(__name__)
 
@@ -162,15 +163,23 @@ def read_pool_space(
     }
 
 
-def list_cluster_instances(client: pylxd.Client) -> List[Any]:
-    """Every instance on the cluster, fully populated.
+def list_cluster_instances(client: pylxd.Client) -> Tuple[List[Any], bool]:
+    """Every instance on the cluster, in every project, fully populated.
 
-    important: recursion=1, never the default. See the module docstring: at recursion=0 each
-    later attribute read is its own HTTP request. The objects returned are ordinary pylxd
-    `Instance` models either way, which is what `build_gpu_inventory` requires - it duck-types
-    `location`, `expanded_config` and `expanded_devices`, none of which a raw dict carries.
+    Returns (records, complete).
+
+    important: EVERY project, not just default. `client.instances.all()` reads through the
+    pooled client, which pylxd binds to `default`, so a member was measured by whatever share
+    of its work happened to live there. The EcoBytes audit recorded 1 of 1 on a member holding
+    44, and the same list feeds `build_gpu_inventory`, so `gpu_used` was wrong by the same
+    margin, which reads as spare capacity.
+
+    important: recursion=2, never the default. At recursion=0 each later attribute read is its
+    own HTTP request, and `build_gpu_inventory` duck-types `location`, `expanded_config` and
+    `expanded_devices`, which only a recursion=2 body carries. `InstanceRecord` exposes exactly
+    those, because a raw dict would make every getattr miss and silently report zero.
     """
-    return client.instances.all(recursion=1)
+    return list_instance_records(client)
 
 
 def parse_cpu_limit(limits_cpu: Any) -> int:
@@ -295,9 +304,13 @@ async def _collect_instances(
     free.
     """
     try:
-        fanout.instances = await _leaf(
+        fanout.instances, complete = await _leaf(
             list_cluster_instances, client, label=f"member_instances[{node}]"
         )
+        if not complete:
+            # A read that could not cover every project is a floor, not a total, and an
+            # undercount here reads as free capacity.
+            fanout.degraded_parts.append(PART_INSTANCES)
     except Exception as err:
         logger.warning("Could not list instances for %s/%s: %s", node, member_name, err)
         fanout.degraded_parts.append(PART_INSTANCES)
