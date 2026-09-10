@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 
 from app.models.schemas import VMInfo
+from app.services.lxd.nic_preflight import NicPreflightError, check_nics
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from .exceptions import (
@@ -1010,6 +1011,22 @@ class InstanceManager:
                 raise LXDOperationError(
                     f"An instance named '{name}' already exists in project '{project}' on {host}"
                 )
+
+            # important: fail fast on a NIC the project cannot reach. LXD accepts a create
+            # like that as an async 202 and only fails the background operation, and the
+            # console's placeholder row has nothing to clear it, so the instance sits at
+            # "Creating..." with empty columns and no reason. That is BUG-ORC-002.
+            #
+            # The pooled client, not create_client: pylxd overwrites an explicit project
+            # parameter with the client's own, so a project-bound client would check the
+            # wrong project.
+            try:
+                await asyncio.to_thread(
+                    check_nics, client, project, devices, profiles
+                )
+            except NicPreflightError as nic_err:
+                raise LXDOperationError(str(nic_err)) from None
+
 
             # Build instance configuration
             instance_config = config or {}
