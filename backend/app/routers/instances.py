@@ -129,9 +129,18 @@ async def list_instances(
             all_vms = [vm for vm in all_vms if vm.type == instance_type]
         
         # Apply tenant ACL filtering (project + instance level)
+        #
+        # important: the ACL alone does not cover a Partner. get_tenant_acl_rules returns None
+        # for Admin and Partner, so check_tenant_permission passes everything for them, and a
+        # Partner is scoped by cluster rather than by project. This list has always spanned
+        # every project, so on a cluster carrying two organizations it named the other
+        # organization's instances. project_is_visible answers True whenever no bound applies,
+        # so this is inert for an Admin and on any single-org cluster, and only narrows where
+        # the bound is real. The same gate already guards the network, profile and ACL lists.
         all_vms = [
             vm for vm in all_vms
-            if check_tenant_permission(
+            if project_is_visible(vm.host, vm.project or "default")
+            and check_tenant_permission(
                 vm.host,
                 vm.project or "default",
                 vm.name,
