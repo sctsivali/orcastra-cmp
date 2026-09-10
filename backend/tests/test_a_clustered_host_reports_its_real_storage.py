@@ -77,14 +77,21 @@ class _Node:
     def __getattr__(self, item: str) -> "_Node":
         return _Node(self._client, self._parts + [item])
 
-    def get(self, params: Dict[str, Any] = None) -> _Response:
+    def get(self, params: Dict[str, Any] = None, timeout: Any = None) -> _Response:
+        # timeout: project_scope passes one on every read, and a fake that refuses it makes
+        # the read raise, which used to be swallowed into an empty instance list.
         return self._client.handle(self._parts, params or {})
 
 
 class FakeClient:
     def __init__(self, fail_pool: str = None, fail_list_on: str = None) -> None:
+        # api_extensions matters: project_scope asks for it before choosing the fast
+        # all-projects read or the per-project walk, and a client that reports none takes the
+        # walk. Either way the walk must be able to answer, or the instance read fails and the
+        # aggregate reports the whole cluster as idle.
         self.host_info = {
-            "environment": {"server_clustered": True, "server_name": "microcloud30"}
+            "environment": {"server_clustered": True, "server_name": "microcloud30"},
+            "api_extensions": [],
         }
         self.fail_pool = fail_pool
         self.fail_list_on = fail_list_on
@@ -98,6 +105,13 @@ class FakeClient:
 
         if parts == ["cluster", "members"]:
             return _Response(MEMBERS)
+        # The instance read this aggregate depends on. Without these two the read raises, and
+        # before the degraded signal was wired up that silently became "no instances", so this
+        # test asserted a healthy cluster while its instance read was failing every time.
+        if parts == ["projects"]:
+            return _Response([{"name": "default", "config": {}}])
+        if parts == ["instances"]:
+            return _Response([])
         if parts == ["resources"]:
             return _Response(RESOURCES[member])
         if parts == ["storage-pools"]:

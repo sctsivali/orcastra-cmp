@@ -267,10 +267,19 @@ def aggregate_microcloud_resources(
                 # name, so the `.location`, `.status` and `.config` reads below each fall into
                 # Model.__getattribute__ -> sync() -> one GET per instance. That is invisible
                 # at the call site and scales with the whole cluster.
-                cluster_instances, _ = list_instance_records(client)
+                cluster_instances, instances_complete = list_instance_records(client)
+                if not instances_complete:
+                    # A partial read is not a smaller cluster. Saying so keeps a half-answer
+                    # from being published as the whole truth.
+                    degraded_parts.append("instances")
             except Exception as inst_err:
                 logger.debug(f"Could not list instances for {node_name}: {inst_err}")
                 cluster_instances = []
+                # important: an empty list here is indistinguishable from a genuinely idle
+                # cluster, so every derived number (cpu_used, gpu_used, gpu_available) reports
+                # the whole fleet as free capacity, which is the one direction a capacity
+                # figure must never be wrong in. Mark it lost instead.
+                degraded_parts.append("instances")
             
             # Get current server name to identify which member we're connected to
             _current_server = environment.get("server_name", "")
