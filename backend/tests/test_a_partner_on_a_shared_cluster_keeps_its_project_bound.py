@@ -181,3 +181,41 @@ def test_an_unset_context_restricts_nothing():
         return visible_projects_for("nuc2")
 
     assert contextvars.copy_context().run(check) is None
+
+
+# ── every list that spans projects must apply the bound ────────────────────────────────────────
+
+def test_every_project_spanning_list_applies_the_bound():
+    """A ratchet, because the instance list is how this was missed.
+
+    The networks, profile and ACL lists were given `project_is_visible` when they widened. The
+    instance list already spanned every project before that work, so it was never part of the
+    change and never got the gate: on a cluster carrying two organizations a Partner saw the
+    other organization's instances by name. Found by driving a shared cluster, not by reading.
+
+    `check_tenant_permission` does not cover this. `get_tenant_acl_rules` returns None for both
+    Admin and Partner, so it passes everything for them, and a Partner is scoped by cluster
+    rather than by project.
+    """
+    import ast
+    import pathlib
+
+    routers = pathlib.Path(__file__).resolve().parents[1] / "app" / "routers"
+    expected = {
+        "networks.py": "list_networks",
+        "profiles.py": "list_profiles",
+        "network_acls.py": "list_network_acls",
+        "instances.py": "list_instances",
+    }
+    missing = []
+    for filename, func in expected.items():
+        tree = ast.parse((routers / filename).read_text())
+        found = False
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func:
+                found = True
+                if "project_is_visible" not in ast.unparse(node):
+                    missing.append(f"{filename}:{func}")
+        if not found:
+            missing.append(f"{filename}:{func} (handler not found, rename?)")
+    assert missing == [], f"these span projects without applying the bound: {missing}"
