@@ -31,6 +31,7 @@ from app.core.lxd_errors import lxd_http_error
 from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.org_scope import (
     check_tenant_permission,
+    project_is_visible,
     get_scope_cache_key,
     org_scope_dependency,
     verify_cluster_access,
@@ -256,7 +257,13 @@ async def list_fleet_snapshots(
     for row in rows:
         key = (row.get("host") or "", row.get("project") or "", row.get("source_name") or "")
         if key not in seen:
-            seen[key] = check_tenant_permission(key[0], key[1], key[2], "snapshot")
+            # important: the tenant ACL alone is no bound for a Partner, whose ACL is always
+            # None, and a snapshot row names the instance it came from. On a cluster carrying
+            # two organizations that is the other organization's instance inventory. Same gate
+            # the network, profile, ACL and instance lists apply.
+            seen[key] = project_is_visible(key[0], key[1]) and check_tenant_permission(
+                key[0], key[1], key[2], "snapshot"
+            )
         if seen[key]:
             visible.append(row)
 
