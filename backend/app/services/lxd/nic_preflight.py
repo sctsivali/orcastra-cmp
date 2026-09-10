@@ -168,3 +168,53 @@ def check_nics(
                 f"{'network' if parsed == subnet.network_address else 'broadcast'} address of "
                 f"{subnet}."
             )
+
+
+def check_address_for_network(
+    client: Any,
+    project: Optional[str],
+    network_name: Optional[str],
+    address: str,
+) -> None:
+    """Validate one fixed IPv4 against the network a NIC is attached to.
+
+    The create path checks a whole device map before an instance exists. This checks a single
+    address against a NIC that already does, which is what the device write path needs.
+    """
+    trimmed = (address or "").strip()
+    if not trimmed:
+        return
+    try:
+        parsed = ipaddress.IPv4Address(trimmed)
+    except ValueError:
+        raise NicPreflightError(f"'{address}' is not a valid IPv4 address.") from None
+
+    if not network_name:
+        raise NicPreflightError(
+            "This interface is not attached to a managed network, so an address cannot be "
+            "reserved for it."
+        )
+
+    project = project or DEFAULT_PROJECT
+    configs = list_project_configs(client) if project != DEFAULT_PROJECT else {}
+    owner = effective_project("networks", project, configs)
+    rows = list_in_project(client, "networks", owner)
+    row = next((r for r in rows if r.get("name") == network_name), None)
+    if row is None:
+        raise NicPreflightError(
+            f"Network '{network_name}' does not exist in project '{project}'."
+        )
+
+    subnet = _subnet_of(row)
+    if subnet is None:
+        raise NicPreflightError(
+            f"Network '{network_name}' has no IPv4 subnet to allocate an address from."
+        )
+    if parsed not in subnet:
+        raise NicPreflightError(f"{address} is outside {network_name}'s subnet {subnet}.")
+    if parsed == subnet.network_address or parsed == subnet.broadcast_address:
+        raise NicPreflightError(
+            f"{address} is the "
+            f"{'network' if parsed == subnet.network_address else 'broadcast'} address of "
+            f"{subnet}."
+        )
