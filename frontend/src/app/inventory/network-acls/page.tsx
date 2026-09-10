@@ -20,8 +20,9 @@ import {
   TableCell,
   
   TableHeader,
+  TableHead,
   TableRow } from "@/components/ui/table";
-import { ShieldCheck } from "lucide-react";
+import { Pencil, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { TableLink } from "@/components/ui/table-link";
@@ -29,7 +30,23 @@ import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { useNetworkACLs } from "@/hooks/use-lxd";
+import { useDeleteNetworkACL, useNetworkACLs } from "@/hooks/use-lxd";
+import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { AclFormDialog } from "@/components/network-acls/acl-form-dialog";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { useToast } from "@/hooks/use-toast";
+import { Role } from "@/types/rbac";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -110,6 +127,17 @@ function NetworkACLsContent() {
   // One dialog for the page, opened from either cell. See components/used-by.
   const usedBy = useUsedByDialog();
 
+  const { hasRole } = usePermissions();
+  const { isReadOnly } = useReadOnlyMode();
+  const canManageACL = hasRole(Role.PARTNER);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<NetworkACLInfo | undefined>(undefined);
+  const [pendingDelete, setPendingDelete] = useState<NetworkACLInfo | undefined>(
+    undefined,
+  );
+  const deleteACL = useDeleteNetworkACL();
+  const { toast } = useToast();
+
   const filters = useTableFilters(ACLS, acls as NetworkACLInfo[], {
     onFilterChange: resetPage,
     availableFields });
@@ -147,11 +175,31 @@ function NetworkACLsContent() {
             Manage hypervisor network access control lists
           </p>
         </div>
-        <RefreshButton
-          label="Refresh network ACLs"
-          lastUpdatedAt={dataUpdatedAt}
-          onRefresh={refreshNow}
-        />
+        <div className="flex items-center gap-2">
+          <RefreshButton
+            label="Refresh network ACLs"
+            lastUpdatedAt={dataUpdatedAt}
+            onRefresh={refreshNow}
+          />
+          {/* Only Partner+ can write a policy; the API enforces this too. */}
+          {canManageACL && (
+            <Button
+              onClick={() => {
+                setEditing(undefined);
+                setDialogOpen(true);
+              }}
+              disabled={isReadOnly}
+              title={
+                isReadOnly
+                  ? "Action disabled in read-only mode"
+                  : "Create a new network ACL"
+              }
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Create Network ACL
+            </Button>
+          )}
+        </div>
       </div>
 
       <UnreachableNodesBanner noun="network ACLs" nodes={unreachableNodes} />
@@ -173,12 +221,13 @@ function NetworkACLsContent() {
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                {canManageACL && <TableHead className="text-right">Actions</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
               {paginatedACLs.length === 0 ? (
                 <TableEmptyRow
-                  colSpan={nodes.length > 0 ? 8 : 7}
+                  colSpan={(nodes.length > 0 ? 8 : 7) + (canManageACL ? 1 : 0)}
                   icon={ShieldCheck}
                   title="No network ACLs found"
                   description={
@@ -240,6 +289,31 @@ function NetworkACLsContent() {
                         onOpen={() => usedBy.openProjects(aclSubject(acl))}
                       />
                     </TableCell>
+                    {canManageACL && (
+                      <TableCell className="text-right whitespace-nowrap">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => {
+                            setEditing(acl);
+                            setDialogOpen(true);
+                          }}
+                          disabled={isReadOnly}
+                          aria-label={`Edit ${acl.name}`}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setPendingDelete(acl)}
+                          disabled={isReadOnly}
+                          aria-label={`Delete ${acl.name}`}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 ))
               )}
@@ -265,6 +339,64 @@ function NetworkACLsContent() {
       </Card>
 
       <UsedByDialog {...usedBy.dialogProps} />
+
+      {canManageACL && (
+        <AclFormDialog
+          open={dialogOpen}
+          onOpenChange={setDialogOpen}
+          existing={editing}
+          onSaved={refreshNow}
+        />
+      )}
+
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => !open && setPendingDelete(undefined)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {pendingDelete?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingDelete?.used_by?.length
+                ? `This ACL is attached to ${pendingDelete.used_by.length} resource${
+                    pendingDelete.used_by.length === 1 ? "" : "s"
+                  }. LXD refuses to delete an ACL that is still in use.`
+                : "This removes the policy from the cluster. It cannot be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (!pendingDelete) return;
+                const target = pendingDelete;
+                setPendingDelete(undefined);
+                try {
+                  await deleteACL.mutateAsync({
+                    name: target.name,
+                    host: target.node ?? "",
+                    project: target.project,
+                  });
+                  toast({
+                    title: "Network ACL deleted",
+                    description: `"${target.name}" removed from ${target.node}.`,
+                  });
+                  refreshNow();
+                } catch (e) {
+                  toast({
+                    title: "Could not delete the network ACL",
+                    description:
+                      e instanceof Error ? e.message : "The cluster refused the delete.",
+                    variant: "destructive",
+                  });
+                }
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

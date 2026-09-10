@@ -21,7 +21,7 @@ import { formatInstanceType } from "@/lib/utils";
 import { Play, Square, RotateCw, RefreshCw, Trash2, Terminal, Monitor, Loader2, Box } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
 import { TagBadge } from "@/components/tag-manager";
-import { removePendingCreate } from "@/lib/pending-creates";
+import { isStalePending, removePendingCreate } from "@/lib/pending-creates";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -155,9 +155,21 @@ function InstancesContent() {
   // cannot be the pre-create list. A blanket 12s wait used to sit here, which left
   // the same instance rendered twice, once "Creating…" and once with its real
   // status, for as long as the real row beat the stream event.
-  const isResolved = (p: { host: string; name: string; createdAt: number }) =>
+  const isResolved = (p: {
+    host: string;
+    name: string;
+    project?: string;
+    createdAt: number;
+  }) =>
     dataUpdatedAt > p.createdAt &&
-    instances.some((i: any) => i.host === p.host && i.name === p.name);
+    instances.some(
+      (i: any) =>
+        i.host === p.host &&
+        i.name === p.name &&
+        // important: with the project. Two projects can each hold an instance called "test",
+        // so matching on host and name alone resolves a placeholder against someone else's row.
+        (i.project || "default") === (p.project || "default"),
+    );
   useEffect(() => {
     for (const p of pendingCreates) {
       if (isResolved(p)) removePendingCreate(p.id);
@@ -439,21 +451,34 @@ function InstancesContent() {
                   <TableCell className="font-medium">{p.name}</TableCell>
                   <TableCell>
                     <Badge
-                      variant={p.status === "Error" ? "destructive" : "outline"}
+                      variant={
+                        p.status === "Error"
+                          ? "destructive"
+                          : isStalePending(p)
+                            ? "warning"
+                            : "outline"
+                      }
                       className="gap-1"
                     >
-                      {p.status !== "Error" && (
+                      {p.status !== "Error" && !isStalePending(p) && (
                         <Loader2 className="h-3 w-3 animate-spin" />
                       )}
                       {p.status === "Error"
                         ? "Failed"
-                        : p.progress
-                          ? `Creating… ${p.progress}`
-                          : "Creating…"}
+                        : isStalePending(p)
+                          ? "No longer reporting"
+                          : p.progress
+                            ? `Creating… ${p.progress}`
+                            : "Creating…"}
                     </Badge>
-                    {p.error && (
+                    {p.error ? (
                       <TableSubText className="text-destructive">{p.error}</TableSubText>
-                    )}
+                    ) : isStalePending(p) ? (
+                      <TableSubText>
+                        The cluster stopped reporting on this create. Refresh to see whether
+                        the instance exists.
+                      </TableSubText>
+                    ) : null}
                   </TableCell>
                   <TableCell>{formatInstanceType(p.type)}</TableCell>
                   <TableCell className="whitespace-nowrap">{p.host}</TableCell>
