@@ -277,3 +277,52 @@ class TestNotInventingRefusals:
                 pass
 
         check_nics(Exploding(), None, {"eth0": {"type": "nic", "network": "x"}}, ["default"])
+
+
+class TestTheRefusalReachesTheCallerAsAClientError:
+    """The create route maps LXDOperationError to a status by substring.
+
+    A fail-fast that arrives as a 500 or a 503 is no better than the hang it replaced: the
+    console renders one as an outage and the other as "try again later", and neither tells the
+    operator to pick a different network. So the wording of these refusals is load-bearing.
+    """
+
+    # Mirrors routers/instances.py create_instance, which is where the mapping lives.
+    @staticmethod
+    def _status_for(message: str) -> int:
+        low = message.lower()
+        if "already exists" in low:
+            return 409
+        if "not found" in low:
+            return 404
+        if "connect" in low or "not available" in low or "could not open project" in low:
+            return 503
+        return 400
+
+    def _messages(self):
+        client = client_with_isolated_project()
+        empty = FakeClient(
+            projects=ISOLATED,
+            networks={DEFAULT_PROJECT: [bridge("br-uplink")], "UAT-Hermes": []},
+            profiles={"UAT-Hermes": [{"name": "default", "devices": {}}]},
+        )
+        subnet_client = FakeClient(
+            projects={DEFAULT_PROJECT: {}},
+            networks={DEFAULT_PROJECT: [bridge("lxdbr0", "10.0.5.1/24")]},
+            profiles={DEFAULT_PROJECT: [{"name": "default", "devices": {}}]},
+        )
+        cases = [
+            (client, "UAT-Hermes", {"eth0": {"type": "nic", "network": "br-uplink"}}),
+            (empty, "UAT-Hermes", {"eth0": {"type": "nic", "network": "br-uplink"}}),
+            (subnet_client, None, {"eth0": {"type": "nic", "network": "lxdbr0", "ipv4.address": "9.9.9.9"}}),
+            (subnet_client, None, {"eth0": {"type": "nic", "network": "lxdbr0", "ipv4.address": "nope"}}),
+            (subnet_client, None, {"eth0": {"type": "nic", "network": "lxdbr0", "ipv4.address": "10.0.5.0"}}),
+        ]
+        for c, project, devices in cases:
+            with pytest.raises(NicPreflightError) as exc:
+                check_nics(c, project, devices, ["default"])
+            yield str(exc.value)
+
+    def test_every_refusal_is_a_400(self):
+        for message in self._messages():
+            assert self._status_for(message) == 400, message
