@@ -813,8 +813,16 @@ async def set_instance_nic_address(
         current, _inherited = await asyncio.to_thread(
             _read_instance_device, client, instance_name, project, device_name
         )
-        check_address_for_network(
-            client, project, nic_network_of(current), request.ipv4_address or ""
+        # important: this reads the cluster over HTTP with a (3, 25) socket timeout, so it
+        # belongs off the loop like the read above it and the write below it. Called directly
+        # it parks a uvicorn worker for up to 56s on a slow daemon, and this deployment runs
+        # WEB_CONCURRENCY=4, so that is a quarter of the API including health checks.
+        await asyncio.to_thread(
+            check_address_for_network,
+            client,
+            project,
+            nic_network_of(current),
+            request.ipv4_address or "",
         )
         written = await asyncio.to_thread(
             set_nic_address_sync,
