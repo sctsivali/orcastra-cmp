@@ -283,3 +283,32 @@ class TestTheWriteIsWaitedOn:
         with pytest.raises(Exception) as exc:
             set_nic_address_sync(client, "db-1", "default", "eth0", "10.0.5.42")
         assert "LXDAPIException" in type(exc.value).__name__ or "ipv4.address" in str(exc.value)
+
+
+class TestAnInheritedDeviceIsNotDetachedForNothing:
+    """Overriding a profile device is one way, so it must buy something.
+
+    `lxc config device override` copies the profile's device onto the instance and the console
+    has no route that hands it back. A Save on an interface that is already on DHCP changed
+    nothing and detached it anyway, after which edits to the profile's NIC stopped reaching
+    that instance and only a shell on the hypervisor could undo it, which is the thing this
+    feature exists to avoid.
+    """
+
+    def _client(self):
+        # the NIC lives only in the expanded set, which is what "inherited" means
+        return FakeClient(
+            record(devices={}, expanded={"eth0": {"type": "nic", "network": "lxdbr0"}})
+        )
+
+    def test_clearing_an_already_dhcp_inherited_nic_writes_nothing(self):
+        client = self._client()
+        set_nic_address_sync(client, "db-1", "default", "eth0", None)
+        assert client.writes == [], "a no-op must not override the profile's device"
+
+    def test_setting_an_address_on_an_inherited_nic_still_overrides(self):
+        client = self._client()
+        set_nic_address_sync(client, "db-1", "default", "eth0", "10.0.5.42")
+        assert len(client.writes) == 1, "a real change must still be written"
+        body, _params = client.writes[0]
+        assert body["devices"]["eth0"]["ipv4.address"] == "10.0.5.42"

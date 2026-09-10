@@ -59,6 +59,8 @@ interface Permission {
 interface Resource {
   name: string;
   path: string;
+  // the project that holds it, so two rows both called "default" can be told apart
+  project?: string;
 }
 
 export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDialogProps) {
@@ -119,11 +121,13 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
         return ((profilesData as any)?.profiles || []).map((p: any) => ({
           name: p.name,
           path: lxdResourcePath("profiles", p.name, p.project),
+          project: p.project,
         }));
       case "network":
         return ((networksData as any)?.networks || []).map((n: any) => ({
           name: n.name,
           path: lxdResourcePath("networks", n.name, n.project),
+          project: n.project,
         }));
       case "storage_pool":
         return ((poolsData as any)?.pools || []).map((s: any) => ({ 
@@ -196,8 +200,12 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
       });
     } else {
       const resources = getAvailableResources();
-      selectedResources.forEach(resourceName => {
-        const resource = resources.find(r => r.name === resourceName);
+      // important: keyed by path, not name. Every LXD project carries its own `default`
+      // profile, so a bare name matches the first row of that name whatever project it is in,
+      // and the grant lands on the wrong project's resource. The edit dialog already keys by
+      // path; this one was left behind.
+      selectedResources.forEach(resourcePath => {
+        const resource = resources.find(r => r.path === resourcePath);
         if (resource) {
           newPerms.push({
             entity_type: newPermission.entity_type,
@@ -472,24 +480,29 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
                         <div className="p-2 space-y-1">
                           {getAvailableResources().map((resource) => (
                             <div
-                              key={resource.name}
+                              key={resource.path}
                               className="flex items-center gap-2 p-1.5 hover:bg-accent rounded transition-colors"
                             >
                               <Checkbox
-                                id={`resource-${resource.name}`}
-                                checked={selectedResources.includes(resource.name)}
+                                id={`resource-${resource.path}`}
+                                checked={selectedResources.includes(resource.path)}
                                 onCheckedChange={(checked) => {
                                   if (checked === true || checked === false) {
-                                    handleResourceToggle(resource.name);
+                                    handleResourceToggle(resource.path);
                                   }
                                 }}
                                 className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0"
                               />
                               <Label 
-                                htmlFor={`resource-${resource.name}`}
+                                htmlFor={`resource-${resource.path}`}
                                 className="text-xs cursor-pointer font-medium flex-1 break-words"
                               >
                                 {resource.name}
+                                {resource.project && resource.project !== "default" && (
+                                  <span className="ml-1 text-xs text-muted-foreground">
+                                    ({resource.project})
+                                  </span>
+                                )}
                               </Label>
                             </div>
                           ))}

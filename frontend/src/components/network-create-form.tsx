@@ -179,13 +179,17 @@ export function NetworkCreateForm() {
         type,
         config,
       };
-      await createNetwork.mutateAsync({ data: payload, host: node, project });
+      const created = await createNetwork.mutateAsync({ data: payload, host: node, project });
+      // A project with features.networks unset does not hold its own networks, so the backend
+      // resolves the create to the project that does. Name where it landed, not what was asked
+      // for, or the toast points the operator at a project the network is not in.
+      const landed = (created as any)?.network?.project ?? project;
       toast({
         title: "Network created",
         description:
-          project === "default"
+          landed === "default"
             ? `"${name}" created on ${node}.`
-            : `"${name}" created on ${node} in project ${project}.`,
+            : `"${name}" created on ${node} in project ${landed}.`,
       });
       navigate("/inventory/networks");
     } catch (e) {

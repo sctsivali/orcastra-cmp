@@ -177,7 +177,10 @@ export function AclFormDialog({
         description: description.trim(),
         ingress: ingress.map(cleanRule),
         egress: egress.map(cleanRule),
-        config: {},
+        // important: omit config on an edit. Sending {} replaces whatever LXD holds, so an
+        // edit that only touched a rule silently dropped the ACL's config keys. Leaving the
+        // key out lets the backend's read-modify-write carry the live value through.
+        ...(isEdit ? {} : { config: {} }),
       };
       if (isEdit) {
         await updateACL.mutateAsync({

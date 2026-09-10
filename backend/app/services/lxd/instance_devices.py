@@ -96,8 +96,19 @@ def set_nic_address_sync(
             "interface."
         )
 
+    updated = apply_fixed_address(device, address)
+    # important: writing an inherited device onto the instance is `lxc config device override`,
+    # and it is one way. Nothing in this console hands the device back to its profile, so a
+    # Save on an interface that is already on DHCP would detach it while changing nothing, and
+    # later edits to the profile's NIC would silently stop reaching this instance.
+    if inherited and updated == device:
+        logger.info(
+            "No change to %s on %s/%s, leaving it inherited", device_name, project, name
+        )
+        return updated
+
     devices = dict(current.get("devices") or {})
-    devices[device_name] = apply_fixed_address(device, address)
+    devices[device_name] = updated
 
     payload = {
         "architecture": current.get("architecture"),
