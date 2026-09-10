@@ -47,6 +47,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, delete
 from sqlalchemy.exc import IntegrityError
 from app.models.db_models import Organization, OrganizationMember
+from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
 
@@ -654,7 +655,7 @@ def _execute_proxy_operation(
         name = params.get("name")
         if not name:
             raise HTTPException(status_code=400, detail="Instance name required")
-        return client.instances.get(name)
+        return client.instances.get(safe_segment(name))
 
     if operation == "list_instances":
         return [

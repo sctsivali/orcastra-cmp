@@ -154,10 +154,24 @@ def aggregate_microcloud_resources(
             # so this counted a fraction of a busy cluster and fed that fraction to the GPU
             # allocation below it.
             try:
-                cluster_instances, _complete = list_instance_records(client)
+                cluster_instances, instances_complete = list_instance_records(client)
+                if not instances_complete:
+                    # This branch has no field to carry a partial read, so say it loudly here.
+                    # The numbers below are built from fewer instances than the cluster holds.
+                    logger.warning(
+                        "Instance read for %s was partial; allocation figures understate usage",
+                        node_name,
+                    )
             except Exception as inst_err:
                 logger.warning(f"Could not list instances for {node_name}: {inst_err}")
-                cluster_instances = []
+                # important: do NOT carry on with an empty list. Every figure derived below
+                # comes from this read, so an empty one reports cpu_used 0, gpu_used 0 and
+                # every card available: a cluster whose read failed looks like a cluster with
+                # nothing running on it, and that is the one direction a capacity figure must
+                # never be wrong in. Returning None makes the caller fall back to this member's
+                # real resources, which under-reports the total and is visibly conservative
+                # rather than invisibly wrong.
+                return None
             
             # Get current server name to identify which member we're connected to
             _current_server = environment.get("server_name", "")

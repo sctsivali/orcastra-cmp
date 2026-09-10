@@ -861,7 +861,7 @@ async def kill_active_session(
         # Check if the operation still exists
         await asyncio.sleep(0.3)  # Small delay for operation cleanup
         try:
-            client.operations.get(operation_id)
+            client.operations.get(safe_segment(operation_id))
             # Operation still exists
             return ActionResponse(success=False, error="Failed to terminate session - operation still exists")
         except Exception:

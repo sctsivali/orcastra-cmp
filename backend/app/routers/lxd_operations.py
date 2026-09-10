@@ -217,7 +217,7 @@ async def get_operation(
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        operation = client.operations.get(operation_id)
+        operation = client.operations.get(safe_segment(operation_id))
         
         return OperationInfo(
             id=operation.id,
@@ -292,7 +292,7 @@ async def wait_operation(
     verify_cluster_access(host)
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        operation = client.operations.get(operation_id)
+        operation = client.operations.get(safe_segment(operation_id))
         operation.wait(timeout=timeout)
         
         return {
