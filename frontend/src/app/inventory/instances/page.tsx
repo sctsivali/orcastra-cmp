@@ -54,6 +54,28 @@ import { RebuildDialog } from "@/components/rebuild-dialog";
 // The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
 // instance's own device; an instance that overrode nothing still has one through its profile,
 // and in that case LXD reports no size because the pool default applies.
+
+/**
+ * Whether any NIC on this instance pins its own IPv4 rather than taking one from DHCP.
+ *
+ * Reads the instance's own devices and its expanded set, because the NIC usually comes from a
+ * profile and only appears in the expanded view. Chapter 5.1.2 of the audit: an operator
+ * reconciling against a corporate IPAM catalogue needs to see which addresses are planned and
+ * which are merely current.
+ */
+function hasFixedAddress(instance: {
+  devices?: Record<string, Record<string, string>> | null;
+  expanded_devices?: Record<string, Record<string, string>> | null;
+}): boolean {
+  const sets = [instance.expanded_devices, instance.devices];
+  for (const devices of sets) {
+    for (const device of Object.values(devices ?? {})) {
+      if (device?.type === "nic" && device["ipv4.address"]) return true;
+    }
+  }
+  return false;
+}
+
 function rootDiskLabel(instance: any): { text: string; title: string } {
   const own = instance?.devices?.root;
   const effective = instance?.expanded_devices?.root ?? own;
@@ -523,6 +545,11 @@ function InstancesContent() {
                       emptyLabel="No IP addresses"
                       itemLabel="IP address"
                     />
+                    {instance.ip_addresses?.length ? (
+                      <TableSubText>
+                        {hasFixedAddress(instance) ? "Static" : "DHCP"}
+                      </TableSubText>
+                    ) : null}
                   </TableCell>
                   <TableCell>
                     <OverflowCell

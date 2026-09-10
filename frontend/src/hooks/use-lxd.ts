@@ -1002,6 +1002,42 @@ export function useDeleteStorageVolume() {
   });
 }
 
+/**
+ * Pin or release a NIC's fixed IPv4 on an instance that already exists.
+ *
+ * Invalidates the instance queries rather than patching them locally: the write can override a
+ * profile-inherited device onto the instance, which changes `devices` as well as the address,
+ * and only a re-read shows that honestly.
+ */
+export function useSetNicAddress() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      instanceName,
+      deviceName,
+      host,
+      project,
+      ipv4Address,
+    }: {
+      instanceName: string;
+      deviceName: string;
+      host: string;
+      project?: string;
+      ipv4Address: string | null;
+    }) =>
+      api.instanceDevices.setNicAddress(instanceName, deviceName, {
+        host,
+        project,
+        ipv4_address: ipv4Address,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["instances"] });
+      queryClient.invalidateQueries({ queryKey: ["instance"] });
+    },
+  });
+}
+
 // Networks Hooks
 /**
  * @param project omit for every project, each row naming the one that holds it. Pass one to

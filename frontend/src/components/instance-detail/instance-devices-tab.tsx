@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { DevicesPanel } from "@/components/used-by/panels/devices-panel";
+import { NicAddressSection } from "./nic-address-section";
 import { DetailSection } from "@/components/detail/detail-field";
 import type { VMInfo } from "@/types/api";
 
@@ -12,6 +13,7 @@ import type { VMInfo } from "@/types/api";
 export function InstanceDevicesTab({ instance }: { instance: VMInfo }) {
   return (
     <div className="space-y-6">
+      <NicAddressSection instance={instance} />
       <DetailSection
         title="Set on This Instance"
         description="Devices configured on the instance itself, which is where a root disk size chosen at create time lives."
