@@ -1127,6 +1127,25 @@ export const profileAPI = {
 };
 
 // Network Operations
+export const instanceDeviceAPI = {
+  /**
+   * Reserve a fixed IPv4 for one of an instance's interfaces, or clear it back to DHCP by
+   * passing null. The backend validates the address against the network's real subnet.
+   */
+  setNicAddress: async (
+    instanceName: string,
+    deviceName: string,
+    body: { host: string; project?: string; ipv4_address: string | null },
+  ) => {
+    return fetchAPI(
+      `/instances/${encodeURIComponent(instanceName)}/devices/${encodeURIComponent(
+        deviceName,
+      )}/address`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    );
+  },
+};
+
 export const networkAPI = {
   /** Omit `project` to read every project, each row naming the one that holds it. */
   list: async (host?: string, project?: string, opts: ReadOptions = {}) => {
@@ -2125,6 +2144,7 @@ export const api = {
   health: healthCheck,
   // New LXD Features
   instances: instanceAPI,
+  instanceDevices: instanceDeviceAPI,
   profiles: profileAPI,
   networks: networkAPI,
   networkACLs: networkACLAPI,
