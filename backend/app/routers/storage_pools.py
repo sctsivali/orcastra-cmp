@@ -22,6 +22,7 @@ from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_names import safe_segment
+from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -38,6 +39,19 @@ def _serialize_pool_resources(resources) -> dict:
         "inodes": resources.inodes if isinstance(resources.inodes, dict) else {},
     }
 
+
+# Storage pool keys LXD stores per member (lxd/db/cluster/storage_pools.go,
+# NodeSpecificStorageConfig). On a cluster these go in the per-member define step; the daemon
+# refuses them in the cluster-wide create and refuses every other key in the define.
+MEMBER_SPECIFIC_POOL_KEYS = frozenset({
+    "size",
+    "source",
+    "source.wipe",
+    "volatile.initial_source",
+    "zfs.pool_name",
+    "lvm.thinpool_name",
+    "lvm.vg_name",
+})
 
 router = APIRouter(
     prefix="/storage/pools",
@@ -338,12 +352,41 @@ async def create_storage_pool(
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.create({
-            "name": request.name,
-            "driver": request.driver,
-            "config": request.config,
-            "description": request.description
-        })
+        if is_clustered(client):
+            # important: on a cluster a pool must be DEFINED on every member first
+            # (POST ?target=<member>, carrying only the member-specific keys) and then
+            # CREATED cluster-wide with the rest. One cluster-wide POST answered
+            # 'Pool not pending on any node (use --target <node> first)' on a 3-member
+            # MicroCloud, so no pool could be created from the console there. The console
+            # sends one config, so every member is defined with the same source and size,
+            # which is how MicroCloud itself lays out its local pool.
+            member_config = {
+                k: v for k, v in (request.config or {}).items()
+                if k in MEMBER_SPECIFIC_POOL_KEYS
+            }
+            cluster_config = {
+                k: v for k, v in (request.config or {}).items()
+                if k not in MEMBER_SPECIFIC_POOL_KEYS
+            }
+            for member in cluster_member_names(client):
+                client.api.storage_pools.post(
+                    json={"name": request.name, "driver": request.driver, "config": member_config},
+                    params={"target": member},
+                )
+            client.api.storage_pools.post(json={
+                "name": request.name,
+                "driver": request.driver,
+                "config": cluster_config,
+                "description": request.description,
+            })
+            pool = client.storage_pools.get(safe_segment(request.name))
+        else:
+            pool = client.storage_pools.create({
+                "name": request.name,
+                "driver": request.driver,
+                "config": request.config,
+                "description": request.description
+            })
         
         # Log activity: storage pool creation success
         activity_logger.log_activity(
