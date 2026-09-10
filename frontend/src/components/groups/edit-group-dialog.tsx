@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { lxdResourcePath } from "@/lib/lxd-resource-path";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -237,18 +238,14 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
           path: `/1.0/images/${img.fingerprint}`
         }));
       case "profile":
-        return ((profilesData as any)?.profiles || []).map((p: any) => ({ 
-          name: p.name, 
-          path: p.project && p.project !== 'default' 
-            ? `/1.0/profiles/${p.name}?project=${p.project}`
-            : `/1.0/profiles/${p.name}` 
+        return ((profilesData as any)?.profiles || []).map((p: any) => ({
+          name: p.name,
+          path: lxdResourcePath("profiles", p.name, p.project),
         }));
       case "network":
         return ((networksData as any)?.networks || []).map((n: any) => ({ 
           name: n.name, 
-          path: n.project && n.project !== 'default' 
-            ? `/1.0/networks/${n.name}?project=${n.project}`
-            : `/1.0/networks/${n.name}` 
+          path: lxdResourcePath("networks", n.name, n.project),
         }));
       case "storage_pool":
         return ((poolsData as any)?.pools || []).map((s: any) => ({ 

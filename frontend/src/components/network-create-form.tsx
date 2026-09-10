@@ -22,7 +22,7 @@ import {
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
-import { useCreateNetwork, useNetworks } from "@/hooks/use-lxd";
+import { useCreateNetwork, useNetworks, useProjects } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -71,6 +71,7 @@ export function NetworkCreateForm() {
   const { isReadOnly } = useReadOnlyMode();
 
   const [node, setNode] = useState("");
+  const [project, setProject] = useState("default");
   const [type, setType] = useState<"bridge" | "ovn">("bridge");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -82,11 +83,30 @@ export function NetworkCreateForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Uplink candidates for OVN: existing networks on the selected node.
-  const { data: networksResp } = useNetworks(node || undefined);
+  // Uplink candidates for OVN.
+  //
+  // important: LXD accepts only a managed bridge or physical network as an OVN uplink, and it
+  // resolves the uplink in the DEFAULT project whatever project the OVN network itself lives
+  // in. This list used to be filtered by node alone, so it offered other OVN networks, macvlan
+  // interfaces and the loopback. On one node in this fleet that is 11 unusable candidates out
+  // of 23. Picking one produced a create the daemon rejected, and an instance that never
+  // finished coming up.
+  const { data: networksResp } = useNetworks(node || undefined, "default");
   const uplinkOptions = ((networksResp as any)?.networks || [])
     .filter((n: any) => (n.node ? n.node === node : true))
+    .filter((n: any) => n.managed && (n.type === "bridge" || n.type === "physical"))
     .map((n: any) => ({ value: n.name, label: `${n.name} (${n.type})` }));
+
+  // Projects that can hold a network. LXD refuses every type except OVN outside default, so a
+  // bridge create is pinned to default rather than offered a choice it cannot honour.
+  const { data: projectsResp } = useProjects(node);
+  const projectOptions = (() => {
+    const seen = new Set<string>(["default"]);
+    for (const p of ((projectsResp as any)?.projects ?? []) as any[]) {
+      if (p?.name) seen.add(p.name);
+    }
+    return Array.from(seen).sort();
+  })();
 
   // Bridge network names become Linux interface names (<= 15 chars). OVN names
   // don't map to a host interface, so they can be longer. LXD also rejects a
@@ -120,6 +140,10 @@ export function NetworkCreateForm() {
           : "";
   const uplinkError =
     type === "ovn" && !uplink ? "Select an uplink network for the OVN network." : "";
+  const projectError =
+    type !== "ovn" && project !== "default"
+      ? "Only OVN networks can be created outside the default project."
+      : "";
 
   // important: `submitting` is React state, so it only reaches `canSubmit` on the next render.
   // Two clicks inside one tick both pass the disabled check and both fire a create, which is
@@ -133,6 +157,7 @@ export function NetworkCreateForm() {
     !ipv4Error &&
     !ipv6Error &&
     !uplinkError &&
+    !projectError &&
     !submitting &&
     !isReadOnly;
 
@@ -154,10 +179,13 @@ export function NetworkCreateForm() {
         type,
         config,
       };
-      await createNetwork.mutateAsync({ data: payload, host: node });
+      await createNetwork.mutateAsync({ data: payload, host: node, project });
       toast({
         title: "Network created",
-        description: `"${name}" created on ${node}.`,
+        description:
+          project === "default"
+            ? `"${name}" created on ${node}.`
+            : `"${name}" created on ${node} in project ${project}.`,
       });
       navigate("/inventory/networks");
     } catch (e) {
@@ -253,7 +281,13 @@ export function NetworkCreateForm() {
               <Label>Type *</Label>
               <Select
                 value={type}
-                onValueChange={(v) => setType(v as "bridge" | "ovn")}
+                onValueChange={(v) => {
+                  const next = v as "bridge" | "ovn";
+                  setType(next);
+                  // LXD refuses every type except OVN outside the default project, so
+                  // leaving a project selected here would build a create it always rejects.
+                  if (next !== "ovn") setProject("default");
+                }}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -267,6 +301,35 @@ export function NetworkCreateForm() {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="net-project">Project</Label>
+            <Select
+              value={project}
+              onValueChange={setProject}
+              disabled={type !== "ovn" || !node}
+            >
+              <SelectTrigger id="net-project">
+                <SelectValue placeholder="default" />
+              </SelectTrigger>
+              <SelectContent>
+                {projectOptions.map((p) => (
+                  <SelectItem key={p} value={p}>
+                    {p}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {projectError ? (
+              <p className="text-xs text-destructive">{projectError}</p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                {type === "ovn"
+                  ? "An OVN network can belong to a project that isolates its networks."
+                  : "A bridge network always belongs to the default project."}
+              </p>
+            )}
           </div>
 
           <div className="grid gap-2">
@@ -305,16 +368,28 @@ export function NetworkCreateForm() {
                 value={uplink}
                 onValueChange={setUplink}
                 options={uplinkOptions}
-                placeholder={node ? "Select uplink network" : "Select a node first"}
+                placeholder={
+                  !node
+                    ? "Select a node first"
+                    : uplinkOptions.length === 0
+                      ? "No usable uplink on this node"
+                      : "Select uplink network"
+                }
                 searchPlaceholder="Search networks..."
-                emptyText="No networks found."
-                disabled={!node}
+                emptyText="No managed bridge or physical network here."
+                disabled={!node || uplinkOptions.length === 0}
               />
               {uplinkError ? (
                 <p className="text-xs text-destructive">{uplinkError}</p>
+              ) : node && uplinkOptions.length === 0 ? (
+                <p className="text-xs text-destructive">
+                  This node has no managed bridge or physical network to uplink through.
+                  Create one in the default project first.
+                </p>
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  OVN networks require an uplink network configured with OVN ranges.
+                  Only a managed bridge or physical network can carry an OVN uplink, and it is
+                  always read from the default project.
                 </p>
               )}
             </div>

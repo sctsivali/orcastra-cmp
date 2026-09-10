@@ -34,6 +34,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  checkFixedAddress,
+  subnetOf,
+} from "@/components/instance-create/nic-address";
+import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
@@ -101,6 +105,9 @@ type NicDevice = {
   id: string;
   network: string; // managed network name
   name: string; // guest interface name (eth0, eth1, ...)
+  // Optional fixed IPv4. LXD writes it as the device's ipv4.address, which pins the
+  // allocation instead of leaving it to DHCP. Empty means DHCP.
+  ipv4Address?: string;
 };
 
 // A physical GPU passed through to the instance, identified by PCI address or id.
@@ -304,18 +311,34 @@ export function InstanceCreateForm() {
 
   // --- Network interfaces -----------------------------------------------------
   const [nics, setNics] = useState<NicDevice[]>([]);
-  const { data: networksResp } = useNetworks(form.selectedNode);
-  const networkOptions = (
+  // important: scoped to the project the instance is going into, not to the node alone.
+  // Offering every network the default project holds is what let an operator attach an
+  // instance in an isolated project to a network that project cannot reach, which the
+  // daemon then failed in the background with nothing to show for it.
+  const { data: networksResp } = useNetworks(
+    form.selectedNode,
+    form.selectedProject || undefined,
+  );
+  const projectNetworks = (
     ((networksResp as unknown as NetworkListResponse | undefined)?.networks ??
       []) as NetworkInfo[]
-  )
-    .filter((n) => n.managed)
-    .map((n) => ({ value: n.name, label: `${n.name} (${n.type})` }));
+  ).filter((n) => n.managed);
+  const networkOptions = projectNetworks.map((n) => ({
+    value: n.name,
+    label: `${n.name} (${n.type})`,
+  }));
+  const networksByName = new Map(projectNetworks.map((n) => [n.name, n]));
 
   // Inherited NICs from the instance's profile(s) (the form applies "default"),
   // mirroring LXD UI's "inherited" rows so the user can override them instead of
   // adding a duplicate on the same network (which causes a DNS-name conflict).
-  const { data: defaultProfile } = useProfile("default", form.selectedNode);
+  // The project's own default profile, not the default project's. A project that sets
+  // features.profiles has a different one, so the inherited rows shown were fiction.
+  const { data: defaultProfile } = useProfile(
+    "default",
+    form.selectedNode,
+    form.selectedProject || undefined,
+  );
   const inheritedNics = Object.entries(
     ((defaultProfile as unknown as ProfileInfo | undefined)?.devices ?? {}) as Record<
       string,
@@ -357,8 +380,15 @@ export function InstanceCreateForm() {
 
   // Each NIC needs a network + interface name, and names must be unique.
   const nicNames = nics.map((n) => n.name.trim());
+  const nicAddressError = (nic: NicDevice): string | null => {
+    const result = checkFixedAddress(
+      nic.ipv4Address ?? "",
+      networksByName.get(nic.network)?.config,
+    );
+    return result.ok ? null : result.reason;
+  };
   const nicsValid =
-    nics.every((n) => !!n.network && !!n.name.trim()) &&
+    nics.every((n) => !!n.network && !!n.name.trim() && !nicAddressError(n)) &&
     new Set(nicNames).size === nicNames.length;
 
   // --- GPU passthrough --------------------------------------------------------
@@ -637,8 +667,9 @@ export function InstanceCreateForm() {
     }));
     setDisks([]);
   };
-  // Local images are project-scoped; clear the picture when project changes.
-  const selectProject = (project: string) =>
+  // Local images and networks are both project-scoped; clear what the old project chose.
+  const selectProject = (project: string) => {
+    setNics([]);
     setForm((prev) => ({
       ...prev,
       selectedProject: project,
@@ -649,6 +680,7 @@ export function InstanceCreateForm() {
       selectedIsoPool: "",
       selectedIsoLabel: "",
     }));
+  };
 
   // --- Submit -----------------------------------------------------------------
   const submit = async (startAfterCreate: boolean) => {
@@ -721,11 +753,14 @@ export function InstanceCreateForm() {
     // NIC devices, keyed by interface name (so a matching name overrides the
     // profile's, e.g. eth0; a new name adds an extra interface).
     nics.forEach((n) => {
-      devices[n.name.trim()] = {
+      const device: Record<string, string> = {
         type: "nic",
         network: n.network,
         name: n.name.trim(),
       };
+      const fixed = (n.ipv4Address ?? "").trim();
+      if (fixed) device["ipv4.address"] = fixed;
+      devices[n.name.trim()] = device;
     });
     // GPU passthrough devices (physical), keyed by device name.
     gpus.forEach((g) => {
@@ -1700,10 +1735,14 @@ export function InstanceCreateForm() {
                       </Select>
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">
+                      <Label
+                        className="text-xs text-muted-foreground"
+                        htmlFor={`nic-name-${nic.id}`}
+                      >
                         Interface name
                       </Label>
                       <Input
+                        id={`nic-name-${nic.id}`}
                         value={nic.name}
                         onChange={(e) =>
                           updateNic(nic.id, { name: e.target.value })
@@ -1720,6 +1759,64 @@ export function InstanceCreateForm() {
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
+                    <div className="sm:col-span-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id={`nic-static-${nic.id}`}
+                          checked={nic.ipv4Address !== undefined}
+                          onCheckedChange={(checked) =>
+                            updateNic(nic.id, {
+                              ipv4Address: checked ? "" : undefined,
+                            })
+                          }
+                        />
+                        <Label
+                          htmlFor={`nic-static-${nic.id}`}
+                          className="text-xs font-normal"
+                        >
+                          Assign a fixed IPv4 address
+                        </Label>
+                      </div>
+                      {nic.ipv4Address !== undefined && (
+                        <div className="space-y-1">
+                          <Label
+                            className="text-xs text-muted-foreground"
+                            htmlFor={`nic-ipv4-${nic.id}`}
+                          >
+                            IPv4 address
+                          </Label>
+                          <Input
+                            id={`nic-ipv4-${nic.id}`}
+                            value={nic.ipv4Address}
+                            onChange={(e) =>
+                              updateNic(nic.id, { ipv4Address: e.target.value })
+                            }
+                            placeholder={
+                              subnetOf(networksByName.get(nic.network)?.config) ??
+                              "No subnet on this network"
+                            }
+                            aria-invalid={!!nicAddressError(nic)}
+                            aria-describedby={
+                              nicAddressError(nic)
+                                ? `nic-ipv4-error-${nic.id}`
+                                : undefined
+                            }
+                          />
+                          {nicAddressError(nic) ? (
+                            <p
+                              id={`nic-ipv4-error-${nic.id}`}
+                              className="text-xs text-destructive"
+                            >
+                              {nicAddressError(nic)}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">
+                              Leave empty to let DHCP choose.
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 ))}
                 {!nicsValid && nics.length > 0 && (
