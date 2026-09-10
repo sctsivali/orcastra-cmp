@@ -201,6 +201,24 @@ function InstancesContent() {
   // Hide placeholders that already resolved to a real row (avoids a duplicate).
   const visiblePendingCreates = pendingCreates.filter((p) => !isResolved(p));
 
+  // important: isStalePending compares against Date.now() and is only read during a render,
+  // and nothing here renders on a clock. useInstances runs with realtime, which sets
+  // refetchInterval false, refetchOnWindowFocus is off by house config, and the only other
+  // render sources are a stream frame or the operator clicking something. In the very case the
+  // expiry exists for, a create LXD refused in the background, none of those arrive by
+  // definition: the missing signal IS the premise. So the row kept animating "Creating..."
+  // past the ten-minute mark until something unrelated happened to re-render the page.
+  // One tick while a live placeholder is on screen, and nothing when the list is quiet.
+  const [, forceStaleCheck] = useState(0);
+  const hasLivePlaceholder = visiblePendingCreates.some(
+    (p) => p.status !== "Error" && !isStalePending(p),
+  );
+  useEffect(() => {
+    if (!hasLivePlaceholder) return;
+    const id = setInterval(() => forceStaleCheck((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [hasLivePlaceholder]);
+
 
   const startInstance = useStartInstance();
   const stopInstance = useStopInstance();
@@ -545,10 +563,16 @@ function InstancesContent() {
                       emptyLabel="No IP addresses"
                       itemLabel="IP address"
                     />
-                    {instance.ip_addresses?.length ? (
-                      <TableSubText>
-                        {hasFixedAddress(instance) ? "Static" : "DHCP"}
-                      </TableSubText>
+                    {/* The allocation label the audit asked for (ch 5.1.2). It must not be
+                        gated on a live address: ip_addresses is populated only for a running
+                        instance, so gating on it hid the label in exactly the case the label
+                        exists for, a stopped instance whose address is pinned and which an
+                        operator is reconciling against an IPAM catalogue. A pinned address is
+                        a property of the device, not of the instance being up. */}
+                    {hasFixedAddress(instance) ? (
+                      <TableSubText>Static</TableSubText>
+                    ) : instance.ip_addresses?.length ? (
+                      <TableSubText>DHCP</TableSubText>
                     ) : null}
                   </TableCell>
                   <TableCell>

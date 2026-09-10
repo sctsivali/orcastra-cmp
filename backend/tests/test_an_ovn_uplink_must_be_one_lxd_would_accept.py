@@ -178,3 +178,26 @@ class TestRestrictedUplinks:
             validate_uplink(ovn("lo"), ECOBYTES_NETWORKS, self.RESTRICTED)
         assert "br-uplink" in exc.value.detail
         assert "uplink," not in exc.value.detail
+
+
+def test_both_write_paths_validate_the_uplink():
+    """A ratchet, because create was guarded and update was not.
+
+    `network` is in ALLOWED_NETWORK_CONFIG_KEYS, so PUT /networks/{name} could set an OVN
+    uplink LXD refuses while POST /networks refused the identical value. The audit filed that
+    defect (BUG-ORC-006); guarding only the create left it reachable through the other door.
+    """
+    import ast
+    import pathlib
+
+    router = pathlib.Path(__file__).resolve().parents[1] / "app" / "routers" / "networks.py"
+    tree = ast.parse(router.read_text())
+    writers = {"create_network", "update_network"}
+    seen = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in writers:
+            seen[node.name] = "validate_uplink" in ast.unparse(node)
+    missing_handler = writers - set(seen)
+    assert not missing_handler, f"handler not found, renamed? {missing_handler}"
+    unguarded = sorted(name for name, ok in seen.items() if not ok)
+    assert unguarded == [], f"these write an uplink without validating it: {unguarded}"

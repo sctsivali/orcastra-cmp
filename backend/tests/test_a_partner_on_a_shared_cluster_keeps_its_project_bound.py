@@ -206,6 +206,10 @@ def test_every_project_spanning_list_applies_the_bound():
         "profiles.py": "list_profiles",
         "network_acls.py": "list_network_acls",
         "instances.py": "list_instances",
+        # /vms is a SECOND live instance list. Naming the four above by hand is what let it
+        # ship unbounded after the other four were fixed, which is why the discovery check
+        # below exists as well.
+        "vms.py": "list_vms",
     }
     missing = []
     for filename, func in expected.items():
@@ -219,3 +223,58 @@ def test_every_project_spanning_list_applies_the_bound():
         if not found:
             missing.append(f"{filename}:{func} (handler not found, rename?)")
     assert missing == [], f"these span projects without applying the bound: {missing}"
+
+
+# Handlers that filter with the tenant ACL alone and are NOT a bound violation, each with the
+# reason it is exempt. Read before adding to this: the bar is that the handler emits no
+# per-row identity, only a total. A handler that names an instance, a network or a project
+# does not belong here.
+AGGREGATE_ONLY = {
+    # Returns None for anyone without a tenant ACL, so it never narrows a Partner in the first
+    # place, and it answers with image fingerprints, which are a cluster-level artifact.
+    "_allowed_image_fingerprints_by_host",
+    # These three sum counters. get_network_metrics keys its totals by interface name (eth0),
+    # not by instance, and the dashboard and node metrics emit host-level figures. A Partner on
+    # a shared cluster sees totals that include another organization's traffic, which is a
+    # property of the host being shared, not a disclosure of what runs on it.
+    "get_monitoring_dashboard",
+    "get_node_metrics",
+    "get_network_metrics",
+}
+
+
+def test_the_tenant_acl_is_never_the_only_project_filter():
+    """Discovery, not a list, because a hand-kept list is how /vms was missed.
+
+    `check_tenant_permission` returns True whenever the tenant ACL is None, and it is always
+    None for an Admin and for a Partner (`org_scope.get_tenant_acl_rules`). So a handler that
+    filters rows with it ALONE applies no project bound to a Partner at all. Any such handler
+    must pair it with `project_is_visible`.
+    """
+    import ast
+    import pathlib
+
+    app = pathlib.Path(__file__).resolve().parents[1] / "app"
+    lonely = []
+    for path in sorted(app.rglob("*.py")):
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            body = ast.unparse(node)
+            if "check_tenant_permission(" not in body:
+                continue
+            # a per-row filter, not a single-resource authorization check
+            if not any(k in body for k in ("for vm in", "for instance in", "for row in")):
+                continue
+            if "project_is_visible" not in body:
+                if node.name in AGGREGATE_ONLY:
+                    continue
+                lonely.append(f"{path.relative_to(app.parent)}:{node.lineno} {node.name}")
+    assert lonely == [], (
+        "these filter rows with the tenant ACL alone, which is no bound for a Partner: "
+        + ", ".join(lonely)
+    )
