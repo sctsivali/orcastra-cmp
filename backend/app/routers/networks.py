@@ -24,6 +24,7 @@ from app.core.org_scope import (
     get_scope_cache_key,
     project_is_visible,
 )
+from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 from app.services.lxd.project_scope import (
     DEFAULT_PROJECT,
     list_across_projects,
@@ -105,6 +106,11 @@ _NETWORK_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
 # out of 23 offered. Choosing one produced a failure at the daemon, or an instance that never
 # finished creating (BUG-ORC-006, and BUG-ORC-002 downstream of it).
 OVN_UPLINK_TYPES = frozenset({"bridge", "physical"})
+
+# Network types that carry member-specific config on a cluster, and so must be defined on
+# every member (POST ?target=) before the cluster-wide create. OVN is the one type without
+# any, and LXD refuses the define step for it. See create_network.
+MEMBER_DEFINED_NETWORK_TYPES = frozenset({"bridge", "macvlan", "physical", "sriov"})
 
 
 def _uplink_candidates(client, host: str) -> Dict[str, Dict]:
@@ -236,32 +242,10 @@ def _sanitize_error(message: str, limit: int = 300) -> str:
     return _SENSITIVE_RE.sub("[redacted]", message or "").strip()[:limit]
 
 
-def _is_clustered(client) -> bool:
-    """True when the LXD host is a multi-member cluster.
-
-    On a cluster, network creation is two-phase (define per member, then create
-    cluster-wide). Unknown/unsupported -> treat as standalone (previous behavior).
-    """
-    try:
-        meta = client.api.cluster.get().json().get("metadata", {}) or {}
-        if not meta.get("enabled"):
-            return False
-        return len(_cluster_member_names(client)) > 1
-    except Exception as e:
-        logger.debug(f"Could not determine cluster state, assuming standalone: {e}")
-        return False
-
-
-def _cluster_member_names(client) -> List[str]:
-    """Member names from /1.0/cluster/members (returns URLs at recursion=0)."""
-    members = client.api.cluster.members.get().json().get("metadata", []) or []
-    names = []
-    for m in members:
-        if isinstance(m, str):
-            names.append(m.rstrip("/").rsplit("/", 1)[-1])
-        elif isinstance(m, dict) and m.get("server_name"):
-            names.append(m["server_name"])
-    return names
+# note: module-level aliases, not direct imports at the call sites. create_network resolves
+# these by name at call time, which is what lets a test swap the cluster shape.
+_is_clustered = is_clustered
+_cluster_member_names = cluster_member_names
 
 
 def _lxd_http_error(exc: Exception, network_name: str) -> HTTPException:
@@ -608,11 +592,18 @@ async def create_network(
         )
         scope = project_params(owner)
 
-        if _is_clustered(client):
+        if _is_clustered(client) and request.type in MEMBER_DEFINED_NETWORK_TYPES:
             # Clustered LXD: a network must first be DEFINED on every member
             # (POST ?target=<member>, member-scoped, no cluster-wide config) and
             # then CREATED cluster-wide (POST with no target). pylxd 2.4.1's
             # networks.create() has no target parameter, so drive the raw API.
+            #
+            # important: only for the types that carry member-specific config. An OVN
+            # network is a cluster-wide object with none, and the daemon refuses the define
+            # step outright: 'Network type "ovn" does not support member specific config'.
+            # Measured against a 3-member MicroCloud: every OVN create from the console
+            # answered 400 while a bridge went through, so the one network type a MicroCloud
+            # tenant can create in its project was the one it could not create.
             for member in _cluster_member_names(client):
                 client.api.networks.post(
                     json={"name": request.name, "type": request.type},
