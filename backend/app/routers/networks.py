@@ -577,6 +577,21 @@ async def create_network(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this project")
 
+        # important: LXD refuses any network type except OVN in a project other than default,
+        # with "Network type does not support non-default projects". Verified against LXD 6.9
+        # on nuc1. Saying so here is the difference between an operator learning the rule and
+        # an operator reading a daemon string, and it is why a project-scoped network in the
+        # partner's cluster is an OVN one.
+        if owner != DEFAULT_PROJECT and request.type != "ovn":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Only OVN networks can be created in project '{owner}'. A "
+                    f"{request.type} network always lives in the default project, which is "
+                    "also where an OVN network looks for its uplink."
+                ),
+            )
+
         validate_uplink(
             request,
             _uplink_candidates(client, host),
