@@ -14,6 +14,7 @@ and it can name its network with `parent` instead of `network`.
 import pytest
 
 from app.services.lxd.nic_preflight import (
+    check_address_for_network,
     NicPreflightError,
     check_nics,
     collect_nics,
@@ -256,6 +257,23 @@ class TestNotInventingRefusals:
                 client, None, {"eth0": {"type": "nic", "network": "docker0"}}, ["default"]
             )
         assert "does not manage" in str(exc.value)
+
+    def test_the_single_address_check_refuses_an_unmanaged_network_the_same_way(self):
+        """The two entry points must agree, or the same mistake reads differently.
+
+        LXD lists a bare host interface as an unmanaged network, so a NIC whose `parent` is one
+        resolves and then fails whatever test comes next. Judged on its subnet it reports having
+        none, which is true and sends the operator looking for a subnet to add.
+        """
+        client = FakeClient(
+            projects={DEFAULT_PROJECT: {}},
+            networks={DEFAULT_PROJECT: [{"name": "enp86s0", "managed": False, "config": {}}]},
+            profiles={DEFAULT_PROJECT: [{"name": "default", "devices": {}}]},
+        )
+        with pytest.raises(NicPreflightError) as exc:
+            check_address_for_network(client, None, "enp86s0", "10.0.5.42")
+        assert "does not manage" in str(exc.value)
+        assert "no IPv4 subnet" not in str(exc.value)
 
     def test_a_create_with_no_nic_at_all_is_left_alone(self):
         check_nics(client_with_isolated_project(), "UAT-Hermes", {}, ["default"])

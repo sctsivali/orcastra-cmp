@@ -204,6 +204,16 @@ def check_address_for_network(
         raise NicPreflightError(
             f"Network '{network_name}' does not exist in project '{project}'."
         )
+    # important: LXD lists a bare host interface as an unmanaged network, so a NIC whose
+    # `parent` is one (a macvlan off `enp86s0`, which is what a stock default profile hands
+    # out) resolves here and then fails the subnet test below. That refusal is correct but
+    # names the wrong reason, and it invites an operator to go looking for a subnet to add.
+    # The create-time check already says this properly; say the same thing here.
+    if not row.get("managed"):
+        raise NicPreflightError(
+            f"Interface is attached to '{network_name}', which LXD does not manage, so an "
+            "address cannot be reserved for it. Attach it to a managed network first."
+        )
 
     subnet = _subnet_of(row)
     if subnet is None:
