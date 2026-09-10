@@ -453,7 +453,16 @@ export function InstanceCreateForm() {
     secBaseHostId: "",
     secIdmapSize: "",
     secUniqueIdmap: "",
-    // Default OFF: most community VM images aren't Secure Boot signed.
+    // Default OFF, because most community VM images are not Secure Boot signed.
+    //
+    // important: this is the one advanced key deliberately NOT left to inherit, and the
+    // compatibility problem it causes is solved in the backend rather than here. Measured on a
+    // live LXD 5.21.7 cluster: Alpine and the daily Ubuntu builds create fine without this key
+    // and then refuse to start with "The image used by this instance is incompatible with
+    // secureboot", while LXD 6.9 refuses the key outright and fails the create. Neither
+    // always-send nor never-send is right, and which one applies is a property of the target
+    // cluster, so services/lxd/instance.py drops it for the versions that refuse it. Only
+    // signed release images carry image.requirements.secureboot=false and cope unaided.
     secSecureboot: "false",
     secCsm: "",
     // Snapshots
