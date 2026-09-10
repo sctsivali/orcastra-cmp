@@ -20,6 +20,7 @@ import logging
 from typing import Any, Dict, Optional, Tuple
 from app.core.lxd_names import safe_segment
 from app.services.lxd.nic_preflight import managed_network_of
+from app.services.lxd.utils import wait_for_lxd_operation
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,13 @@ def set_nic_address_sync(
     put_kwargs = {"json": payload, "params": params}
     if etag:
         put_kwargs["headers"] = {"If-Match": etag}
-    client.api.instances[safe_segment(name)].put(**put_kwargs)
+    written = client.api.instances[safe_segment(name)].put(**put_kwargs)
+    # important: an instance PUT is an ASYNC LXD operation. It answers 202 with an operation id
+    # and does the work afterwards, so returning here reports a refusal as a success: the
+    # operator is told the address is reserved while the background job failed on a DHCP-less
+    # network, an address already leased, or a device LXD will not accept. Wait for the
+    # operation and let its error surface.
+    wait_for_lxd_operation(client, written, timeout=30)
     if inherited:
         logger.info(
             "Overrode profile-inherited device %s on %s/%s", device_name, project, name

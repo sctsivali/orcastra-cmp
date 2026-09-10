@@ -186,3 +186,100 @@ class TestWritingItBack:
         client = FakeClient(rec)
         set_nic_address_sync(client, "db-1", "default", "eth0", "10.0.5.7")
         assert "architecture" not in client.writes[0][0]
+
+
+# ── the write is asynchronous, and a refusal must not read as a success ────────────────────────
+
+class _Resp:
+    def __init__(self, body, status=202):
+        self._body = body
+        self.status_code = status
+        self.headers = {}
+
+    def json(self):
+        return self._body
+
+
+class _OpNode:
+    def __init__(self, outcome):
+        self._outcome = outcome
+
+    @property
+    def wait(self):
+        return self
+
+    def get(self, params=None, timeout=None):
+        return _Resp({"metadata": self._outcome}, 200)
+
+
+class _AsyncPutClient:
+    """A daemon that answers the device PUT the way LXD really does: 202 plus an operation."""
+
+    def __init__(self, outcome):
+        self.outcome = outcome
+        self.waited = []
+        client = self
+
+        class Instance:
+            def __init__(self, name):
+                self.name = name
+
+            def get(self, params=None, timeout=None):
+                return _Resp(
+                    {
+                        "metadata": {
+                            "devices": {"eth0": {"type": "nic", "network": "lxdbr0"}},
+                            "config": {},
+                            "profiles": ["default"],
+                            "architecture": "x86_64",
+                        }
+                    },
+                    200,
+                )
+
+            def put(self, json=None, params=None, timeout=None, headers=None):
+                return _Resp(
+                    {
+                        "type": "async",
+                        "operation": "/1.0/operations/abc-123",
+                        "metadata": {"id": "abc-123"},
+                    }
+                )
+
+        class Instances:
+            def __getitem__(self, name):
+                return Instance(name)
+
+        class Operations:
+            def __getitem__(self, op_id):
+                client.waited.append(op_id)
+                return _OpNode(client.outcome)
+
+        class Api:
+            instances = Instances()
+            operations = Operations()
+
+        self.api = Api()
+
+
+class TestTheWriteIsWaitedOn:
+    """LXD answers an instance PUT with 202 and does the work afterwards.
+
+    Returning at the 202 reported a refused write as a success: the console said the address
+    was reserved while the background job had failed, so the operator saw Static on a NIC that
+    was still on DHCP. Verified against nuc1, whose device PUT answers
+    `{"type":"async","status":"Operation created",...,"operation":"/1.0/operations/..."}`.
+    """
+
+    def test_a_successful_operation_is_waited_for(self):
+        client = _AsyncPutClient({"status": "Success", "err": ""})
+        set_nic_address_sync(client, "db-1", "default", "eth0", "10.0.5.42")
+        assert client.waited == ["abc-123"], "the operation must be awaited, not assumed"
+
+    def test_a_failed_operation_is_raised_rather_than_reported_as_success(self):
+        client = _AsyncPutClient(
+            {"status": "Failure", "err": 'Cannot specify "ipv4.address" when DHCP is disabled'}
+        )
+        with pytest.raises(Exception) as exc:
+            set_nic_address_sync(client, "db-1", "default", "eth0", "10.0.5.42")
+        assert "LXDAPIException" in type(exc.value).__name__ or "ipv4.address" in str(exc.value)
