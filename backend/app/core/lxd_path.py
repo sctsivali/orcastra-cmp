@@ -14,9 +14,19 @@ The result is a request that passes every authorization check for the default pr
 executed against another one, on GET, PUT and DELETE alike. Verified end to end against the
 installed uvicorn, pylxd and requests rather than reasoned about.
 
-So every name that becomes a path segment goes through `safe_segment`, and the routes that
-accept one validate its shape first so an illegal name is a 400 rather than an escaped string
-LXD will reject anyway.
+So every name that becomes a path segment goes through `safe_segment`.
+
+note: this is the second mechanism against the same class, and deliberately so. `core/lxd_names`
+refuses a malformed name at the route boundary with a FastAPI pattern, which is the better
+answer where it applies because the refusal is a 422 before any client is built. It reaches six
+routers: instance snapshots, storage volumes, snapshot schedules, mobility and the snapshot
+fleet. The network, profile, network-ACL and instance routes it never reached, which is where
+the injection was still live, and encoding covers every call site rather than every route that
+someone remembered to annotate.
+
+Adding the boundary pattern to those routers as well is worth doing, and would turn a name LXD
+will 404 into a 422 that says why. It is a behaviour change on the error path, so it belongs in
+its own change rather than in a hotfix.
 """
 
 import re
