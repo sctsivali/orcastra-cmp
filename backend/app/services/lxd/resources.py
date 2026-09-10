@@ -24,6 +24,8 @@ from .node_resources import aggregate_microcloud_resources, build_node_resources
 from .exceptions import LXDOperationError
 from .freshness import LiveRead, read_resources
 
+from app.services.lxd.project_scope import list_instance_records
+
 logger = logging.getLogger(__name__)
 
 
@@ -155,7 +157,7 @@ class ResourceManager:
         """
         try:
             return build_gpu_inventory(
-                read_resources(client, node_name).body, client.instances.all()
+                read_resources(client, node_name).body, list_instance_records(client)[0]
             )
         except Exception as e:
             logger.warning(f"Error listing GPUs for {node_name}: {e}")
@@ -191,7 +193,7 @@ class ResourceManager:
             
             # get all running instances to calculate CPU usage
             try:
-                instances = client.instances.all()
+                instances, _ = list_instance_records(client)
                 cpu_used = 0
                 for instance in instances:
                     if instance.status == "Running":
@@ -363,7 +365,7 @@ class ResourceManager:
                 # GPU capacity, usage and card detail, all from the canonical inventory.
                 gpu_inv = GpuInventory.empty()
                 try:
-                    gpu_inv = build_gpu_inventory(live.body, client.instances.all())
+                    gpu_inv = build_gpu_inventory(live.body, list_instance_records(client)[0])
                 except Exception as gpu_err:
                     # A GPU read failure must not zero the node's CPU and memory.
                     logger.debug(f"Could not get GPU info for {node_name}: {gpu_err}")

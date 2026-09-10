@@ -29,6 +29,8 @@ from app.services.lxd_cert_manager import LXDCertificateManager
 from app.core.vault_client import VaultClient
 from app.core.config import get_settings
 
+from app.services.lxd.project_scope import list_instance_records
+
 logger = logging.getLogger(__name__)
 
 # Shared thread pool for blocking operations
@@ -312,7 +314,7 @@ class LXDService:
         data = self.resource_manager.get_node_resources(client, node_name, resources=live)
         gpu = GpuInventory.empty()
         try:
-            gpu = build_gpu_inventory(live.body, client.instances.all())
+            gpu = build_gpu_inventory(live.body, list_instance_records(client)[0])
         except Exception as e:
             logger.debug(f"Could not read GPU inventory for {node_name}: {e}")
         return build_node_resources(data, gpu)

@@ -632,6 +632,14 @@ class MemberResources(BaseModel):
     storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
     instances_count: int = Field(0, description="Number of instances on this member")
     instances_running: int = Field(0, description="Number of running instances")
+    instances_partial: bool = Field(
+        False,
+        description=(
+            "True when the instance read could not cover every project, so the counts and "
+            "the GPU allocation below them are a floor rather than a total. An undercount "
+            "reads as free capacity, so it is never reported silently."
+        ),
+    )
     collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
 
 

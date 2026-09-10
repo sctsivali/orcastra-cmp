@@ -33,7 +33,9 @@ class _Endpoint:
     def __init__(self, handler) -> None:
         self._handler = handler
 
-    def get(self, params: Dict[str, Any] = None) -> _Response:
+    def get(self, params: Dict[str, Any] = None, timeout: Any = None) -> _Response:
+        # timeout is accepted because the real _APINode takes one, and the all-projects read
+        # passes it explicitly rather than inheriting the pooled socket budget.
         return _Response(self._handler(params or {}))
 
 
@@ -41,11 +43,33 @@ class FakeClient:
     """The subset of pylxd.Client the aggregation touches."""
 
     def __init__(self, members: List[Dict[str, Any]], per_member: Dict[str, Any], instances: List[Any]) -> None:
-        self.host_info = {"environment": {"server_clustered": True, "server_name": members[0]["server_name"]}}
+        self.host_info = {
+            "environment": {"server_clustered": True, "server_name": members[0]["server_name"]},
+            # the aggregation reads every project in one request where the daemon says it can
+            "api_extensions": ["instance_all_projects"],
+        }
         self._members = members
         self._per_member = per_member
-        self.instances = SimpleNamespace(all=lambda: list(instances))
+        self._instances = list(instances)
+        self.instance_reads = 0
         self.api = _Api(self)
+
+    def _instance_rows(self) -> List[Dict[str, Any]]:
+        """What GET /1.0/instances?recursion=2&all-projects=true returns."""
+        self.instance_reads += 1
+        return [
+            {
+                "name": i.name,
+                "project": getattr(i, "project", "default"),
+                "location": i.location,
+                "status": i.status,
+                "config": i.config,
+                "devices": i.devices,
+                "expanded_config": getattr(i, "expanded_config", i.config),
+                "expanded_devices": getattr(i, "expanded_devices", i.devices),
+            }
+            for i in self._instances
+        ]
 
 
 class _Api:
@@ -59,6 +83,8 @@ class _Api:
         )
 
     def __getitem__(self, key: str) -> _Endpoint:
+        if key == "instances":
+            return _Endpoint(lambda params: {"metadata": self._client._instance_rows()})
         # storage-pools and friends: nothing this test asserts on
         return _Endpoint(lambda params: {"metadata": []})
 
@@ -155,17 +181,16 @@ def test_an_unclustered_node_is_refused_rather_than_guessed() -> None:
 
 
 def test_the_instance_list_is_fetched_once_for_the_whole_cluster() -> None:
-    """It used to be fetched twice per member, so ten members meant twenty identical calls."""
-    calls = {"n": 0}
+    """It used to be fetched twice per member, so ten members meant twenty identical calls.
+
+    The read is now one all-projects request rather than pylxd's instances.all(), because the
+    latter only ever saw the default project. What has to stay true is the count: one read for
+    the cluster, however many members it has.
+    """
     client = _cluster()
-    real = client.instances.all
-
-    def counting_all():
-        calls["n"] += 1
-        return real()
-
-    client.instances = SimpleNamespace(all=counting_all)
 
     nr.aggregate_microcloud_resources(client, "microcloud", {})
 
-    assert calls["n"] == 1, f"instances.all() called {calls['n']} times"
+    assert client.instance_reads == 1, (
+        f"instance list read {client.instance_reads} times"
+    )

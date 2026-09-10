@@ -23,6 +23,7 @@ from app.models.schemas import (
 )
 
 from app.services.lxd.gpu import build_gpu_inventory
+from app.services.lxd.project_scope import list_instance_records
 from app.core.dependencies import require_tenant
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 
@@ -375,9 +376,20 @@ async def get_member_resources(
         instances_count = 0
         instances_running = 0
         instances = []
+        instances_partial = False
 
         try:
-            instances = client.instances.all()
+            # important: this used to be client.instances.all() on the pooled client, which
+            # pylxd binds to the default project, so a member running work in any other
+            # project was counted as running almost nothing. The audit recorded 1 of 1 on a
+            # member holding 44. The same list feeds build_gpu_inventory below, so the GPU
+            # allocation was undercounted by exactly the same margin, and an undercount there
+            # reads as spare capacity.
+            #
+            # It was also recursion 0, so every attribute read below cost its own round trip.
+            # One recursion=2 all-projects read replaces N+1 requests.
+            instances, complete = list_instance_records(client)
+            instances_partial = not complete
             for instance in instances:
                 instance_location = getattr(instance, 'location', '')
                 if instance_location == member_name:
@@ -406,7 +418,12 @@ async def get_member_resources(
                             cpu_used += 1
                         
         except Exception as usage_err:
-            logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
+            # important: a failed read here is not "no instances". Reporting zero would show
+            # a busy member as empty capacity, so the counts are marked as a floor.
+            logger.warning(
+                f"Could not calculate usage for member {member_name}: {usage_err}"
+            )
+            instances_partial = True
         
         # GPU capacity, allocation and card detail from the canonical inventory, scoped to
         # this member. Counting cards here by hand is what made this endpoint report two GPUs
@@ -447,6 +464,7 @@ async def get_member_resources(
             storage_pools=storage_pools,
             instances_count=instances_count,
             instances_running=instances_running,
+            instances_partial=instances_partial,
             collected_at=collected_at,
         )
         

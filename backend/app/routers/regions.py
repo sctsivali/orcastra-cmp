@@ -24,6 +24,8 @@ from app.models.schemas import (
 from app.services.lxd.freshness import read_resources
 from app.services.lxd.gpu import build_gpu_inventory
 
+from app.services.lxd.project_scope import list_instance_records
+
 logger = logging.getLogger(__name__)
 from app.core.dependencies import require_tenant
 from app.services.lxd.hardware import (
@@ -290,7 +292,11 @@ async def get_regions_overview(
                                         pass
                             
                                     try:
-                                        instances = client.instances.all()
+                                        # every project: the pooled client is bound to
+                                        # default, and the ACL check just below reads
+                                        # instance.project, which a default-scoped
+                                        # recursion-0 listing never carries.
+                                        instances, _ = list_instance_records(client)
                                         visible_instances = [
                                             instance for instance in instances
                                             if tenant_acl_has_permission(

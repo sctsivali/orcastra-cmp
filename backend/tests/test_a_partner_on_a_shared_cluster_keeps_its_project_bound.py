@@ -16,7 +16,7 @@ and an Admin is gated by break-glass at the cluster level.
 
 import asyncio
 import contextvars
-from typing import Any, List, Optional
+from typing import Any, List
 
 import pytest
 

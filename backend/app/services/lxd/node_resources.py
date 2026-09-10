@@ -16,6 +16,8 @@ from app.models.schemas import NodeResources
 from .gpu import GpuInventory, build_gpu_inventory
 from .hardware import build_hardware_profile, merge_hardware_profiles
 
+from app.services.lxd.project_scope import list_instance_records
+
 logger = logging.getLogger(__name__)
 
 
@@ -148,10 +150,13 @@ def aggregate_microcloud_resources(
             # important: fetched once for the whole cluster. The per-member loop used to
             # call instances.all() twice per member, so a ten-member cluster made twenty
             # identical round trips to build one number.
+            # note: every project, not just default. The pooled client is bound to default,
+            # so this counted a fraction of a busy cluster and fed that fraction to the GPU
+            # allocation below it.
             try:
-                cluster_instances = client.instances.all()
+                cluster_instances, _complete = list_instance_records(client)
             except Exception as inst_err:
-                logger.debug(f"Could not list instances for {node_name}: {inst_err}")
+                logger.warning(f"Could not list instances for {node_name}: {inst_err}")
                 cluster_instances = []
             
             # Get current server name to identify which member we're connected to
