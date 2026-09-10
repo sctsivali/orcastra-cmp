@@ -244,18 +244,16 @@ async def get_cluster_member(
         response = client.api.cluster.members[safe_segment(member_name)].get()
         member_data = response.json().get("metadata", {})
         
-        # Parse roles
-        roles = []
-        if member_data.get("database", False):
-            roles.append("database-leader" if member_data.get("database") else "database")
-        
+        # important: LXD reports roles itself, as the list endpoint above already reads them.
+        # Deriving them from the `database` flag named every database member the leader,
+        # which is how a 3-member MicroCloud read as three leaders on the member page.
         return ClusterMember(
             server_name=member_data.get("server_name", member_name),
             url=member_data.get("url", ""),
             database=member_data.get("database", False),
             status=member_data.get("status", "Online"),
             message=member_data.get("message", "Fully operational"),
-            roles=roles,
+            roles=member_data.get("roles", []) or [],
             architecture=member_data.get("architecture"),
             failure_domain=member_data.get("failure_domain", "default"),
             description=member_data.get("description"),
