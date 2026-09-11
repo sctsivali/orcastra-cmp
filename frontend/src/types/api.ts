@@ -1349,12 +1349,78 @@ export interface MonitoringDashboardResponse {
 // System Resource Usage Types
 // ========================
 
+/** Cgroup limits and usage of the backend container itself. `memory`, `cpu` and `workers`
+ *  are the detailed reads; the flat `memory_limit`/`cpu_limit` stay for older clients. */
+export interface ContainerMemory {
+  limit: number | null;
+  current: number | null;
+  anon: number | null;
+  file: number | null;
+  /** current minus reclaimable page cache: the figure docker stats prints. */
+  used: number | null;
+  percent: number | null;
+}
+
+export interface ContainerCPU {
+  /** CPUs the cgroup quota allows, null when unlimited. */
+  limit: number | null;
+  usage_usec: number | null;
+  /** Percent of the quota over `window_seconds`, null on the first read of a worker. */
+  percent: number | null;
+  window_seconds: number | null;
+  nr_throttled: number | null;
+  throttled_usec: number | null;
+}
+
+export interface WorkerInfo {
+  pid: number;
+  memory_rss: number;
+  uptime_seconds: number;
+}
+
+export interface WorkersInfo {
+  count: number;
+  /** WEB_CONCURRENCY as configured, null when unset. */
+  expected: number | null;
+  answering_pid: number;
+  master_pid: number | null;
+  master_uptime_seconds: number | null;
+  total_rss: number;
+  workers: WorkerInfo[];
+}
+
 export interface ContainerInfo {
   is_containerized: boolean;
   runtime: string;
   cgroup_version: string | null;
   memory_limit: number | null;
   cpu_limit: number | null;
+  container_id: string | null;
+  memory: ContainerMemory | null;
+  cpu: ContainerCPU | null;
+  workers: WorkersInfo | null;
+}
+
+/** One host filesystem, with every mountpoint the container reaches it through. */
+export interface HostFilesystem {
+  device: string;
+  fstype: string;
+  mountpoints: string[];
+  total: number;
+  used: number;
+  free: number;
+  percent: number;
+}
+
+/** The kernel's view of the machine the backend runs on: on an LXD virtual machine, the VM. */
+export interface HostInfo {
+  cpu: CPUInfo;
+  memory: MemoryInfo;
+  filesystems: HostFilesystem[];
+  boot_time: string;
+  uptime_seconds: number;
+  is_virtual_machine: boolean | null;
+  platform_vendor: string | null;
 }
 
 export interface CPUInfo {
@@ -1430,6 +1496,9 @@ export interface OSInfo {
   uptime_seconds: number;
 }
 
+// note: `cpu`, `memory`, `disks`, `process` and `os` predate the split into scopes and mix them
+// (cgroup counts and limits beside host-wide percent, load and uptime). They stay for older
+// clients; new consumers read `host` and `container`.
 export interface SystemResourceUsage {
   timestamp: string;
   container: ContainerInfo | null;
@@ -1440,6 +1509,10 @@ export interface SystemResourceUsage {
   process: ProcessInfo | null;
   python: PythonInfo;
   os: OSInfo;
+  /** The kernel's view; null from a backend older than this field. */
+  host: HostInfo | null;
+  /** Which namespace `network` describes: the container's when containerised. */
+  network_scope: "container" | "host";
 }
 
 // ========================
