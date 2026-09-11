@@ -10,6 +10,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.fanout import NodeRead, collect
+from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -74,76 +76,52 @@ class NetworkACLCreateRequest(BaseModel):
     config: Dict[str, str] = Field(default_factory=dict, description="ACL configuration")
 
 
-class NetworkACLListResponse(BaseModel):
+class NetworkACLListResponse(FanoutReachability):
     """Response for listing network ACLs."""
     total: int = Field(..., description="Total number of ACLs")
     acls: List[NetworkACLInfo] = Field(..., description="List of network ACLs")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
-    )
-    partial_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that answered but could not be read for every project, so their entries "
-            "may be incomplete. A short list is never presented as the whole truth."
-        ),
-    )
 
 
 def _fetch_acls_for_node(
     lxd_service: LXDService, node_name: str, project: Optional[str] = None
-) -> tuple[List[NetworkACLInfo], bool]:
+) -> NodeRead[NetworkACLInfo]:
     """Fetch network ACLs for a single node - runs in thread pool.
 
-    Returns (acls, complete). LXD scopes network ACLs by project and gives them no feature
-    key of their own, so they follow features.networks: a project holding its own networks
-    holds its own ACLs too.
+    LXD scopes network ACLs by project and gives them no feature key of their own, so they
+    follow features.networks: a project holding its own networks holds its own ACLs too. A
+    read that could not cover every project is a partial read; a listing that failed
+    propagates and the caller names the cluster.
     """
-    acls: List[NetworkACLInfo] = []
-    complete = True
-    try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        if client is None:
-            # important: unreachable is not empty. Without this the next line
-            # raises AttributeError on None, which the generic handler below
-            # turns into a partial result and the node is never named.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        if project:
-            owner = resolve_owner(client, "network-acls", project)
-            rows = list_in_project(client, "network-acls", owner)
-        else:
-            rows, complete = list_across_projects(client, "network-acls")
-        for acl_data in rows:
-            try:
-                acls.append(NetworkACLInfo(
-                    name=acl_data.get('name', ''),
-                    description=acl_data.get('description', ''),
-                    ingress=acl_data.get('ingress', []),
-                    egress=acl_data.get('egress', []),
-                    config=acl_data.get('config', {}),
-                    used_by=acl_data.get('used_by', []),
-                    node=node_name,
-                    project=acl_data.get('project') or DEFAULT_PROJECT,
-                ))
-            except Exception as e:
-                # important: not unreachability. See networks.py: an item
-                # vanishing mid-listing must not condemn the whole node.
-                logger.warning(f"Error parsing ACL data on {node_name}: {e}")
-                complete = False
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing network ACLs on {node_name}: {e}")
-        complete = False
-    return acls, complete
+    client = lxd_service.connection_manager.get_client(node_name)
+    if client is None:
+        # important: unreachable is not empty. Without this the next line
+        # raises AttributeError on None, which the generic handler below
+        # turns into a partial result and the node is never named.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    read: NodeRead[NetworkACLInfo] = NodeRead()
+    if project:
+        owner = resolve_owner(client, "network-acls", project)
+        rows = list_in_project(client, "network-acls", owner)
+    else:
+        rows, complete = list_across_projects(client, "network-acls")
+        if not complete:
+            read.lost("not every project could be read")
+    for acl_data in rows:
+        try:
+            read.rows.append(NetworkACLInfo(
+                name=acl_data.get('name', ''),
+                description=acl_data.get('description', ''),
+                ingress=acl_data.get('ingress', []),
+                egress=acl_data.get('egress', []),
+                config=acl_data.get('config', {}),
+                used_by=acl_data.get('used_by', []),
+                node=node_name,
+                project=acl_data.get('project') or DEFAULT_PROJECT,
+            ))
+        except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+            read.lost(f"ACL {acl_data.get('name', '?')}: {type(exc).__name__}")
+    return read
 
 
 @router.get(
@@ -179,8 +157,6 @@ async def list_network_acls(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        all_acls = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -189,16 +165,11 @@ async def list_network_acls(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        partial_nodes: List[str] = []
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, tuple):
-                rows, complete = result
-                all_acls.extend(rows)
-                if not complete:
-                    partial_nodes.append(node_name)
-            elif isinstance(result, Exception):
-                logger.error(f"Error fetching network ACLs: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(
+            nodes_to_query, results, noun="network ACLs", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_acls = fan.rows
 
         # important: a Partner is scoped by cluster, not by project, and the used_by filter
         # below never runs for them. An ACL body is a firewall policy, so on a shared cluster
@@ -221,7 +192,8 @@ async def list_network_acls(
             acls=all_acls,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
-            partial_nodes=sorted(partial_nodes),
+            partial_nodes=sorted(fan.partial_nodes),
+            node_errors=fan.node_errors,
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

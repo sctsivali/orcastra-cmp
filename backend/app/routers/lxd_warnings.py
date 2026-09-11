@@ -9,7 +9,12 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from pylxd.exceptions import LXDAPIException
+
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.fanout import NodeRead, collect
+from app.models.schemas import FanoutReachability
+from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -47,75 +52,67 @@ class WarningInfo(BaseModel):
     status: str = Field("", description="Warning status")
 
 
-class WarningListResponse(BaseModel):
+class WarningListResponse(FanoutReachability):
     """Response for listing warnings."""
     total: int = Field(..., description="Total number of warnings")
     warnings: List[WarningInfo] = Field(..., description="List of warnings")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
-    )
 
 
-def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> List[WarningInfo]:
-    """Fetch warnings for a single node - runs in thread pool."""
-    warnings = []
+def _warning_rows(client) -> list:
+    """The cluster's warnings from every project, in one request where LXD allows it.
+
+    note: `/1.0/warnings` without `all-projects` answers about the default project only, so
+    a warning raised in a customer's project never reached the page. A daemon that does not
+    know the parameter answers 400; it is asked again without it.
+    """
     try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        if client is None:
-            # important: unreachable is not empty. Without this the next line
-            # raises AttributeError on None, which the generic handler below
-            # turns into a partial result and the node is never named.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        # Use recursion=1 to get full details in one call
+        response = client.api.warnings.get(
+            params={'recursion': '1', 'all-projects': 'true'}, timeout=(5, 30)
+        )
+    except LXDAPIException as exc:
+        if getattr(getattr(exc, "response", None), "status_code", None) != 400:
+            raise
         response = client.api.warnings.get(params={'recursion': '1'}, timeout=(5, 30))
-        if response.status_code == 200:
-            warnings_data = response.json().get('metadata', [])
-            for warning_detail in warnings_data:
-                try:
-                    # LXD returns "none" for standalone nodes - replace with actual node name
-                    raw_location = warning_detail.get('location', '')
-                    location = raw_location if raw_location and raw_location.lower() != "none" else node_name
-                    
-                    # LXD returns "default" for global warnings - keep it as is (it's the default project)
-                    project = warning_detail.get('project', '') or 'default'
-                    
-                    warnings.append(WarningInfo(
-                        uuid=warning_detail.get('uuid', ''),
-                        location=location,
-                        source_node=node_name,
-                        project=project,
-                        type=warning_detail.get('type', ''),
-                        count=warning_detail.get('count', 0),
-                        first_seen_at=warning_detail.get('first_seen_at', ''),
-                        last_seen_at=warning_detail.get('last_seen_at', ''),
-                        last_message=warning_detail.get('last_message', ''),
-                        severity=warning_detail.get('severity', ''),
-                        status=warning_detail.get('status', '')
-                    ))
-                except LXDConnectionError:
-                    # a missing client IS unreachability: let it through
-                    raise
-                except Exception as e:
-                    # important: not unreachability. See networks.py: an item
-                    # vanishing mid-listing must not condemn the whole node.
-                    logger.warning(f"Error parsing warning data on {node_name}: {e}")
-        elif response.status_code == 404:
-            logger.debug(f"Warnings endpoint not available on {node_name} (404 - older LXD version?)")
-        else:
-            logger.warning(f"Got status {response.status_code} for warnings on {node_name}")
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing warnings on {node_name}: {e}", exc_info=True)
-    return warnings
+    return response.json().get('metadata') or []
+
+
+def _fetch_warnings_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[WarningInfo]:
+    """Fetch warnings for a single node - runs in thread pool."""
+    client = lxd_service.connection_manager.get_client(node_name)
+    if client is None:
+        # important: unreachable is not empty. Without this the next line
+        # raises AttributeError on None, which the generic handler below
+        # turns into a partial result and the node is never named.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    read: NodeRead[WarningInfo] = NodeRead()
+    for warning_detail in _warning_rows(client):
+        if not isinstance(warning_detail, dict):
+            continue
+        try:
+            # LXD returns "none" for standalone nodes - replace with actual node name
+            raw_location = warning_detail.get('location', '')
+            location = raw_location if raw_location and raw_location.lower() != "none" else node_name
+
+            # LXD returns "default" for global warnings - keep it as is (it's the default project)
+            project = warning_detail.get('project', '') or 'default'
+
+            read.rows.append(WarningInfo(
+                uuid=warning_detail.get('uuid', ''),
+                location=location,
+                source_node=node_name,
+                project=project,
+                type=warning_detail.get('type', ''),
+                count=warning_detail.get('count', 0) or 0,
+                first_seen_at=warning_detail.get('first_seen_at', '') or '',
+                last_seen_at=warning_detail.get('last_seen_at', '') or '',
+                last_message=warning_detail.get('last_message', '') or '',
+                severity=warning_detail.get('severity', '') or '',
+                status=warning_detail.get('status', '') or ''
+            ))
+        except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+            read.lost(f"warning {warning_detail.get('uuid', '?')}: {type(exc).__name__}")
+    return read
 
 
 @router.get(
@@ -142,8 +139,6 @@ async def list_warnings(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        all_warnings = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -152,12 +147,11 @@ async def list_warnings(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, list):
-                all_warnings.extend(result)
-            elif isinstance(result, Exception):
-                logger.error(f"Error fetching warnings: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(
+            nodes_to_query, results, noun="warnings", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_warnings = fan.rows
 
         all_warnings = [
             warning for warning in all_warnings
@@ -169,6 +163,8 @@ async def list_warnings(
             warnings=all_warnings,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

@@ -9,7 +9,16 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from pylxd.exceptions import LXDAPIException
+
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.project_scope import (
+    ALL_PROJECTS_READ_TIMEOUT,
+    DEFAULT_PROJECT,
+    list_pool_volumes,
+)
+from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -48,6 +57,11 @@ class StorageVolumeInfo(BaseModel):
     used_by: List[str] = Field(default_factory=list, description="Resources using this volume")
     node: str = Field("", description="Node name where volume is defined")
     content_type: str = Field("", description="Content type")
+    project: str = Field(DEFAULT_PROJECT, description="Project that holds the volume")
+    location: str = Field(
+        "",
+        description="Cluster member that holds the volume; empty for a shared pool or a single host",
+    )
 
 
 class StorageVolumeCreateRequest(BaseModel):
@@ -60,63 +74,73 @@ class StorageVolumeCreateRequest(BaseModel):
     content_type: str = Field("filesystem", description="Content type")
 
 
-class StorageVolumeListResponse(BaseModel):
+class StorageVolumeListResponse(FanoutReachability):
     """Response for listing storage volumes."""
     total: int = Field(..., description="Total number of volumes")
     volumes: List[StorageVolumeInfo] = Field(..., description="List of storage volumes")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
+
+
+def _pool_names(client, pool_filter: Optional[str]) -> List[str]:
+    """The pools to read, from one recursion=0 listing (or the filter alone)."""
+    if pool_filter:
+        return [pool_filter]
+    response = client.api.storage_pools.get(
+        params={"recursion": 0}, timeout=ALL_PROJECTS_READ_TIMEOUT
     )
+    names: List[str] = []
+    for entry in response.json().get("metadata") or []:
+        if isinstance(entry, str):
+            names.append(entry.rstrip("/").rsplit("/", 1)[-1].split("?")[0])
+        elif isinstance(entry, dict) and entry.get("name"):
+            names.append(entry["name"])
+    return names
 
 
-def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter: Optional[str]) -> List[StorageVolumeInfo]:
-    """Fetch storage volumes for a single node - runs in thread pool."""
-    volumes_list = []
-    try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        if client is None:
-            # important: unreachable is not empty. See the sibling routers.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        # Get all storage pools
-        pools = client.storage_pools.all()
-        
-        for storage_pool in pools:
-            if pool_filter and storage_pool.name != pool_filter:
-                continue
-            
+def _fetch_volumes_for_node(
+    lxd_service: LXDService, node_name: str, pool_filter: Optional[str]
+) -> NodeRead[StorageVolumeInfo]:
+    """Every volume on one cluster, one request per pool. Runs in the thread pool.
+
+    important: pylxd's collection manager listed at recursion 0 in the default project and
+    then synced every volume one request at a time. On a clustered host a per-member pool
+    lists its volumes as `.../volumes/custom/backups?target=microcloud20`, which the sync
+    could not read, and the first refusal dropped the rest of that pool. Nothing is synced
+    now, every project is read, and a pool that cannot be read is named, not skipped.
+    """
+    client = lxd_service.connection_manager.get_client(node_name)
+    if client is None:
+        # important: unreachable is not empty. See the sibling routers.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    read: NodeRead[StorageVolumeInfo] = NodeRead()
+    for pool_name in _pool_names(client, pool_filter):
+        try:
+            rows, complete = list_pool_volumes(client, pool_name)
+        except LXDAPIException as exc:
+            # note: only LXD's own refusal is a per-pool problem; a transport error means the
+            # rest of the cluster cannot be read either and is classified by the caller.
+            read.lost(f"pool {pool_name}: LXD answered {getattr(exc.response, 'status_code', '?')}: "
+                      f"{' '.join(str(exc).split())[:200]}")
+            continue
+        if not complete:
+            read.lost(f"pool {pool_name}: not every project could be read")
+        for row in rows:
             try:
-                volumes = storage_pool.volumes.all()
-                for volume in volumes:
-                    volumes_list.append(StorageVolumeInfo(
-                        name=volume.name,
-                        type=volume.type,
-                        pool=storage_pool.name,
-                        description=getattr(volume, 'description', '') or "",
-                        config=volume.config or {},
-                        used_by=volume.used_by or [],
-                        content_type=getattr(volume, 'content_type', ''),
-                        node=node_name
-                    ))
-            except LXDConnectionError:
-                # a missing client IS unreachability: let it through
-                raise
-            except Exception as e:
-                # important: not unreachability. See networks.py: an item
-                # vanishing mid-listing must not condemn the whole node.
-                logger.warning(f"Error listing volumes in pool {storage_pool.name}: {e}")
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing storage volumes on {node_name}: {e}")
-    return volumes_list
+                read.rows.append(StorageVolumeInfo(
+                    name=row.get("name") or "",
+                    type=row.get("type") or "",
+                    pool=pool_name,
+                    description=row.get("description") or "",
+                    config=row.get("config") or {},
+                    used_by=row.get("used_by") or [],
+                    content_type=row.get("content_type") or "",
+                    node=node_name,
+                    project=row.get("project") or DEFAULT_PROJECT,
+                    location=row.get("location") or "",
+                ))
+            except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+                read.lost(f"volume {row.get('name', '?')} in pool {pool_name}: {type(exc).__name__}")
+    return read
 
 
 @router.get(
@@ -155,8 +179,6 @@ async def list_storage_volumes(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        all_volumes = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -165,14 +187,12 @@ async def list_storage_volumes(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        answered = 0
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, list):
-                answered += 1
-                all_volumes.extend(result)
-            elif isinstance(result, Exception):
-                logger.warning(f"Error fetching storage volumes: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(
+            nodes_to_query, results, noun="storage volumes", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_volumes = fan.rows
+        cacheable = fan.cacheable
 
         if tenant_acl_active():
             visible_volumes = []
@@ -188,14 +208,18 @@ async def list_storage_volumes(
             volumes=all_volumes,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
         
-        # important: an outage must not be remembered as the answer. See instances.py.
-        if answered:
+        # important: an outage must not be remembered as the answer, and neither may a
+        # partial one: a cluster that failed its listing was cached as "no volumes" for
+        # 180 seconds. See instances.py.
+        if cacheable:
             cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
             logger.debug("Cached storage volumes list for 180 seconds")
         else:
-            logger.warning("Not caching storage volumes list: no node answered")
+            logger.warning("Not caching storage volumes list: %s", fan.node_errors or "no node answered")
 
         return response
     except Exception as e:

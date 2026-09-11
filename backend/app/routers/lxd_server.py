@@ -10,6 +10,9 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.fanout import NodeRead, collect
+from app.models.schemas import FanoutReachability
+from app.core.tenant_visibility import tenant_acl_active
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -44,70 +47,61 @@ class ServerInfo(BaseModel):
     public: bool = Field(False, description="Whether server is public")
 
 
-class ServerListResponse(BaseModel):
+class ServerListResponse(FanoutReachability):
     """Response for listing server info."""
     servers: List[ServerInfo] = Field(..., description="List of server information")
     total: int = Field(..., description="Total number of servers")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
-    )
 
 
-def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> Optional[ServerInfo]:
-    """Fetch server info for a single node - runs in thread pool."""
+def _fetch_server_info_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[ServerInfo]:
+    """Server info for a single node - runs in thread pool.
+
+    important: a failure here is reported, not swallowed. The previous version returned None
+    on any error, and a node that returned None was in neither `servers` nor
+    `unreachable_nodes`, so the page rendered nothing and said nothing.
+    """
+    client = lxd_service.connection_manager.get_client(node_name)
+    if client is None:
+        # important: unreachable is not empty. Without this the next line
+        # raises AttributeError on None, which the generic handler below
+        # turns into a partial result and the node is never named.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    # Get server info from host_info property
+    server_data = client.host_info or {}
+
+    # Detect node type from api_extensions in the server response
+    # Build metadata dict similar to /1.0 endpoint response
+    metadata = {
+        "api_extensions": server_data.get('api_extensions', []),
+        "environment": server_data.get('environment') or {},
+    }
+    detected_type = detect_cluster_type_from_metadata(metadata)
+
+    # Also try to get from stored metadata as fallback
     try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        if client is None:
-            # important: unreachable is not empty. Without this the next line
-            # raises AttributeError on None, which the generic handler below
-            # turns into a partial result and the node is never named.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        # Get server info from host_info property
-        server_data = client.host_info
-        
-        # Detect node type from api_extensions in the server response
-        # Build metadata dict similar to /1.0 endpoint response
-        metadata = {
-            "api_extensions": server_data.get('api_extensions', []),
-            "environment": server_data.get('environment', {})
-        }
-        detected_type = detect_cluster_type_from_metadata(metadata)
-        
-        # Also try to get from stored metadata as fallback
-        try:
-            metadata_store = get_node_metadata_store()
-            stored_metadata = metadata_store.get_node(node_name)
-            if stored_metadata and stored_metadata.get("type"):
-                # Prefer stored type if it's more specific (ex;, explicitly set as Incus)
-                stored_type = stored_metadata.get("type", "").lower()
-                if stored_type == "incus":
-                    detected_type = "Incus"
-                elif stored_type == "microcloud":
-                    detected_type = "MicroCloud"
-        except Exception as e:
-            logger.debug(f"Could not get stored metadata for {node_name}: {e}")
-        
-        return ServerInfo(
-            node=node_name,
-            node_type=detected_type,
-            api_version=server_data.get('api_version', ''),
-            auth=server_data.get('auth', ''),
-            config=server_data.get('config', {}),
-            environment=server_data.get('environment', {}),
-            public=server_data.get('public', False)
-        )
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
+        metadata_store = get_node_metadata_store()
+        stored_metadata = metadata_store.get_node(node_name)
+        if stored_metadata and stored_metadata.get("type"):
+            # Prefer stored type if it's more specific (ex;, explicitly set as Incus)
+            stored_type = stored_metadata.get("type", "").lower()
+            if stored_type == "incus":
+                detected_type = "Incus"
+            elif stored_type == "microcloud":
+                detected_type = "MicroCloud"
     except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error getting server info from {node_name}: {e}")
-        return None
+        logger.debug(f"Could not get stored metadata for {node_name}: {e}")
+
+    # note: LXD renders `config` as null for an identity without can_edit on the server (a
+    # restricted certificate). That is still a server that answered.
+    return NodeRead(rows=[ServerInfo(
+        node=node_name,
+        node_type=detected_type,
+        api_version=server_data.get('api_version') or '',
+        auth=server_data.get('auth') or '',
+        config=server_data.get('config') or {},
+        environment=server_data.get('environment') or {},
+        public=bool(server_data.get('public', False)),
+    )])
 
 
 @router.get(
@@ -134,8 +128,6 @@ async def list_servers(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Filter out None and exceptions
-        all_servers = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -144,17 +136,18 @@ async def list_servers(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, ServerInfo):
-                all_servers.append(result)
-            elif isinstance(result, Exception):
-                logger.error(f"Error fetching server info: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(
+            nodes_to_query, results, noun="server information", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_servers = fan.rows
         
         return ServerListResponse(
             servers=all_servers,
             total=len(all_servers),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler

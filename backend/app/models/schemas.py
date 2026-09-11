@@ -107,6 +107,32 @@ class VMInfo(BaseModel):
         }
 
 
+class FanoutReachability(BaseModel):
+    """What a fan-out list could not read, cluster by cluster.
+
+    important: every field has a default. A payload cached by the previous build carries none
+    of them, and a required field would fail every cached read until its TTL expired.
+    """
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Clusters whose entries are missing from this list: never reached, refused, or "
+            "the listing itself failed. node_errors says which."
+        ),
+    )
+    partial_nodes: List[str] = Field(
+        default_factory=list,
+        description="Clusters that answered but lost some rows; node_errors names what was lost",
+    )
+    node_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Reason per cluster in unreachable_nodes or partial_nodes, prefixed with "
+            "unreachable:, forbidden:, error: or partial:. Empty for Tenant callers."
+        ),
+    )
+
+
 class VMListResponse(BaseModel):
     """Response for listing all VMs."""
     total: int = Field(..., description="Total number of VMs (before pagination)")

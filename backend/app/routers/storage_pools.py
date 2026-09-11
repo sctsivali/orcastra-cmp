@@ -14,6 +14,9 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
+from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT
+from app.models.schemas import FanoutReachability
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
@@ -82,48 +85,46 @@ class StoragePoolCreateRequest(BaseModel):
     config: Dict[str, str] = Field(default_factory=dict, description="Pool configuration")
 
 
-class StoragePoolListResponse(BaseModel):
+class StoragePoolListResponse(FanoutReachability):
     """Response for listing storage pools."""
     total: int = Field(..., description="Total number of pools")
     pools: List[StoragePoolInfo] = Field(..., description="List of storage pools")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
+
+
+def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[StoragePoolInfo]:
+    """Every storage pool on one cluster, in one request. Runs in the thread pool.
+
+    A storage pool is a cluster-wide object, so one recursion=1 listing carries every pool
+    with its driver, status and config; pylxd's manager listed at recursion 0 and synced each
+    pool afterwards. A failure of the listing itself propagates to the caller, which names the
+    cluster rather than reporting it as having no pools.
+    """
+    client = lxd_service.get_client_with_reconnect(node_name)
+    if client is None:
+        # important: unreachable is not empty. Returning a bare list here
+        # made a dead node indistinguishable from one with nothing.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    response = client.api.storage_pools.get(
+        params={"recursion": 1}, timeout=ALL_PROJECTS_READ_TIMEOUT
     )
-
-
-def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> List[StoragePoolInfo]:
-    """Fetch storage pools for a single node - runs in thread pool."""
-    pools_list = []
-    try:
-        client = lxd_service.get_client_with_reconnect(node_name)
-        if client is None:
-            # important: unreachable is not empty. Returning a bare list here
-            # made a dead node indistinguishable from one with nothing.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        pools = client.storage_pools.all()
-        for pool in pools:
-            pools_list.append(StoragePoolInfo(
-                name=pool.name,
-                description=getattr(pool, 'description', '') or "",
-                driver=pool.driver,
-                config=pool.config or {},
-                used_by=pool.used_by or [],
-                status=getattr(pool, 'status', ''),
-                node=node_name
+    read: NodeRead[StoragePoolInfo] = NodeRead()
+    for row in response.json().get("metadata") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            read.rows.append(StoragePoolInfo(
+                name=row.get("name") or "",
+                description=row.get("description") or "",
+                driver=row.get("driver") or "",
+                config=row.get("config") or {},
+                used_by=row.get("used_by") or [],
+                status=row.get("status") or "",
+                node=node_name,
             ))
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing storage pools on {node_name}: {e}")
-    return pools_list
+        except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+            read.lost(f"pool {row.get('name', '?')}: {type(exc).__name__}")
+    return read
 
 
 @router.get(
@@ -159,7 +160,6 @@ async def list_storage_pools(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        all_pools = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -168,14 +168,12 @@ async def list_storage_pools(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        answered = 0
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, list):
-                answered += 1
-                all_pools.extend(result)
-            elif isinstance(result, Exception):
-                logger.warning(f"Error fetching pools: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(
+            nodes_to_query, results, noun="storage pools", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_pools = fan.rows
+        cacheable = fan.cacheable
 
         if tenant_acl_active():
             visible_pools = []
@@ -190,14 +188,18 @@ async def list_storage_pools(
             pools=all_pools,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
 
-        # important: an outage must not be remembered as the answer. See instances.py.
-        if answered:
+        # important: an outage must not be remembered as the answer, and neither may a
+        # partial one: a cluster that failed its listing was cached as "no pools" for
+        # 180 seconds. See instances.py.
+        if cacheable:
             cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
             logger.debug("Cached storage pools list for 180 seconds")
         else:
-            logger.warning("Not caching storage pools list: no node answered")
+            logger.warning("Not caching storage pools list: %s", fan.node_errors or "no node answered")
 
         return response
     except Exception as e:

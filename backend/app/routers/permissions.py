@@ -10,6 +10,8 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.fanout import NodeRead, collect
+from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -66,32 +68,18 @@ class GroupInfo(BaseModel):
     node: str = Field("", description="Node/cluster this group belongs to")
 
 
-class IdentityListResponse(BaseModel):
+class IdentityListResponse(FanoutReachability):
     """Response for listing identities."""
     total: int = Field(..., description="Total number of identities")
     identities: List[IdentityInfo] = Field(..., description="List of identities")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
-    )
 
 
-class GroupListResponse(BaseModel):
+class GroupListResponse(FanoutReachability):
     """Response for listing groups."""
     total: int = Field(..., description="Total number of groups")
     groups: List[GroupInfo] = Field(..., description="List of groups")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
-    )
 
 
 class IdentityAddRequest(BaseModel):
@@ -109,53 +97,38 @@ def _get_auth_type_from_type(identity_type: str) -> str:
     return "tls"
 
 
-def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> List[IdentityInfo]:
-    """Fetch identities for a single node - runs in thread pool."""
-    identities = []
-    try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        if client is None:
-            # important: unreachable is not empty. Without this the next line
-            # raises AttributeError on None, which the generic handler below
-            # turns into a partial result and the node is never named.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        # Use recursion=1 to get full details in one call
-        response = client.api.auth.identities.get(params={'recursion': '1'}, timeout=(5, 30))
-        if response.status_code == 200:
-            identities_data = response.json().get('metadata', [])
-            for identity_data in identities_data:
-                try:
-                    # Handle None values from LXD API
-                    groups_list = identity_data.get('groups')
-                    if groups_list is None:
-                        groups_list = []
-                    
-                    identity_type = identity_data.get('type', '')
-                    identities.append(IdentityInfo(
-                        id=identity_data.get('id', ''),
-                        name=identity_data.get('name', ''),
-                        type=identity_type,
-                        auth_type=_get_auth_type_from_type(identity_type),
-                        groups=groups_list,
-                        node=node_name
-                    ))
-                except LXDConnectionError:
-                    # a missing client IS unreachability: let it through
-                    raise
-                except Exception as e:
-                    # important: not unreachability. See networks.py: an item
-                    # vanishing mid-listing must not condemn the whole node.
-                    logger.warning(f"Error parsing identity data: {e}")
-        else:
-            logger.warning(f"Got status {response.status_code} for identities on {node_name}")
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing identities on {node_name}: {e}")
-    return identities
+def _fetch_identities_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[IdentityInfo]:
+    """Fetch identities for a single node - runs in thread pool.
+
+    A refusal or a failed read propagates to the caller, which names the cluster; the
+    previous version logged it and returned an empty list, so a cluster whose identities
+    could not be read looked like a cluster with none.
+    """
+    client = lxd_service.connection_manager.get_client(node_name)
+    if client is None:
+        # important: unreachable is not empty. Without this the next line
+        # raises AttributeError on None, which the generic handler below
+        # turns into a partial result and the node is never named.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    # Use recursion=1 to get full details in one call
+    response = client.api.auth.identities.get(params={'recursion': '1'}, timeout=(5, 30))
+    read: NodeRead[IdentityInfo] = NodeRead()
+    for identity_data in response.json().get('metadata') or []:
+        if not isinstance(identity_data, dict):
+            continue
+        try:
+            identity_type = identity_data.get('type') or ''
+            read.rows.append(IdentityInfo(
+                id=identity_data.get('id') or '',
+                name=identity_data.get('name') or '',
+                type=identity_type,
+                auth_type=_get_auth_type_from_type(identity_type),
+                groups=identity_data.get('groups') or [],
+                node=node_name
+            ))
+        except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+            read.lost(f"identity {identity_data.get('id', '?')}: {type(exc).__name__}")
+    return read
 
 
 # Identity Endpoints
@@ -183,8 +156,6 @@ async def list_identities(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        all_identities = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -193,18 +164,17 @@ async def list_identities(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, list):
-                all_identities.extend(result)
-            elif isinstance(result, Exception):
-                logger.error(f"Error fetching identities: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(nodes_to_query, results, noun="identities")
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_identities = fan.rows
         
         return IdentityListResponse(
             total=len(all_identities),
             identities=all_identities,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
     except Exception as e:
         logger.error(f"Error listing identities: {e}")
@@ -251,73 +221,53 @@ async def get_identity(
         raise HTTPException(status_code=404, detail=f"Identity {identity_id} not found")
 
 
-def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> List[GroupInfo]:
+def _fetch_groups_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[GroupInfo]:
     """Fetch groups for a single node - runs in thread pool."""
-    groups = []
-    try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        
-        # If client is None, try to reconnect
+    client = lxd_service.connection_manager.get_client(node_name)
+
+    # If client is None, try to reconnect
+    if client is None:
+        logger.info(f"Reconnecting to {node_name} for groups list")
+        try:
+            client = lxd_service.cert_manager.connect_with_vault_cert(node_name, connection_manager=lxd_service.connection_manager)
+        except Exception as e:
+            # important: a node we cannot reconnect to is unreachable, not empty.
+            # Returning here left the caller nothing to name.
+            logger.warning(f"Failed to reconnect to {node_name}: {e}")
+            raise LXDConnectionError(f"Could not connect to {node_name}") from e
         if client is None:
-            logger.info(f"Reconnecting to {node_name} for groups list")
-            try:
-                client = lxd_service.cert_manager.connect_with_vault_cert(node_name, connection_manager=lxd_service.connection_manager)
-            except Exception as e:
-                # important: a node we cannot reconnect to is unreachable, not empty.
-                # Returning here left the caller nothing to name.
-                logger.warning(f"Failed to reconnect to {node_name}: {e}")
-                raise LXDConnectionError(f"Could not connect to {node_name}") from e
-            if client is None:
-                # important: unreachable is not empty. Returning a bare collection
-                # here leaves the caller nothing to label, which is how a dead
-                # cluster read as a cluster with nothing.
-                raise LXDConnectionError(f"Could not connect to {node_name}")
-        
-        # Use recursion=1 to get full details in one call
-        response = client.api.auth.groups.get(params={'recursion': '1'}, timeout=(5, 30))
-        if response.status_code == 200:
-            groups_data = response.json().get('metadata', [])
-            for group_data in groups_data:
-                try:
-                    identities_dict = group_data.get('identities', {})
-                    
-                    # LXD returns identities as nested dict: {auth_type: [ids]}
-                    # Preserve the structure for frontend
-                    tls_identities = []
-                    oidc_identities = []
-                    if isinstance(identities_dict, dict):
-                        tls_identities = identities_dict.get('tls', []) or []
-                        oidc_identities = identities_dict.get('oidc', []) or []
-                    
-                    # Handle None values from LXD API
-                    permissions_list = group_data.get('permissions')
-                    if permissions_list is None:
-                        permissions_list = []
-                    
-                    groups.append(GroupInfo(
-                        name=group_data.get('name', ''),
-                        description=group_data.get('description', ''),
-                        identities=GroupIdentities(tls=tls_identities, oidc=oidc_identities),
-                        permissions=permissions_list,
-                        node=node_name  # Include node information
-                    ))
-                except LXDConnectionError:
-                    # a missing client IS unreachability: let it through
-                    raise
-                except Exception as e:
-                    # important: not unreachability. See networks.py: an item
-                    # vanishing mid-listing must not condemn the whole node.
-                    logger.warning(f"Error parsing group data: {e}")
-        else:
-            logger.warning(f"Got status {response.status_code} for groups on {node_name}")
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing groups on {node_name}: {e}")
-    return groups
+            # important: unreachable is not empty. Returning a bare collection
+            # here leaves the caller nothing to label, which is how a dead
+            # cluster read as a cluster with nothing.
+            raise LXDConnectionError(f"Could not connect to {node_name}")
+
+    # Use recursion=1 to get full details in one call
+    response = client.api.auth.groups.get(params={'recursion': '1'}, timeout=(5, 30))
+    read: NodeRead[GroupInfo] = NodeRead()
+    for group_data in response.json().get('metadata') or []:
+        if not isinstance(group_data, dict):
+            continue
+        try:
+            identities_dict = group_data.get('identities') or {}
+
+            # LXD returns identities as nested dict: {auth_type: [ids]}
+            # Preserve the structure for frontend
+            tls_identities = []
+            oidc_identities = []
+            if isinstance(identities_dict, dict):
+                tls_identities = identities_dict.get('tls') or []
+                oidc_identities = identities_dict.get('oidc') or []
+
+            read.rows.append(GroupInfo(
+                name=group_data.get('name') or '',
+                description=group_data.get('description') or '',
+                identities=GroupIdentities(tls=tls_identities, oidc=oidc_identities),
+                permissions=group_data.get('permissions') or [],
+                node=node_name  # Include node information
+            ))
+        except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+            read.lost(f"group {group_data.get('name', '?')}: {type(exc).__name__}")
+    return read
 
 
 # Group Endpoints
@@ -345,8 +295,6 @@ async def list_groups(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        all_groups = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -355,18 +303,17 @@ async def list_groups(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, list):
-                all_groups.extend(result)
-            elif isinstance(result, Exception):
-                logger.error(f"Error fetching groups: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(nodes_to_query, results, noun="groups")
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_groups = fan.rows
         
         return GroupListResponse(
             total=len(all_groups),
             groups=all_groups,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
     except Exception as e:
         logger.error(f"Error listing groups: {e}")
