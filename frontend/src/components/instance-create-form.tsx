@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import {
   ArrowLeft,
@@ -273,10 +273,27 @@ export function InstanceCreateForm() {
     undefined,
     form.selectedNode,
   );
-  const customVolumes = (
-    ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
-      []) as StorageVolumeInfo[]
-  ).filter((v) => v.type === "custom");
+  // important: the volume list now spans every project and, on a clustered host, lists a
+  // per-member pool's volume once per member. A disk on this instance can only attach a custom
+  // volume from the instance's own project (or default, which a project without its own
+  // volumes sees), and one option per (pool, name) is what the operator picks; the member is
+  // decided by placement.
+  const volumeProject = form.selectedProject || "default";
+  const customVolumes = useMemo(() => {
+    const rows = (
+      ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
+        []) as StorageVolumeInfo[]
+    ).filter((v) => v.type === "custom");
+    const scoped = rows.filter((v) => (v.project ?? "default") === volumeProject);
+    const pool = scoped.length ? scoped : rows.filter((v) => (v.project ?? "default") === "default");
+    const seen = new Set<string>();
+    return pool.filter((v) => {
+      const key = `${v.pool}/${v.name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [volumesResp, volumeProject]);
   const volumesInPool = (pool: string) =>
     customVolumes.filter((v) => v.pool === pool);
   const volumeContentType = (pool: string, name: string) =>

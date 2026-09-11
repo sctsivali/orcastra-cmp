@@ -173,7 +173,10 @@ async def list_storage_pools(
         )
         unreachable_nodes.extend(fan.unreachable_nodes)
         all_pools = fan.rows
-        cacheable = fan.cacheable
+        # important: a cluster this worker holds no client for is named unreachable above and
+        # blocks the write too. The cache is shared by every worker, so one worker's missing
+        # client must not become every worker's answer for 180 seconds.
+        cacheable = fan.cacheable and not unreachable_nodes
 
         if tenant_acl_active():
             visible_pools = []

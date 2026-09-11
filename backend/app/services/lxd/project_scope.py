@@ -262,6 +262,9 @@ def _walk_projects(
 
     configs = list_project_configs(client)
 
+    if collection == "storage-volumes":
+        return _walk_projects_for_volumes(client, names, configs, recursion, path, complete)
+
     # Resolve every project to the one that really holds its records, then read each of those
     # once. On a fleet where most projects inherit, this is the difference between 47 requests
     # and two, and it is also what stops the same bridge appearing 47 times.
@@ -283,6 +286,37 @@ def _walk_projects(
             logger.warning("Could not read %s in project %s: %s", collection, owner, exc)
             complete = False
 
+    return rows, complete
+
+
+def _walk_projects_for_volumes(
+    client: Any,
+    names: List[str],
+    configs: Dict[str, Dict[str, str]],
+    recursion: int,
+    path: Optional[str],
+    complete: bool,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """The volume walk reads every project, not only the owners.
+
+    `features.storage.volumes` governs custom volumes only: a project with the flag false sees
+    default's custom volumes, but the root volumes of its own instances still live in that
+    project. Reading owners alone dropped those. So every project is read; from a project that
+    does not own its custom volumes only the instance volumes are kept, custom and image rows
+    being default's repeated.
+    """
+    rows: List[Dict[str, Any]] = []
+    for name in names:
+        owner = effective_project("storage-volumes", name, configs)
+        try:
+            for row in list_in_project(client, "storage-volumes", name, recursion, path):
+                if owner != name and row.get("type") not in ("container", "virtual-machine"):
+                    continue
+                row["project"] = name
+                rows.append(row)
+        except Exception as exc:  # noqa: BLE001 - reported as a partial read, not an outage
+            logger.warning("Could not read storage volumes in project %s: %s", name, exc)
+            complete = False
     return rows, complete
 
 

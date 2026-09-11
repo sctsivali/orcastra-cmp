@@ -2,7 +2,7 @@
 
 pylxd's collection manager listed a pool's volumes at recursion 0 in the default project and
 then synced every volume with its own GET. On a clustered host a per-member pool lists its
-volumes as `/1.0/storage-pools/local/volumes/custom/backups?target=microcloud20`, which the
+volumes as `/1.0/storage-pools/local/volumes/custom/backups?target=member-a`, which the
 per-volume sync could not read, and the first refusal dropped the rest of that pool. On a
 production MicroCloud the page showed zero volumes and zero ISOs for a cluster holding 140.
 
@@ -71,11 +71,11 @@ class _Service:
 
 LOCAL_ROWS = [
     {"name": "backups", "type": "custom", "content_type": "filesystem", "project": "default",
-     "location": "microcloud20", "config": {}, "used_by": []},
+     "location": "member-a", "config": {}, "used_by": []},
     {"name": "backups", "type": "custom", "content_type": "filesystem", "project": "default",
-     "location": "microcloud30", "config": {}, "used_by": []},
-    {"name": "web01", "type": "container", "content_type": "filesystem", "project": "atlas-desktop-lab",
-     "location": "microcloud40", "config": {}, "used_by": ["/1.0/instances/web01?project=atlas-desktop-lab"]},
+     "location": "member-b", "config": {}, "used_by": []},
+    {"name": "web01", "type": "container", "content_type": "filesystem", "project": "uat-hermes",
+     "location": "member-c", "config": {}, "used_by": ["/1.0/instances/web01?project=uat-hermes"]},
 ]
 REMOTE_ROWS = [
     {"name": "FreeBSD-14.2.iso", "type": "custom", "content_type": "iso", "project": "default",
@@ -104,9 +104,9 @@ def test_one_request_per_pool_with_project_and_member_on_every_row():
     listed = [c["path"] for c in calls if c["path"].endswith("/volumes")]
     assert listed == ["/1.0/storage-pools/local/volumes", "/1.0/storage-pools/remote/volumes"]
     rows = {(r.pool, r.type, r.name, r.location, r.project) for r in read.rows}
-    assert ("local", "custom", "backups", "microcloud20", "default") in rows
-    assert ("local", "custom", "backups", "microcloud30", "default") in rows
-    assert ("local", "container", "web01", "microcloud40", "atlas-desktop-lab") in rows
+    assert ("local", "custom", "backups", "member-a", "default") in rows
+    assert ("local", "custom", "backups", "member-b", "default") in rows
+    assert ("local", "container", "web01", "member-c", "uat-hermes") in rows
     assert ("remote", "custom", "FreeBSD-14.2.iso", "", "default") in rows, "shared pool: location is empty, not 'none'"
     iso = [r for r in read.rows if r.content_type == "iso"]
     assert [r.name for r in iso] == ["FreeBSD-14.2.iso"]
@@ -139,8 +139,9 @@ def test_a_pool_that_refuses_is_named_and_the_others_still_list():
     assert read.problems == ["pool local: LXD answered 400: More than one cluster member has a volume named backups"]
 
 
-def test_without_the_extension_each_owning_project_is_read_once():
-    """features.storage.volumes false means the project sees default's volumes: read default once."""
+def test_without_the_extension_every_project_is_read_and_only_its_own_rows_kept():
+    """features.storage.volumes false: the project sees default's custom volumes (dropped, they
+    are default's) but its instances' root volumes still live in it (kept)."""
     calls: List[Dict[str, Any]] = []
 
     def handler(path, params):
@@ -156,12 +157,20 @@ def test_without_the_extension_each_owning_project_is_read_once():
         if path == "/1.0/storage-pools/local/volumes":
             assert "all-projects" not in params
             project = params["project"]
-            return _Resp(200, {"metadata": [{"name": f"vol-{project}", "type": "custom", "content_type": "filesystem",
-                                             "location": "none", "config": {}, "used_by": []}]})
+            rows = [{"name": f"vol-{project}", "type": "custom", "content_type": "filesystem",
+                     "location": "none", "config": {}, "used_by": []}]
+            if project == "shares-default":
+                # what LXD really answers for a non-owning project: default's custom volume
+                # under the project's name, plus the project's own instance root volume
+                rows = [{"name": "vol-default", "type": "custom", "content_type": "filesystem", "location": "none", "config": {}, "used_by": []},
+                        {"name": "web01", "type": "container", "content_type": "filesystem", "location": "none", "config": {}, "used_by": []}]
+            return _Resp(200, {"metadata": rows})
         raise AssertionError(f"{path} {params}")
 
     rows, complete = list_pool_volumes(_Client(handler, []), "local")
     assert complete
     projects_read = [c["params"]["project"] for c in calls if c["path"].endswith("/volumes")]
-    assert sorted(projects_read) == ["default", "own"], projects_read
-    assert sorted((r["name"], r["project"]) for r in rows) == [("vol-default", "default"), ("vol-own", "own")]
+    assert sorted(projects_read) == ["default", "own", "shares-default"], projects_read
+    assert sorted((r["name"], r["project"]) for r in rows) == [
+        ("vol-default", "default"), ("vol-own", "own"), ("web01", "shares-default"),
+    ]

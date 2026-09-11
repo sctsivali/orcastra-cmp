@@ -143,24 +143,24 @@ def _always_400(path, params):
 def test_classify_names_the_kind_and_never_the_host():
     read_timeout = requests.exceptions.ConnectionError(
         urllib3.exceptions.MaxRetryError(
-            None, "https://central2.example:443/1.0/x",
-            reason=urllib3.exceptions.ReadTimeoutError(None, "https://central2.example:443/1.0/x", "Read timed out"),
+            None, "https://cluster.example:443/1.0/x",
+            reason=urllib3.exceptions.ReadTimeoutError(None, "https://cluster.example:443/1.0/x", "Read timed out"),
         )
     )
     cases = [
-        (LXDAuthorizationError("central2.example refused"), fanout.KIND_FORBIDDEN),
-        (LXDConnectionError("Could not connect to central2.example"), fanout.KIND_UNREACHABLE),
+        (LXDAuthorizationError("cluster.example refused"), fanout.KIND_FORBIDDEN),
+        (LXDConnectionError("Could not connect to cluster.example"), fanout.KIND_UNREACHABLE),
         (LXDLocalStorageError("/tmp full"), fanout.KIND_FAILED),
         (_lxd_error(403, "not authorized"), fanout.KIND_FORBIDDEN),
         (_lxd_error(400, "More than one cluster member has a volume named backups"), fanout.KIND_FAILED),
         (read_timeout, fanout.KIND_UNREACHABLE),
-        (requests.exceptions.ReadTimeout("https://central2.example:443 timed out"), fanout.KIND_UNREACHABLE),
+        (requests.exceptions.ReadTimeout("https://cluster.example:443 timed out"), fanout.KIND_UNREACHABLE),
         (KeyError("metadata"), fanout.KIND_FAILED),
     ]
     for exc, expected_kind in cases:
         kind, reason = fanout.classify(exc)
         assert kind == expected_kind, f"{type(exc).__name__}: {kind} != {expected_kind}"
-        assert "central2" not in reason and "example" not in reason, f"reason leaks the host: {reason!r}"
+        assert "cluster.example" not in reason and "example" not in reason, f"reason leaks the host: {reason!r}"
         assert reason, f"{type(exc).__name__} has an empty reason"
     assert fanout.classify(read_timeout)[1] == "read timed out"
     assert fanout.classify(_lxd_error(400, "x" * 500))[1].endswith("x" * 50)
@@ -299,3 +299,74 @@ def test_a_complete_listing_is_cached_and_carries_no_errors(monkeypatch):
     assert [p["name"] for p in body["pools"]] == ["local"]
     assert body["unreachable_nodes"] == [] and body["partial_nodes"] == [] and body["node_errors"] == {}
     assert [ns for ns, _, _ in cache.sets] == ["api_responses"]
+
+
+# --- the seeded set and the project bound ---------------------------------------------------
+
+def test_a_cluster_this_worker_holds_no_client_for_blocks_the_cache_too(monkeypatch):
+    """One worker's missing client must not become every worker's answer for 180 s.
+
+    The cache is shared by the workers. A cluster registered after this worker booted (or
+    evicted by its breaker) is named unreachable by the seeding, and the body was still
+    written because the queried clusters answered in full.
+    """
+    from app.routers import storage_pools, storage_volumes
+
+    def pools(path, params):
+        return _Resp(200, {"metadata": [{"name": "local", "driver": "zfs", "status": "Created", "config": {}, "used_by": []}]})
+
+    for module, path in ((storage_pools, "/storage/pools"), (storage_volumes, "/storage/volumes")):
+        cache = _CacheSpy()
+        svc = _service(_Client(lambda p, q: _Resp(200, {"metadata": []}) if "volumes" in p or "storage-pools" == p.rsplit("/", 1)[-1] and q.get("recursion") == 0 else pools(p, q)))
+        svc.get_node_names = lambda: [HOST, "C3"]  # type: ignore[attr-defined]
+        from app.services.lxd_service import get_lxd_service
+        from app.core.rbac import get_current_user
+        from app.core.org_scope import org_scope_dependency
+
+        monkeypatch.setattr(module, "get_cache_manager", lambda: cache)
+        app = FastAPI()
+        app.include_router(module.router)
+        app.dependency_overrides[get_lxd_service] = lambda: svc
+        app.dependency_overrides[get_current_user] = lambda: None
+        app.dependency_overrides[org_scope_dependency] = lambda: None
+        body = TestClient(app, raise_server_exceptions=False).get(path).json()
+        assert body["unreachable_nodes"] == ["C3"], body
+        assert cache.sets == [], f"{path}: a body naming a never-asked cluster unreachable was cached"
+
+
+def test_volumes_and_warnings_hold_a_partner_to_the_project_bound(monkeypatch):
+    """On a cluster bound to two organizations a Partner sees default plus their own projects."""
+    import contextvars
+
+    from app.core import org_scope
+    from app.routers import lxd_warnings, storage_volumes
+
+    def cluster(path, params):
+        if path == "/1.0/storage-pools":
+            return _Resp(200, {"metadata": ["/1.0/storage-pools/local"]})
+        if path == "/1.0/storage-pools/local/volumes":
+            return _Resp(200, {"metadata": [
+                {"name": "mine", "type": "custom", "content_type": "filesystem", "project": "sivali-prod", "location": "none", "config": {}, "used_by": []},
+                {"name": "theirs", "type": "custom", "content_type": "filesystem", "project": "other-org", "location": "none", "config": {}, "used_by": []},
+                {"name": "shared", "type": "custom", "content_type": "filesystem", "project": "default", "location": "none", "config": {}, "used_by": []},
+            ]})
+        if path == "/1.0/warnings":
+            return _Resp(200, {"metadata": [
+                {"uuid": "w-mine", "project": "sivali-prod", "location": "m1", "type": "t", "count": 1},
+                {"uuid": "w-theirs", "project": "other-org", "location": "m1", "type": "t", "count": 1},
+                {"uuid": "w-default", "project": "default", "location": "m1", "type": "t", "count": 1},
+            ]})
+        raise AssertionError(path)
+
+    def run():
+        org_scope._visible_projects_var.set({HOST: {"default", "sivali-prod"}})
+        out = {}
+        for module, path, key, name in ((storage_volumes, "/storage/volumes", "volumes", "name"), (lxd_warnings, "/warnings", "warnings", "uuid")):
+            app = _app(module, _Client(cluster, extensions=["storage_volumes_all_projects", "warnings"]), monkeypatch, _CacheSpy())
+            body = app.get(path).json()
+            out[key] = sorted(r[name] for r in body[key])
+        return out
+
+    out = contextvars.copy_context().run(run)
+    assert out["volumes"] == ["mine", "shared"], out
+    assert out["warnings"] == ["w-default", "w-mine"], out

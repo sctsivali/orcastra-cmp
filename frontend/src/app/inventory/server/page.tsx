@@ -111,7 +111,7 @@ function ConfigMapLink({
 
 export default function ServerPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
+  const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
   const servers = (data as any)?.servers || [];
   // Clusters that never answered: their server details are absent from the grid, so warn
   // rather than showing fewer cards with nothing to explain it.
@@ -146,7 +146,19 @@ export default function ServerPage() {
       <UnreachableNodesBanner noun="server details" nodes={reach.unreachable} reasons={reach.reasons} />
       <UnreachableNodesBanner noun="server details" nodes={reach.partial} reasons={reach.reasons} partial />
 
-      {servers.length === 0 ? (
+      {isError ? (
+        // a request that failed is not a fleet with nothing: say which, so "No cluster
+        // answered" is only ever reached on a successful response with zero rows
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={Server}
+              title="Could not load server details"
+              description={error instanceof Error ? error.message : "The request failed. Use Refresh to try again."}
+            />
+          </CardContent>
+        </Card>
+      ) : servers.length === 0 ? (
         // note: an empty grid said nothing at all. With every cluster named in a banner above,
         // this tells the operator the page itself is fine and the fleet is what it is.
         <Card>

@@ -80,17 +80,21 @@ def transport_reason(exc: BaseException) -> Optional[str]:
         reason = _urllib3_reason(exc)
         if isinstance(reason, urllib3.exceptions.ReadTimeoutError):
             return "read timed out"
+        # note: NewConnectionError (refused, no route, DNS) subclasses ConnectTimeoutError in
+        # urllib3, so it has to be told apart first or it reads as a timeout.
+        if isinstance(reason, urllib3.exceptions.NewConnectionError):
+            return "connection refused or host unreachable"
         if isinstance(reason, urllib3.exceptions.ConnectTimeoutError):
             return "connect timed out"
         if isinstance(reason, urllib3.exceptions.SSLError):
             return "TLS handshake failed"
-        if isinstance(reason, urllib3.exceptions.NewConnectionError):
-            return "connection refused or host unreachable"
         return "connection error"
     if isinstance(exc, requests.exceptions.Timeout):
         return "read timed out"
     if isinstance(exc, urllib3.exceptions.ReadTimeoutError):
         return "read timed out"
+    if isinstance(exc, urllib3.exceptions.NewConnectionError):
+        return "connection refused or host unreachable"
     if isinstance(exc, urllib3.exceptions.ConnectTimeoutError):
         return "connect timed out"
     if isinstance(exc, (urllib3.exceptions.HTTPError, requests.exceptions.RequestException)):

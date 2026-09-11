@@ -59,11 +59,11 @@ class _Service:
 
 POOLS = [
     {"name": "local", "driver": "zfs", "status": "Created", "description": "", "config": {"size": "1.7TiB"},
-     "used_by": ["/1.0/instances/a"], "locations": ["microcloud20", "microcloud30", "microcloud40"]},
+     "used_by": ["/1.0/instances/a"], "locations": ["member-a", "member-b", "member-c"]},
     {"name": "remote", "driver": "ceph", "status": "Created", "description": "shared", "config": {},
-     "used_by": [], "locations": ["microcloud20", "microcloud30", "microcloud40"]},
+     "used_by": [], "locations": ["member-a", "member-b", "member-c"]},
     {"name": "sata-ssd", "driver": "ceph", "status": "Created", "description": "", "config": {},
-     "used_by": [], "locations": ["microcloud20", "microcloud30", "microcloud40"]},
+     "used_by": [], "locations": ["member-a", "member-b", "member-c"]},
 ]
 
 

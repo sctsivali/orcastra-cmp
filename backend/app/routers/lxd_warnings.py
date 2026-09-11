@@ -21,7 +21,13 @@ from app.services.lxd_service import (
     require_client,
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, check_tenant_permission, apply_cluster_filter
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    check_tenant_permission,
+    apply_cluster_filter,
+    project_is_visible,
+)
 from pydantic import BaseModel, Field
 from app.core.lxd_names import safe_segment
 
@@ -60,11 +66,11 @@ class WarningListResponse(FanoutReachability):
 
 
 def _warning_rows(client) -> list:
-    """The cluster's warnings from every project, in one request where LXD allows it.
+    """The cluster's warnings, asking for every project where the daemon honours it.
 
-    note: `/1.0/warnings` without `all-projects` answers about the default project only, so
-    a warning raised in a customer's project never reached the page. A daemon that does not
-    know the parameter answers 400; it is asked again without it.
+    note: LXD scopes `/1.0/warnings` by project; `all-projects=true` is the documented way to
+    ask for all of them and a daemon that ignores the parameter answers as it always did. A
+    daemon that refuses it with 400 is asked again without it.
     """
     try:
         response = client.api.warnings.get(
@@ -151,7 +157,10 @@ async def list_warnings(
             nodes_to_query, results, noun="warnings", reasons_visible=not tenant_acl_active()
         )
         unreachable_nodes.extend(fan.unreachable_nodes)
-        all_warnings = fan.rows
+        # important: rows may now come from every project the daemon reports, and a Partner
+        # is scoped by cluster, not by project; the tenant check below passes everything for
+        # a Partner. Hold the rows to the project bound first.
+        all_warnings = [w for w in fan.rows if project_is_visible(w.source_node, w.project or "default")]
 
         all_warnings = [
             warning for warning in all_warnings

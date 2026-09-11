@@ -26,7 +26,13 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    get_scope_cache_key,
+    project_is_visible,
+)
+from urllib.parse import unquote
 from app.core.tenant_visibility import filter_visible_lxd_references, tenant_acl_active
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
@@ -81,6 +87,27 @@ class StorageVolumeListResponse(FanoutReachability):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _volume_node(client, pool: str, volume_type: str, volume_name: str):
+    """The raw API node for one volume, so a project or a member can be named on the call."""
+    return client.api["storage-pools"][safe_segment(pool)]["volumes"][safe_segment(volume_type)][safe_segment(volume_name)]
+
+
+def _address_params(project: Optional[str], location: Optional[str]) -> Dict[str, str]:
+    """Query parameters that address a volume outside the default project or on one member.
+
+    note: the list now carries `project` and `location` on every row (the volumes of a
+    per-member pool exist once per member, and other projects hold their own). A detail,
+    update or delete that names only (pool, type, name) would land on the default project's
+    copy, so callers pass the row's own values back.
+    """
+    params: Dict[str, str] = {}
+    if project and project != DEFAULT_PROJECT:
+        params["project"] = project
+    if location:
+        params["target"] = location
+    return params
+
+
 def _pool_names(client, pool_filter: Optional[str]) -> List[str]:
     """The pools to read, from one recursion=0 listing (or the filter alone)."""
     if pool_filter:
@@ -91,7 +118,8 @@ def _pool_names(client, pool_filter: Optional[str]) -> List[str]:
     names: List[str] = []
     for entry in response.json().get("metadata") or []:
         if isinstance(entry, str):
-            names.append(entry.rstrip("/").rsplit("/", 1)[-1].split("?")[0])
+            # the URL carries the name percent-escaped; safe_segment escapes it again later
+            names.append(unquote(entry.rstrip("/").rsplit("/", 1)[-1].split("?")[0]))
         elif isinstance(entry, dict) and entry.get("name"):
             names.append(entry["name"])
     return names
@@ -104,7 +132,7 @@ def _fetch_volumes_for_node(
 
     important: pylxd's collection manager listed at recursion 0 in the default project and
     then synced every volume one request at a time. On a clustered host a per-member pool
-    lists its volumes as `.../volumes/custom/backups?target=microcloud20`, which the sync
+    lists its volumes as `.../volumes/custom/backups?target=member-a`, which the sync
     could not read, and the first refusal dropped the rest of that pool. Nothing is synced
     now, every project is read, and a pool that cannot be read is named, not skipped.
     """
@@ -191,8 +219,15 @@ async def list_storage_volumes(
             nodes_to_query, results, noun="storage volumes", reasons_visible=not tenant_acl_active()
         )
         unreachable_nodes.extend(fan.unreachable_nodes)
-        all_volumes = fan.rows
-        cacheable = fan.cacheable
+        # important: the rows now span every project, and a Partner is scoped by cluster, not
+        # by project. On a cluster bound to two organizations this is the only thing keeping
+        # one organization's volumes out of the other's console. The cache key already
+        # carries the bound (get_scope_cache_key), so the cached body is per scope.
+        all_volumes = [v for v in fan.rows if project_is_visible(v.node, v.project)]
+        # important: a cluster this worker holds no client for is named unreachable above and
+        # blocks the write too. The cache is shared by every worker, so one worker's missing
+        # client must not become every worker's answer for 180 seconds.
+        cacheable = fan.cacheable and not unreachable_nodes
 
         if tenant_acl_active():
             visible_volumes = []
@@ -238,27 +273,35 @@ async def get_storage_volume(
     volume_name: str,
     host: str = Query(..., description="Target host node"),
     pool: str = Query(..., description="Storage pool name"),
+    project: Optional[str] = Query(None, description="Project that holds the volume (the row's project)"),
+    location: Optional[str] = Query(None, description="Cluster member that holds it (the row's location)"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific storage volume."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project or DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        storage_pool = client.storage_pools.get(safe_segment(pool))
-        volume = storage_pool.volumes.get(volume_type, volume_name)
-        used_by = filter_visible_lxd_references(host, volume.used_by or [])
+        row = _volume_node(client, pool, volume_type, volume_name).get(
+            params=_address_params(project, location) or None
+        ).json().get("metadata") or {}
+        used_by = filter_visible_lxd_references(host, row.get("used_by") or [])
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this storage volume")
         
+        loc = row.get("location") or ""
         return StorageVolumeInfo(
-            name=volume.name,
-            type=volume.type,
+            name=row.get("name") or volume_name,
+            type=row.get("type") or volume_type,
             pool=pool,
-            description=getattr(volume, 'description', '') or "",
-            config=volume.config or {},
+            description=row.get("description") or "",
+            config=row.get("config") or {},
             used_by=used_by,
-            content_type=getattr(volume, 'content_type', ''),
+            content_type=row.get("content_type") or "",
             node=host,
+            project=row.get("project") or project or DEFAULT_PROJECT,
+            location="" if loc == "none" else loc,
         )
     except HTTPException:
         # broad handler below converts it into a 500
@@ -356,23 +399,32 @@ async def update_storage_volume(
     pool: str = Query(..., description="Storage pool name"),
     config: Optional[Dict[str, str]] = Body(None),
     description: Optional[str] = Body(None),
+    project: Optional[str] = Query(None, description="Project that holds the volume (the row's project)"),
+    location: Optional[str] = Query(None, description="Cluster member that holds it (the row's location)"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a storage volume."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project or DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        storage_pool = client.storage_pools.get(safe_segment(pool))
-        volume = storage_pool.volumes.get(volume_type, volume_name)
-        
+        node = _volume_node(client, pool, volume_type, volume_name)
+        params = _address_params(project, location) or None
+        current = node.get(params=params).json().get("metadata") or {}
+        body: Dict[str, object] = {}
         if config is not None:
-            volume.config = config
-        if description is not None and hasattr(volume, 'description'):
-            volume.description = description
-        
-        volume.save()
+            body["config"] = config
+        elif current.get("config") is not None:
+            body["config"] = current.get("config")
+        if description is not None:
+            body["description"] = description
+        elif current.get("description") is not None:
+            body["description"] = current.get("description")
+        # PATCH would merge; the previous pylxd save() sent the whole object, which is PUT
+        node.put(json=body, params=params)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_volumes")
@@ -401,17 +453,24 @@ async def delete_storage_volume(
     volume_name: str,
     host: str = Query(..., description="Target host node"),
     pool: str = Query(..., description="Storage pool name"),
+    project: Optional[str] = Query(None, description="Project that holds the volume (the row's project)"),
+    location: Optional[str] = Query(None, description="Cluster member that holds it (the row's location)"),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a storage volume."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project or DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
-        storage_pool = client.storage_pools.get(safe_segment(pool))
-        volume = storage_pool.volumes.get(volume_type, volume_name)
-        volume.delete()
+        node = _volume_node(client, pool, volume_type, volume_name)
+        params = _address_params(project, location) or None
+        # important: on a clustered host a per-member pool holds one volume of this name per
+        # member. Without a target LXD refuses the ambiguity; the caller passes the row's
+        # location, and this never guesses a member.
+        node.delete(params=params)
         
         # Log activity: storage volume deletion success
         activity_logger.log_activity(
@@ -423,7 +482,7 @@ async def delete_storage_volume(
             details={"pool": pool, "type": volume_type}
         )
         
-        schedule_orcahub_event("volume.deleted", host, getattr(volume, "project", None), volume_name, resource_type="VOLUME")
+        schedule_orcahub_event("volume.deleted", host, project or DEFAULT_PROJECT, volume_name, resource_type="VOLUME")
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_volumes")
         return {

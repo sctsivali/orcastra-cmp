@@ -90,6 +90,7 @@ export function MemberResourceModal({
     const used = hasSplit ? resources?.storage_local_used ?? 0 : resources?.storage_used ?? 0;
     return {
       headline: hasSplit ? "Storage (Local)" : "Storage",
+      summaryLabel: hasSplit ? "Available Storage (Local)" : "Available Storage",
       total,
       used,
       percent: total > 0 ? (used / total) * 100 : 0,
@@ -155,13 +156,13 @@ export function MemberResourceModal({
             {(resources.instances_partial || resources.storage_partial) && (
               // note: a floor presented as a fact reads as free capacity. This says which
               // figures could not be read, above the cards that would otherwise show zeros.
-              <Alert data-testid="member-partial-notice">
+              <Alert data-testid="member-partial-notice" role="status">
                 <Activity className="h-4 w-4" />
                 <AlertDescription>
                   {resources.instances_partial && resources.storage_partial
-                    ? "The instance list and part of the storage could not be read from this member, so the instance, CPU and storage figures are incomplete."
+                    ? "The instance list and part of the storage could not be read from this member, so the instance count, the CPU and GPU allocation and the storage figures are unknown."
                     : resources.instances_partial
-                      ? "The instance list could not be read from this member, so the instance count and the CPU allocation are unknown."
+                      ? "The instance list could not be read from this member, so the instance count and the CPU and GPU allocation are unknown."
                       : "A storage pool could not be read for this member, so the storage figures are a floor."}
                 </AlertDescription>
               </Alert>
@@ -282,7 +283,7 @@ export function MemberResourceModal({
                     </div>
                     )}
                     <div className="flex flex-col items-center justify-center gap-2">
-                      {resources.instances_running > 0 && (
+                      {!resources.instances_partial && resources.instances_running > 0 && (
                         <TableLink
                           onClick={() => handleShowInstances("running")}
                           aria-label={`Show the running instances on ${memberName}`}
@@ -290,7 +291,7 @@ export function MemberResourceModal({
                           {`${resources.instances_running} Running`}
                         </TableLink>
                       )}
-                      {resources.instances_count - resources.instances_running > 0 && (
+                      {!resources.instances_partial && resources.instances_count - resources.instances_running > 0 && (
                         <TableLink
                           onClick={() => handleShowInstances("stopped")}
                           aria-label={`Show the stopped instances on ${memberName}`}
@@ -314,7 +315,7 @@ export function MemberResourceModal({
                 <CardDescription>{GPU_UTILIZATION_NOTE}</CardDescription>
               </CardHeader>
               <CardContent>
-                <GpuPanel src={resources} dense />
+                <GpuPanel src={resources} dense allocationUnknown={Boolean(resources.instances_partial)} />
               </CardContent>
             </Card>
 
@@ -371,15 +372,15 @@ export function MemberResourceModal({
               <CardContent>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
                   <div>
-                    <p className="text-muted-foreground mb-1">Available CPU</p>
-                    <p className="font-medium">{resources.cpu_available} cores</p>
+                    <p className="text-muted-foreground mb-1">Unallocated CPU</p>
+                    <p className="font-medium">{resources.instances_partial ? "unknown" : `${resources.cpu_available} cores`}</p>
                   </div>
                   <div>
                     <p className="text-muted-foreground mb-1">Available Memory</p>
                     <p className="font-medium">{formatBytes(resources.memory_available)}</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground mb-1">Available Storage (local)</p>
+                    <p className="text-muted-foreground mb-1">{storage.summaryLabel}</p>
                     <p className="font-medium">{formatBytes(storage.total - storage.used)}</p>
                   </div>
                 </div>

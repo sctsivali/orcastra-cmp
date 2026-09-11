@@ -132,15 +132,39 @@ def test_one_read_timeout_keeps_the_pooled_client_and_the_breaker_untouched(mana
     assert not health.is_tripped(CLUSTER)
 
 
-def test_two_consecutive_read_timeouts_take_the_reconnect_path(manager):
+def test_a_burst_of_read_timeouts_on_one_slow_moment_counts_as_one(manager):
+    """Five parallel callers hitting the same slow probe must not evict the client between them."""
+    client = _Client([_read_timeout_via_connection_error() for _ in range(5)])
+    manager._clients[CLUSTER] = client
+    reconnects = []
+    manager._auto_reconnect = lambda cid: reconnects.append(cid) or None  # type: ignore[assignment]
+    for _ in range(5):
+        assert manager.get_client(CLUSTER) is client
+    assert reconnects == []
+
+
+def test_a_second_read_timeout_after_the_spacing_takes_the_reconnect_path(manager):
     client = _Client([_read_timeout_via_connection_error(), _read_timeout_via_connection_error()])
     manager._clients[CLUSTER] = client
     reconnects = []
     manager._auto_reconnect = lambda cid: reconnects.append(cid) or None  # type: ignore[assignment]
 
     assert manager.get_client(CLUSTER) is client
+    count, first_at = manager._slow_validations[CLUSTER]
+    manager._slow_validations[CLUSTER] = (count, first_at - manager.SLOW_VALIDATION_SPACING - 1)
     assert manager.get_client(CLUSTER) is None
     assert reconnects == [CLUSTER]
+    assert CLUSTER not in manager._slow_validations, "eviction clears the tolerance"
+
+
+def test_eviction_and_a_good_probe_both_reset_the_tolerance(manager):
+    client = _Client([requests.exceptions.ReadTimeout("slow")])
+    manager._clients[CLUSTER] = client
+    manager._auto_reconnect = lambda cid: None  # type: ignore[assignment]
+    assert manager.get_client(CLUSTER) is client
+    assert CLUSTER in manager._slow_validations
+    manager.cleanup_connection(CLUSTER)
+    assert CLUSTER not in manager._slow_validations
 
 
 def test_a_successful_probe_resets_the_tolerance(manager):
@@ -149,7 +173,8 @@ def test_a_successful_probe_resets_the_tolerance(manager):
     manager._auto_reconnect = lambda cid: None  # type: ignore[assignment]
     assert manager.get_client(CLUSTER) is client
     assert manager.get_client(CLUSTER) is client
-    assert manager.get_client(CLUSTER) is client, "the counter restarted after a good probe"
+    assert CLUSTER not in manager._slow_validations, "a good probe clears the tolerance"
+    assert manager.get_client(CLUSTER) is client
 
 
 def test_a_connect_timeout_still_evicts_at_once(manager):

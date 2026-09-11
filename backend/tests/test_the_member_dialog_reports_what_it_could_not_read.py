@@ -30,7 +30,7 @@ from app.services.lxd.lxd_service import LXDService
 TIB = 1024 ** 4
 GIB = 1024 ** 3
 NODE = "C2"
-MEMBERS = ["microcloud20", "microcloud30", "microcloud40"]
+MEMBERS = ["member-a", "member-b", "member-c"]
 
 
 class _Response:
@@ -90,13 +90,13 @@ SPACE = {
     "sata-ssd": {m: {"total": int(5.3 * TIB), "used": int(3.5 * TIB)} for m in MEMBERS},
 }
 INSTANCES = [
-    {"name": "web01", "project": "atlas-desktop-lab", "location": "microcloud20", "status": "Running",
+    {"name": "web01", "project": "uat-hermes", "location": "member-a", "status": "Running",
      "config": {"limits.cpu": "4"}, "expanded_config": {"limits.cpu": "4"}, "expanded_devices": {}},
-    {"name": "db01", "project": "atlas-desktop-lab", "location": "microcloud20", "status": "Running",
+    {"name": "db01", "project": "uat-hermes", "location": "member-a", "status": "Running",
      "config": {}, "expanded_config": {}, "expanded_devices": {}},
-    {"name": "old", "project": "default", "location": "microcloud20", "status": "Stopped",
+    {"name": "old", "project": "default", "location": "member-a", "status": "Stopped",
      "config": {"limits.cpu": "0-3"}, "expanded_config": {}, "expanded_devices": {}},
-    {"name": "elsewhere", "project": "default", "location": "microcloud30", "status": "Running",
+    {"name": "elsewhere", "project": "default", "location": "member-b", "status": "Running",
      "config": {"limits.cpu": "0,2"}, "expanded_config": {}, "expanded_devices": {}},
 ]
 
@@ -145,9 +145,9 @@ def _service(client) -> LXDService:
 
 def test_shared_pools_are_counted_once_and_marked_and_local_is_the_member_s_own():
     client = FakeClient()
-    res = _read_member_resources(_service(client), NODE, "microcloud20")
+    res = _read_member_resources(_service(client), NODE, "member-a")
     by_name = {p["name"]: p for p in res.storage_pools}
-    assert by_name["local"]["scope"] == "local" and by_name["local"]["members"] == ["microcloud20"]
+    assert by_name["local"]["scope"] == "local" and by_name["local"]["members"] == ["member-a"]
     assert by_name["remote"]["scope"] == "shared" and by_name["remote"]["members"] == MEMBERS
     assert by_name["sata-ssd"]["scope"] == "shared"
     assert res.storage_local_total == int(1.7 * TIB) and res.storage_local_used == 131 * GIB
@@ -161,7 +161,7 @@ def test_shared_pools_are_counted_once_and_marked_and_local_is_the_member_s_own(
 
 def test_instances_are_counted_by_location_from_one_recursion_1_read():
     client = FakeClient()
-    res = _read_member_resources(_service(client), NODE, "microcloud20")
+    res = _read_member_resources(_service(client), NODE, "member-a")
     assert [c for c in client.calls if c.startswith("instances")] == ["instances recursion=1 all-projects=true"]
     assert (res.instances_count, res.instances_running) == (3, 2)
     # 4 cores for web01, 1 for db01 with no limit, the stopped one allocates nothing
@@ -171,7 +171,7 @@ def test_instances_are_counted_by_location_from_one_recursion_1_read():
 
 def test_a_failed_instance_read_is_marked_and_not_rendered_as_zero_capacity():
     client = FakeClient(instances_fail=True)
-    res = _read_member_resources(_service(client), NODE, "microcloud20")
+    res = _read_member_resources(_service(client), NODE, "member-a")
     assert res.instances_partial is True
     assert (res.instances_count, res.instances_running, res.cpu_used) == (0, 0, 0)
     # the storage read is independent and still complete
@@ -180,9 +180,9 @@ def test_a_failed_instance_read_is_marked_and_not_rendered_as_zero_capacity():
 
 def test_a_pool_a_member_did_not_answer_for_marks_storage_partial():
     space = {k: dict(v) for k, v in SPACE.items()}
-    space["local"] = {m: v for m, v in SPACE["local"].items() if m != "microcloud20"}
+    space["local"] = {m: v for m, v in SPACE["local"].items() if m != "member-a"}
     client = FakeClient(space=space)
-    res = _read_member_resources(_service(client), NODE, "microcloud20")
+    res = _read_member_resources(_service(client), NODE, "member-a")
     assert res.storage_partial is True
     assert res.storage_local_total == 0 and res.storage_shared_total == 2 * int(5.3 * TIB)
 
@@ -226,13 +226,13 @@ def _app(client, monkeypatch, cache: _CacheSpy) -> TestClient:
 def test_a_degraded_body_is_cached_briefly_and_a_complete_one_for_the_full_ttl(monkeypatch):
     cache = _CacheSpy()
     app = _app(FakeClient(instances_fail=True), monkeypatch, cache)
-    body = app.get(f"/cluster-members/microcloud20/resources?node={NODE}").json()
+    body = app.get(f"/cluster-members/member-a/resources?node={NODE}").json()
     assert body["instances_partial"] is True
     assert [ttl for _, ttl, _ in cache.sets] == [DEGRADED_CACHE_TTL]
 
     cache = _CacheSpy()
     app = _app(FakeClient(), monkeypatch, cache)
-    body = app.get(f"/cluster-members/microcloud20/resources?node={NODE}").json()
+    body = app.get(f"/cluster-members/member-a/resources?node={NODE}").json()
     assert body["instances_partial"] is False and body["storage_partial"] is False
     assert [ttl for _, ttl, _ in cache.sets] != [DEGRADED_CACHE_TTL]
     assert body["storage_shared_total"] == 2 * int(5.3 * TIB)
