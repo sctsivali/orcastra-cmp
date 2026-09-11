@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 # which the UI is required to render as "unknown" rather than "now" - correct, but it would
 # describe every cached body for a full TTL after deploy as having no known age, on exactly the
 # surfaces someone would be watching to confirm the fix. Re-keying costs one cold window.
-RESOURCE_SCHEMA_VERSION = "v5"
+# v6: member resources gained the local/shared storage split and storage_partial. A v5 body
+# would render a member's ceph pools as its own disk again for a TTL after deploy.
+RESOURCE_SCHEMA_VERSION = "v6"
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's

@@ -80,7 +80,7 @@ def _offending_calls(tree: ast.AST) -> List[int]:
 # is the read and CRUD surface, where a wedged cluster now costs a bounded stall per request
 # (the pooled socket timeout is (3, 8)) rather than a parked worker forever.
 BASELINE = {
-    "app/routers/cluster_members.py": 3,
+    "app/routers/cluster_members.py": 2,
     "app/routers/cluster_registration.py": 1,
     "app/routers/console.py": 3,
     "app/routers/lxd_operations.py": 3,

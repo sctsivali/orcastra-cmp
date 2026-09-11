@@ -655,7 +655,24 @@ class MemberResources(BaseModel):
     storage_used: int = Field(0, description="Used storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
     storage_usage_percent: float = Field(0.0, description="Storage usage percentage")
-    storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
+    storage_local_total: int = Field(0, description="Bytes in pools local to this member (its own disks)")
+    storage_local_used: int = Field(0, description="Used bytes in this member's local pools")
+    storage_shared_total: int = Field(
+        0,
+        description=(
+            "Bytes in cluster-wide pools (ceph and the like) reachable from this member. Counted "
+            "once at cluster level; every member reports the same store."
+        ),
+    )
+    storage_shared_used: int = Field(0, description="Used bytes in the cluster-wide pools")
+    storage_partial: bool = Field(
+        False,
+        description="True when a pool's space could not be read for this member, so the storage figures are a floor",
+    )
+    storage_pools: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Storage pools info; each row carries scope (local or shared) and members",
+    )
     instances_count: int = Field(0, description="Number of instances on this member")
     instances_running: int = Field(0, description="Number of running instances")
     instances_partial: bool = Field(
