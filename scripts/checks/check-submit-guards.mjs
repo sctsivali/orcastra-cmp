@@ -61,7 +61,7 @@ for (const file of walk(srcRoot)) {
 if (offenders.length) {
   console.error('Forms fire a mutation without a synchronous double-submit guard:');
   for (const o of offenders) console.error(`  ${o}`);
-  console.error('\nCopy the pattern in components/network-create-form.tsx: a useRef claimed as the');
+  console.error('\nCopy the pattern in components/networks/network-create-dialog.tsx: a useRef claimed as the');
   console.error('first statement of the handler, before any await, and released in a finally.');
   process.exit(1);
 }

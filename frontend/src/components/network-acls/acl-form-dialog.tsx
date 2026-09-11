@@ -163,7 +163,7 @@ export function AclFormDialog({
   // important: `submitting` is React state, so it only reaches `canSubmit` on the next render.
   // Two clicks inside one tick both pass the disabled check and both fire a create, which is
   // two ACLs on the cluster. The ref is claimed synchronously, before any await, so the second
-  // click has something to lose against. Same guard as network-create-form.tsx.
+  // click has something to lose against. Same guard as networks/network-create-dialog.tsx.
   const submitInFlightRef = useRef(false);
 
   const submit = async () => {
