@@ -421,3 +421,33 @@ def test_the_legacy_keys_keep_their_shape(fake_cgroup, fake_psutil):
     assert isinstance(body["memory"]["total"], int)
     assert body["timestamp"].endswith("+00:00")
     assert set(body) - set(LEGACY_TOP_LEVEL) == {"host", "network_scope"}, "only additions"
+
+
+# --- role gate ------------------------------------------------------------------------------
+
+def _client(groups: List[str], user_id: str) -> TestClient:
+    from app.core.auth import AuthenticatedUser
+    from app.core.rbac import get_current_user
+    from app.routers.system import router
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(
+        user_id=user_id, email=f"{user_id}@example.test", groups=groups,
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize("groups,expected", [
+    (["role_tenant"], 403),
+    (["role_partner"], 200),
+    (["role_admin"], 200),
+])
+def test_tenant_is_refused_partner_and_admin_are_served(fake_cgroup, fake_psutil, groups, expected):
+    response = _client(groups, f"scoped-{groups[0]}").get("/system/resource-usage")
+    assert response.status_code == expected, response.text[:300]
+    if expected == 200:
+        body = response.json()
+        assert body["host"]["memory"]["total"] == HOST_TOTAL
+        assert body["container"]["memory"]["limit"] == LIMIT
+        assert body["network_scope"] == "container"

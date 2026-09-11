@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core.config import get_settings
-from app.core.dependencies import require_tenant, require_admin, AuthenticatedUser
+from app.core.dependencies import require_tenant, require_partner, require_admin, AuthenticatedUser
 # note: the resource-usage models moved to app.models.system_resources; they are re-exported
 # here so an importer of app.routers.system keeps working.
 from app.models.system_resources import (  # noqa: F401
@@ -147,6 +147,7 @@ async def clear_cache(
 @router.get(
     "/resource-usage",
     response_model=SystemResourceUsage,
+    dependencies=[Depends(require_partner())],
 )
 async def get_system_resource_usage():
     """
@@ -155,7 +156,7 @@ async def get_system_resource_usage():
     Deployment-aware: `host` is the kernel's view of the machine, `container` is this
     deployment's cgroup scope (limits, what counts against them, the worker set). The
     top-level cpu/memory/disks/process/os blocks are kept for older clients and mix
-    both scopes.
+    both scopes. Partner and above only; the panel names host devices and PIDs.
     """
     try:
         # note: the collector reads /proc and /sys and psutil; it never sleeps, but it is
