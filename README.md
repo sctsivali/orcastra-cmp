@@ -8,7 +8,7 @@
 
 # Orcastra Dashboard
 
-[![Release](https://img.shields.io/badge/Release-v1.0.0--RC4-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases/tag/v1.0.0-RC4)
+[![Release](https://img.shields.io/badge/Release-v1.0.0--RC4--hotfix1-0A7A3E?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases/tag/v1.0.0-RC4-hotfix1)
 [![Stability](https://img.shields.io/badge/Stability-Release_Candidate-1F6FEB?style=flat-square)](https://github.com/sctsivali/orcastra-dashboard/releases)
 [![License](https://img.shields.io/badge/License-GPLv3-2EA043?style=flat-square)](LICENSE)
 [![Community](https://img.shields.io/badge/Community-Forum-5865F2?style=flat-square)](https://discourse.orca.id)
