@@ -290,7 +290,7 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto p-6">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>Create New Group</DialogTitle>
           <DialogDescription>
             Create a new authentication group with custom permissions

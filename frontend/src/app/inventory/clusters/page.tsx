@@ -237,7 +237,7 @@ function ClustersContent() {
         }
       }}>
         <DialogContent className="max-w-3xl">
-          <DialogHeader>
+          <DialogHeader className="pb-4">
             <DialogTitle>
               Certificate Regenerated
             </DialogTitle>

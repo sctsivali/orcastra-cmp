@@ -137,7 +137,7 @@ export function MemberResourceModal({
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-4xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>
             {memberName || "Member Resources"}
           </DialogTitle>
@@ -402,7 +402,7 @@ export function MemberResourceModal({
       {/* Instance Details Modal */}
       <Dialog open={showInstanceModal} onOpenChange={setShowInstanceModal}>
         <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
-          <DialogHeader>
+          <DialogHeader className="pb-4">
             <DialogTitle>
               {instanceFilter === "running" ? "Running" : "Stopped"} Instances on {memberName}
             </DialogTitle>

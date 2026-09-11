@@ -2135,7 +2135,7 @@ export function InstanceCreateForm() {
       {/* Select base image dialog — Local + Custom + Ubuntu catalogs */}
       <Dialog open={imageDialogOpen} onOpenChange={setImageDialogOpen}>
         <DialogContent className="sm:max-w-[75rem] max-h-[85vh] overflow-hidden flex flex-col">
-          <DialogHeader>
+          <DialogHeader className="pb-4">
             <DialogTitle>Select Base Image</DialogTitle>
             <DialogDescription>
               Local images, plus the Custom (images.lxd.canonical.com) and Ubuntu

@@ -1185,7 +1185,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       {/* Unsaved Changes Warning Dialog */}
       <Dialog open={showUnsavedWarning} onOpenChange={setShowUnsavedWarning}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader className="pb-4">
             <DialogTitle className="text-amber-600">
               Unsaved Changes
             </DialogTitle>
@@ -1207,7 +1207,7 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
       {/* Remove Identity Confirmation Dialog */}
       <Dialog open={!!identityToRemove} onOpenChange={(open) => !open && setIdentityToRemove(null)}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader className="pb-4">
             <DialogTitle className="text-destructive">
               Remove Identity
             </DialogTitle>

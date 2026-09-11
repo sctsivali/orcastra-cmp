@@ -759,7 +759,7 @@ export function PolicyManagementSection() {
                                   </Button>
                                 </DialogTrigger>
                                 <DialogContent>
-                                  <DialogHeader>
+                                  <DialogHeader className="pb-4">
                                     <DialogTitle>Delete Policy</DialogTitle>
                                     <DialogDescription>
                                       Delete <strong>&quot;{policy.name}&quot;</strong>?

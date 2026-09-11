@@ -120,7 +120,7 @@ export function ClusterLocationDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
-        <DialogHeader className="shrink-0">
+        <DialogHeader className="shrink-0 pb-4">
           <DialogTitle>
             Set Cluster Location
           </DialogTitle>

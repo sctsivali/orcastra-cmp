@@ -229,7 +229,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4" />
             Rebuild Instance

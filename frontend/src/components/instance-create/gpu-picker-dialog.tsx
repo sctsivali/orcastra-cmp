@@ -63,7 +63,7 @@ export function GpuPickerDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[56rem] max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>Select GPU</DialogTitle>
           <DialogDescription>
             Cards detected on {nodeName || "the node"}. Compute GPUs are listed first. A display
@@ -81,7 +81,7 @@ export function GpuPickerDialog({
             Reading GPUs from {nodeName || "the node"}
           </div>
         ) : isError ? (
-          <div className="space-y-3 py-2">
+          <div className="space-y-3">
             <p className="text-sm text-destructive">
               Could not read GPUs from {nodeName || "the node"}. This does not mean the node has
               none.
@@ -97,7 +97,7 @@ export function GpuPickerDialog({
             </div>
           </div>
         ) : sorted.length === 0 ? (
-          <div className="space-y-3 py-2">
+          <div className="space-y-3">
             <p className="text-sm text-muted-foreground">No GPUs detected on this node.</p>
             <Button type="button" variant="outline" size="sm" onClick={onAddCustom}>
               <Plus className="h-4 w-4 mr-1" />

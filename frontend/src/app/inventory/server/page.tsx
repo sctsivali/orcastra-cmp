@@ -63,7 +63,7 @@ function ConfigMapLink({
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col overflow-hidden">
-          <DialogHeader className="pr-8 flex-shrink-0">
+          <DialogHeader className="pr-8 flex-shrink-0 pb-4">
             <DialogTitle className="text-xl">{title}</DialogTitle>
             <DialogDescription>
               {itemCount} {noun}

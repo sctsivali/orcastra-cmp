@@ -673,7 +673,7 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>
             {getTitle()}
           </DialogTitle>
