@@ -91,6 +91,9 @@ class LXDConnectionManager:
         # should be visible via get_node_names(). Prevents stale or
         # unregistered nodes from leaking into API responses.
         self._registered_clusters: Optional[set] = None
+        # Consecutive read timeouts of the validation probe, per cluster. See
+        # _validate_connection.
+        self._slow_validations: Dict[str, int] = {}
         
         # Register cleanup on exit
         atexit.register(self._cleanup_all_temp_files)
@@ -159,6 +162,13 @@ class LXDConnectionManager:
         
         return session
     
+    # A probe that times out on the read has completed TCP and TLS: the daemon is there and
+    # busy. One such probe used to evict the pooled client, and when the reconnect's own probe
+    # timed out as well the breaker tripped for 60 seconds, so a healthy MicroCloud under load
+    # flipped to "Could not reach" and back. Two consecutive read timeouts still mean a wedged
+    # daemon and take the existing path; connect, TLS and untrusted answers always do.
+    SLOW_VALIDATION_TOLERANCE = 2
+
     def _validate_connection(self, client: pylxd.Client, node_name: str) -> bool:
         """
         Validate if connection is still alive and authenticated.
@@ -178,12 +188,26 @@ class LXDConnectionManager:
                     metadata = data.get("metadata")
                     if metadata:
                         client.host_info = metadata
+                    self._slow_validations.pop(node_name, None)
                     return True
                 else:
                     logger.warning(f"Connection to {node_name} not trusted (auth={auth_status})")
                     return False
             return True
         except Exception as e:
+            from app.services.lxd.fanout import is_read_timeout
+
+            if is_read_timeout(e):
+                slow = self._slow_validations.get(node_name, 0) + 1
+                if slow < self.SLOW_VALIDATION_TOLERANCE:
+                    self._slow_validations[node_name] = slow
+                    logger.info(
+                        "Validation of %s timed out on the read (%d of %d tolerated); TCP and TLS "
+                        "completed, keeping the pooled client",
+                        node_name, slow, self.SLOW_VALIDATION_TOLERANCE,
+                    )
+                    return True
+                self._slow_validations.pop(node_name, None)
             logger.warning(f"Connection validation failed for {node_name}: {e}")
             return False
     
@@ -513,7 +537,11 @@ class LXDConnectionManager:
                         cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
                     )
                     return None
-            
+
+            # note: the boot path configures the session (pool size, retry policy, default
+            # timeout) and this path did not, so a worker that had reconnected once ran a
+            # different HTTP stack for the same cluster than its sibling.
+            self._configure_client_session(client)
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
             health.clear(cluster_id)
@@ -572,10 +600,13 @@ class LXDConnectionManager:
         logger.debug(f"Synced registered clusters whitelist: {self._registered_clusters}")
 
     def register_cluster(self, cluster_id: str) -> None:
-        """Add a single cluster to the registered whitelist."""
-        if self._registered_clusters is None:
-            self._registered_clusters = set()
-        self._registered_clusters.add(cluster_id)
+        """Add a single cluster to the registered whitelist.
+
+        note: None means "unfiltered" (the boot sync failed). Turning it into a one-element
+        set here would hide every other connected cluster in this worker.
+        """
+        if self._registered_clusters is not None:
+            self._registered_clusters.add(cluster_id)
 
     def unregister_cluster(self, cluster_id: str) -> None:
         """Remove a single cluster from the registered whitelist."""

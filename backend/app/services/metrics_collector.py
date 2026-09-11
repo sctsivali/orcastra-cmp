@@ -470,7 +470,16 @@ class MetricsCollector:
             
             # Get all registered cluster IDs
             cluster_ids = cert_manager.list_clusters()
-            
+
+            # important: the whitelist behind get_node_names() was synced at boot and in the
+            # one worker that served a registration. Every other worker went on omitting a
+            # cluster registered after boot, even once this sweep had connected it, so the
+            # list pages named it unreachable from that worker until a restart. This sweep
+            # runs in every worker outside any request context, so the Vault list it holds
+            # is the unfiltered fleet. Guarded on non-empty: a Vault blip must not blank it.
+            if cluster_ids:
+                self._lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
+
             reconnected = 0
             
             for cluster_id in cluster_ids:
