@@ -169,6 +169,26 @@ class Fanout(Generic[T]):
         return bool(self.answered) and not self.partial_nodes and not self.unreachable_nodes
 
 
+def unattempted(seeded: Sequence[str], connection_manager: object) -> List[str]:
+    """The seeded clusters this worker has never tried to connect to.
+
+    A list handler seeds `unreachable_nodes` with every registered cluster it holds no client
+    for. Two very different things put a cluster there: it is down (this worker tried, and
+    the healer keeps trying), or this worker has not caught up with a registration yet (the
+    next healer tick connects it, within a minute). A body naming a known-down cluster is a
+    correct answer and may be cached, as it always was; a body naming a cluster the worker
+    has simply not tried must not be, because the cache is shared by every worker and the
+    one that did connect it would then serve "unreachable" for the whole TTL.
+
+    A manager without `has_attempted` (a stub) is treated as having tried nothing, which is
+    the conservative reading: no cache rather than a wrong one.
+    """
+    tried = getattr(connection_manager, "has_attempted", None)
+    if tried is None:
+        return list(seeded)
+    return [node for node in seeded if not tried(node)]
+
+
 def collect(
     nodes: Sequence[str],
     results: Sequence[object],

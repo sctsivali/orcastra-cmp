@@ -84,8 +84,12 @@ class _Client:
 
 
 class _Manager:
-    def __init__(self, client):
+    def __init__(self, client, attempted=()):
         self._client = client
+        self.attempted = set(attempted)
+
+    def has_attempted(self, host):
+        return host in self.attempted
 
     def get_client(self, host, *args, **kwargs):
         if isinstance(self._client, BaseException):
@@ -303,35 +307,62 @@ def test_a_complete_listing_is_cached_and_carries_no_errors(monkeypatch):
 
 # --- the seeded set and the project bound ---------------------------------------------------
 
-def test_a_cluster_this_worker_holds_no_client_for_blocks_the_cache_too(monkeypatch):
-    """One worker's missing client must not become every worker's answer for 180 s.
-
-    The cache is shared by the workers. A cluster registered after this worker booted (or
-    evicted by its breaker) is named unreachable by the seeding, and the body was still
-    written because the queried clusters answered in full.
-    """
-    from app.routers import storage_pools, storage_volumes
+def _seeded_app(module, attempted):
+    """A fleet of HOST (answers) and C3 (this worker holds no client for it)."""
+    from app.services.lxd_service import get_lxd_service
+    from app.core.rbac import get_current_user
+    from app.core.org_scope import org_scope_dependency
 
     def pools(path, params):
         return _Resp(200, {"metadata": [{"name": "local", "driver": "zfs", "status": "Created", "config": {}, "used_by": []}]})
 
+    svc = _service(_Client(lambda p, q: _Resp(200, {"metadata": []}) if "volumes" in p or "storage-pools" == p.rsplit("/", 1)[-1] and q.get("recursion") == 0 else pools(p, q)))
+    svc.connection_manager.attempted = set(attempted)
+    svc.get_node_names = lambda: [HOST, "C3"]  # type: ignore[attr-defined]
+    app = FastAPI()
+    app.include_router(module.router)
+    app.dependency_overrides[get_lxd_service] = lambda: svc
+    app.dependency_overrides[get_current_user] = lambda: None
+    app.dependency_overrides[org_scope_dependency] = lambda: None
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_a_cluster_this_worker_has_not_tried_yet_blocks_the_cache(monkeypatch):
+    """One worker's missing client must not become every worker's answer for 180 s.
+
+    The cache is shared by the workers. A cluster registered after this worker booted is
+    named unreachable by the seeding until the next healer tick connects it; a body written
+    meanwhile would tell every other worker's users the cluster is down.
+    """
+    from app.routers import storage_pools, storage_volumes
+
     for module, path in ((storage_pools, "/storage/pools"), (storage_volumes, "/storage/volumes")):
         cache = _CacheSpy()
-        svc = _service(_Client(lambda p, q: _Resp(200, {"metadata": []}) if "volumes" in p or "storage-pools" == p.rsplit("/", 1)[-1] and q.get("recursion") == 0 else pools(p, q)))
-        svc.get_node_names = lambda: [HOST, "C3"]  # type: ignore[attr-defined]
-        from app.services.lxd_service import get_lxd_service
-        from app.core.rbac import get_current_user
-        from app.core.org_scope import org_scope_dependency
-
         monkeypatch.setattr(module, "get_cache_manager", lambda: cache)
-        app = FastAPI()
-        app.include_router(module.router)
-        app.dependency_overrides[get_lxd_service] = lambda: svc
-        app.dependency_overrides[get_current_user] = lambda: None
-        app.dependency_overrides[org_scope_dependency] = lambda: None
-        body = TestClient(app, raise_server_exceptions=False).get(path).json()
+        client = _seeded_app(module, attempted=[HOST])
+        body = client.get(path).json()
         assert body["unreachable_nodes"] == ["C3"], body
-        assert cache.sets == [], f"{path}: a body naming a never-asked cluster unreachable was cached"
+        assert cache.sets == [], f"{path}: a body naming a never-tried cluster unreachable was cached"
+
+
+def test_a_cluster_this_worker_tried_and_found_down_is_cached_for_one_healer_cadence(monkeypatch):
+    """A fleet with a dead cluster is the normal case (production runs 2 of 5 connected).
+
+    Refusing to cache whenever any cluster is unreachable made every page open a live read
+    of every cluster that did answer, and five concurrent readers queued to ten seconds.
+    A body naming a cluster this worker tried is a correct answer; it is remembered for 60 s
+    rather than 180 so a recovery shows within the healer's cadence.
+    """
+    from app.routers import storage_pools, storage_volumes
+
+    for module, path in ((storage_pools, "/storage/pools"), (storage_volumes, "/storage/volumes")):
+        cache = _CacheSpy()
+        monkeypatch.setattr(module, "get_cache_manager", lambda: cache)
+        client = _seeded_app(module, attempted=[HOST, "C3"])
+        body = client.get(path).json()
+        assert body["unreachable_nodes"] == ["C3"], body
+        assert [ttl for _, _, ttl in cache.sets] == [module.DEGRADED_CACHE_TTL], f"{path}: {cache.sets}"
+        assert module.DEGRADED_CACHE_TTL < 180
 
 
 def test_volumes_and_warnings_hold_a_partner_to_the_project_bound(monkeypatch):

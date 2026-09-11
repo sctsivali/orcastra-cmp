@@ -17,6 +17,7 @@ import urllib3
 
 from app.services.lxd import health
 from app.services.lxd.connection import LXDConnectionManager, TimeoutHTTPAdapter
+from app.services.lxd.exceptions import LXDConnectionError
 from app.services import metrics_collector as mc
 
 CLUSTER = "C2"
@@ -96,6 +97,30 @@ def test_registering_one_cluster_never_starts_filtering_from_a_one_element_set(m
     manager.register_cluster(CLUSTER)
     assert manager._registered_clusters is None
     assert sorted(manager.get_node_names()) == [CLUSTER, "nuc1"]
+
+
+def test_a_connect_attempt_is_remembered_whatever_came_of_it(manager, monkeypatch):
+    """The list routers cache a body naming a cluster this worker tried and found down, and
+    refuse to cache one naming a cluster it has not tried. Both outcomes of a connect, and the
+    breaker refusing to try, must therefore count as tried."""
+    from app.services.lxd.fanout import unattempted
+
+    assert not manager.has_attempted(CLUSTER)
+    assert unattempted([CLUSTER, "nuc1"], manager) == [CLUSTER, "nuc1"]
+
+    monkeypatch.setattr("app.services.lxd.connection.pylxd.Client", lambda *a, **k: (_ for _ in ()).throw(ConnectionError("down")))
+    with pytest.raises(LXDConnectionError):
+        manager.connect_with_vault_cert(CLUSTER, "https://127.0.0.1:1", "c", "k", verify=False)
+    assert manager.has_attempted(CLUSTER), "a failed connect is an attempt"
+    assert unattempted([CLUSTER, "nuc1"], manager) == ["nuc1"]
+
+    # the breaker now refuses the next try without contacting the peer: still an attempt
+    assert health.is_tripped(CLUSTER)
+    assert manager.connect_with_vault_cert(CLUSTER, "https://127.0.0.1:1", "c", "k", verify=False) is None
+    assert manager.has_attempted(CLUSTER)
+
+    # a stub manager without the method is read conservatively: nothing tried, nothing cached
+    assert unattempted(["x"], object()) == ["x"]
 
 
 # --- the slow probe --------------------------------------------------------------------------

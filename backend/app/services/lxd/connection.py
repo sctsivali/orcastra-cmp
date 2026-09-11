@@ -8,7 +8,7 @@ import time
 import os
 import atexit
 import gc
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import requests
 import pylxd
 from requests.adapters import HTTPAdapter
@@ -91,6 +91,13 @@ class LXDConnectionManager:
         # should be visible via get_node_names(). Prevents stale or
         # unregistered nodes from leaking into API responses.
         self._registered_clusters: Optional[set] = None
+        # Clusters this worker has tried to connect to since it started, whatever the outcome.
+        # A cluster in the whitelist but not here is one this worker has not caught up with
+        # yet (registered seconds ago, connected by the next healer tick); one that is here
+        # and still has no client is known to be down. The list routers cache a body that
+        # names a known-down cluster and refuse to cache one that names a cluster they have
+        # simply not tried, because the cache is shared by every worker.
+        self._attempted: Set[str] = set()
         # (count, first_at) of tolerated read timeouts of the validation probe, per cluster.
         # See _validate_connection; cleared whenever the client is evicted or rebuilt.
         self._slow_validations: Dict[str, Tuple[int, float]] = {}
@@ -297,6 +304,7 @@ class LXDConnectionManager:
         registration, auth checks and certificate rotation. Those are the operations that fix
         a broken cluster, so refusing them would make the breaker self-sealing.
         """
+        self._attempted.add(cluster_id)
         if not force and health.is_tripped(cluster_id):
             logger.debug(
                 "Skipping connect to %s: recently unreachable (%s)",
@@ -643,6 +651,10 @@ class LXDConnectionManager:
     def has_connection_info(self, cluster_id: str) -> bool:
         """Check if we have stored connection info for a cluster."""
         return cluster_id in self._connection_info
+
+    def has_attempted(self, cluster_id: str) -> bool:
+        """True once this worker has tried to connect to the cluster, whatever came of it."""
+        return cluster_id in self._attempted
     
     def cleanup_connection(self, cluster_id: str) -> None:
         """

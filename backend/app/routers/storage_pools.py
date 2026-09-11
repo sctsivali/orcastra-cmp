@@ -14,7 +14,7 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
-from app.services.lxd.fanout import NodeRead, collect
+from app.services.lxd.fanout import NodeRead, collect, unattempted
 from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT
 from app.models.schemas import FanoutReachability
 from app.core.single_flight import single_flight
@@ -55,6 +55,10 @@ MEMBER_SPECIFIC_POOL_KEYS = frozenset({
     "lvm.thinpool_name",
     "lvm.vg_name",
 })
+
+# A body naming a known-down cluster is right today and may be wrong once the healer
+# reconnects it, so it is remembered for one healer cadence rather than three minutes.
+DEGRADED_CACHE_TTL = 60
 
 router = APIRouter(
     prefix="/storage/pools",
@@ -165,18 +169,23 @@ async def list_storage_pools(
         # connection_manager.get_node_names() returns only nodes with a live client while
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
-        unreachable_nodes: List[str] = (
+        seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
+        unreachable_nodes: List[str] = list(seeded)
         fan = collect(
             nodes_to_query, results, noun="storage pools", reasons_visible=not tenant_acl_active()
         )
         unreachable_nodes.extend(fan.unreachable_nodes)
         all_pools = fan.rows
-        # important: a cluster this worker holds no client for is named unreachable above and
-        # blocks the write too. The cache is shared by every worker, so one worker's missing
-        # client must not become every worker's answer for 180 seconds.
-        cacheable = fan.cacheable and not unreachable_nodes
+        # important: the seeding names two kinds of cluster, and only one of them may be
+        # remembered. A cluster this worker tried and found down is a correct answer, cached
+        # as it always was (a shorter TTL, so recovery shows within the healer's cadence). A
+        # cluster this worker has never tried, registered seconds ago, must not be: the cache
+        # is shared by every worker, and the one that did connect it would then serve
+        # "unreachable" for the whole TTL. See fanout.unattempted.
+        cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
+        ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
 
         if tenant_acl_active():
             visible_pools = []
@@ -199,8 +208,8 @@ async def list_storage_pools(
         # partial one: a cluster that failed its listing was cached as "no pools" for
         # 180 seconds. See instances.py.
         if cacheable:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug("Cached storage pools list for 180 seconds")
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
+            logger.debug("Cached storage pools list for %s seconds", ttl)
         else:
             logger.warning("Not caching storage pools list: %s", fan.node_errors or "no node answered")
 
