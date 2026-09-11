@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyRow } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyRow } from "@/components/ui/table-text";
 import { formatLabel } from "@/lib/utils";
 import { HardDrive } from "lucide-react";
 import { useStorageVolumes } from "@/hooks/use-lxd";
@@ -36,11 +36,16 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 interface VolumeInfo {
   name: string;
   type: string;
+  pool: string;
   content_type: string;
   description: string;
   config: Record<string, string>;
   used_by: string[];
   node?: string;
+  /** The project that holds the volume. `used_by` answers who consumes it. */
+  project?: string;
+  /** The cluster member that holds it; empty on a shared pool or a single host. */
+  location?: string;
 }
 
 const VOLUMES = defineTable<VolumeInfo>()({
@@ -49,6 +54,16 @@ const VOLUMES = defineTable<VolumeInfo>()({
   searchExtra: (v) => [v.description],
   columns: [
     { field: "name", label: "Name", sort: (v) => v.name, search: (v) => v.name, filter: fromSort("text") },
+    {
+      // On a cluster with a per-member pool the same name exists once per member, and a
+      // custom volume may exist in several pools of one project: name alone is not an identity.
+      field: "pool",
+      label: "Pool",
+      sort: (v) => v.pool,
+      search: (v) => v.pool,
+      facet: (v) => v.pool,
+      facetSpec: {},
+    },
     {
       field: "type",
       label: "Type",
@@ -70,15 +85,34 @@ const VOLUMES = defineTable<VolumeInfo>()({
       facet: (v) => v.node,
       facetSpec: { role: "node", primary: true },
     },
+    {
+      field: "location",
+      label: "Location",
+      sort: (v) => v.location ?? "",
+      facet: (v) => v.location ?? "",
+      facetSpec: { emptyLabel: "(shared)" },
+    },
     { field: "used_by", label: "Used By", sort: (v) => v.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
     {
+      field: "project",
+      label: "Project",
+      // The project that HOLDS this volume, which is a different question from the
+      // `projects` column below it: that one answers who consumes it.
+      sort: (v) => v.project ?? "",
+      facet: (v) => v.project ?? "",
+      facetSpec: { role: "project", primary: true },
+    },
+    {
+      // filter-coverage: this is not the project dimension. It answers which projects
+      // CONSUME the volume, derived from used_by, while the "project" column above answers
+      // which one holds it, and that is the column carrying the project role.
       field: "projects",
-      label: "Projects",
+      label: "Used By Projects",
       // Was a copy of the used_by accessor, so the header sorted by resource count while the
       // cell displayed a project count. It now sorts by what it displays.
       sort: (v) => projectsFromUsedBy(v.used_by).length,
       facet: (v) => projectsFromUsedBy(v.used_by),
-      facetSpec: { role: "project", emptyLabel: "(no project)" },
+      facetSpec: { emptyLabel: "(no project)" },
     },
     {
       field: "usage",
@@ -107,12 +141,17 @@ function StorageVolumesContent() {
     () => Array.from(new Set(volumes.map((v) => v.node).filter(Boolean))).sort(),
     [volumes],
   );
+  // A member column only once some volume names one: a shared pool and a single host never do.
+  const locations = useMemo(
+    () => Array.from(new Set(volumes.map((v) => v.location).filter(Boolean))).sort(),
+    [volumes],
+  );
 
   // The column appears once any node is known, the facet once there are two to choose
   // between. The thresholds differ on purpose: one option filters nothing.
   const availableFields = useMemo(
-    () => (nodes.length > 0 ? VOLUMES.facetFields : VOLUMES.facetFields.filter((f) => f !== "node")),
-    [nodes.length],
+    () => VOLUMES.facetFields.filter((f) => (f !== "node" || nodes.length > 0) && (f !== "location" || locations.length > 0)),
+    [nodes.length, locations.length],
   );
 
   // One dialog for the page, opened from either cell. See components/used-by.
@@ -143,7 +182,7 @@ function StorageVolumesContent() {
 
   // Derived from the headers actually rendered. It used to be the with-Node count, so the
   // empty row was one column too wide on every scope that returns nothing.
-  const columnCount = nodes.length > 0 ? 6 : 5;
+  const columnCount = 8 + (nodes.length > 0 ? 1 : 0) + (locations.length > 0 ? 1 : 0);
 
   if (isLoading) {
     return <LoadingLottiePage />;
@@ -180,13 +219,18 @@ function StorageVolumesContent() {
             <TableHeader>
               <TableRow>
                 <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Pool" field="pool" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 <SortableTableHead label="Content Type" field="content_type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {nodes.length > 0 && (
                   <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
+                {locations.length > 0 && (
+                  <SortableTableHead label="Location" field="location" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -203,8 +247,9 @@ function StorageVolumesContent() {
                 />
               ) : (
                 paginatedVolumes.map((volume: any, idx: number) => (
-                  <TableRow key={`${volume.node}-${volume.name}-${idx}`}>
+                  <TableRow key={`${volume.node}-${volume.pool}-${volume.location}-${volume.name}-${idx}`}>
                     <TableCell className="font-medium">{volume.name}</TableCell>
+                    <TableCell>{volume.pool}</TableCell>
                     <TableCell>
                       {formatLabel(volume.type)}
                     </TableCell>
@@ -216,6 +261,9 @@ function StorageVolumesContent() {
                         {volume.node}
                       </TableCell>
                     )}
+                    {locations.length > 0 && (
+                      <TableCell>{volume.location || EMPTY_VALUE}</TableCell>
+                    )}
                     <TableCell className="text-center">
                       <UsedByCell
                         usedBy={volume.used_by}
@@ -225,6 +273,7 @@ function StorageVolumesContent() {
                         onOpen={() => usedBy.openUsage(volumeSubject(volume))}
                       />
                     </TableCell>
+                    <TableCell>{volume.project || EMPTY_VALUE}</TableCell>
                     <TableCell>
                       <ProjectsCell
                         usedBy={volume.used_by}

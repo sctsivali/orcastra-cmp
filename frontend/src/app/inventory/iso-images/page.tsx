@@ -14,7 +14,7 @@ import {
   
   TableHeader,
   TableRow } from "@/components/ui/table";
-import { TableEmptyRow } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyRow } from "@/components/ui/table-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -59,13 +59,24 @@ const ISOS = defineTable<any>()({
       facetSpec: { role: "node", primary: true } },
     { field: "used_by", label: "Used By", sort: (i) => i.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
     {
+      field: "project",
+      label: "Project",
+      // The project that HOLDS the image; `projects` below answers who consumes it.
+      sort: (i) => i.project ?? "",
+      facet: (i) => i.project ?? "",
+      facetSpec: { role: "project", primary: true },
+    },
+    {
+      // filter-coverage: this is not the project dimension. It answers which projects
+      // CONSUME the image, derived from used_by, while the "project" column above answers
+      // which one holds it, and that is the column carrying the project role.
       field: "projects",
-      label: "Projects",
+      label: "Used By Projects",
       // The one page in the used_by family that never had this column, though the rows have
       // always carried used_by. Same shape as storage-volumes.
       sort: (i) => projectsFromUsedBy(i.used_by).length,
       facet: (i) => projectsFromUsedBy(i.used_by),
-      facetSpec: { role: "project", emptyLabel: "(no project)" },
+      facetSpec: { emptyLabel: "(no project)" },
     },
     {
       field: "usage",
@@ -107,7 +118,7 @@ function IsoImagesContent() {
   );
 
   // Header, cell and the empty row's width move together; a mismatch renders a short row.
-  const columnCount = nodes.length > 0 ? 5 : 4;
+  const columnCount = nodes.length > 0 ? 6 : 5;
 
   const availableFields = useMemo(
     () =>
@@ -188,7 +199,8 @@ function IsoImagesContent() {
                   <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -220,6 +232,7 @@ function IsoImagesContent() {
                         onOpen={() => usedBy.openUsage(isoSubject(v))}
                       />
                     </TableCell>
+                    <TableCell>{v.project || EMPTY_VALUE}</TableCell>
                     <TableCell>
                       <ProjectsCell
                         usedBy={v.used_by}
