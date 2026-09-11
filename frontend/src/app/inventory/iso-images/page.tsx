@@ -20,6 +20,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { IsoUploadDialog } from "@/components/iso-upload-dialog";
 import { useStorageVolumes } from "@/hooks/use-lxd";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -77,6 +78,10 @@ const ISOS = defineTable<any>()({
 function IsoImagesContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStorageVolumes();
   const allVolumes = (data as any)?.volumes || [];
+  // The ISO list is the volume list filtered, so a cluster the volume read lost is a
+  // cluster whose ISOs are missing here too. Without this banner the page said "No ISO
+  // images yet" for a cluster holding two.
+  const reach = reachabilityOf(data);
   // ISOs are custom storage volumes with content-type "iso".
   const isos = useMemo(
     () => allVolumes.filter((v: any) => v.content_type === "iso"),
@@ -164,6 +169,9 @@ function IsoImagesContent() {
           )}
         </div>
       </div>
+
+      <UnreachableNodesBanner noun="ISO images" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="ISO images" nodes={reach.partial} reasons={reach.reasons} partial />
 
       <Card>
         <CardHeader className="space-y-4">

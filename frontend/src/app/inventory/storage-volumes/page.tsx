@@ -4,7 +4,7 @@ import type { StorageVolumeInfo } from "@/types/api";
 
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TableToolbar } from "@/components/ui/table-toolbar";
@@ -95,7 +95,7 @@ function StorageVolumesContent() {
 
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
-  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+  const reach = reachabilityOf(data);
 
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
@@ -167,7 +167,8 @@ function StorageVolumesContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="storage volumes" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="storage volumes" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="storage volumes" nodes={reach.partial} reasons={reach.reasons} partial />
 
       <Card>
         <CardHeader className="space-y-4">

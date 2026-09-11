@@ -586,14 +586,26 @@ export interface ProfileInfo {
   project?: string;
 }
 
-export interface ProfileListResponse {
+/**
+ * What a fan-out list could not read, cluster by cluster. Every field is optional because a
+ * payload cached by an older build carries none of them.
+ */
+export interface FanoutReachability {
+  /** Clusters whose rows are missing: never reached, refused, or the listing itself failed. */
+  unreachable_nodes?: string[];
+  /** Clusters that answered but lost some rows; node_errors names what was lost. */
+  partial_nodes?: string[];
+  /**
+   * Reason per cluster in either list, prefixed "unreachable:", "forbidden:", "error:" or
+   * "partial:". Absent for Tenant callers, who see the banner without the diagnosis.
+   */
+  node_errors?: Record<string, string>;
+}
+
+export interface ProfileListResponse extends FanoutReachability {
   total: number;
   profiles: ProfileInfo[];
   nodes: string[];
-  /** Nodes that could not be reached; their rows are missing from the list above. */
-  unreachable_nodes?: string[];
-  /** Nodes that answered but could not be read for every project, so their rows may be incomplete. */
-  partial_nodes?: string[];
 }
 
 export interface ProfileCreateRequest {
@@ -648,14 +660,10 @@ export interface NetworkACLInfo {
   project?: string;
 }
 
-export interface NetworkACLListResponse {
+export interface NetworkACLListResponse extends FanoutReachability {
   total: number;
   acls: NetworkACLInfo[];
   nodes: string[];
-  /** Nodes that could not be reached; their rows are missing from the list above. */
-  unreachable_nodes?: string[];
-  /** Nodes that answered but could not be read for every project, so their rows may be incomplete. */
-  partial_nodes?: string[];
 }
 
 export interface NetworkACLCreateRequest {
@@ -677,7 +685,7 @@ export interface StoragePoolInfo {
   node?: string;
 }
 
-export interface StoragePoolListResponse {
+export interface StoragePoolListResponse extends FanoutReachability {
   total: number;
   pools: StoragePoolInfo[];
   nodes: string[];
@@ -700,9 +708,13 @@ export interface StorageVolumeInfo {
   used_by: string[];
   content_type: string;
   node?: string;
+  /** The LXD project that holds the volume. */
+  project?: string;
+  /** Cluster member that holds it; empty for a shared pool or a single host. */
+  location?: string;
 }
 
-export interface StorageVolumeListResponse {
+export interface StorageVolumeListResponse extends FanoutReachability {
   total: number;
   volumes: StorageVolumeInfo[];
   nodes: string[];
@@ -758,7 +770,7 @@ export interface WarningInfo {
   status: string;
 }
 
-export interface WarningListResponse {
+export interface WarningListResponse extends FanoutReachability {
   total: number;
   warnings: WarningInfo[];
   nodes: string[];
@@ -775,7 +787,7 @@ export interface ServerInfo {
   public: boolean;
 }
 
-export interface ServerListResponse {
+export interface ServerListResponse extends FanoutReachability {
   servers: ServerInfo[];
   total: number;
 }
@@ -790,7 +802,7 @@ export interface IdentityInfo {
   node: string;
 }
 
-export interface IdentityListResponse {
+export interface IdentityListResponse extends FanoutReachability {
   total: number;
   identities: IdentityInfo[];
   nodes: string[];
@@ -810,7 +822,7 @@ export interface GroupInfo {
   node: string;
 }
 
-export interface GroupListResponse {
+export interface GroupListResponse extends FanoutReachability {
   total: number;
   groups: GroupInfo[];
   nodes: string[];
@@ -913,19 +925,33 @@ export interface MemberResources {
   gpu_vendors?: string[];
   gpu_models?: string[];
   gpu_utilization_supported?: boolean;
+  /** Sum of every pool row below: what this member can place work on, shared pools included. */
   storage_total: number;
   storage_used: number;
   storage_available: number;
   storage_usage_percent: number;
+  /** Pools on this member's own disks. */
+  storage_local_total?: number;
+  storage_local_used?: number;
+  /** Cluster-wide pools (ceph and the like) reachable from this member; counted once at cluster level. */
+  storage_shared_total?: number;
+  storage_shared_used?: number;
+  /** A pool's space could not be read for this member, so the storage figures are a floor. */
+  storage_partial?: boolean;
   storage_pools: Array<{
     name: string;
     driver: string;
     space_total: number;
     space_used: number;
     space_available: number;
+    /** "local" is this member's own disk, "shared" is the cluster's store seen from here. */
+    scope?: "local" | "shared";
+    members?: string[];
   }>;
   instances_count: number;
   instances_running: number;
+  /** The instance list could not be read in full: the counts and the CPU allocation are a floor. */
+  instances_partial?: boolean;
   /** When this sample was read off the cluster. Absent means unknown, never "now". */
   collected_at?: string | null;
 }

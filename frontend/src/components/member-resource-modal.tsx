@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -79,6 +80,24 @@ export function MemberResourceModal({
 
   const [instancesError, setInstancesError] = React.useState<string | null>(null);
 
+  // What the storage card headlines. A build that reports the local/shared split headlines
+  // the member's own disks; an older payload (no split) falls back to the sum of its rows,
+  // which is what it always showed.
+  const storage = React.useMemo(() => {
+    const local = resources?.storage_local_total;
+    const hasSplit = typeof local === "number" && typeof resources?.storage_shared_total === "number";
+    const total = hasSplit ? local : resources?.storage_total ?? 0;
+    const used = hasSplit ? resources?.storage_local_used ?? 0 : resources?.storage_used ?? 0;
+    return {
+      headline: hasSplit ? "Storage (Local)" : "Storage",
+      total,
+      used,
+      percent: total > 0 ? (used / total) * 100 : 0,
+      sharedTotal: hasSplit ? resources?.storage_shared_total ?? 0 : 0,
+      sharedUsed: hasSplit ? resources?.storage_shared_used ?? 0 : 0,
+    };
+  }, [resources]);
+
   // important: this used to set an empty array on purpose, with a comment saying LXD does not
   // report which member an instance runs on. It does; VMInfo simply did not carry the field, so
   // the drill-down always rendered "Instance Details Unavailable". `location` is now modelled
@@ -133,6 +152,21 @@ export function MemberResourceModal({
           </div>
         ) : resources ? (
           <div className="space-y-6">
+            {(resources.instances_partial || resources.storage_partial) && (
+              // note: a floor presented as a fact reads as free capacity. This says which
+              // figures could not be read, above the cards that would otherwise show zeros.
+              <Alert data-testid="member-partial-notice">
+                <Activity className="h-4 w-4" />
+                <AlertDescription>
+                  {resources.instances_partial && resources.storage_partial
+                    ? "The instance list and part of the storage could not be read from this member, so the instance, CPU and storage figures are incomplete."
+                    : resources.instances_partial
+                      ? "The instance list could not be read from this member, so the instance count and the CPU allocation are unknown."
+                      : "A storage pool could not be read for this member, so the storage figures are a floor."}
+                </AlertDescription>
+              </Alert>
+            )}
+
             {/* Overview Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* CPU */}
@@ -140,21 +174,24 @@ export function MemberResourceModal({
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm font-medium flex items-center gap-2">
                     <Cpu className="h-4 w-4 text-blue-500" />
-                    CPU
+                    CPU Allocated
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2">
+                  {/* note: allocation, not utilisation. The figure is the sum of limits.cpu of the
+                      running instances placed here (one core for an instance with no limit); LXD's
+                      resources API carries no host CPU utilisation. */}
+                  <div className="space-y-2" data-partial={resources.instances_partial ? "true" : undefined}>
                     <div className="flex items-baseline justify-center gap-1">
-                      <span className="text-2xl font-bold">{resources.cpu_used}</span>
+                      <span className="text-2xl font-bold">{resources.instances_partial ? "?" : resources.cpu_used}</span>
                       <span className="text-sm text-muted-foreground">/ {resources.cpu_total} cores</span>
                     </div>
                     <Progress 
-                      value={resources.cpu_usage_percent} 
+                      value={resources.instances_partial ? 0 : resources.cpu_usage_percent} 
                       className="h-2"
                     />
-                    <p className={`text-sm font-medium text-center ${getUsageColor(resources.cpu_usage_percent)}`}>
-                      {resources.cpu_usage_percent.toFixed(1)}% used
+                    <p className={`text-sm font-medium text-center ${resources.instances_partial ? "text-muted-foreground" : getUsageColor(resources.cpu_usage_percent)}`}>
+                      {resources.instances_partial ? "allocation unknown" : `${resources.cpu_usage_percent.toFixed(1)}% allocated`}
                     </p>
                   </div>
                 </CardContent>
@@ -193,25 +230,33 @@ export function MemberResourceModal({
                 <CardHeader className="pb-3">
                   <CardTitle className="text-sm font-medium flex items-center gap-2">
                     <HardDrive className="h-4 w-4 text-green-500" />
-                    Storage
+                    {storage.headline}
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2">
+                  {/* note: the headline is what this member itself holds. A cluster-wide pool
+                      (ceph) is seen from every member, and adding it to each one made a 1.7 TB
+                      member read as 12.4 TB; it is reported once, on its own line. */}
+                  <div className="space-y-2" data-partial={resources.storage_partial ? "true" : undefined}>
                     <div className="text-center text-sm">
-                      <span className="text-2xl font-bold">{formatBytesCompact(resources.storage_used).value}</span>
-                      <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.storage_used).unit}</span>
+                      <span className="text-2xl font-bold">{formatBytesCompact(storage.used).value}</span>
+                      <span className="text-xs text-muted-foreground"> {formatBytesCompact(storage.used).unit}</span>
                       <span className="text-xs text-muted-foreground"> / </span>
-                      <span className="text-base font-semibold">{formatBytesCompact(resources.storage_total).value}</span>
-                      <span className="text-xs text-muted-foreground"> {formatBytesCompact(resources.storage_total).unit}</span>
+                      <span className="text-base font-semibold">{formatBytesCompact(storage.total).value}</span>
+                      <span className="text-xs text-muted-foreground"> {formatBytesCompact(storage.total).unit}</span>
                     </div>
                     <Progress 
-                      value={resources.storage_usage_percent} 
+                      value={storage.percent} 
                       className="h-2"
                     />
-                    <p className={`text-sm font-medium text-center ${getUsageColor(resources.storage_usage_percent)}`}>
-                      {resources.storage_usage_percent.toFixed(1)}% used
+                    <p className={`text-sm font-medium text-center ${getUsageColor(storage.percent)}`}>
+                      {storage.percent.toFixed(1)}% used{resources.storage_partial ? " (incomplete)" : ""}
                     </p>
+                    {storage.sharedTotal > 0 && (
+                      <p className="text-xs text-muted-foreground text-center">
+                        + {formatBytes(storage.sharedUsed)} / {formatBytes(storage.sharedTotal)} shared, cluster-wide
+                      </p>
+                    )}
                   </div>
                 </CardContent>
               </Card>
@@ -225,11 +270,17 @@ export function MemberResourceModal({
                   </CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="space-y-2">
+                  <div className="space-y-2" data-partial={resources.instances_partial ? "true" : undefined}>
+                    {resources.instances_partial ? (
+                      <p className="text-center text-sm text-muted-foreground">
+                        <span className="text-2xl font-bold text-foreground">?</span> unavailable
+                      </p>
+                    ) : (
                     <div className="flex items-baseline justify-center gap-1">
                       <span className="text-2xl font-bold">{resources.instances_running}</span>
                       <span className="text-sm text-muted-foreground">/ {resources.instances_count} total</span>
                     </div>
+                    )}
                     <div className="flex flex-col items-center justify-center gap-2">
                       {resources.instances_running > 0 && (
                         <TableLink
@@ -272,7 +323,9 @@ export function MemberResourceModal({
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Storage Pools</CardTitle>
-                  <CardDescription>Individual storage pool utilization</CardDescription>
+                  <CardDescription>
+                    Individual storage pool utilization. A shared pool is the cluster&apos;s store as this member sees it, counted once at cluster level.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
@@ -288,6 +341,9 @@ export function MemberResourceModal({
                               <HardDrive className="h-4 w-4 text-muted-foreground" />
                               <span className="font-medium">{pool.name}</span>
                               <span className="text-muted-foreground">{formatLabel(pool.driver)}</span>
+                              {pool.scope === "shared" && (
+                                <Badge variant="muted">shared, cluster-wide</Badge>
+                              )}
                             </div>
                             <span className="text-sm text-muted-foreground">
                               {formatBytes(pool.space_used)} / {formatBytes(pool.space_total)}
@@ -323,8 +379,8 @@ export function MemberResourceModal({
                     <p className="font-medium">{formatBytes(resources.memory_available)}</p>
                   </div>
                   <div>
-                    <p className="text-muted-foreground mb-1">Available Storage</p>
-                    <p className="font-medium">{formatBytes(resources.storage_available)}</p>
+                    <p className="text-muted-foreground mb-1">Available Storage (local)</p>
+                    <p className="font-medium">{formatBytes(storage.total - storage.used)}</p>
                   </div>
                 </div>
               </CardContent>

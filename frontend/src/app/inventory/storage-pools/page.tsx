@@ -4,7 +4,7 @@ import type { StoragePoolInfo } from "@/types/api";
 
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Badge } from "@/components/ui/badge";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -101,7 +101,7 @@ function StoragePoolsContent() {
   
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
-  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+  const reach = reachabilityOf(data);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const resetPage = () => setCurrentPage(1);
@@ -176,7 +176,8 @@ function StoragePoolsContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="storage pools" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="storage pools" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="storage pools" nodes={reach.partial} reasons={reach.reasons} partial />
 
       <Card>
         <CardHeader className="space-y-4">
