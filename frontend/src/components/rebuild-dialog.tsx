@@ -243,7 +243,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
         {/* Loading preflight */}
         {phase === "loading" && (
-          <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
             Checking the instance…
           </div>
@@ -399,7 +399,7 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
         {/* Running / done / failed */}
         {(phase === "running" || phase === "done" || phase === "failed") && (
-          <div className="space-y-3 py-2">
+          <div className="space-y-3">
             {phase === "done" ? (
               <div className="flex items-center gap-2 text-sm font-medium text-emerald-600">
                 <CheckCircle2 className="h-5 w-5" /> Rebuild complete

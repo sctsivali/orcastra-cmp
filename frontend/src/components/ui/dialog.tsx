@@ -114,9 +114,10 @@ DialogContent.displayName = DialogPrimitive.Content.displayName
 
 // important: DialogContent has set no gap and no space-y since v0.2.0 (the mobile rewrite
 // dropped shadcn's `grid gap-4`), so a header sits flush against whatever follows it. Until the
-// gap is restored on DialogContent itself, a DialogHeader that is followed by anything, a
-// body, a form or a DialogFooter, carries `pb-4`: sixteen pixels, the rhythm the bodies space
-// their own sections by. AlertDialogContent kept `gap-4` and needs nothing.
+// gap is restored on DialogContent itself, a DialogHeader whose next child brings no spacing
+// of its own (a body, a form or a DialogFooter with no top margin or padding) carries `pb-4`:
+// sixteen pixels, the rhythm the bodies space their own sections by. A body that already
+// pads itself (`py-4`, `mt-4`) needs nothing more. AlertDialogContent kept `gap-4`.
 const DialogHeader = ({
   className,
   ...props
