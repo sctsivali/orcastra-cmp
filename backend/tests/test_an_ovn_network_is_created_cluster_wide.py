@@ -31,7 +31,7 @@ class _Networks:
     def __init__(self) -> None:
         self.posts: List[Dict[str, Any]] = []
 
-    def post(self, json: Dict[str, Any], params: Dict[str, Any]) -> None:
+    def post(self, json: Dict[str, Any], params: Dict[str, Any], timeout=None) -> None:
         self.posts.append({"json": json, "params": dict(params)})
 
     def __getitem__(self, name: str):

@@ -25,7 +25,7 @@ class _RawPools:
     def __init__(self) -> None:
         self.posts: List[Dict[str, Any]] = []
 
-    def post(self, json: Dict[str, Any], params: Dict[str, Any] = None) -> None:
+    def post(self, json: Dict[str, Any], params: Dict[str, Any] = None, timeout=None) -> None:
         self.posts.append({"json": json, "params": dict(params or {})})
 
 

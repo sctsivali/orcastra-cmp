@@ -98,10 +98,11 @@ class _Networks:
         self.async_writes = async_writes
         self.posts: List[Dict[str, Any]] = []
         self.deletes: List[str] = []
+        self.delete_timeouts: List[Any] = []
         self.gets_before_settled = 0
 
-    def post(self, json: Dict[str, Any], params: Dict[str, Any]) -> _Response:
-        self.posts.append({"json": json, "params": dict(params)})
+    def post(self, json: Dict[str, Any], params: Dict[str, Any], timeout=None) -> _Response:
+        self.posts.append({"json": json, "params": dict(params), "timeout": timeout})
         return _async("op-create") if self.async_writes else _sync()
 
     def __getitem__(self, name: str):
@@ -112,8 +113,9 @@ class _Networks:
                 raise pylxd_exceptions.LXDAPIException(_Response({"error": "Network not found"}, 404))
             return _Response({"metadata": {"name": name, "type": "bridge", "managed": True, "config": {}}})
 
-        def delete(params=None):
+        def delete(params=None, timeout=None):
             self.deletes.append(name)
+            self.delete_timeouts.append(timeout)
             return _async("op-delete") if self.async_writes else _sync()
 
         return SimpleNamespace(get=get, delete=delete)
@@ -203,8 +205,9 @@ def _acl_app(monkeypatch, post_answer=None):
     calls: List[str] = []
 
     class _Acls:
-        def post(self, json, params):
+        def post(self, json, params, timeout=None):
             calls.append("post")
+            calls.append(f"timeout={timeout}")
             if post_answer is not None:
                 return post_answer()
             return _async("op-acl")
@@ -242,7 +245,7 @@ def test_an_acl_create_waits_for_its_operation(monkeypatch) -> None:
     tc, calls, ops = _acl_app(monkeypatch)
     r = tc.post("/network-acls?host=nuc1", json={"name": "qaacl", "description": "", "ingress": [], "egress": [], "config": {}})
     assert r.status_code == 200, r.text
-    assert calls == ["post"]
+    assert calls == ["post", f"timeout={lxd_utils.write_timeout(acls_module.ACL_WRITE_WAIT_SECONDS)}"]
     assert [w["op"] for w in ops.waits] == ["op-acl"]
 
 
@@ -309,3 +312,17 @@ def test_an_operation_that_vanished_after_an_elapsed_slice_reports_the_wait_erro
     else:
         raise AssertionError("an unreadable operation must not pass as success")
     assert len(ops.waits) == 1
+
+
+def test_a_synchronous_write_is_sent_with_a_read_timeout_that_outlives_it(monkeypatch) -> None:
+    """LXD 5.21 finishes a network create before it answers. An OVN create on a three-member
+    cluster ran past the pooled client's 8 s read, so the console reported "Failed to create
+    network" while the daemon created it. The write carries its own read timeout."""
+    client, nets, _ = _networks_app(monkeypatch, async_writes=False)
+    r = client.post("/networks?host=nuc1", json=BRIDGE)
+    assert r.status_code == 200, r.text
+    assert nets.posts and all(p["timeout"] == lxd_utils.write_timeout(networks_module.NETWORK_WRITE_WAIT_SECONDS) for p in nets.posts)
+    assert nets.posts[0]["timeout"][1] > 8, "the read must outlive the pooled client's 8 s"
+    r = client.delete(f"/networks/{BRIDGE['name']}?host=nuc1")
+    assert r.status_code == 200, r.text
+    assert nets.delete_timeouts == [lxd_utils.write_timeout(networks_module.NETWORK_WRITE_WAIT_SECONDS)]

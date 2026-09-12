@@ -39,7 +39,7 @@ from app.core.tenant_visibility import (
 from app.services.activity_logger import get_activity_logger
 from pydantic import BaseModel, Field, field_validator
 from app.core.lxd_names import safe_segment
-from app.services.lxd.utils import wait_for_lxd_operation
+from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -310,7 +310,9 @@ async def create_network_acl(
             "config": request.config
         }
         
-        response = client.api["network-acls"].post(json=acl_data, params=scope)
+        response = client.api["network-acls"].post(
+            json=acl_data, params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
+        )
         # LXD 6.9 answers with an operation (storage_and_network_operations); settle it before
         # reporting success, or the list right after the create does not hold the ACL yet
         wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
@@ -407,7 +409,9 @@ async def update_network_acl(
             acl_data['config'] = config
         
         # Put updated ACL
-        put_response = client.api["network-acls"][safe_segment(acl_name)].put(json=acl_data, params=scope)
+        put_response = client.api["network-acls"][safe_segment(acl_name)].put(
+            json=acl_data, params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
+        )
         wait_for_lxd_operation(client, put_response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if put_response.status_code in [200, 202]:
@@ -448,7 +452,9 @@ async def delete_network_acl(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network ACL")
         scope = project_params(owner)
-        response = client.api["network-acls"][safe_segment(acl_name)].delete(params=scope)
+        response = client.api["network-acls"][safe_segment(acl_name)].delete(
+            params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
+        )
         wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if response.status_code in [200, 202]:

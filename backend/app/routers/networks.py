@@ -15,7 +15,7 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
-from app.services.lxd.utils import jsonable_lxd, wait_for_lxd_operation
+from app.services.lxd.utils import jsonable_lxd, wait_for_lxd_operation, write_timeout
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import (
@@ -616,6 +616,7 @@ async def create_network(
                     client.api.networks.post(
                         json={"name": request.name, "type": request.type},
                         params={**scope, "target": member},
+                        timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
                     ),
                     timeout=NETWORK_WRITE_WAIT_SECONDS,
                 )
@@ -629,6 +630,7 @@ async def create_network(
                         "description": request.description,
                     },
                     params=scope,
+                    timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
                 ),
                 timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
@@ -643,6 +645,7 @@ async def create_network(
                         "description": request.description,
                     },
                     params=scope,
+                    timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
                 ),
                 timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
@@ -794,7 +797,9 @@ async def update_network(
             payload["description"] = description
         wait_for_lxd_operation(
             client,
-            client.api.networks[safe_segment(network_name)].put(json=payload, params=scope),
+            client.api.networks[safe_segment(network_name)].put(
+                json=payload, params=scope, timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
+            ),
             timeout=NETWORK_WRITE_WAIT_SECONDS,
         )
 
@@ -841,7 +846,9 @@ async def delete_network(
             raise HTTPException(status_code=403, detail="Access denied to this network")
         wait_for_lxd_operation(
             client,
-            client.api.networks[safe_segment(network_name)].delete(params=project_params(owner)),
+            client.api.networks[safe_segment(network_name)].delete(
+                params=project_params(owner), timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
+            ),
             timeout=NETWORK_WRITE_WAIT_SECONDS,
         )
 

@@ -140,6 +140,16 @@ def find_instance_in_projects(
 # slices shorter than that and the operation is re-polled until it settles or the deadline
 # passes. A slice that returns with the operation still Running is not a failure.
 OPERATION_WAIT_SLICE_SECONDS = 5
+# The pooled client reads for 8 s. A daemon without storage_and_network_operations (LXD 5.21)
+# finishes a network, ACL or pool write before it answers, and an OVN network create on a
+# three-member cluster ran past those 8 s: the console reported "Failed to create network"
+# while the daemon created it. A write is sent with a read timeout that outlives it.
+WRITE_CONNECT_TIMEOUT_SECONDS = 5
+
+
+def write_timeout(read_seconds: int) -> tuple:
+    """A (connect, read) timeout for one synchronous write, passed per call to pylxd."""
+    return (WRITE_CONNECT_TIMEOUT_SECONDS, read_seconds)
 _TERMINAL_OPERATION_STATUSES = {"Success", "Done", "Failure", "Cancelled"}
 
 

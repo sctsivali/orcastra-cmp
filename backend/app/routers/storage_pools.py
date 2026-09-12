@@ -25,7 +25,7 @@ from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_names import safe_segment
-from app.services.lxd.utils import wait_for_lxd_operation
+from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
 from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 
 logger = logging.getLogger(__name__)
@@ -391,6 +391,7 @@ async def create_storage_pool(
                     client.api.storage_pools.post(
                         json={"name": request.name, "driver": request.driver, "config": member_config},
                         params={"target": member},
+                        timeout=write_timeout(POOL_WRITE_WAIT_SECONDS),
                     ),
                     timeout=POOL_WRITE_WAIT_SECONDS,
                 )
@@ -403,7 +404,7 @@ async def create_storage_pool(
                     "driver": request.driver,
                     "config": cluster_config,
                     "description": request.description,
-                }),
+                }, timeout=write_timeout(POOL_WRITE_WAIT_SECONDS)),
                 timeout=POOL_WRITE_WAIT_SECONDS,
             )
             pool = client.storage_pools.get(safe_segment(request.name))
