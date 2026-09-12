@@ -216,6 +216,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
               <SearchableSelect
                 value={node}
                 onValueChange={(next) => {
+                  if (next === node) return;
                   setNode(next);
                   // The uplink and the project were read from the previous node; a stale
                   // uplink from node A used to survive a switch to node B and pass canSubmit.

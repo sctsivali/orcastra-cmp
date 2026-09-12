@@ -348,7 +348,14 @@ function NetworksContent() {
 
       <UsedByDialog {...usedBy.dialogProps} />
       {canCreateNetwork && (
-        <NetworkCreateDialog open={createOpen} onOpenChange={setCreateOpen} onSaved={refreshNow} />
+        <NetworkCreateDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          // the create already succeeded; a refresh that fails is the list's own error state
+          onSaved={() => {
+            void Promise.resolve(refreshNow()).catch(() => undefined);
+          }}
+        />
       )}
     </div>
   );
