@@ -3,7 +3,8 @@ Response models for GET /system/resource-usage.
 
 The top-level cpu/memory/disks/process/os blocks predate the two-scope panel and mix the host
 and the container view (a cgroup memory limit is reported as memory.total, a cpu quota as
-cpu.count_logical). They are kept unchanged for older clients. New consumers read `host`
+cpu.count_logical). Every key is kept with its old meaning for older clients; the only
+change is that `timestamp` now carries its UTC offset. New consumers read `host`
 (the kernel's view of the machine) and `container` (this deployment's cgroup scope).
 """
 

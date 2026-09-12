@@ -2,8 +2,8 @@
 Collector behind GET /system/resource-usage: two honest scopes.
 
 `host` is the kernel's view of the machine, `container` is this deployment's cgroup scope
-(limits, what counts against them, the uvicorn worker set); the legacy top-level blocks are
-assembled exactly as before. Nothing sleeps on the request path: every percent is a delta
+(limits, what counts against them, the uvicorn worker set); the legacy top-level blocks keep
+every key and its meaning (the timestamp is now UTC-aware). Nothing sleeps on the request path: every percent is a delta
 against the previous call held in a process-wide sampler, and every optional reader is
 wrapped so a missing source is a null field, never a 500.
 """
@@ -50,30 +50,39 @@ _HOST_BUSY_FIELDS = ("user", "nice", "system", "irq", "softirq", "steal")
 
 
 class DeltaSampler:
-    """Percent of a cumulative (busy, total) pair since the previous sample."""
+    """Percent of a cumulative (busy, total) pair since the previous sample.
+
+    Two polls inside the counter's resolution (two tabs, a refresh right after a poll) see no
+    delta at all. Those keep the old baseline and answer with the last window rather than a
+    false 0.0, so the next real poll still measures from the last point that moved.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._previous: Optional[Tuple[float, float, float]] = None
+        self._last: Optional[Tuple[float, float]] = None
 
     def sample(self, busy: float, total: float) -> Optional[Tuple[float, float]]:
         now = time.monotonic()
         with self._lock:
             previous = self._previous
+            if previous is None:
+                self._previous = (now, busy, total)
+                return None
+            prev_time, prev_busy, prev_total = previous
+            total_delta = total - prev_total
+            if total_delta <= 0:
+                return self._last
+            percent = (busy - prev_busy) / total_delta * 100.0
+            percent = min(100.0, max(0.0, percent))
             self._previous = (now, busy, total)
-        if previous is None:
-            return None
-        prev_time, prev_busy, prev_total = previous
-        total_delta = total - prev_total
-        if total_delta <= 0:
-            return None
-        percent = (busy - prev_busy) / total_delta * 100.0
-        percent = min(100.0, max(0.0, percent))
-        return round(percent, 1), round(now - prev_time, 3)
+            self._last = (round(percent, 1), round(now - prev_time, 3))
+            return self._last
 
     def reset(self) -> None:
         with self._lock:
             self._previous = None
+            self._last = None
 
 
 _HOST_CPU = DeltaSampler()

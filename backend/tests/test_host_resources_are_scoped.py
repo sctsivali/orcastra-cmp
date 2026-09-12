@@ -289,6 +289,17 @@ def test_container_cpu_percent_is_the_delta_between_two_cpu_stat_readings(fake_c
     assert second.throttled_usec == 999
 
 
+def test_a_poll_inside_the_counter_resolution_repeats_the_last_window_not_zero():
+    sampler = sr.DeltaSampler()
+    assert sampler.sample(busy=10.0, total=100.0) is None
+    first = sampler.sample(busy=15.0, total=110.0)
+    assert first is not None and first[0] == 50.0
+    # the same counters again: nothing moved, so the last answer stands and the baseline stays
+    assert sampler.sample(busy=15.0, total=110.0) == first
+    later = sampler.sample(busy=25.0, total=120.0)
+    assert later is not None and later[0] == 100.0
+
+
 def test_host_cpu_percent_never_sleeps(fake_cgroup, fake_psutil):
     sr._HOST_CPU.reset()
     first = _collect()
@@ -359,6 +370,29 @@ def test_a_missing_cgroup_file_is_a_null_not_a_500(fake_cgroup, fake_psutil):
     assert cpu.limit == 2.0
     assert cpu.usage_usec is None and cpu.percent is None and cpu.nr_throttled is None
     assert out.memory.total == LIMIT
+
+
+def test_an_unlimited_container_in_the_host_cgroup_namespace_reads_its_own_cgroup(tmp_path, monkeypatch, fake_psutil):
+    # cgroupns=host: the root is the whole machine, the process lives under /docker/<id>, and
+    # no cpu.max or memory.max is set anywhere. The fallback must land on the container's own
+    # cgroup, not the machine's.
+    root = tmp_path / "sys/fs/cgroup"
+    own = root / "docker" / "abc123"
+    _write(root / "cgroup.controllers", "cpuset cpu io memory pids\n")
+    _write(root / "memory.current", "999999999\n")
+    _write_cpu_stat_v2(root, 10 * USAGE_USEC)
+    _write(own / "memory.max", "max\n")
+    _write(own / "memory.current", f"{CURRENT}\n")
+    _write(own / "memory.stat", f"anon {ANON}\nfile {FILE}\ninactive_file {INACTIVE_FILE}\n")
+    _write(own / "cpu.max", "max 100000\n")
+    _write_cpu_stat_v2(own, USAGE_USEC)
+    _point_platform_files(tmp_path, monkeypatch, root, "0::/docker/abc123\n")
+
+    assert cgroup.select_memory_scope().path == own
+    assert cgroup.select_cpu_scope().path == own
+    out = _collect()
+    assert out.container.memory.limit is None and out.container.memory.current == CURRENT
+    assert out.container.cpu.limit is None and out.container.cpu.usage_usec == USAGE_USEC
 
 
 def test_cgroup_v1_reads_the_v1_files(fake_cgroup_v1, fake_psutil):

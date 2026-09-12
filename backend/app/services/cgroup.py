@@ -106,24 +106,30 @@ def _deduplicate_paths(paths: List[Path]) -> List[Path]:
     return unique_paths
 
 
+# note: nearest first, root last. A limit is picked by size so the order is moot for it, but
+# the unlimited fallback takes the first readable usage file, and under cgroupns=host the
+# root is the whole machine while the process's own cgroup is the container. With a private
+# namespace (Docker's default) /proc/self/cgroup reads "0::/" and the two are the same dir.
 def _candidate_cgroup_v2_files(filename: str) -> List[Path]:
-    candidates = [CGROUP_ROOT / filename]
+    candidates: List[Path] = []
     for controllers, raw_path in _parse_proc_cgroup():
         if controllers:
             continue
         current = _safe_cgroup_path(CGROUP_ROOT, raw_path)
         candidates.extend(_ancestor_files(current, CGROUP_ROOT, filename))
+    candidates.append(CGROUP_ROOT / filename)
     return _deduplicate_paths(candidates)
 
 
 def _candidate_cgroup_v1_files(controller: str, filename: str) -> List[Path]:
     root = CGROUP_ROOT / controller
-    candidates = [root / filename]
+    candidates: List[Path] = []
     for controllers, raw_path in _parse_proc_cgroup():
         if controller not in controllers:
             continue
         current = _safe_cgroup_path(root, raw_path)
         candidates.extend(_ancestor_files(current, root, filename))
+    candidates.append(root / filename)
     return _deduplicate_paths(candidates)
 
 
