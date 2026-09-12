@@ -59,7 +59,7 @@ import { RebuildDialog } from "@/components/rebuild-dialog";
  * Whether any NIC on this instance pins its own IPv4 rather than taking one from DHCP.
  *
  * Reads the instance's own devices and its expanded set, because the NIC usually comes from a
- * profile and only appears in the expanded view. Chapter 5.1.2 of the audit: an operator
+ * profile and only appears in the expanded view. The case that matters: an operator
  * reconciling against a corporate IPAM catalogue needs to see which addresses are planned and
  * which are merely current.
  */
@@ -563,7 +563,7 @@ function InstancesContent() {
                       emptyLabel="No IP addresses"
                       itemLabel="IP address"
                     />
-                    {/* The allocation label the audit asked for (ch 5.1.2). It must not be
+                    {/* The allocation label operators asked for. It must not be
                         gated on a live address: ip_addresses is populated only for a running
                         instance, so gating on it hid the label in exactly the case the label
                         exists for, a stopped instance whose address is pinned and which an

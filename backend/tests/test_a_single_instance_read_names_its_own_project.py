@@ -3,7 +3,7 @@
 The wrapper that read the instance carried the project only as a private field, so the VMInfo
 conversion read `default` for an instance in any other project. The detail dialog prefers that
 single read over the list row, and its Devices tab then sent the fixed-address write to
-`default`, where the cluster answered "Instance not found": the audit's own project shape.
+`default`, where the cluster answered "Instance not found": the project shape seen in the field.
 """
 
 from types import SimpleNamespace

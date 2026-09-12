@@ -6,7 +6,7 @@
  * The page has been a reader since it shipped: the routes, the API client and the hooks all
  * existed, with no call site anywhere, so an administrator had to drop to `lxc network acl
  * create` on the hypervisor to define a rule and then come back here to look at it. That is
- * the gap the EcoBytes audit filed as BUG-ORC-005A(b) and repeated as a feature request.
+ * the gap operators reported and repeated as a feature request.
  *
  * An ACL is a name plus two ordered rule lists. LXD validates the rule bodies itself and its
  * errors are specific, so this form checks the things the operator can fix without a round

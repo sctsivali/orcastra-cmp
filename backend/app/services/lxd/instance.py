@@ -1078,7 +1078,7 @@ class InstanceManager:
             # important: fail fast on a NIC the project cannot reach. LXD accepts a create
             # like that as an async 202 and only fails the background operation, and the
             # console's placeholder row has nothing to clear it, so the instance sits at
-            # "Creating..." with empty columns and no reason. That is BUG-ORC-002.
+            # "Creating..." with empty columns and no reason.
             #
             # The pooled client, not create_client: pylxd overwrites an explicit project
             # parameter with the client's own, so a project-bound client would check the

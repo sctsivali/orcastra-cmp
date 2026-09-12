@@ -108,9 +108,9 @@ _NETWORK_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
 # An OVN network reaches the outside world through an uplink, and LXD accepts only a managed
 # Bridge or Physical network for the job. The dashboard used to hand the daemon whatever the
 # operator picked, and the picker offered every interface it could see: other OVN networks,
-# macvlan interfaces, and the loopback. On nuc1 today that is 11 candidates LXD cannot accept
-# out of 23 offered. Choosing one produced a failure at the daemon, or an instance that never
-# finished creating (BUG-ORC-006, and BUG-ORC-002 downstream of it).
+# macvlan interfaces, and the loopback. On one LXD 6.9 host that is 11 candidates LXD cannot
+# accept out of 23 offered. Choosing one produced a failure at the daemon, or an instance that
+# never finished creating.
 OVN_UPLINK_TYPES = frozenset({"bridge", "physical"})
 
 # Network types that carry member-specific config on a cluster, and so must be defined on
@@ -577,10 +577,10 @@ async def create_network(
             raise HTTPException(status_code=403, detail="Access denied to this project")
 
         # important: LXD refuses any network type except OVN in a project other than default,
-        # with "Network type does not support non-default projects". Verified against LXD 6.9
-        # on nuc1. Saying so here is the difference between an operator learning the rule and
-        # an operator reading a daemon string, and it is why a project-scoped network in the
-        # partner's cluster is an OVN one.
+        # with "Network type does not support non-default projects". Verified against LXD 6.9.
+        # Saying so here is the difference between an operator learning the rule and an
+        # operator reading a daemon string, and it is why a project-scoped network on a
+        # cluster is an OVN one.
         if owner != DEFAULT_PROJECT and request.type != "ovn":
             raise HTTPException(
                 status_code=400,
@@ -776,8 +776,8 @@ async def update_network(
         ) or {}
 
         # important: the create path validates the OVN uplink and this one did not, while
-        # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect the audit filed
-        # (BUG-ORC-006) was still reachable through update. Reuse the same validator rather
+        # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect was still
+        # reachable through update. Reuse the same validator rather
         # than growing a second copy of the rule: it reads only .type and .config.
         if config is not None and "network" in config:
             merged = {**(current.get("config") or {}), **config}

@@ -282,7 +282,7 @@ def test_the_route_reads_the_cluster_off_the_event_loop():
 
 
 def test_an_offline_member_is_refused_at_once_with_the_cluster_s_reason(monkeypatch):
-    """The reporter powered a member off. A read targeted at it hung on the cluster for the
+    """A member was powered off in the field. A read targeted at it hung on the cluster for the
     pooled read timeout, then a retry, then "No resource data". The cluster's own record says
     Offline and why, at once."""
     records = {"member-b": {"server_name": "member-b", "status": "Offline",
