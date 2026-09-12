@@ -12,7 +12,7 @@ greenlet>=3.0.0
 alembic>=1.13.0
 
 # LXD client
-pylxd>=2.3.2
+pylxd>=2.3.7  # save/delete(wait=True) on async LXD 6.9 operations
 
 # HTTP client (used by pylxd)
 requests>=2.31.0

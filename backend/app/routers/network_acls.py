@@ -38,6 +38,7 @@ from app.core.tenant_visibility import (
 from app.services.activity_logger import get_activity_logger
 from pydantic import BaseModel, Field
 from app.core.lxd_names import safe_segment
+from app.services.lxd.utils import wait_for_lxd_operation
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -50,6 +51,8 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+# an ACL write on LXD 6.9 is an operation; see NETWORK_WRITE_WAIT_SECONDS in networks.py
+ACL_WRITE_WAIT_SECONDS = 60
 
 
 class NetworkACLInfo(BaseModel):
@@ -287,6 +290,9 @@ async def create_network_acl(
         }
         
         response = client.api["network-acls"].post(json=acl_data, params=scope)
+        # LXD 6.9 answers with an operation (storage_and_network_operations); settle it before
+        # reporting success, or the list right after the create does not hold the ACL yet
+        wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if response.status_code in [200, 201, 202]:
             # Log activity for audit trail
@@ -381,6 +387,7 @@ async def update_network_acl(
         
         # Put updated ACL
         put_response = client.api["network-acls"][safe_segment(acl_name)].put(json=acl_data, params=scope)
+        wait_for_lxd_operation(client, put_response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if put_response.status_code in [200, 202]:
             return {
@@ -421,6 +428,7 @@ async def delete_network_acl(
             raise HTTPException(status_code=403, detail="Access denied to this network ACL")
         scope = project_params(owner)
         response = client.api["network-acls"][safe_segment(acl_name)].delete(params=scope)
+        wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if response.status_code in [200, 202]:
             # Log activity for audit trail

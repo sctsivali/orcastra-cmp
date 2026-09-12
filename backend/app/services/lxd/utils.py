@@ -135,12 +135,26 @@ def find_instance_in_projects(
     return None, None
 
 
+# important: one blocking wait on the pooled client dies at its 8 s read timeout however long
+# the caller asked for (see connection.DEFAULT_LXD_TIMEOUT), so a bounded wait is taken in
+# slices shorter than that and the operation is re-polled until it settles or the deadline
+# passes. A slice that returns with the operation still Running is not a failure.
+OPERATION_WAIT_SLICE_SECONDS = 5
+_TERMINAL_OPERATION_STATUSES = {"Success", "Done", "Failure", "Cancelled"}
+
+
 def wait_for_lxd_operation(
     client: pylxd.Client,
     response: object,
     timeout: Optional[int] = None,
 ) -> None:
-    """Wait for an async LXD operation response to complete."""
+    """Wait for an async LXD operation response to complete.
+
+    A synchronous response (no operation in the body) returns at once, so a write can be
+    wrapped unconditionally: LXD 6.9 with the storage_and_network_operations extension
+    answers 202 with an operation for network, ACL and storage pool writes that older
+    daemons complete before answering.
+    """
     try:
         response_data = response.json()
     except Exception:
@@ -161,12 +175,18 @@ def wait_for_lxd_operation(
     if not operation_id:
         return
 
-    if timeout is not None:
-        wait_response = client.api.operations[safe_segment(operation_id)].wait.get(
-            params={"timeout": timeout}
-        )
+    wait_endpoint = client.api.operations[safe_segment(operation_id)].wait
+    if timeout is None:
+        wait_response = wait_endpoint.get()
     else:
-        wait_response = client.api.operations[safe_segment(operation_id)].wait.get()
+        remaining = float(timeout)
+        while True:
+            slice_seconds = max(1, int(min(OPERATION_WAIT_SLICE_SECONDS, remaining)))
+            wait_response = wait_endpoint.get(params={"timeout": slice_seconds})
+            remaining -= slice_seconds
+            status = _operation_status(wait_response)
+            if status in _TERMINAL_OPERATION_STATUSES or remaining <= 0:
+                break
 
     try:
         wait_metadata = wait_response.json().get("metadata", {})
@@ -177,6 +197,14 @@ def wait_for_lxd_operation(
     err = wait_metadata.get("err") if isinstance(wait_metadata, dict) else None
     if err or (status and status not in {"Success", "Done"}):
         raise pylxd_exceptions.LXDAPIException(wait_response)
+
+
+def _operation_status(wait_response: object) -> Optional[str]:
+    try:
+        metadata = wait_response.json().get("metadata", {})
+    except Exception:
+        return None
+    return metadata.get("status") if isinstance(metadata, dict) else None
 
 
 class InstanceWrapper:

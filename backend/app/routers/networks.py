@@ -15,7 +15,7 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
-from app.services.lxd.utils import jsonable_lxd
+from app.services.lxd.utils import jsonable_lxd, wait_for_lxd_operation
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import (
@@ -62,6 +62,12 @@ _executor = ThreadPoolExecutor(max_workers=5)
 # already bounded to the pooled (3, 8) by TimeoutHTTPAdapter, so this only has to cover a
 # realistic member count rather than an unbounded wait.
 NETWORK_CREATE_TIMEOUT = 90.0
+# important: LXD 6.9 (api extension storage_and_network_operations) answers a network create,
+# update or delete with an operation instead of finishing first. Read back before it settles
+# and the daemon says "Network not found" about a network it is still creating; list after a
+# delete and the row is still there. Every write below waits on the operation it got, which
+# on an older daemon is a no-op because there is none.
+NETWORK_WRITE_WAIT_SECONDS = 60
 # Shed rather than queue: the pool is 5 wide and shared with the list fan-out.
 NETWORK_MAX_IN_FLIGHT = 10
 
@@ -605,28 +611,40 @@ async def create_network(
             # answered 400 while a bridge went through, so the one network type a MicroCloud
             # tenant can create in its project was the one it could not create.
             for member in _cluster_member_names(client):
-                client.api.networks.post(
-                    json={"name": request.name, "type": request.type},
-                    params={**scope, "target": member},
+                wait_for_lxd_operation(
+                    client,
+                    client.api.networks.post(
+                        json={"name": request.name, "type": request.type},
+                        params={**scope, "target": member},
+                    ),
+                    timeout=NETWORK_WRITE_WAIT_SECONDS,
                 )
-            client.api.networks.post(
-                json={
-                    "name": request.name,
-                    "type": request.type,
-                    "config": request.config,
-                    "description": request.description,
-                },
-                params=scope,
+            wait_for_lxd_operation(
+                client,
+                client.api.networks.post(
+                    json={
+                        "name": request.name,
+                        "type": request.type,
+                        "config": request.config,
+                        "description": request.description,
+                    },
+                    params=scope,
+                ),
+                timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
         else:
-            client.api.networks.post(
-                json={
-                    "name": request.name,
-                    "type": request.type,
-                    "config": request.config,
-                    "description": request.description,
-                },
-                params=scope,
+            wait_for_lxd_operation(
+                client,
+                client.api.networks.post(
+                    json={
+                        "name": request.name,
+                        "type": request.type,
+                        "config": request.config,
+                        "description": request.description,
+                    },
+                    params=scope,
+                ),
+                timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
         created = client.api.networks[safe_segment(request.name)].get(params=scope).json().get(
             "metadata"
@@ -774,7 +792,11 @@ async def update_network(
             payload["config"] = config
         if description is not None:
             payload["description"] = description
-        client.api.networks[safe_segment(network_name)].put(json=payload, params=scope)
+        wait_for_lxd_operation(
+            client,
+            client.api.networks[safe_segment(network_name)].put(json=payload, params=scope),
+            timeout=NETWORK_WRITE_WAIT_SECONDS,
+        )
 
         get_cache_manager().delete_pattern("api_responses", "networks:*")
 
@@ -817,7 +839,11 @@ async def delete_network(
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
-        client.api.networks[safe_segment(network_name)].delete(params=project_params(owner))
+        wait_for_lxd_operation(
+            client,
+            client.api.networks[safe_segment(network_name)].delete(params=project_params(owner)),
+            timeout=NETWORK_WRITE_WAIT_SECONDS,
+        )
 
         get_cache_manager().delete_pattern("api_responses", "networks:*")
 

@@ -25,6 +25,7 @@ from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_names import safe_segment
+from app.services.lxd.utils import wait_for_lxd_operation
 from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,8 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+# a pool write on LXD 6.9 is an operation; see NETWORK_WRITE_WAIT_SECONDS in networks.py
+POOL_WRITE_WAIT_SECONDS = 120
 
 
 class StoragePoolInfo(BaseModel):
@@ -383,16 +386,26 @@ async def create_storage_pool(
                 if k not in MEMBER_SPECIFIC_POOL_KEYS
             }
             for member in cluster_member_names(client):
-                client.api.storage_pools.post(
-                    json={"name": request.name, "driver": request.driver, "config": member_config},
-                    params={"target": member},
+                wait_for_lxd_operation(
+                    client,
+                    client.api.storage_pools.post(
+                        json={"name": request.name, "driver": request.driver, "config": member_config},
+                        params={"target": member},
+                    ),
+                    timeout=POOL_WRITE_WAIT_SECONDS,
                 )
-            client.api.storage_pools.post(json={
-                "name": request.name,
-                "driver": request.driver,
-                "config": cluster_config,
-                "description": request.description,
-            })
+            # LXD 6.9 answers with an operation (storage_and_network_operations); reading the
+            # pool back before it settles is a 404 for a pool the daemon is still creating
+            wait_for_lxd_operation(
+                client,
+                client.api.storage_pools.post(json={
+                    "name": request.name,
+                    "driver": request.driver,
+                    "config": cluster_config,
+                    "description": request.description,
+                }),
+                timeout=POOL_WRITE_WAIT_SECONDS,
+            )
             pool = client.storage_pools.get(safe_segment(request.name))
         else:
             pool = client.storage_pools.create({
@@ -475,7 +488,7 @@ async def update_storage_pool(
         if description is not None and hasattr(pool, 'description'):
             pool.description = description
         
-        pool.save()
+        pool.save(wait=True)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_pools", "storage_pool_resources")
@@ -514,7 +527,7 @@ async def delete_storage_pool(
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(safe_segment(pool_name))
-        pool.delete()
+        pool.delete(wait=True)
         
         # Log activity: storage pool deletion success
         activity_logger.log_activity(
