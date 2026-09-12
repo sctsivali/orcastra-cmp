@@ -175,18 +175,31 @@ def wait_for_lxd_operation(
     if not operation_id:
         return
 
-    wait_endpoint = client.api.operations[safe_segment(operation_id)].wait
+    operation = client.api.operations[safe_segment(operation_id)]
+    wait_endpoint = operation.wait
     if timeout is None:
         wait_response = wait_endpoint.get()
     else:
         remaining = float(timeout)
         while True:
             slice_seconds = max(1, int(min(OPERATION_WAIT_SLICE_SECONDS, remaining)))
-            wait_response = wait_endpoint.get(params={"timeout": slice_seconds})
+            try:
+                wait_response = wait_endpoint.get(params={"timeout": slice_seconds})
+            except pylxd_exceptions.LXDAPIException as exc:
+                # important: LXD answers an elapsed wait timeout with an error body, "context
+                # deadline exceeded", in the same shape as a failed request, while the operation
+                # keeps running. Read the operation itself before believing the error: a device
+                # write on a clustered OVN instance takes longer than one slice and was reported
+                # as refused while the cluster applied it.
+                wait_response = _operation_record(operation, exc)
             remaining -= slice_seconds
             status = _operation_status(wait_response)
-            if status in _TERMINAL_OPERATION_STATUSES or remaining <= 0:
+            if status in _TERMINAL_OPERATION_STATUSES:
                 break
+            if remaining <= 0:
+                raise pylxd_exceptions.LXDAPIException(_SyntheticResponse(
+                    f"Operation {operation_id} is still {status or 'running'} after {timeout}s"
+                ))
 
     try:
         wait_metadata = wait_response.json().get("metadata", {})
@@ -197,6 +210,26 @@ def wait_for_lxd_operation(
     err = wait_metadata.get("err") if isinstance(wait_metadata, dict) else None
     if err or (status and status not in {"Success", "Done"}):
         raise pylxd_exceptions.LXDAPIException(wait_response)
+
+
+def _operation_record(operation: object, wait_error: Exception) -> object:
+    """The operation as LXD holds it now, or the wait's own error if it cannot be read."""
+    try:
+        return operation.get()
+    except pylxd_exceptions.LXDAPIException:
+        raise wait_error
+
+
+class _SyntheticResponse:
+    """An LXD-shaped error body for a deadline of our own, so callers see one exception type."""
+
+    status_code = 200
+
+    def __init__(self, error: str) -> None:
+        self._body = {"type": "error", "error": error, "metadata": None}
+
+    def json(self) -> dict:
+        return self._body
 
 
 def _operation_status(wait_response: object) -> Optional[str]:

@@ -45,21 +45,49 @@ def _sync() -> _Response:
                       "metadata": None}, 200)
 
 
-class _Operations:
-    """client.api.operations[op].wait: answers Running until `settle_after` waits, then Success."""
+def _deadline_error() -> pylxd_exceptions.LXDAPIException:
+    """What LXD 5.21 and 6.x answer when /operations/{id}/wait?timeout=N elapses: HTTP 200
+    with an error body, which pylxd raises the same way it raises a failed request."""
+    return pylxd_exceptions.LXDAPIException(_Response({
+        "type": "error", "status": "", "status_code": 0, "operation": "",
+        "error_code": 500, "error": "context deadline exceeded", "metadata": None,
+    }))
 
-    def __init__(self, settle_after: int = 1, final: str = "Success") -> None:
+
+class _Operations:
+    """client.api.operations[op]: `.wait.get` answers Running until `settle_after` waits, then
+    Success. With `deadline_errors`, a wait whose slice elapses raises the way LXD really
+    answers, and `.get()` on the operation reports its current status; `vanished` makes that
+    read a 404, the way a finished operation that LXD already dropped looks."""
+
+    def __init__(self, settle_after: int = 1, final: str = "Success",
+                 deadline_errors: bool = False, vanished: bool = False) -> None:
         self.waits: List[Dict[str, Any]] = []
+        self.reads: List[str] = []
         self.settle_after = settle_after
         self.final = final
+        self.deadline_errors = deadline_errors
+        self.vanished = vanished
+
+    def _status(self) -> str:
+        return self.final if len(self.waits) >= self.settle_after else "Running"
 
     def __getitem__(self, op: str):
-        def get(params: Optional[Dict[str, Any]] = None) -> _Response:
+        def wait_get(params: Optional[Dict[str, Any]] = None) -> _Response:
             self.waits.append({"op": op, "params": dict(params or {})})
-            status = self.final if len(self.waits) >= self.settle_after else "Running"
+            status = self._status()
+            if status == "Running" and self.deadline_errors:
+                raise _deadline_error()
             err = "boom" if status == "Failure" else ""
             return _Response({"type": "sync", "metadata": {"id": op, "status": status, "err": err}})
-        return SimpleNamespace(wait=SimpleNamespace(get=get))
+
+        def get() -> _Response:
+            self.reads.append(op)
+            if self.vanished:
+                raise pylxd_exceptions.NotFound(_Response({"type": "error", "error": "not found"}, 404))
+            return _Response({"type": "sync", "metadata": {"id": op, "status": self._status(), "err": ""}})
+
+        return SimpleNamespace(wait=SimpleNamespace(get=wait_get), get=get)
 
 
 class _Networks:
@@ -209,3 +237,50 @@ def test_an_acl_create_waits_for_its_operation(monkeypatch) -> None:
     assert r.status_code == 200, r.text
     assert calls == ["post"]
     assert [w["op"] for w in ops.waits] == ["op-acl"]
+
+
+def test_an_elapsed_wait_slice_is_not_a_failure() -> None:
+    """LXD answers an elapsed `?timeout=` with "context deadline exceeded" while the operation
+    runs on. A NIC address write on a clustered OVN instance takes about six seconds, one
+    second more than a slice, and was reported as refused while the cluster applied it."""
+    ops = _Operations(settle_after=3, deadline_errors=True)
+    client = SimpleNamespace(api=SimpleNamespace(operations=ops))
+    lxd_utils.wait_for_lxd_operation(client, _async("op-slow"), timeout=30)
+    assert [w["params"]["timeout"] for w in ops.waits] == [5, 5, 5]
+    assert ops.reads == ["op-slow", "op-slow"], "each elapsed slice asks the operation itself"
+
+
+def test_a_failure_after_an_elapsed_slice_still_surfaces() -> None:
+    ops = _Operations(settle_after=2, final="Failure", deadline_errors=True)
+    client = SimpleNamespace(api=SimpleNamespace(operations=ops))
+    try:
+        lxd_utils.wait_for_lxd_operation(client, _async("op-bad"), timeout=30)
+    except pylxd_exceptions.LXDAPIException as exc:
+        assert "boom" in str(exc)
+    else:
+        raise AssertionError("a failed operation must raise")
+
+
+def test_our_own_deadline_names_the_operation_not_the_daemon() -> None:
+    ops = _Operations(settle_after=99, deadline_errors=True)
+    client = SimpleNamespace(api=SimpleNamespace(operations=ops))
+    try:
+        lxd_utils.wait_for_lxd_operation(client, _async("op-stuck"), timeout=12)
+    except pylxd_exceptions.LXDAPIException as exc:
+        assert "op-stuck" in str(exc) and "12s" in str(exc)
+        assert "context deadline" not in str(exc)
+    else:
+        raise AssertionError("an operation still running at the deadline must raise")
+    assert [w["params"]["timeout"] for w in ops.waits] == [5, 5, 2]
+
+
+def test_an_operation_that_vanished_after_an_elapsed_slice_reports_the_wait_error() -> None:
+    ops = _Operations(settle_after=99, deadline_errors=True, vanished=True)
+    client = SimpleNamespace(api=SimpleNamespace(operations=ops))
+    try:
+        lxd_utils.wait_for_lxd_operation(client, _async("op-gone"), timeout=30)
+    except pylxd_exceptions.LXDAPIException as exc:
+        assert "context deadline exceeded" in str(exc)
+    else:
+        raise AssertionError("an unreadable operation must not pass as success")
+    assert len(ops.waits) == 1
