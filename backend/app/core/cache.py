@@ -37,6 +37,8 @@ REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 NODES_AVAILABILITY_CACHE_KEY = f"nodes:availability:{RESOURCE_SCHEMA_VERSION}"
 NODES_AVAILABILITY_CACHE_TTL = 45
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
+# Not under the `instances:` pattern on purpose: it must survive the clearance it records.
+INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
 MICROCLOUD_RESOURCES_CACHE_PREFIX = f"microcloud_resources:{RESOURCE_SCHEMA_VERSION}"
 
 # Lazy import encryption to avoid circular imports
@@ -425,7 +427,19 @@ class CacheManager:
         self.delete_pattern("api_responses", "vms:*")
         self.delete_pattern("api_responses", "monitoring:*")
         self.delete_pattern("api_responses", "storage_volumes:*")
+        # important: a list read that was already in flight when this ran still holds the old
+        # picture and would write it back over the clearance a moment later (a fleet read takes
+        # ten seconds with a dead cluster registered). The generation lets such a read notice.
+        try:
+            self.set("api_responses", INSTANCE_LIST_GENERATION_KEY, str(time.time_ns()), ttl=3600)
+        except Exception as e:  # noqa: BLE001 - the clearance above is what matters
+            logger.debug(f"Could not record the instance list generation: {e}")
         logger.info("Cleared instance, VM, monitoring, and storage volume caches")
+
+    def instance_list_generation(self) -> Optional[str]:
+        """The token the last instance invalidation left; None when none has run yet."""
+        value = self.get("api_responses", INSTANCE_LIST_GENERATION_KEY)
+        return str(value) if value is not None else None
 
     def invalidate_resource_cache(self, *kinds: str):
         """Drop the cached list responses for the named resource kinds.

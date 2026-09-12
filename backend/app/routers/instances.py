@@ -120,6 +120,7 @@ async def list_instances(
         return VMListResponse(**cached_response)
     
     try:
+        generation = cache.instance_list_generation()
         all_vms, connected_nodes = await lxd_service.list_all_vms()
         
         # Filter by host if provided
@@ -177,8 +178,15 @@ async def list_instances(
         # emptiness for the whole TTL and, on a forced refresh, overwrite good
         # data the operator could still see. No node answered means no result.
         if connected_nodes:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
-            logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
+            if cache.instance_list_generation() != generation:
+                # important: an invalidation ran while this read was in flight (a create
+                # landed, a background start finished). What was read is already the old
+                # picture; writing it back would pin it for the TTL right after the clearance
+                # meant to remove it.
+                logger.info("Not caching instances list: an instance changed during the read")
+            else:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+                logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
         else:
             logger.warning("Not caching instances list: no cluster answered")
         
