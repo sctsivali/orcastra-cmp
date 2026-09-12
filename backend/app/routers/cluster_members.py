@@ -16,6 +16,7 @@ from app.services.lxd_service import (
 )
 from pydantic import BaseModel, Field
 from pylxd.exceptions import LXDAPIException
+from requests.exceptions import RequestException
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager, MEMBER_RESOURCES_CACHE_PREFIX
 from app.core.config import get_settings
@@ -315,6 +316,23 @@ def count_member_instances(instances, member_name: str) -> Tuple[int, int, int]:
     return count, running, cores
 
 
+class MemberUnavailableError(Exception):
+    """The cluster's own record says this member is not Online, so it will not answer a read."""
+
+    def __init__(self, member_name: str, status: str, message: str) -> None:
+        super().__init__(f"Member '{member_name}' is {status}" + (f": {message}" if message else ""))
+        self.member_name, self.status, self.message = member_name, status, message
+
+
+def _member_record_status(client, member_name: str) -> Optional[Tuple[str, str]]:
+    """(status, message) as the cluster's member record has it, or None when it cannot be read."""
+    try:
+        record = client.api.cluster.members[safe_segment(member_name)].get().json().get("metadata") or {}
+    except Exception:
+        return None
+    return (str(record.get("status") or ""), str(record.get("message") or ""))
+
+
 def _read_member_resources(lxd_service: LXDService, node: str, member_name: str) -> MemberResources:
     """Everything the member dialog shows, read from the cluster. Runs in a worker thread.
 
@@ -325,6 +343,14 @@ def _read_member_resources(lxd_service: LXDService, node: str, member_name: str)
     a shared pool is the cluster's and is reported once, marked `scope: shared`.
     """
     client = require_client(lxd_service.connection_manager.get_client(node), node)
+
+    # important: a member the cluster itself reports as Offline never answers `?target=`: the
+    # request hangs on the cluster until the pooled read timeout, and the dialog waited through
+    # that and a retry for a generic failure. The member record answers at once, so ask it
+    # first and let the operator read the cluster's own reason.
+    record = _member_record_status(client, member_name)
+    if record and record[0] and record[0].lower() != "online":
+        raise MemberUnavailableError(member_name, *record)
 
     # Get resources for this specific member by targeting it
     member_resources_response = client.api.resources.get(params={"target": member_name})
@@ -519,6 +545,18 @@ async def get_member_resources(
         # important: let require_client's 503 through, so an offline cluster does not read as a
         # server fault. Without this the broad handler below converts it into a 500.
         raise
+    except MemberUnavailableError as e:
+        logger.info(f"Member {member_name} on {node} is {e.status}: {e.message}")
+        raise HTTPException(status_code=503, detail=str(e))
+    except RequestException as e:
+        # important: a member that stopped answering mid-read surfaces as the pooled client's
+        # read timeout. That is the cluster not answering, not a server fault, and the raw
+        # urllib3 text names the endpoint, which the operator has no use for.
+        logger.warning(f"Cluster {node} did not answer for member {member_name}: {e}")
+        raise HTTPException(
+            status_code=504,
+            detail=f"Cluster '{node}' did not answer for member '{member_name}' within the read timeout",
+        )
     except LXDAPIException as e:
         # important: LXD answers 404 for `?target=<name>` on a host that is not clustered, and
         # for a member name that does not exist. Neither is a server fault, and reporting them

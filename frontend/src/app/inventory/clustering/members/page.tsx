@@ -101,7 +101,7 @@ function ClusterMembersContent() {
   
   // note: gated on the modal. Without it this kept polling a live per-member read in the
   // background for a panel nobody had open.
-  const { data: memberResources, isLoading: isLoadingResources } = useMemberResources(
+  const { data: memberResources, isLoading: isLoadingResources, error: resourcesError } = useMemberResources(
     node,
     selectedMember || "",
     { enabled: isModalOpen },
@@ -340,6 +340,7 @@ function ClusterMembersContent() {
         nodeName={node}
         resources={memberResources || null}
         isLoading={isLoadingResources}
+        error={resourcesError instanceof Error ? resourcesError.message : null}
       />
     </div>
   );

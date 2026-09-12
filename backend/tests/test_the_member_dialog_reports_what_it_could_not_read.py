@@ -101,21 +101,46 @@ INSTANCES = [
 ]
 
 
+class _Members:
+    """client.api.cluster.members[name].get(): the cluster's own record of a member."""
+
+    def __init__(self, records: Dict[str, Dict[str, Any]], calls: List[str]):
+        self._records, self.calls = records, calls
+
+    def __getitem__(self, name: str):
+        def get(params: Dict[str, Any] = None, timeout: Any = None) -> _Response:
+            self.calls.append(f"member-record {name}")
+            return _Response({"metadata": self._records[name]})
+        return SimpleNamespace(get=get)
+
+
 class FakeClient:
     project = None
 
-    def __init__(self, instances_fail: bool = False, pools=POOLS, space=SPACE):
+    def __init__(self, instances_fail: bool = False, pools=POOLS, space=SPACE,
+                 members: Dict[str, Dict[str, Any]] = None, resources_hang: bool = False):
         self.calls: List[str] = []
         self.host_info = {
             "environment": {"server_clustered": True, "server_name": MEMBERS[0]},
             "api_extensions": ["instance_all_projects"],
         }
         per_member = {"cpu": {"total": 88}, "memory": {"total": 256 * GIB, "used": 90 * GIB}}
+        def _resources(p):
+            self.calls.append(f"resources target={p.get('target')}")
+            if resources_hang:
+                import requests
+                raise requests.exceptions.ConnectionError(
+                    "HTTPSConnectionPool(host='10.0.0.1', port=8443): Read timed out. (read timeout=8)"
+                )
+            return {"metadata": per_member}
+
         self.api = _API(
-            resources=_Endpoint(lambda p: {"metadata": per_member}),
+            resources=_Endpoint(_resources),
             storage_pools=_Pools(pools, space, self.calls),
             instances=_Instances(INSTANCES, self.calls, fail=instances_fail),
         )
+        if members is not None:
+            self.api.cluster = SimpleNamespace(members=_Members(members, self.calls))
 
 
 class _API(SimpleNamespace):
@@ -254,3 +279,35 @@ def test_the_route_reads_the_cluster_off_the_event_loop():
     assert to_thread_targets == ["_read_member_resources"]
     api_reads = [n for n in ast.walk(handler) if isinstance(n, ast.Attribute) and n.attr == "api"]
     assert api_reads == [], "no pylxd read may run inline in the handler"
+
+
+def test_an_offline_member_is_refused_at_once_with_the_cluster_s_reason(monkeypatch):
+    """The reporter powered a member off. A read targeted at it hung on the cluster for the
+    pooled read timeout, then a retry, then "No resource data". The cluster's own record says
+    Offline and why, at once."""
+    records = {"member-b": {"server_name": "member-b", "status": "Offline",
+                            "message": "No heartbeat for 27.88s (2026-09-12 11:17:31 +0000 UTC)"}}
+    client = FakeClient(members=records, resources_hang=True)
+    app = _app(client, monkeypatch, _CacheSpy())
+    r = app.get(f"/cluster-members/member-b/resources?node={NODE}")
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"] == "Member 'member-b' is Offline: No heartbeat for 27.88s (2026-09-12 11:17:31 +0000 UTC)"
+    assert not any(c.startswith("resources target=") for c in client.calls), "no read is sent to a member that is off"
+
+
+def test_an_online_member_is_read_after_its_record_says_so(monkeypatch):
+    records = {"member-a": {"server_name": "member-a", "status": "Online", "message": "Fully operational"}}
+    client = FakeClient(members=records)
+    app = _app(client, monkeypatch, _CacheSpy())
+    r = app.get(f"/cluster-members/member-a/resources?node={NODE}")
+    assert r.status_code == 200, r.text
+    assert client.calls[:2] == ["member-record member-a", "resources target=member-a"]
+
+
+def test_a_member_that_stops_answering_mid_read_is_a_504_without_the_endpoint_in_it(monkeypatch):
+    client = FakeClient(resources_hang=True)
+    app = _app(client, monkeypatch, _CacheSpy())
+    r = app.get(f"/cluster-members/member-a/resources?node={NODE}")
+    assert r.status_code == 504, r.text
+    assert r.json()["detail"] == f"Cluster '{NODE}' did not answer for member 'member-a' within the read timeout"
+    assert "HTTPSConnectionPool" not in r.text

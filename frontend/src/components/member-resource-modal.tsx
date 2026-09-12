@@ -30,6 +30,8 @@ interface MemberResourceModalProps {
   nodeName?: string | null;
   resources: MemberResources | null;
   isLoading: boolean;
+  /** Why the read failed, in the words of the API, when there is nothing to show. */
+  error?: string | null;
 }
 
 function formatBytes(bytes: number): string {
@@ -72,6 +74,7 @@ export function MemberResourceModal({
   nodeName,
   resources,
   isLoading,
+  error,
 }: MemberResourceModalProps) {
   const [showInstanceModal, setShowInstanceModal] = React.useState(false);
   const [instanceFilter, setInstanceFilter] = React.useState<"running" | "stopped" | null>(null);
@@ -388,11 +391,16 @@ export function MemberResourceModal({
             </Card>
           </div>
         ) : (
-          <div className="text-center py-12">
+          // note: the API's reason is the cluster's own, such as "Member 'mc3' is Offline: No
+          // heartbeat for 27s". A generic line here sent the operator looking for a dashboard
+          // fault when the member was simply powered off.
+          <div className="text-center py-12" role="status">
             <Server className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">No resource data</h3>
+            <h3 className="text-lg font-semibold mb-2">
+              {error ? "This member could not be read" : "No resource data"}
+            </h3>
             <p className="text-muted-foreground">
-              Unable to fetch resource information for this member
+              {error || "Unable to fetch resource information for this member"}
             </p>
           </div>
         )}
