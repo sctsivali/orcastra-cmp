@@ -1178,6 +1178,15 @@ class InstanceManager:
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
 
+    @staticmethod
+    def _invalidate_lists_after_background_change(name: str, host: str) -> None:
+        """Clear the list caches a background job has just made stale. Never raises."""
+        try:
+            from app.core.cache import get_cache_manager
+            get_cache_manager().invalidate_instance_cache()
+        except Exception as e:  # noqa: BLE001 - a cache miss is cheaper than a lost start
+            logger.warning(f"Could not clear the instance list cache after {name} on {host} changed: {e}")
+
     async def _watch_create_operation(self, client, name: str, operation_id: Optional[str],
                                       host: str, project: str) -> None:
         """Background: record whether the create operation LXD queued actually succeeded.
@@ -1225,6 +1234,10 @@ class InstanceManager:
             instance = await asyncio.to_thread(client.instances.get, name)
             await asyncio.to_thread(lambda: instance.start(wait=True))
             logger.info(f"Auto-started {name} on {host} (project={project})")
+            # important: the list cache was cleared when the create was accepted, and the
+            # console re-read it while the instance was still Stopped. Without clearing it
+            # again here the row read Stopped for a full TTL after the cluster had it Running.
+            self._invalidate_lists_after_background_change(name, host)
         except Exception as e:
             logger.error(
                 f"Auto-start failed for {name} on {host} (project={project}): {e}"
