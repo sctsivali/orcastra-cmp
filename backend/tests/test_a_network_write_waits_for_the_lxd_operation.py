@@ -197,13 +197,16 @@ def test_the_wait_stops_at_the_first_terminal_status() -> None:
     assert len(ops.waits) == 1
 
 
-def test_an_acl_create_waits_for_its_operation(monkeypatch) -> None:
+def _acl_app(monkeypatch, post_answer=None):
+    """A TestClient over the ACL router with a fake daemon; `post_answer` overrides the create."""
     ops = _Operations()
     calls: List[str] = []
 
     class _Acls:
         def post(self, json, params):
             calls.append("post")
+            if post_answer is not None:
+                return post_answer()
             return _async("op-acl")
 
     class _Api:
@@ -232,11 +235,33 @@ def test_an_acl_create_waits_for_its_operation(monkeypatch) -> None:
     app.dependency_overrides[get_current_user] = lambda: None
     app.dependency_overrides[org_scope_dependency] = lambda: None
     app.dependency_overrides[check_read_only_mode] = lambda: None
-    tc = TestClient(app, raise_server_exceptions=False)
+    return TestClient(app, raise_server_exceptions=False), calls, ops
+
+
+def test_an_acl_create_waits_for_its_operation(monkeypatch) -> None:
+    tc, calls, ops = _acl_app(monkeypatch)
     r = tc.post("/network-acls?host=nuc1", json={"name": "qaacl", "description": "", "ingress": [], "egress": [], "config": {}})
     assert r.status_code == 200, r.text
     assert calls == ["post"]
     assert [w["op"] for w in ops.waits] == ["op-acl"]
+
+
+def test_a_bad_acl_name_is_refused_at_the_boundary_not_by_the_daemon(monkeypatch) -> None:
+    """"has space" reached LXD, which refused it, and the refusal came back as a 500."""
+    tc, calls, _ = _acl_app(monkeypatch)
+    for bad in ("has space", "1abc", "../x", "a" * 64, ""):
+        r = tc.post("/network-acls?host=nuc1", json={"name": bad, "ingress": [], "egress": []})
+        assert r.status_code == 422, (bad, r.text)
+    assert calls == [], "nothing was sent to the daemon"
+
+
+def test_the_daemon_s_own_refusal_keeps_its_status(monkeypatch) -> None:
+    def refused():
+        raise pylxd_exceptions.LXDAPIException(_Response({"type": "error", "error": "Name already in use"}, 409))
+    tc, calls, _ = _acl_app(monkeypatch, post_answer=refused)
+    r = tc.post("/network-acls?host=nuc1", json={"name": "qaacl", "ingress": [], "egress": []})
+    assert r.status_code == 409, r.text
+    assert "Name already in use" in r.text
 
 
 def test_an_elapsed_wait_slice_is_not_a_failure() -> None:

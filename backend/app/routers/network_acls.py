@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Query, Body
 from typing import Optional, List, Dict, Any
 import logging
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 from app.services.lxd.exceptions import LXDConnectionError
@@ -36,7 +37,7 @@ from app.core.tenant_visibility import (
     tenant_may_see_project,
 )
 from app.services.activity_logger import get_activity_logger
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from app.core.lxd_names import safe_segment
 from app.services.lxd.utils import wait_for_lxd_operation
 
@@ -70,13 +71,33 @@ class NetworkACLInfo(BaseModel):
     )
 
 
+# LXD's own rule for an ACL name. Checked here so a bad name is a 422 at the boundary, not
+# the daemon's refusal surfacing as a 500.
+_ACL_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
+
+
+def _http_status_for(exc: Exception) -> int:
+    """The daemon's own 4xx is the caller's mistake and keeps its status; anything else is ours."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if status in (400, 404, 409) else 500
+
+
 class NetworkACLCreateRequest(BaseModel):
     """Request body for creating a network ACL."""
-    name: str = Field(..., description="ACL name")
+    name: str = Field(..., min_length=1, max_length=63, description="ACL name")
     description: str = Field("", description="ACL description")
     ingress: List[Dict[str, Any]] = Field(default_factory=list, description="Ingress rules")
     egress: List[Dict[str, Any]] = Field(default_factory=list, description="Egress rules")
     config: Dict[str, str] = Field(default_factory=dict, description="ACL configuration")
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not _ACL_NAME_RE.match(v):
+            raise ValueError(
+                "Name must start with a letter and contain only letters, numbers and hyphens"
+            )
+        return v
 
 
 class NetworkACLListResponse(FanoutReachability):
@@ -336,7 +357,7 @@ async def create_network_acl(
             error_code=type(e).__name__,
             error_message=str(e),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=_http_status_for(e), detail=str(e))
 
 
 @router.put(
@@ -400,7 +421,7 @@ async def update_network_acl(
         raise
     except Exception as e:
         logger.error(f"Error updating network ACL {acl_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=_http_status_for(e), detail=str(e))
 
 
 @router.delete(
@@ -467,4 +488,4 @@ async def delete_network_acl(
             error_code=type(e).__name__,
             error_message=str(e),
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=_http_status_for(e), detail=str(e))
