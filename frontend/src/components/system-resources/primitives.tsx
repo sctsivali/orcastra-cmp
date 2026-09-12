@@ -1,7 +1,6 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 export function formatUptime(seconds: number): string {
@@ -54,38 +53,5 @@ export function Tile({
       <p className="text-sm font-medium">{value}</p>
       {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
     </div>
-  );
-}
-
-/** A headline figure in its own card, for the numbers an operator scans first. */
-export function StatCard({
-  icon: Icon,
-  title,
-  value,
-  subtitle,
-  children,
-  className,
-}: {
-  icon: React.ElementType;
-  title: string;
-  value: ReactNode;
-  subtitle?: ReactNode;
-  children?: ReactNode;
-  className?: string;
-}) {
-  return (
-    <Card className={className}>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-          <Icon className="h-4 w-4" aria-hidden="true" />
-          {title}
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold">{value}</div>
-        {subtitle && <p className="text-xs text-muted-foreground mt-1">{subtitle}</p>}
-        {children}
-      </CardContent>
-    </Card>
   );
 }

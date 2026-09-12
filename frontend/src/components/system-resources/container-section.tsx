@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/card";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { formatBytes } from "@/lib/utils";
-import { StatCard, Tile, UsageProgress, formatUptime } from "@/components/system-resources/primitives";
+import { Tile, UsageProgress, formatUptime } from "@/components/system-resources/primitives";
 import { ratePerSecond } from "@/components/system-resources/rates";
 
 interface ContainerSectionProps {
@@ -128,8 +128,8 @@ function ContainerCpuCard({ container }: { container: ContainerInfo }) {
           </div>
           <UsageProgress value={percent ?? 0} />
           <p className="text-xs text-muted-foreground">
-            {c?.window_seconds
-              ? `Averaged over the last ${c.window_seconds.toFixed(0)} s by the worker that answered this poll.`
+            {c?.window_seconds && c.window_seconds >= 0.5
+              ? `Averaged over the last ${c.window_seconds.toFixed(1)} s by the worker that answered this poll.`
               : "Averaged between two polls by the worker that answers them."}
           </p>
         </div>
@@ -159,26 +159,26 @@ function WorkersCard({ container }: { container: ContainerInfo | null }) {
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <StatCard
+          <Tile
             icon={Layers}
-            title="Workers"
+            label="Workers"
             value={w ? w.count : EMPTY_VALUE}
-            subtitle={w ? (w.expected !== null ? `of ${w.expected} expected` : "WEB_CONCURRENCY not set") : undefined}
+            sub={w ? (w.expected !== null ? `of ${w.expected} expected` : "WEB_CONCURRENCY not set") : undefined}
           />
-          <StatCard icon={MemoryStick} title="Total Memory" value={w ? formatBytes(w.total_rss) : EMPTY_VALUE} subtitle="resident, all workers" />
-          <StatCard icon={Cpu} title="Answered By" value={w ? `PID ${w.answering_pid}` : EMPTY_VALUE} subtitle="this poll" />
-          <StatCard
+          <Tile icon={MemoryStick} label="Total Memory" value={w ? formatBytes(w.total_rss) : EMPTY_VALUE} sub="resident, all workers" />
+          <Tile icon={Cpu} label="Answered By" value={w ? `PID ${w.answering_pid}` : EMPTY_VALUE} sub="this poll" />
+          <Tile
             icon={Clock}
-            title="Master Uptime"
+            label="Master Uptime"
             value={w?.master_uptime_seconds !== null && w?.master_uptime_seconds !== undefined ? formatUptime(w.master_uptime_seconds) : EMPTY_VALUE}
-            subtitle={w?.master_pid !== null && w?.master_pid !== undefined ? `PID ${w.master_pid}` : "no master process"}
+            sub={w?.master_pid !== null && w?.master_pid !== undefined ? `PID ${w.master_pid}` : "no master process"}
           />
         </div>
         {w && w.workers.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {w.workers.map((p) => (
               <Badge key={p.pid} variant="outline" className="font-mono text-xs">
-                PID {p.pid} {formatBytes(p.memory_rss)}
+                PID {p.pid} {formatBytes(p.memory_rss)} up {formatUptime(p.uptime_seconds)}
               </Badge>
             ))}
           </div>

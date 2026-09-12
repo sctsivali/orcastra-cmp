@@ -146,7 +146,7 @@ function HostStorageCard({ host }: { host: HostInfo | null }) {
       <CardContent className="space-y-4">
         {filesystems.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            No host filesystem is visible from this container.
+            {host ? "No host filesystem is visible from this container." : "Not reported by this backend."}
           </p>
         )}
         {filesystems.map((fs) => (

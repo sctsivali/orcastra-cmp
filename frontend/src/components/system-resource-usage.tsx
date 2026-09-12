@@ -18,10 +18,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { HostSection } from "@/components/system-resources/host-section";
 import { ContainerSection } from "@/components/system-resources/container-section";
 
-/** The sample before the current one, kept for the network rates. */
-interface PreviousSample {
-  network: NetworkInterfaceInfo[];
-  timestamp: string;
+/** Two consecutive samples, kept together so the network rates never straddle a render. */
+interface Samples {
+  previous: { network: NetworkInterfaceInfo[]; timestamp: string } | null;
+  current: SystemResourceUsage | null;
 }
 
 /**
@@ -32,8 +32,7 @@ interface PreviousSample {
  * while the load average was the machine's.
  */
 export function SystemResourceUsagePanel() {
-  const [previous, setPrevious] = useState<PreviousSample | null>(null);
-  const [current, setCurrent] = useState<SystemResourceUsage | null>(null);
+  const [samples, setSamples] = useState<Samples>({ previous: null, current: null });
 
   const { data, isLoading, isError, error, refreshNow, dataUpdatedAt } = useRefreshableQuery({
     queryKey: ["systemResourceUsage"],
@@ -44,14 +43,17 @@ export function SystemResourceUsagePanel() {
   });
 
   // Rates come from two consecutive samples and their own timestamps, so a manual refresh a
-  // second after a poll still yields a true per-second figure.
+  // second after a poll still yields a true per-second figure. Both halves move in one state
+  // update, and the panel renders from that state, so a frame never pairs a new sample with
+  // the previous pair's window.
   useEffect(() => {
     if (!data) return;
-    setCurrent((prev) => {
-      if (prev && prev.timestamp !== data.timestamp) {
-        setPrevious({ network: prev.network, timestamp: prev.timestamp });
-      }
-      return data;
+    setSamples((s) => {
+      if (s.current && s.current.timestamp === data.timestamp) return s;
+      return {
+        previous: s.current ? { network: s.current.network, timestamp: s.current.timestamp } : null,
+        current: data,
+      };
     });
   }, [data]);
 
@@ -94,7 +96,7 @@ export function SystemResourceUsagePanel() {
     );
   }
 
-  const usage = data ?? current;
+  const usage = samples.current ?? data;
   if (!usage) return null;
 
   const containerised = Boolean(usage.container?.is_containerized);
@@ -121,7 +123,7 @@ export function SystemResourceUsagePanel() {
         container={usage.container ?? null}
         network={usage.network}
         networkScope={usage.network_scope ?? (containerised ? "container" : "host")}
-        previous={previous}
+        previous={samples.previous}
         timestamp={usage.timestamp}
       />
     </div>

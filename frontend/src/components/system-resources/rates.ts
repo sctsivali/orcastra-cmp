@@ -16,5 +16,6 @@ export function ratePerSecond(
   const seconds = (Date.parse(currAt) - Date.parse(prevAt)) / 1000;
   if (!Number.isFinite(seconds) || seconds < 0.5) return null;
   const delta = curr - prev;
-  return delta > 0 ? delta / seconds : 0;
+  // whole bytes: formatBytes picks its unit from log1024 and has none for a fraction of a byte
+  return delta > 0 ? Math.floor(delta / seconds) : 0;
 }
