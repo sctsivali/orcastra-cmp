@@ -250,6 +250,11 @@ class InstanceWrapper:
         self._data = data
         self._client = client
         self._project = project
+        # important: the project the instance was found in, under the name the VMInfo
+        # conversion reads. Without it every wrapper-backed read (the single instance GET,
+        # start, stop, restart) reported `default` for an instance in any other project, and
+        # the detail dialog then sent its device writes to the wrong project.
+        self.project = project
         self.name = data.get('name', '')
         self.status = data.get('status', 'Unknown')
         self.status_code = data.get('status_code', 0)
