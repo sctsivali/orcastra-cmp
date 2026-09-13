@@ -3,6 +3,7 @@
  */
 
 import {
+  IPAMListResponse,
   NetworkACLDetail,
   VMListResponse,
   VMInfo,
@@ -1650,7 +1651,7 @@ export const clusterAPI = {
 export const ipamAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const url = host ? `/ipam?host=${encodeURIComponent(host)}` : "/ipam";
-    return fetchRead(url, opts);
+    return fetchRead<IPAMListResponse>(url, opts);
   },
 };
 

@@ -602,6 +602,32 @@ export interface FanoutReachability {
   node_errors?: Record<string, string>;
 }
 
+/** How an IPAM row's address came to be held. See the backend's IPAMAllocation.allocation. */
+export type IPAMAllocationKind = "static" | "dhcp" | "gateway" | "forward" | "load_balancer" | "unknown";
+
+export interface IPAMAllocation {
+  address: string;
+  type: string;
+  used_by: string;
+  hardware_address: string;
+  network: string;
+  node: string;
+  project: string;
+  allocation: IPAMAllocationKind;
+  /** bridge, ovn, macvlan, physical; empty when the network was not found. */
+  network_type: string;
+  /** The project that holds the network record; empty when the network was not found. */
+  network_project: string;
+  subnet_ipv4: string;
+  subnet_ipv6: string;
+}
+
+export interface IPAMListResponse extends FanoutReachability {
+  total: number;
+  allocations: IPAMAllocation[];
+  nodes: string[];
+}
+
 export interface ProfileListResponse extends FanoutReachability {
   total: number;
   profiles: ProfileInfo[];

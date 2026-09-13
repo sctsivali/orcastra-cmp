@@ -57,6 +57,8 @@ function normalizeProject(project?: string | null) {
 function refreshInstanceQueries(queryClient: QueryClient) {
   void queryClient.invalidateQueries({ queryKey: queryKeys.vms });
   void queryClient.invalidateQueries({ queryKey: ["instances"] });
+  // a create, delete or start changes the allocation table the IPAM page reads
+  void queryClient.invalidateQueries({ queryKey: ["ipam"] });
 }
 
 function removeInstanceFromList(
@@ -1034,6 +1036,8 @@ export function useSetNicAddress() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["instances"] });
       queryClient.invalidateQueries({ queryKey: ["instance"] });
+      // a pin or a clear flips the row on the IPAM page between Static and DHCP
+      queryClient.invalidateQueries({ queryKey: ["ipam"] });
     },
   });
 }
