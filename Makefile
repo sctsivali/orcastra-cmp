@@ -253,6 +253,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-table-typography.mjs
 	@echo "$(COLOR_GREEN)Checking unreachable-cluster banners...$(COLOR_RESET)"
 	@node scripts/checks/check-unreachable-banner.mjs
+	@echo "$(COLOR_GREEN)Checking node picker status coverage...$(COLOR_RESET)"
+	@node scripts/checks/check-node-picker-status.mjs
 	@echo "$(COLOR_GREEN)Checking role gates...$(COLOR_RESET)"
 	@node scripts/checks/check-role-gates.mjs
 	@echo "$(COLOR_GREEN)Checking console reloads...$(COLOR_RESET)"
