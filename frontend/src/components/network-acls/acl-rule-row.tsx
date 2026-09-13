@@ -13,7 +13,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import { ACTIONS, PROTOCOLS, STATES, type AclRule, type Direction } from "./acl-rules";
+import {
+  ACTIONS,
+  PROTOCOLS,
+  STATES,
+  portsAllowed,
+  rulePortErrors,
+  type AclRule,
+  type Direction,
+} from "./acl-rules";
 
 interface AclRuleRowProps {
   dir: Direction;
@@ -23,10 +31,35 @@ interface AclRuleRowProps {
   onRemove: () => void;
 }
 
-/** One ingress or egress rule: action, protocol, the far address, the port, and its state. */
+/** One ingress or egress rule: action, protocol, the far address, both ports, and its state. */
 export function AclRuleRow({ dir, index, rule, onChange, onRemove }: AclRuleRowProps) {
+  const ports = portsAllowed(rule);
+  const errors = rulePortErrors(rule);
+  const portId = (field: "source_port" | "destination_port") =>
+    `acl-${dir}-${index}-${field === "source_port" ? "sport" : "dport"}`;
+  const portField = (field: "source_port" | "destination_port", label: string, placeholder: string) => (
+    <div className="space-y-1">
+      <Label htmlFor={portId(field)} className="text-xs text-muted-foreground">
+        {label}
+      </Label>
+      <Input
+        id={portId(field)}
+        value={rule[field] ?? ""}
+        onChange={(e) => onChange({ [field]: e.target.value })}
+        placeholder={ports ? placeholder : "Needs tcp or udp"}
+        disabled={!ports}
+        aria-invalid={errors[field] ? true : undefined}
+        aria-describedby={errors[field] ? `${portId(field)}-error` : undefined}
+      />
+      {errors[field] && (
+        <p id={`${portId(field)}-error`} className="text-xs text-destructive">
+          {errors[field]}
+        </p>
+      )}
+    </div>
+  );
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-[1fr_1fr_1fr_1fr_auto] gap-2 rounded-lg border p-3 items-end">
+    <div className="grid grid-cols-2 sm:grid-cols-[1fr_1fr_1fr_1fr_1fr_auto] gap-2 rounded-lg border p-3 items-start">
       <div className="space-y-1">
         <Label className="text-xs text-muted-foreground">Action</Label>
         <Select value={rule.action} onValueChange={(v) => onChange({ action: v })}>
@@ -46,7 +79,16 @@ export function AclRuleRow({ dir, index, rule, onChange, onRemove }: AclRuleRowP
         <Label className="text-xs text-muted-foreground">Protocol</Label>
         <Select
           value={rule.protocol || "any"}
-          onValueChange={(v) => onChange({ protocol: v === "any" ? "" : v })}
+          onValueChange={(v) => {
+            const protocol = v === "any" ? "" : v;
+            // LXD refuses a port on anything but tcp and udp, so a port typed under tcp must
+            // not travel along when the protocol changes to icmp or any.
+            onChange(
+              portsAllowed({ ...rule, protocol })
+                ? { protocol }
+                : { protocol, source_port: "", destination_port: "" },
+            );
+          }}
         >
           <SelectTrigger>
             <SelectValue />
@@ -73,24 +115,19 @@ export function AclRuleRow({ dir, index, rule, onChange, onRemove }: AclRuleRowP
           placeholder="Any address"
         />
       </div>
-      <div className="space-y-1">
-        <Label className="text-xs text-muted-foreground">Destination port</Label>
-        <Input
-          value={rule.destination_port ?? ""}
-          onChange={(e) => onChange({ destination_port: e.target.value })}
-          placeholder="Any port"
-        />
-      </div>
+      {portField("source_port", "Source port", "Any source port")}
+      {portField("destination_port", "Destination port", "Any destination port")}
       <Button
         type="button"
         variant="ghost"
         size="icon"
+        className="mt-5"
         onClick={onRemove}
         aria-label={`Remove ${dir} rule ${index + 1}`}
       >
         <Trash2 className="h-4 w-4" />
       </Button>
-      <div className="col-span-2 sm:col-span-5 space-y-1">
+      <div className="col-span-2 sm:col-span-6 space-y-1">
         <Label className="text-xs text-muted-foreground">State</Label>
         <Select value={rule.state || "enabled"} onValueChange={(v) => onChange({ state: v })}>
           <SelectTrigger className="sm:w-48">

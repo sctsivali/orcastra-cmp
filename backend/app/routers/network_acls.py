@@ -10,6 +10,7 @@ import asyncio
 import re
 from concurrent.futures import ThreadPoolExecutor
 
+from app.services.lxd.acl_rules import rule_list_problem, validate_rules
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.fanout import NodeRead, collect
 from app.models.schemas import FanoutReachability
@@ -128,6 +129,14 @@ class NetworkACLCreateRequest(BaseModel):
             raise ValueError(
                 "Name must start with a letter and contain only letters, numbers and hyphens"
             )
+        return v
+
+    @field_validator("ingress", "egress")
+    @classmethod
+    def _validate_rule_ports(cls, v: List[Dict[str, Any]], info: Any) -> List[Dict[str, Any]]:
+        problem = rule_list_problem(v, info.field_name)
+        if problem:
+            raise ValueError(problem)
         return v
 
 
@@ -430,6 +439,8 @@ async def update_network_acl(
 ):
     """Update a network ACL."""
     verify_cluster_access(host)
+    validate_rules(ingress, "ingress")
+    validate_rules(egress, "egress")
     try:
         client = require_client(lxd_service.connection_manager.get_client(host), host)
         owner = resolve_owner(client, "network-acls", project)

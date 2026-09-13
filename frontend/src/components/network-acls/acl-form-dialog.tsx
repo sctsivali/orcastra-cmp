@@ -54,7 +54,14 @@ import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { APIError, type NetworkACLInfo } from "@/types/api";
 
 import { AclRuleRow } from "./acl-rule-row";
-import { NAME_RE, cleanRule, emptyRule, type AclRule, type Direction } from "./acl-rules";
+import {
+  NAME_RE,
+  cleanRule,
+  emptyRule,
+  rulePortErrors,
+  type AclRule,
+  type Direction,
+} from "./acl-rules";
 
 export type { AclRule } from "./acl-rules";
 
@@ -155,7 +162,9 @@ export function AclFormDialog({
     return Array.from(seen).sort();
   })();
 
-  const rulesValid = [...ingress, ...egress].every((r) => !!r.action);
+  const rulesValid = [...ingress, ...egress].every(
+    (r) => !!r.action && Object.keys(rulePortErrors(r)).length === 0,
+  );
   const canSubmit =
     !!host &&
     (isEdit || (name !== "" && nameError === "")) &&
