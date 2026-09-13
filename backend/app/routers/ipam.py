@@ -5,6 +5,7 @@ Provides endpoints for managing LXD network IP address allocations.
 
 from fastapi import APIRouter, HTTPException, Depends, Query
 from typing import Any, Dict, Literal, Optional, List, Tuple
+from urllib.parse import unquote
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -13,6 +14,7 @@ from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.fanout import NodeRead, collect, unattempted
 from app.services.lxd.ipam_join import classify, network_facts
 from app.services.lxd.project_scope import (
+    ALL_PROJECTS_READ_TIMEOUT,
     InstanceRecord,
     list_across_projects,
     list_instance_records,
@@ -92,6 +94,66 @@ class IPAMListResponse(FanoutReachability):
     nodes: List[str] = Field(..., description="List of nodes")
 
 
+def _read_allocations(
+    client: Any, node_name: str, project_names: List[str], read: NodeRead
+) -> List[Tuple[Optional[str], Dict[str, Any]]]:
+    """Every allocation on the cluster as (listing project or None, row).
+
+    important: one all-projects read where the daemon offers `network_allocations`, because the
+    per-project walk lists a shared network's leases once per project that borrows the network:
+    measured on a 19-project MicroCloud, 19 reads and 815 rows in 54 s against one read and
+    59 rows in 4 s. The all-projects rows name their owner in used_by (`?project=`), which is
+    what the caller reads; the listing project is None for them. A daemon without the
+    extension, or an all-projects read that does not answer 200, is walked as before.
+    """
+    base_url = client.api._api_endpoint
+    timeout = socket_timeout_for(client)
+    info = getattr(client, "host_info", None) or {}
+    if "network_allocations" in (info.get("api_extensions") or []):
+        try:
+            response = client.api.session.get(
+                f"{base_url}/network-allocations?all-projects=true&recursion=1",
+                timeout=ALL_PROJECTS_READ_TIMEOUT,
+            )
+            if response.status_code == 200:
+                return [(None, row) for row in (response.json().get("metadata") or []) if isinstance(row, dict)]
+            logger.debug(f"all-projects allocations on {node_name}: status {response.status_code}, walking projects")
+        except Exception as e:  # noqa: BLE001 - fall back to the walk, which names its own losses
+            logger.debug(f"all-projects allocations on {node_name} failed ({type(e).__name__}), walking projects")
+    rows: List[Tuple[Optional[str], Dict[str, Any]]] = []
+    for project_name in project_names:
+        try:
+            # important: client.api.session bypasses pylxd's _APINode, so the timeout
+            # _APINode would have injected never applies. Without this the call blocks
+            # forever against a silent node and permanently burns a pool thread.
+            response = client.api.session.get(
+                f"{base_url}/network-allocations?project={project_name}&recursion=1", timeout=timeout
+            )
+            if response.status_code != 200:
+                logger.debug(
+                    f"Could not get network allocations for project {project_name} on {node_name}: "
+                    f"status {response.status_code}"
+                )
+                continue
+            rows.extend((project_name, row) for row in (response.json().get("metadata") or []) if isinstance(row, dict))
+        except Exception as e:  # noqa: BLE001 - one project's failure is named, not fatal
+            # the project is in the log for the operator of the box; the banner a Partner on a
+            # shared cluster reads must not name another organization's project
+            logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
+            read.lost(f"one project's allocations: {type(e).__name__}")
+    return rows
+
+
+def _project_in_reference(tail: str) -> str:
+    """The `?project=` of an instance reference, "default" when it carries none."""
+    if "?" not in tail:
+        return "default"
+    for pair in tail.split("?", 1)[1].split("&"):
+        if pair.startswith("project="):
+            return unquote(pair[len("project="):]) or "default"
+    return "default"
+
+
 def _generation(cache: Any) -> Optional[str]:
     """The instance-list generation token, or None from a cache that keeps none (a stub)."""
     read = getattr(cache, "instance_list_generation", None)
@@ -149,76 +211,72 @@ def _fetch_ipam_for_node(
 
     configs, networks, records, instances_ok = _read_join_sources(client, node_name, read)
     project_names = list(configs.keys()) or ["default"]
+    # important: LXD lists a shared network's leases under every project that borrows the
+    # network (features.networks unset), naming the instance's own project only in used_by.
+    # The same lease therefore arrives once per borrowing project; it is one row, in the
+    # instance's project, or the pin lookup misses and a tenant of the borrowing project is
+    # shown an instance that is not theirs. The network's own rows (gateway, forwards) stay
+    # per project: each borrower does use that gateway.
+    seen_instance_rows: set = set()
 
-    for project_name in project_names:
-        try:
-            base_url = client.api._api_endpoint
-            allocations_url = f"network-allocations?project={project_name}&recursion=1"
-            full_url = f"{base_url}/{allocations_url}"
-            # important: client.api.session bypasses pylxd's _APINode, so the timeout
-            # _APINode would have injected never applies. Without this the call blocks
-            # forever against a silent node and permanently burns a pool thread.
-            allocations_response = client.api.session.get(
-                full_url, timeout=socket_timeout_for(client)
-            )
+    for listing_project, alloc in _read_allocations(client, node_name, project_names, read):
+        alloc_network = alloc.get('network', '')
+        if network_filter and alloc_network != network_filter:
+            continue
 
-            if allocations_response.status_code != 200:
-                logger.debug(
-                    f"Could not get network allocations for project {project_name} on {node_name}: "
-                    f"status {allocations_response.status_code}"
-                )
+        addresses_str = alloc.get('addresses', '')
+        address = addresses_str.split('/')[0] if addresses_str else ''
+        alloc_type = alloc.get('type', 'network')
+        used_by = alloc.get('used_by', '')
+        hwaddr = alloc.get('hwaddr', '')
+
+        # the row's project: the instance's own for an instance row, the network's owner for the
+        # network's rows when the daemon named it, else the project the row was listed under
+        row_project = listing_project
+        if used_by and '/instances/' in used_by:
+            resource_type = "instance"
+            tail = used_by.split('/instances/')[-1]
+            resource_name = tail.split('?')[0]
+            row_project = _project_in_reference(tail)
+            key = (row_project, resource_name, alloc_network, address)
+            if key in seen_instance_rows:
                 continue
-            for alloc in allocations_response.json().get('metadata', []):
-                alloc_network = alloc.get('network', '')
-                if network_filter and alloc_network != network_filter:
-                    continue
+            seen_instance_rows.add(key)
+        elif used_by:
+            resource_type = alloc_type
+            resource_name = alloc_network
+            if listing_project is None:
+                row_project = _project_in_reference(used_by.split('/networks/')[-1]) if '/networks/' in used_by else "default"
+        else:
+            resource_type = "network"
+            resource_name = alloc_network
+            if listing_project is None:
+                row_project = "default"
+        if not address:
+            continue
 
-                addresses_str = alloc.get('addresses', '')
-                address = addresses_str.split('/')[0] if addresses_str else ''
-                alloc_type = alloc.get('type', 'network')
-                used_by = alloc.get('used_by', '')
-                hwaddr = alloc.get('hwaddr', '')
-
-                if used_by and '/instances/' in used_by:
-                    resource_type = "instance"
-                    resource_name = used_by.split('/instances/')[-1].split('?')[0]
-                elif used_by:
-                    resource_type = alloc_type
-                    resource_name = alloc_network
-                else:
-                    resource_type = "network"
-                    resource_name = alloc_network
-                if not address:
-                    continue
-
-                # the row's project is the instance's project: LXD lists allocations per project
-                record = records.get((project_name, resource_name)) if resource_type == "instance" else None
-                kind = classify(
-                    alloc_type if resource_type != "instance" else "instance",
-                    address, record, alloc_network, instances_ok,
-                )
-                net_type, net_project, subnet4, subnet6 = network_facts(
-                    alloc_network, project_name, configs, networks
-                )
-                read.rows.append(IPAMAllocation(
-                    address=address,
-                    type=resource_type,
-                    used_by=resource_name,
-                    hardware_address=hwaddr or "",
-                    network=alloc_network,
-                    node=node_name,
-                    project=project_name,
-                    allocation=kind,
-                    network_type=net_type,
-                    network_project=net_project,
-                    subnet_ipv4=subnet4,
-                    subnet_ipv6=subnet6,
-                ))
-        except Exception as e:  # noqa: BLE001 - one project's failure is named, not fatal
-            # the project is in the log for the operator of the box; the banner a Partner on a
-            # shared cluster reads must not name another organization's project
-            logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
-            read.lost(f"one project's allocations: {type(e).__name__}")
+        record = records.get((row_project, resource_name)) if resource_type == "instance" else None
+        kind = classify(
+            alloc_type if resource_type != "instance" else "instance",
+            address, record, alloc_network, instances_ok,
+        )
+        net_type, net_project, subnet4, subnet6 = network_facts(
+            alloc_network, row_project, configs, networks
+        )
+        read.rows.append(IPAMAllocation(
+            address=address,
+            type=resource_type,
+            used_by=resource_name,
+            hardware_address=hwaddr or "",
+            network=alloc_network,
+            node=node_name,
+            project=row_project,
+            allocation=kind,
+            network_type=net_type,
+            network_project=net_project,
+            subnet_ipv4=subnet4,
+            subnet_ipv6=subnet6,
+        ))
     if read.problems:
         logger.warning("IPAM read on %s lost %d part(s): %s", node_name, len(read.problems), "; ".join(read.problems))
     return read

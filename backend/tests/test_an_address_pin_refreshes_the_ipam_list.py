@@ -228,3 +228,111 @@ def test_a_failed_project_read_does_not_name_the_project_to_the_caller(monkeypat
     assert result.problems, "the failed project read must be named as a problem"
     assert all("UAT-Hermes" not in p for p in result.problems), result.problems
     assert any("RuntimeError" in p for p in result.problems), result.problems
+
+
+def test_a_lease_listed_under_a_borrowing_project_belongs_to_the_instances_project(monkeypatch) -> None:
+    """LXD lists a shared network's leases under every project that borrows the network, and
+    names the instance's own project only in used_by. The row must carry that project, so the
+    pin lookup finds the instance and a tenant of the borrowing project is not shown it; and
+    the same lease listed three times is one row."""
+    tc, _ = _app(monkeypatch)
+    from app.routers import ipam as ipam_module
+
+    class _Api:
+        _api_endpoint = "https://fake:8443/1.0"
+        projects = _Node([{"name": "default", "config": {}}, {"name": "borrower", "config": {}},
+                          {"name": "other", "config": {"features.networks": "true"}}])
+
+        def __init__(self) -> None:
+            self.session = SimpleNamespace(get=self._allocations)
+
+        @staticmethod
+        def _allocations(url: str, timeout=None):
+            project = url.split("project=")[1].split("&")[0]
+            shared = [
+                {"addresses": "10.22.114.1/24", "type": "network", "used_by": "/1.0/networks/lxdbr0", "network": "lxdbr0"},
+                {"addresses": "10.22.114.231/24", "type": "instance", "hwaddr": "00:16:3e:00:00:01",
+                 "used_by": "/1.0/instances/qahf-nic-test", "network": "lxdbr0"},
+                {"addresses": "10.22.114.77/24", "type": "instance", "hwaddr": "00:16:3e:00:00:07",
+                 "used_by": "/1.0/instances/theirs?project=other", "network": "lxdbr0"},
+            ]
+            return _Response({"metadata": shared if project in ("default", "borrower") else []})
+
+        def __getitem__(self, key):
+            return {
+                "networks": _Node([{"name": "lxdbr0", "project": "default", "type": "bridge",
+                                    "config": {"ipv4.address": "10.22.114.1/24"}}]),
+                "instances": _Node([
+                    {"name": "qahf-nic-test", "project": "default",
+                     "expanded_devices": {"eth1": {"type": "nic", "nictype": "bridged", "parent": "lxdbr0",
+                                                   "ipv4.address": "10.22.114.231"}}},
+                    {"name": "theirs", "project": "other", "expanded_devices": {"eth0": {"type": "nic", "network": "lxdbr0"}}},
+                ]),
+            }[key]
+
+    client = SimpleNamespace(api=_Api(), host_info={"api_extensions": ["networks_all_projects", "instance_all_projects"]}, project=None)
+    svc = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node: client))
+    read = ipam_module._fetch_ipam_for_node(svc, HOST, None)
+    rows = read.rows
+    mine = [r for r in rows if r.used_by == "qahf-nic-test"]
+    assert len(mine) == 1, [(r.project, r.address) for r in rows]
+    assert mine[0].project == "default"
+    assert mine[0].allocation == "static"
+    theirs = [r for r in rows if r.used_by == "theirs"]
+    assert len(theirs) == 1 and theirs[0].project == "other" and theirs[0].allocation == "dhcp"
+    # the gateway of a borrowed network is listed for each project that borrows it
+    assert sorted(r.project for r in rows if r.type == "network") == ["borrower", "default"]
+
+
+def test_a_daemon_with_the_extension_is_read_once_for_every_project(monkeypatch) -> None:
+    """One all-projects read instead of one per project: measured on a 19-project MicroCloud,
+    54 s and 815 duplicated rows became 4 s and 59. The rows name their owner in used_by."""
+    tc, _ = _app(monkeypatch)
+    from app.routers import ipam as ipam_module
+    calls: List[str] = []
+
+    class _Api:
+        _api_endpoint = "https://fake:8443/1.0"
+        projects = _Node([{"name": "default", "config": {}}, {"name": "borrower", "config": {}}])
+
+        def __init__(self) -> None:
+            self.session = SimpleNamespace(get=self._allocations)
+
+        @staticmethod
+        def _allocations(url: str, timeout=None):
+            calls.append(url)
+            assert "all-projects=true" in url, "a daemon with the extension must not be walked"
+            return _Response({"metadata": [
+                {"addresses": "10.22.114.1/24", "type": "network", "used_by": "/1.0/networks/lxdbr0", "network": "lxdbr0"},
+                {"addresses": "10.22.114.231/24", "type": "instance", "hwaddr": "00:16:3e:00:00:01",
+                 "used_by": "/1.0/instances/qahf-nic-test", "network": "lxdbr0"},
+                {"addresses": "192.168.3.1/24", "type": "network", "used_by": "/1.0/networks/ovn-x?project=other", "network": "ovn-x"},
+                {"addresses": "192.168.3.12/24", "type": "instance", "hwaddr": "00:16:3e:00:00:02",
+                 "used_by": "/1.0/instances/theirs?project=other", "network": "ovn-x"},
+            ]})
+
+        def __getitem__(self, key):
+            return {
+                "networks": _Node([
+                    {"name": "lxdbr0", "project": "default", "type": "bridge", "config": {"ipv4.address": "10.22.114.1/24"}},
+                    {"name": "ovn-x", "project": "other", "type": "ovn", "config": {"ipv4.address": "192.168.3.1/24"}},
+                ]),
+                "instances": _Node([
+                    {"name": "qahf-nic-test", "project": "default",
+                     "expanded_devices": {"eth1": {"type": "nic", "nictype": "bridged", "parent": "lxdbr0", "ipv4.address": "10.22.114.231"}}},
+                    {"name": "theirs", "project": "other", "expanded_devices": {"eth0": {"type": "nic", "network": "ovn-x"}}},
+                ]),
+            }[key]
+
+    client = SimpleNamespace(api=_Api(), host_info={"api_extensions": ["networks_all_projects", "instance_all_projects", "network_allocations"]}, project=None)
+    svc = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node: client))
+    read = ipam_module._fetch_ipam_for_node(svc, HOST, None)
+    assert len(calls) == 1 and "all-projects=true" in calls[0]
+    by = {(r.project, r.address): r for r in read.rows}
+    assert by[("default", "10.22.114.1")].allocation == "gateway"
+    assert by[("default", "10.22.114.231")].allocation == "static"
+    assert by[("other", "192.168.3.1")].allocation == "gateway"
+    assert by[("other", "192.168.3.12")].allocation == "dhcp"
+    assert by[("other", "192.168.3.12")].network_type == "ovn"
+    assert by[("other", "192.168.3.12")].subnet_ipv4 == "192.168.3.1/24"
+    assert read.complete
