@@ -23,6 +23,7 @@ from .exceptions import (
 from .utils import (
     parse_vm_status,
     extract_ip_addresses,
+    extract_ip_addresses_from_state,
     find_instance_in_projects,
     jsonable_lxd,
     normalize_cluster_member,
@@ -227,17 +228,7 @@ class InstanceManager:
                 timeout=(1, 3)  # Aggressive timeout for parallel calls
             )
             state_data = state_resp.json()['metadata']
-            network_data = state_data.get('network', {})
-            
-            for iface_name, iface_data in network_data.items():
-                addresses = iface_data.get('addresses', [])
-                for addr in addresses:
-                    family = addr.get('family')
-                    address = addr.get('address')
-                    scope = addr.get('scope', '')
-                    if family == 'inet' or (family == 'inet6' and scope == 'global'):
-                        if address:
-                            ip_addrs.append(address)
+            ip_addrs = extract_ip_addresses_from_state(state_data)
         except Exception as e:
             logger.debug(f"Could not get state for {instance_name}: {e}")
         

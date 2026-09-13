@@ -3,8 +3,9 @@ Utility functions for LXD operations.
 Includes helpers for parsing status, extracting IPs, and finding instances.
 """
 
+import ipaddress
 import logging
-from typing import Any, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 import pylxd
 from pylxd import exceptions as pylxd_exceptions
 
@@ -38,60 +39,59 @@ def parse_vm_status(status: str, status_code: int) -> VMStatus:
     return status_map.get(status, VMStatus.UNKNOWN)
 
 
+def is_display_address(addr: Dict[str, Any]) -> bool:
+    """
+    Whether one address from an instance's network state belongs in an IP column.
+
+    important: the loopback used to sit beside the real address on every running instance,
+    because one collector walked `lo` and kept every inet address. Skipping `lo` by name is
+    not enough either (a loopback address can live on another interface), so the address
+    itself decides: reachable from outside the instance, so not loopback, not link-local,
+    and not scope "local".
+    """
+    address = addr.get("address") or ""
+    family = addr.get("family")
+    if not address or family not in ("inet", "inet6"):
+        return False
+    if addr.get("scope") in ("local", "link"):
+        return False
+    try:
+        parsed = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return not address.startswith(("127.", "fe80", "::1"))
+    return not (parsed.is_loopback or parsed.is_link_local)
+
+
+def _display_addresses(network_data: Dict[str, Any]) -> List[str]:
+    return [
+        addr.get("address")
+        for iface_name, iface_data in (network_data or {}).items()
+        if iface_name != "lo"
+        for addr in (iface_data or {}).get("addresses", [])
+        if is_display_address(addr)
+    ]
+
+
 def extract_ip_addresses(instance) -> List[str]:
     """Extract IP addresses from instance network state."""
-    ip_addresses = []
-    
     try:
         if instance.status != "Running":
-            return ip_addresses
-        
+            return []
         state = instance.state()
         if state and state.network:
-            for iface_name, iface_data in state.network.items():
-                if iface_name == "lo":
-                    continue
-                
-                for addr in iface_data.get("addresses", []):
-                    if addr.get("family") == "inet":
-                        ip_addresses.append(addr.get("address"))
-                    elif addr.get("family") == "inet6":
-                        ip_addr = addr.get("address")
-                        # Skip link-local addresses
-                        if not ip_addr.startswith("fe80"):
-                            ip_addresses.append(ip_addr)
+            return _display_addresses(state.network)
     except Exception as e:
         logger.debug(f"Could not get IP addresses for {instance.name}: {e}")
-    
-    return ip_addresses
+    return []
 
 
 def extract_ip_addresses_from_state(state_data: dict) -> List[str]:
     """Extract IP addresses from instance state data dictionary."""
-    ip_addresses = []
-    
     try:
-        network_data = state_data.get('network', {})
-        if not network_data:
-            return ip_addresses
-        
-        for iface_name, iface_data in network_data.items():
-            if iface_name == "lo":
-                continue
-            
-            addresses = iface_data.get('addresses', [])
-            for addr in addresses:
-                if addr.get('family') == 'inet':
-                    ip_addresses.append(addr.get('address'))
-                elif addr.get('family') == 'inet6':
-                    ip_addr = addr.get('address')
-                    # Skip link-local addresses
-                    if ip_addr and not ip_addr.startswith('fe80'):
-                        ip_addresses.append(ip_addr)
+        return _display_addresses(state_data.get('network', {}))
     except Exception as e:
         logger.debug(f"Could not extract IP addresses from state data: {e}")
-    
-    return ip_addresses
+    return []
 
 
 def find_instance_in_projects(

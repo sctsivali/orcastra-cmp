@@ -17,7 +17,7 @@ from app.models.schemas import (
 )
 from app.core.node_metadata import get_node_metadata_store
 from app.core.type_utils import detect_cluster_type_from_metadata, normalize_node_type
-from .utils import parse_vm_status, find_instance_in_projects
+from .utils import parse_vm_status, find_instance_in_projects, is_display_address
 from .gpu import GpuInventory, build_gpu_inventory
 from .hardware import build_hardware_profile
 from .node_resources import aggregate_microcloud_resources, build_node_resources
@@ -546,12 +546,12 @@ class ResourceManager:
                     if iface_name == "lo":
                         continue
                     for addr in iface_data.get("addresses", []):
-                        ip = addr.get("address")
-                        family = addr.get("family")
-                        if family == "inet":
-                            metrics.ipv4_addresses.append(ip)
-                        elif family == "inet6" and not ip.startswith("fe80"):
-                            metrics.ipv6_addresses.append(ip)
+                        if not is_display_address(addr):
+                            continue
+                        if addr.get("family") == "inet":
+                            metrics.ipv4_addresses.append(addr.get("address"))
+                        else:
+                            metrics.ipv6_addresses.append(addr.get("address"))
             
             return metrics
             
