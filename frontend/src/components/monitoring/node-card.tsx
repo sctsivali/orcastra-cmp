@@ -1,8 +1,11 @@
+"use client";
+
 import { memo } from "react";
 import { Play, Server } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { clusterStatusMeta } from "@/lib/cluster-status";
+import { usePermissions } from "@/hooks/use-permissions";
 import { ClusterStatus } from "@/types/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -28,13 +31,16 @@ interface NodeCardProps {
 
 export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
   const gpu = summarizeGpus(node);
-  // note: this endpoint still emits "pending_trust", which is not in the ClusterStatus enum.
-  // clusterStatusMeta accepts it as a documented alias, so this card reads the same vocabulary
-  // as the Clusters page without waiting on a backend change. The hand-written amber pill it
-  // replaces was the last place a status colour was written at a call site.
-  const statusMeta = clusterStatusMeta(
-    node.is_online ? ClusterStatus.ONLINE : node.cluster_status,
-  );
+  const { isPartner } = usePermissions();
+  const rawStatus = clusterStatusMeta(node);
+  // important: "Pending Trust" and "Error" are certificate-handshake and platform vocabulary a
+  // tenant cannot act on, and the operator-surface gate pins that neither reaches one. The body
+  // copy below already drew that line; the badge did not, and rendered the raw label. Every
+  // not-online state means one thing to a tenant: this node is not answering.
+  const statusMeta =
+    isPartner || rawStatus.status === ClusterStatus.ONLINE
+      ? rawStatus
+      : { ...rawStatus, label: "Unavailable", srLabel: "Status: Unavailable" };
   const getStatusBadge = () => (
     <Badge variant={statusMeta.badgeVariant}>{statusMeta.label}</Badge>
   );
@@ -137,8 +143,12 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
         ) : (
           <div className="text-center py-4 text-muted-foreground">
             <Server className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            {/* One source for the word, so the badge above and this line can never disagree.
+                It used to compare node.cluster_status to the literal "pending_trust", which the
+                backend no longer emits. Kept as a sentence: the badge is the label, this is the
+                card's empty state and reads better saying what it means. */}
             <p className="text-sm font-medium">
-              {node.cluster_status === "pending_trust" ? "Pending Trust" : "Node is offline"}
+              Node is {statusMeta.label.toLowerCase()}
             </p>
             {node.status_message && (
               <p className="text-xs mt-1 max-w-[200px] mx-auto">{node.status_message}</p>

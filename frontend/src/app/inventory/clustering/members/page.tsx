@@ -89,8 +89,18 @@ function ClusterMembersContent() {
   
   const { data: clustersData } = useClusters();
   const clusters = React.useMemo(() => {
-    return (clustersData?.clusters || []).filter(
-      (c: any) => c.cluster_type?.toLowerCase() === "microcloud" && c.status === "online"
+    // important: the status filter that used to sit beside the type filter is gone. An offline
+    // MicroCloud cluster simply vanished from this picker, so an operator whose cluster had
+    // gone down was left with no row, no status and nothing to explain the absence. It is
+    // listed and marked instead, which is the rule every other cluster picker follows.
+    const rows = (clustersData?.clusters || []).filter(
+      (c: any) => c.cluster_type?.toLowerCase() === "microcloud"
+    );
+    // Reachable clusters lead, so the list does not open on a row that cannot be read.
+    return rows.sort(
+      (a: any, b: any) =>
+        clusterStatusMeta(a.status).toneRank - clusterStatusMeta(b.status).toneRank ||
+        (a.display_name || a.cluster_id).localeCompare(b.display_name || b.cluster_id)
     );
   }, [clustersData]);
   
@@ -131,7 +141,12 @@ function ClusterMembersContent() {
     if (nodeParam && clusters.some((c: any) => c.cluster_id === nodeParam)) {
       setNode(nodeParam);
     } else if (clusters.length > 0 && !nodeParam) {
-      const firstNode = clusters[0].cluster_id;
+      // important: prefer a cluster that will answer. Now that unreachable clusters are listed
+      // rather than filtered out, defaulting to the first row would open this page on an error
+      // toast on every visit whenever the alphabetically first cluster happened to be down.
+      const first =
+        clusters.find((c: any) => clusterStatusMeta(c.status).reachable) ?? clusters[0];
+      const firstNode = first.cluster_id;
       setNode(firstNode);
       router.replace(`/inventory/clustering/members?node=${firstNode}`);
     }

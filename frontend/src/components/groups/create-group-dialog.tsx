@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { lxdResourcePath } from "@/lib/lxd-resource-path";
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +12,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
+import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { Label } from "@/components/ui/label";
 import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { Textarea } from "@/components/ui/textarea";
@@ -47,7 +50,6 @@ import {
 interface CreateGroupDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  nodes: string[];
 }
 
 interface Permission {
@@ -63,15 +65,32 @@ interface Resource {
   project?: string;
 }
 
-export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDialogProps) {
+export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps) {
   const { toast } = useToast();
   const createGroupMutation = useCreateGroup();
-  
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
+
+  // The list is ordered reachable-first, so the first selectable option is a cluster that can
+  // actually take a group. This used to default to nodes[0] of a list the page had already
+  // filtered down to whatever answered, which hid the rest rather than ranking them.
+  const defaultNode = useMemo(
+    () => nodeOptions.find((o) => !o.disabled)?.value ?? "",
+    [nodeOptions],
+  );
+
   const [formData, setFormData] = useState({
     name: "",
     description: "",
-    node: nodes[0] || "",
+    node: "",
   });
+
+  // note: reachability arrives after the dialog can open, so the default cannot be a useState
+  // initialiser. Only ever fills an empty choice, never overwrites the operator's.
+  useEffect(() => {
+    if (!open || !defaultNode) return;
+    setFormData((prev) => (prev.node ? prev : { ...prev, node: defaultNode }));
+  }, [open, defaultNode]);
   
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [newPermission, setNewPermission] = useState({
@@ -270,7 +289,7 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
       });
 
       // Reset form
-      setFormData({ name: "", description: "", node: nodes[0] || "" });
+      setFormData({ name: "", description: "", node: defaultNode });
       setPermissions([]);
       setNewPermission({ entity_type: "project", entitlement: "can_view" });
       setSelectedResources([]);
@@ -302,21 +321,29 @@ export function CreateGroupDialog({ open, onOpenChange, nodes }: CreateGroupDial
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="node">Target Node *</Label>
-              <Select
+              <SearchableSelect
+                id="node"
                 value={formData.node}
                 onValueChange={(value) => setFormData({ ...formData, node: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a node" />
-                </SelectTrigger>
-                <SelectContent>
-                  {nodes.map((node) => (
-                    <SelectItem key={node} value={node}>
-                      {node}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+                options={nodeOptions}
+                placeholder={loadingNodes ? "Loading..." : "Select a node"}
+                searchPlaceholder="Search nodes..."
+                emptyText="No nodes available."
+                disabled={loadingNodes}
+              />
+              <NodeStatusNotice
+                meta={formData.node ? nodePicker.statusOf(formData.node) : undefined}
+                reason={
+                  formData.node
+                    ? nodePicker.availabilityOf(formData.node)?.reason ?? undefined
+                    : undefined
+                }
+                nodeLabel={formData.node ? nodePicker.labelOf(formData.node) : undefined}
+                unavailable={nodePicker.statusUnavailable}
+                noSelectableNodes={nodePicker.selectableCount === 0}
+                updatedAt={nodePicker.statusUpdatedAt}
+                onRecheck={nodePicker.refreshNow}
+              />
               <p className="text-xs text-muted-foreground">
                 Resources will be fetched from this node
               </p>

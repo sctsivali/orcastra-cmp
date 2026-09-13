@@ -8,7 +8,11 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { ClusterStatus, type NodeStatus } from "@/types/api";
+import {
+  ClusterStatus,
+  type ClusterMonitoringMetrics,
+  type NodeStatus,
+} from "@/types/api";
 
 /**
  * One vocabulary for "can this cluster be used right now".
@@ -139,6 +143,12 @@ function isNodeStatus(value: unknown): value is NodeStatus {
   return typeof value === "object" && value !== null && "connected" in value;
 }
 
+// The monitoring payload names the same idea differently: is_online where NodeStatus says
+// connected. Disjoint keys, so the two shapes can be told apart structurally.
+function isMonitoringNode(value: unknown): value is ClusterMonitoringMetrics {
+  return typeof value === "object" && value !== null && "is_online" in value;
+}
+
 /**
  * Resolve any shape the product carries into the one vocabulary.
  *
@@ -148,11 +158,21 @@ function isNodeStatus(value: unknown): value is NodeStatus {
  * change what the UI decides the first time a backend message is reworded.
  */
 export function clusterStatusMeta(
-  input: ClusterStatus | NodeStatus | string | null | undefined,
+  input:
+    | ClusterStatus
+    | NodeStatus
+    | ClusterMonitoringMetrics
+    | string
+    | null
+    | undefined,
 ): ClusterStatusMeta {
   let key: string | undefined;
 
-  if (isNodeStatus(input)) {
+  if (isMonitoringNode(input)) {
+    // is_online wins because a body cached before the monitoring endpoint spoke the enum can
+    // still carry the old cluster_status vocabulary, and "connected" is never ambiguous.
+    key = input.is_online ? ClusterStatus.ONLINE : input.cluster_status;
+  } else if (isNodeStatus(input)) {
     key =
       input.status ??
       // Fallback for a body cached before the backend carried `status`. Structural, not
