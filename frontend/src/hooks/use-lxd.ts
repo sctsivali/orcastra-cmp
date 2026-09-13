@@ -1146,6 +1146,9 @@ export function useNetworkACLForEdit(
     gcTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
+    // a reconnect must not re-read underneath an edit in progress: the re-seed would drop the
+    // operator's changes without the stale notice this dialog exists to show
+    refetchOnReconnect: false,
   });
 }
 
@@ -1242,6 +1245,9 @@ export function useProfileForEdit(
     gcTime: 0,
     retry: false,
     refetchOnWindowFocus: false,
+    // a reconnect must not re-read underneath an edit in progress: the re-seed would drop the
+    // operator's changes without the stale notice this dialog exists to show
+    refetchOnReconnect: false,
   });
 }
 

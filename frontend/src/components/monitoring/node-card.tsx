@@ -40,7 +40,11 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
   const statusMeta =
     isPartner || rawStatus.status === ClusterStatus.ONLINE
       ? rawStatus
-      : { ...rawStatus, label: "Unavailable", srLabel: "Status: Unavailable" };
+      : {
+          ...clusterStatusMeta(ClusterStatus.OFFLINE),
+          label: "Unavailable",
+          srLabel: "Status: Unavailable",
+        };
   const getStatusBadge = () => (
     <Badge variant={statusMeta.badgeVariant}>{statusMeta.label}</Badge>
   );

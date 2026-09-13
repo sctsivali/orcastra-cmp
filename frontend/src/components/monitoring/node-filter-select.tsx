@@ -7,7 +7,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import type { SearchableSelectOption } from "@/components/ui/searchable-select";
 import { usePermissions } from "@/hooks/use-permissions";
 import { clusterStatusMeta } from "@/lib/cluster-status";
-import type { ClusterMonitoringMetrics } from "@/types/api";
+import { ClusterStatus, type ClusterMonitoringMetrics } from "@/types/api";
 
 export const ALL_NODES = "all";
 
@@ -36,15 +36,20 @@ export function NodeFilterSelect({
   const { isPartner } = usePermissions();
   const options = useMemo<SearchableSelectOption[]>(() => {
     const rows = nodes.map((node) => {
-      const meta = clusterStatusMeta(node);
+      const raw = clusterStatusMeta(node);
+      // important: "Pending Trust" and "Error" are certificate-handshake and platform
+      // vocabulary a tenant cannot act on; the node card beside this filter already collapses
+      // every not-online state to "Unavailable" for them, one word in one colour, so the list
+      // must too.
+      const meta =
+        isPartner || raw.reachable
+          ? raw
+          : { ...clusterStatusMeta(ClusterStatus.OFFLINE), label: "Unavailable" };
       return {
         value: node.node_name,
         label: node.node_name,
         status: {
-          // important: "Pending Trust" and "Error" are certificate-handshake and platform
-          // vocabulary a tenant cannot act on; the node card beside this filter already
-          // collapses every not-online state to "Unavailable" for them, so the list must too.
-          label: isPartner || meta.reachable ? meta.label : "Unavailable",
+          label: meta.label,
           dotClassName: meta.dotClassName,
           tone: meta.tone,
         },

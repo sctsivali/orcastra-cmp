@@ -222,11 +222,9 @@ def test_a_failed_project_read_does_not_name_the_project_to_the_caller(monkeypat
             return {"networks": _Node(NETWORKS), "instances": _Node(INSTANCES)}[key]
 
     client = SimpleNamespace(api=_Api(), host_info={"api_extensions": ["networks_all_projects", "instance_all_projects"]}, project=None)
-    read = ipam_module.NodeRead()
     monkeypatch.setattr(ipam_module, "_read_join_sources", lambda c, n, r: ({"default": {}, "UAT-Hermes": {"features.networks": "true"}}, {}, {}, True))
     svc = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node: client))
     result = ipam_module._fetch_ipam_for_node(svc, HOST, None)
     assert result.problems, "the failed project read must be named as a problem"
     assert all("UAT-Hermes" not in p for p in result.problems), result.problems
     assert any("RuntimeError" in p for p in result.problems), result.problems
-    del read

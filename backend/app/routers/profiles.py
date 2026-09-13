@@ -320,6 +320,11 @@ async def list_profiles(
         all_profiles = [
             p for p in all_profiles if project_is_visible(p.node, p.project)
         ]
+        # the rows' used_by is held to the same bound as the single read: on a shared cluster
+        # the other organization's projects inherit `default` profiles too, and the row feeds
+        # the delete confirm and the "in use by N" reason on the page
+        for p in all_profiles:
+            p.used_by = filter_visible_lxd_references(p.node, _bounded_used_by(p.node, p.used_by))
 
         if tenant_acl_active():
             visible_profiles = []

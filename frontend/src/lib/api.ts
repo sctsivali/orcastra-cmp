@@ -1657,7 +1657,8 @@ export const clusterAPI = {
 export const ipamAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const url = host ? `/ipam?host=${encodeURIComponent(host)}` : "/ipam";
-    return fetchRead<IPAMListResponse>(url, opts);
+    // three all-projects reads plus one per project per node: the heavy budget on a fresh read
+    return fetchHeavyRead<IPAMListResponse>(url, opts);
   },
 };
 

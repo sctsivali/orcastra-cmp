@@ -141,7 +141,9 @@ export function AclFormDialog({
     setError(null);
   }, [open, isEdit, editRead.data]);
 
-  const reading = isEdit && (editRead.isPending || editRead.isFetching);
+  // isPending, not isFetching: only the first read (and a Reload, which changes the key)
+  // replaces the form; a background fetch must never swap it out from under an edit
+  const reading = isEdit && editRead.isPending;
   const readFailed = isEdit && editRead.isError;
   const reload = () => setNonce((n) => n + 1);
 

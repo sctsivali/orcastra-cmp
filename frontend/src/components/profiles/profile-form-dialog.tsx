@@ -162,7 +162,9 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
     setError(null);
   }, [isEdit, editRead.data]);
 
-  const reading = isEdit && (editRead.isPending || editRead.isFetching);
+  // isPending, not isFetching: only the first read (and a Reload, which changes the key)
+  // replaces the form; a background fetch must never swap it out from under an edit
+  const reading = isEdit && editRead.isPending;
   const readFailed = isEdit && editRead.isError;
   const reload = () => setNonce((n) => n + 1);
 
@@ -179,14 +181,21 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
   const descError = descriptionError(description);
   const configErrors = configRowErrors(config);
   const devErrors = deviceErrors(devices);
+  const blankRow =
+    config.some((r) => !r.key.trim()) ||
+    devices.some((d) => !d.name.trim() || !d.type || d.props.some((r) => !r.key.trim()));
   const firstProblem =
     nameError ||
     descError ||
-    Object.values(configErrors)[0] ||
+    Object.values(configErrors).find(Boolean) ||
     (() => {
-      const first = Object.values(devErrors)[0];
-      return first ? first.name || first.type || Object.values(first.props)[0] || "" : "";
-    })();
+      for (const err of Object.values(devErrors)) {
+        const first = err.name || err.type || Object.values(err.props).find(Boolean);
+        if (first) return first;
+      }
+      return "";
+    })() ||
+    (blankRow ? "Fill in or remove the empty row" : "");
 
   // important: `submitting` is React state, so it only reaches `canSubmit` on the next render.
   // Two clicks inside one tick both pass the disabled check and both fire a create, which is
@@ -386,7 +395,7 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
                 <p className="text-xs text-destructive">{descError}</p>
               ) : description.length > DESCRIPTION_MAX - 55 ? (
                 <p className="text-xs text-muted-foreground">
-                  {description.length} of {DESCRIPTION_MAX} characters
+                  {description.length} characters; the table shows the first two lines
                 </p>
               ) : null}
             </div>

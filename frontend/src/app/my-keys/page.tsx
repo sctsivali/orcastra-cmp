@@ -283,6 +283,7 @@ function MyKeysContent() {
                 className="gap-1.5 shrink-0"
                 disabled={isReadOnly}
                 title={isReadOnly ? "Disabled in read-only mode" : undefined}
+                aria-label="Generate Key"
               >
                 <Plus className="h-4 w-4" />
                 {/* note: this was two spans, "Generate" gated on xs: and " Key" on sm:. There is

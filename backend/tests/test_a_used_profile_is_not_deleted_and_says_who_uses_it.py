@@ -72,3 +72,34 @@ def test_a_partner_is_not_shown_instances_outside_its_project_bound(monkeypatch)
     r = tc.delete("/profiles/web?host=nuc1")
     assert r.status_code == 409, r.text
     assert "mine" in r.json()["detail"] and "theirs" not in r.json()["detail"]
+
+
+def test_the_list_rows_are_held_to_the_same_bound(monkeypatch) -> None:
+    """The delete confirm and the row's "in use by N" read the list row, not the single read."""
+    from types import SimpleNamespace
+    from app.routers import profiles as profiles_module
+
+    used_by = ["/1.0/instances/mine", "/1.0/instances/theirs?project=orgb-prod"]
+    rows = [profiles_module.ProfileInfo(name="web", description="", config={}, devices={},
+                                        used_by=used_by, node="nuc1", project="default")]
+    monkeypatch.setattr(profiles_module, "_fetch_profiles_for_node", lambda svc, node, project: (rows, True))
+    monkeypatch.setattr(profiles_module, "project_is_visible", lambda host, project: project in ("default",))
+    monkeypatch.setattr(profiles_module, "tenant_acl_active", lambda: False)
+    monkeypatch.setattr(profiles_module, "verify_cluster_access", lambda host: None, raising=False)
+    monkeypatch.setattr(profiles_module, "get_cache_manager", lambda: SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None))
+    svc = SimpleNamespace(
+        connection_manager=SimpleNamespace(get_node_names=lambda: ["nuc1"], has_attempted=lambda n: True),
+        get_node_names=lambda: ["nuc1"],
+    )
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.core.org_scope import org_scope_dependency
+    from app.core.rbac import get_current_user
+    from app.services.lxd_service import get_lxd_service
+    app_ = FastAPI(); app_.include_router(profiles_module.router)
+    app_.dependency_overrides[get_lxd_service] = lambda: svc
+    app_.dependency_overrides[get_current_user] = lambda: None
+    app_.dependency_overrides[org_scope_dependency] = lambda: None
+    r = TestClient(app_, raise_server_exceptions=False).get("/profiles?fresh=true")
+    assert r.status_code == 200, r.text
+    assert r.json()["profiles"][0]["used_by"] == ["/1.0/instances/mine"]

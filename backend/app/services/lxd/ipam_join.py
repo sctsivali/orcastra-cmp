@@ -100,4 +100,7 @@ def network_facts(
     row = networks.get((owner, network)) or networks.get((DEFAULT_PROJECT, network))
     if row is None:
         return "", "", "", ""
-    return str(row.get("type") or ""), owner, _cidr(row, "ipv4.address"), _cidr(row, "ipv6.address")
+    # the project the record actually came from, not the one the flags predicted: when the
+    # project read failed the prediction is a guess and the default fallback is what matched
+    holder = str(row.get("project") or owner)
+    return str(row.get("type") or ""), holder, _cidr(row, "ipv4.address"), _cidr(row, "ipv6.address")

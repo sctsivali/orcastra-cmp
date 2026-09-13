@@ -217,8 +217,10 @@ def _fetch_ipam_for_node(
         except Exception as e:  # noqa: BLE001 - one project's failure is named, not fatal
             # the project is in the log for the operator of the box; the banner a Partner on a
             # shared cluster reads must not name another organization's project
-            logger.warning(f"Error getting allocations for project {project_name} on {node_name}: {e}")
+            logger.debug(f"Error getting allocations for project {project_name} on {node_name}: {e}")
             read.lost(f"one project's allocations: {type(e).__name__}")
+    if read.problems:
+        logger.warning("IPAM read on %s lost %d part(s): %s", node_name, len(read.problems), "; ".join(read.problems))
     return read
 
 

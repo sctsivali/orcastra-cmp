@@ -126,7 +126,7 @@ export function SearchableSelect({
           className={cn(
             // gap-2, not only justify-between: on a w-auto trigger the two groups fill the
             // width and justify-between then leaves no space at all, so the value and its
-            // status label rendered as one word ("central2Online").
+            // status label rendered as one word ("nodeOnline").
             "flex h-10 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
             className
           )}

@@ -10,7 +10,8 @@
 // underscores and hyphens, at most 63. Stricter than LXD on purpose.
 export const PROFILE_NAME_RE = /^[a-zA-Z][a-zA-Z0-9._-]*$/;
 export const PROFILE_NAME_MAX = 63;
-// LXD has no cap; this keeps the two-line description cell readable.
+// LXD has no cap. The dialog shows a count past this so a long description is a choice, not
+// a surprise; a description written elsewhere that is longer still edits and saves.
 export const DESCRIPTION_MAX = 255;
 
 export const STALE_PROFILE_MESSAGE =
@@ -60,10 +61,9 @@ export function profileNameError(name: string): string {
   return "";
 }
 
-export function descriptionError(description: string): string {
-  return description.length > DESCRIPTION_MAX
-    ? `Description must be at most ${DESCRIPTION_MAX} characters.`
-    : "";
+/** Never an error: LXD accepts any length. Kept as the one place the rule is stated. */
+export function descriptionError(_description: string): string {
+  return "";
 }
 
 /** Per-row problems, keyed by row id; empty when every row is fine. */
@@ -72,7 +72,9 @@ export function configRowErrors(rows: ConfigRow[], reserved: readonly string[] =
   const seen = new Set<string>();
   for (const row of rows) {
     const key = row.key.trim();
-    if (!key) out[row.id] = "Enter a key";
+    // a row just added is blank by definition; it blocks the save (the footer says why) but is
+    // not painted as a mistake until something has been typed into it
+    if (!key) out[row.id] = row.value.trim() ? "Enter a key" : "";
     else if (/\s/.test(key)) out[row.id] = "A key cannot contain spaces";
     else if (reserved.includes(key)) out[row.id] = "Set the type with the selector above";
     else if (seen.has(key)) out[row.id] = "Duplicate key";
@@ -93,12 +95,12 @@ export function deviceErrors(drafts: DeviceDraft[]): Record<string, DeviceErrors
   for (const draft of drafts) {
     const errors: DeviceErrors = { props: configRowErrors(draft.props, ["type"]) };
     const name = draft.name.trim();
-    if (!name) errors.name = "Enter a device name";
+    if (!name) errors.name = draft.type || draft.props.length ? "Enter a device name" : "";
     else if (/[\s/]/.test(name)) errors.name = "A device name cannot contain spaces or slashes";
     else if (seen.has(name)) errors.name = "Duplicate device name";
     seen.add(name);
-    if (!draft.type) errors.type = "Select a type";
-    if (errors.name || errors.type || Object.keys(errors.props).length) out[draft.id] = errors;
+    if (!draft.type) errors.type = name ? "Select a type" : "";
+    if (errors.name || errors.type || Object.values(errors.props).some(Boolean)) out[draft.id] = errors;
   }
   return out;
 }
