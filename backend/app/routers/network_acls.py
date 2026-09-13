@@ -3,7 +3,7 @@ API Router for Network ACL operations.
 Provides endpoints for managing LXD network ACLs.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
+from fastapi import APIRouter, HTTPException, Depends, Query, Body, Header, Response
 from typing import Optional, List, Dict, Any
 import logging
 import asyncio
@@ -71,15 +71,46 @@ class NetworkACLInfo(BaseModel):
     )
 
 
+class NetworkACLDetail(NetworkACLInfo):
+    """A single ACL as read from the daemon, with the version it was read at."""
+    etag: Optional[str] = Field(
+        None,
+        description=(
+            "Opaque version of the ACL as LXD holds it. Send it back as the If-Match header "
+            "on PUT and a write over someone else's change is refused with 412."
+        ),
+    )
+
+
 # LXD's own rule for an ACL name. Checked here so a bad name is a 422 at the boundary, not
 # the daemon's refusal surfacing as a 500.
 _ACL_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
+
+STALE_ACL_DETAIL = (
+    "This ACL changed since it was read. Reload it and apply the change again."
+)
 
 
 def _http_status_for(exc: Exception) -> int:
     """The daemon's own 4xx is the caller's mistake and keeps its status; anything else is ours."""
     status = getattr(getattr(exc, "response", None), "status_code", None)
-    return status if status in (400, 404, 409) else 500
+    return status if status in (400, 404, 409, 412) else 500
+
+
+def _detail_for(exc: Exception) -> str:
+    """LXD's 412 text names two hashes; the operator needs the sentence, not the hashes."""
+    return STALE_ACL_DETAIL if _http_status_for(exc) == 412 else str(exc)
+
+
+def _etag_of(response: Any) -> Optional[str]:
+    """The ETag header of a raw pylxd read, or None when the daemon (or a fake) sent none."""
+    headers = getattr(response, "headers", None)
+    return headers.get("ETag") if headers else None
+
+
+def _etags_match(sent: str, current: Optional[str]) -> bool:
+    """LXD trims the quotes before comparing, so a client that strips them is not refused."""
+    return current is None or sent.strip().strip('"') == current.strip().strip('"')
 
 
 class NetworkACLCreateRequest(BaseModel):
@@ -231,12 +262,16 @@ async def list_network_acls(
 
 @router.get(
     "/{acl_name}",
-    response_model=NetworkACLInfo,
+    response_model=NetworkACLDetail,
     summary="Get network ACL details",
-    description="Get detailed information about a specific network ACL.",
+    description=(
+        "Get detailed information about a specific network ACL, with the ETag to send back "
+        "as If-Match on an update."
+    ),
 )
 async def get_network_acl(
     acl_name: str,
+    http_response: Response,
     host: str = Query(..., description="Target host node"),
     project: Optional[str] = Query(
         None, description="LXD project holding the ACL (default project when omitted)"
@@ -258,7 +293,10 @@ async def get_network_acl(
             used_by = filter_visible_lxd_references(host, acl_data.get('used_by', []))
             if tenant_acl_active() and not used_by:
                 raise HTTPException(status_code=403, detail="Access denied to this network ACL")
-            return NetworkACLInfo(
+            etag = _etag_of(response)
+            if etag:
+                http_response.headers["ETag"] = etag
+            return NetworkACLDetail(
                 name=acl_data.get('name', ''),
                 description=acl_data.get('description', ''),
                 ingress=acl_data.get('ingress', []),
@@ -267,6 +305,7 @@ async def get_network_acl(
                 used_by=used_by,
                 node=host,
                 project=acl_data.get('project') or owner,
+                etag=etag,
             )
         else:
             raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
@@ -378,6 +417,13 @@ async def update_network_acl(
     project: Optional[str] = Query(
         None, description="LXD project holding the ACL (default project when omitted)"
     ),
+    if_match: Optional[str] = Header(
+        None,
+        description=(
+            "The etag from the single read. When sent, the write is refused with 412 if the "
+            "ACL changed since; when omitted the write is unconditional."
+        ),
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
@@ -395,6 +441,11 @@ async def update_network_acl(
         get_response = client.api["network-acls"][safe_segment(acl_name)].get(params=scope)
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
+        # important: compared here as well as by the daemon. The read-modify-write below is
+        # built on this read, so a precondition the read already contradicts must not be
+        # turned into a PUT at all, and a daemon that ignored If-Match would still be caught.
+        if if_match and not _etags_match(if_match, _etag_of(get_response)):
+            raise HTTPException(status_code=412, detail=STALE_ACL_DETAIL)
         
         acl_data = get_response.json().get('metadata', {})
         
@@ -409,9 +460,14 @@ async def update_network_acl(
             acl_data['config'] = config
         
         # Put updated ACL
-        put_response = client.api["network-acls"][safe_segment(acl_name)].put(
-            json=acl_data, params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
-        )
+        put_kwargs: Dict[str, Any] = {
+            "json": acl_data,
+            "params": scope,
+            "timeout": write_timeout(ACL_WRITE_WAIT_SECONDS),
+        }
+        if if_match:
+            put_kwargs["headers"] = {"If-Match": if_match}
+        put_response = client.api["network-acls"][safe_segment(acl_name)].put(**put_kwargs)
         wait_for_lxd_operation(client, put_response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if put_response.status_code in [200, 202]:
@@ -425,7 +481,7 @@ async def update_network_acl(
         raise
     except Exception as e:
         logger.error(f"Error updating network ACL {acl_name}: {e}")
-        raise HTTPException(status_code=_http_status_for(e), detail=str(e))
+        raise HTTPException(status_code=_http_status_for(e), detail=_detail_for(e))
 
 
 @router.delete(
