@@ -3,7 +3,7 @@
 import { useCallback, useMemo } from "react";
 
 import { useNodeAvailability, useNodeNames } from "@/hooks/use-lxd";
-import { clusterStatusMeta, type ClusterStatusMeta } from "@/lib/cluster-status";
+import { clusterStatusMeta, clusterSublabel, type ClusterStatusMeta } from "@/lib/cluster-status";
 import type { SearchableSelectOption } from "@/components/ui/searchable-select";
 import { ClusterStatus, type ClusterAvailability } from "@/types/api";
 
@@ -102,14 +102,11 @@ export function useNodePickerOptions(
       // visible: blitz001 and blitz01 are called "BSD Lab" and "VDC" and share one endpoint,
       // so with the id hidden the endpoint could not tell them apart either.
       const label = row?.display_name || name;
-      // note: the backend uses the literal "unknown" when it has no endpoint. Printing that
-      // word under a cluster's name reads as a fact about the cluster rather than a gap in
-      // what we know, so an absent endpoint shows as nothing at all.
-      const rawEndpoint = row?.endpoint;
-      const endpoint =
-        showEndpoint && rawEndpoint && rawEndpoint !== "unknown" ? rawEndpoint : undefined;
-      const sublabel =
-        label !== name ? [name, endpoint].filter(Boolean).join("  ") : endpoint;
+      const sublabel = clusterSublabel(
+        name,
+        row?.display_name,
+        showEndpoint ? row?.endpoint : undefined,
+      );
 
       return {
         value: name,

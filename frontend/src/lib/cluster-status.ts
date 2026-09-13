@@ -198,3 +198,21 @@ export function clusterStatusMeta(
     srLabel: `Status: ${entry.label}`,
   };
 }
+
+/**
+ * The line under a cluster's name in a picker: the id when it differs from the display name,
+ * then the endpoint, so two clusters an operator named alike still tell apart. The backend
+ * writes the literal "unknown" when it has no endpoint; printing that under a name reads as a
+ * fact about the cluster rather than a gap in what we know, so it shows as nothing.
+ */
+export function clusterSublabel(
+  id: string,
+  displayName: string | undefined,
+  endpoint: string | undefined,
+): string | undefined {
+  const shownEndpoint = endpoint && endpoint !== "unknown" ? endpoint : undefined;
+  const label = displayName || id;
+  const parts = label !== id ? [id, shownEndpoint] : [shownEndpoint];
+  const joined = parts.filter(Boolean).join("  ");
+  return joined || undefined;
+}
