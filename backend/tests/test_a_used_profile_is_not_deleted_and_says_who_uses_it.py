@@ -3,7 +3,9 @@ Deleting a profile that instances still use is refused with their names, and `de
 the reason LXD gives.
 
 A delete used to go straight to the daemon, whose "Profile is currently in use" came back
-as a 500 with no instance named. The route now reads the profile first and refuses with a
+as a 500 with no instance named. The route now refuses `default` before asking anything
+(the daemon keeps one in every project, and every project's default is in use, so the
+in-use preflight would otherwise answer first), reads any other profile and refuses with a
 409 naming the instances; the daemon's own refusals (a race after the preflight, and the
 403 it answers for `default`) keep a clear sentence too.
 """
@@ -44,6 +46,18 @@ def test_the_default_profile_cannot_be_deleted(monkeypatch) -> None:
     r = tc.delete("/profiles/default?host=nuc1")
     assert r.status_code == 403, r.text
     assert "default profile cannot be deleted" in r.json()["detail"]
+
+
+def test_a_default_profile_in_use_is_refused_as_default_not_as_in_use(monkeypatch) -> None:
+    # every real project's default is used by something, so the in-use preflight used to win
+    # and the API said 409 "used by 13 instances" while the row menu said the daemon keeps it
+    used = dict(PROFILE, name="default", used_by=["/1.0/instances/web1", "/1.0/instances/web2"])
+    daemon = Daemon(profile=used)
+    tc, _ = app(monkeypatch, daemon)
+    r = tc.delete("/profiles/default?host=nuc1&project=p")
+    assert r.status_code == 403, r.text
+    assert "default profile cannot be deleted" in r.json()["detail"]
+    assert daemon.deletes == [] and daemon.gets == [], "nothing was asked of the daemon"
 
 
 def test_an_unused_profile_is_deleted_and_the_list_cleared(monkeypatch) -> None:

@@ -582,6 +582,11 @@ async def delete_profile(
     """Delete a profile."""
     verify_cluster_access(host)
     _check_path_name(profile_name)
+    # important: refused before the in-use preflight. Every project's default profile is in
+    # use, so the preflight would answer "used by N instances" for a profile the daemon keeps
+    # regardless, and the API would disagree with the row menu's reason.
+    if profile_name == "default":
+        raise HTTPException(status_code=403, detail=DEFAULT_PROFILE_DETAIL)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
