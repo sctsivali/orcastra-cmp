@@ -35,6 +35,7 @@ const PICKERS = new Map([
   ['components/project-create-form.tsx', { kind: 'hook', notice: true }],
   ['components/networks/network-create-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/network-acls/acl-form-dialog.tsx', { kind: 'hook', notice: true }],
+  ['components/profiles/profile-form-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/image-upload-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/iso-upload-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/groups/create-group-dialog.tsx', { kind: 'hook', notice: true }],

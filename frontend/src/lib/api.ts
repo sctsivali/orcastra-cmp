@@ -5,6 +5,10 @@
 import {
   IPAMListResponse,
   NetworkACLDetail,
+  ProfileCreateRequest,
+  ProfileDetail,
+  ProfileUpdateRequest,
+  ProfileWriteResponse,
   VMListResponse,
   VMInfo,
   VMCreateRequest,
@@ -1049,25 +1053,27 @@ export const profileAPI = {
   },
 
   get: async (name: string, host: string, project?: string) => {
-    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }));
+    return fetchAPI<ProfileDetail>(withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }));
   },
 
-  create: async (data: any, host: string, project?: string) => {
-    return fetchAPI(withQuery("/profiles", { host, project }), {
+  create: async (data: ProfileCreateRequest, host: string, project?: string) => {
+    return fetchAPI<ProfileWriteResponse>(withQuery("/profiles", { host, project }), {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  update: async (name: string, host: string, data: any, project?: string) => {
-    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }), {
+  /** `etag` is what the single read answered; with it the write is refused (412) if the profile changed since. */
+  update: async (name: string, host: string, data: ProfileUpdateRequest, project?: string, etag?: string | null) => {
+    return fetchAPI<ProfileWriteResponse>(withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }), {
       method: "PUT",
       body: JSON.stringify(data),
+      ...(etag ? { headers: { "If-Match": etag } } : {}),
     });
   },
 
   delete: async (name: string, host: string, project?: string) => {
-    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }), {
+    return fetchAPI(withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }), {
       method: "DELETE",
     });
   },

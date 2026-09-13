@@ -15,7 +15,7 @@ import {
   healthCheck,
   api 
 } from "@/lib/api";
-import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse } from "@/types";
+import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse, ProfileCreateRequest, ProfileUpdateRequest } from "@/types";
 import {
   ATTENDED_DATA_CONFIG,
   DYNAMIC_DATA_CONFIG,
@@ -1222,14 +1222,62 @@ export function useProfile(name: string, host: string, project?: string) {
   });
 }
 
+/**
+ * The read an edit dialog seeds from: always fresh, never retried, keyed by a nonce so a
+ * Reload re-fetches rather than handing back the copy it is meant to replace. Same reasoning
+ * as useNetworkACLForEdit: the stale read above would carry a stale etag into every save.
+ */
+export function useProfileForEdit(
+  name: string,
+  host: string,
+  project: string | undefined,
+  nonce: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["profile", "edit", name, host, project ?? null, nonce],
+    queryFn: () => api.profiles.get(name, host, project),
+    enabled: enabled && !!name && !!host,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export function useCreateProfile() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: ({ data, host, project }: { data: any; host: string; project?: string }) =>
+    mutationFn: ({ data, host, project }: { data: ProfileCreateRequest; host: string; project?: string }) =>
       api.profiles.create(data, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
+    },
+  });
+}
+
+export function useUpdateProfile() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      name,
+      host,
+      project,
+      data,
+      etag,
+    }: {
+      name: string;
+      host: string;
+      project?: string;
+      data: ProfileUpdateRequest;
+      /** From useProfileForEdit; the write is refused with 412 if the profile changed since. */
+      etag?: string | null;
+    }) => api.profiles.update(name, host, data, project, etag),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["profile"] });
     },
   });
 }
@@ -1242,6 +1290,7 @@ export function useDeleteProfile() {
       api.profiles.delete(name, host, project),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["profiles"] });
+      queryClient.invalidateQueries({ queryKey: ["profile"] });
     },
   });
 }

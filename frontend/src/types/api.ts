@@ -586,6 +586,32 @@ export interface ProfileInfo {
   project?: string;
 }
 
+/** A single profile as read from the daemon, with the version it was read at. */
+export interface ProfileDetail extends ProfileInfo {
+  /** Send it back as If-Match on an update; a write over someone else's change is a 412. */
+  etag?: string | null;
+}
+
+export interface ProfileCreateRequest {
+  name: string;
+  description?: string;
+  config?: Record<string, string>;
+  devices?: Record<string, Record<string, string>>;
+}
+
+/** A map that is sent replaces LXD's whole map; an omitted one is carried through. */
+export interface ProfileUpdateRequest {
+  description?: string;
+  config?: Record<string, string>;
+  devices?: Record<string, Record<string, string>>;
+}
+
+export interface ProfileWriteResponse {
+  success: boolean;
+  message: string;
+  profile?: ProfileDetail;
+}
+
 /**
  * What a fan-out list could not read, cluster by cluster. Every field is optional because a
  * payload cached by an older build carries none of them.
