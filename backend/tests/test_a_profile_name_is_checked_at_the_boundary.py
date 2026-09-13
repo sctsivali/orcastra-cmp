@@ -48,3 +48,15 @@ def test_a_path_name_that_would_leave_its_segment_is_refused(monkeypatch) -> Non
             r = getattr(tc, method)(f"/profiles/{bad}?host=nuc1", **kwargs)
             assert r.status_code in (400, 404, 422), (bad, method, r.status_code)
     assert daemon.puts == [] and daemon.deletes == []
+
+
+def test_a_trailing_newline_is_not_a_name(monkeypatch) -> None:
+    """`$` matches before a final newline, so "web\\n" used to pass and render beside "web"."""
+    daemon = Daemon()
+    tc, _ = app(monkeypatch, daemon)
+    r = tc.post("/profiles?host=nuc1", json={"name": "web\n"})
+    assert r.status_code == 422, r.text
+    assert daemon.posts == []
+    r = tc.put("/profiles/web%0A?host=nuc1", json={"description": "x"})
+    assert r.status_code == 400, r.text
+    assert daemon.puts == []

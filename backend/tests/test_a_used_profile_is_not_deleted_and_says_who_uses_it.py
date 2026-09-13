@@ -55,3 +55,20 @@ def test_an_unused_profile_is_deleted_and_the_list_cleared(monkeypatch) -> None:
     assert ("profiles",) in calls["invalidated"]
     audit = [a for a in calls["activity"] if a["action"] == "profile.delete"][-1]
     assert audit["result"] == "success"
+
+
+def test_a_partner_is_not_shown_instances_outside_its_project_bound(monkeypatch) -> None:
+    """On a cluster shared by two organizations, the other one's instances inherit `default`
+    profiles too. Their names must not surface in used_by or in the 409, and they must not
+    block a delete on the visible side alone."""
+    used = dict(PROFILE, used_by=["/1.0/instances/mine", "/1.0/instances/theirs?project=orgb-prod"])
+    daemon = Daemon(profile=used)
+    tc, _ = app(monkeypatch, daemon)
+    from app.routers import profiles as profiles_module
+    monkeypatch.setattr(profiles_module, "project_is_visible", lambda host, project: project in ("default",))
+    r = tc.get("/profiles/web?host=nuc1")
+    assert r.status_code == 200, r.text
+    assert r.json()["used_by"] == ["/1.0/instances/mine"]
+    r = tc.delete("/profiles/web?host=nuc1")
+    assert r.status_code == 409, r.text
+    assert "mine" in r.json()["detail"] and "theirs" not in r.json()["detail"]

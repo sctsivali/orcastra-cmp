@@ -196,3 +196,37 @@ def test_an_instance_lifecycle_change_clears_the_ipam_list() -> None:
         "a NIC pin, a create or a delete changes the allocation table; leaving ipam:list "
         f"cached shows the old picture for two minutes. cleared={cleared}"
     )
+
+
+def test_a_failed_project_read_does_not_name_the_project_to_the_caller(monkeypatch) -> None:
+    """A Partner on a shared cluster must not learn the other organization's project names
+    from a banner; the project is logged, the reason shown is generic."""
+    tc, _ = _app(monkeypatch)
+    from app.routers import ipam as ipam_module
+
+    class _Api:
+        _api_endpoint = "https://fake:8443/1.0"
+        projects = _Node(PROJECTS)
+
+        def __init__(self) -> None:
+            self.session = SimpleNamespace(get=self._allocations)
+
+        @staticmethod
+        def _allocations(url: str, timeout=None):
+            if "project=UAT-Hermes" in url:
+                raise RuntimeError("read timed out")
+            project = url.split("project=")[1].split("&")[0]
+            return _Response({"metadata": ALLOCATIONS.get(project, [])})
+
+        def __getitem__(self, key):
+            return {"networks": _Node(NETWORKS), "instances": _Node(INSTANCES)}[key]
+
+    client = SimpleNamespace(api=_Api(), host_info={"api_extensions": ["networks_all_projects", "instance_all_projects"]}, project=None)
+    read = ipam_module.NodeRead()
+    monkeypatch.setattr(ipam_module, "_read_join_sources", lambda c, n, r: ({"default": {}, "UAT-Hermes": {"features.networks": "true"}}, {}, {}, True))
+    svc = SimpleNamespace(connection_manager=SimpleNamespace(get_client=lambda node: client))
+    result = ipam_module._fetch_ipam_for_node(svc, HOST, None)
+    assert result.problems, "the failed project read must be named as a problem"
+    assert all("UAT-Hermes" not in p for p in result.problems), result.problems
+    assert any("RuntimeError" in p for p in result.problems), result.problems
+    del read

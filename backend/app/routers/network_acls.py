@@ -125,7 +125,7 @@ class NetworkACLCreateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def _validate_name(cls, v: str) -> str:
-        if not _ACL_NAME_RE.match(v):
+        if not _ACL_NAME_RE.fullmatch(v):
             raise ValueError(
                 "Name must start with a letter and contain only letters, numbers and hyphens"
             )
