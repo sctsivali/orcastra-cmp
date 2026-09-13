@@ -660,6 +660,12 @@ export interface NetworkACLInfo {
   project?: string;
 }
 
+/** A single ACL as read from the daemon, with the version it was read at. */
+export interface NetworkACLDetail extends NetworkACLInfo {
+  /** Send it back as If-Match on an update; a write over someone else's change is a 412. */
+  etag?: string | null;
+}
+
 export interface NetworkACLListResponse extends FanoutReachability {
   total: number;
   acls: NetworkACLInfo[];

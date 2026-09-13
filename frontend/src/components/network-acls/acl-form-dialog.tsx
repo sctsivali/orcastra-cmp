@@ -11,11 +11,16 @@
  * An ACL is a name plus two ordered rule lists. LXD validates the rule bodies itself and its
  * errors are specific, so this form checks the things the operator can fix without a round
  * trip (a name LXD will reject, a rule with no action) and lets the daemon answer the rest.
+ *
+ * An edit seeds from a fresh read, not from the list row: the row can be minutes old and
+ * carries no version. The read's etag travels back as If-Match, so two operators editing one
+ * ACL no longer end with the later save winning whole; the second one is told to reload.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -36,15 +41,17 @@ import {
 } from "@/components/ui/select";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
   useCreateNetworkACL,
+  useNetworkACLForEdit,
   useProjects,
   useUpdateNetworkACL,
 } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
-import type { NetworkACLInfo } from "@/types/api";
+import { APIError, type NetworkACLInfo } from "@/types/api";
 
 import { AclRuleRow } from "./acl-rule-row";
 import { NAME_RE, cleanRule, emptyRule, type AclRule, type Direction } from "./acl-rules";
@@ -84,18 +91,52 @@ export function AclFormDialog({
   const [egress, setEgress] = useState<AclRule[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The version the edit was seeded at, and whether a save was refused because it moved on.
+  const [etag, setEtag] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  // Bumped by Reload so the edit read runs again instead of answering from cache.
+  const [nonce, setNonce] = useState(0);
 
-  // Reset every time the dialog opens, so a cancelled edit does not seed the next one.
+  const editRead = useNetworkACLForEdit(
+    existing?.name ?? "",
+    existing?.node ?? "",
+    existing?.project,
+    nonce,
+    open && isEdit,
+  );
+
+  // Reset every time the dialog opens, so a cancelled edit does not seed the next one. The
+  // row gives an edit its identity (name, node, project) at once; the rules and description
+  // arrive with the fresh read below.
   useEffect(() => {
     if (!open) return;
     setName(existing?.name ?? "");
     setHost(existing?.node ?? "");
     setProject(existing?.project ?? "default");
-    setDescription(existing?.description ?? "");
-    setIngress((existing?.ingress as AclRule[]) ?? []);
-    setEgress((existing?.egress as AclRule[]) ?? []);
+    setDescription("");
+    setIngress([]);
+    setEgress([]);
     setError(null);
+    setEtag(null);
+    setStale(false);
+    setNonce(0);
   }, [open, existing]);
+
+  // Seed from the fresh read, and again after every Reload (the nonce is in the query key).
+  useEffect(() => {
+    if (!open || !isEdit || !editRead.data) return;
+    const acl = editRead.data;
+    setDescription(acl.description ?? "");
+    setIngress((acl.ingress as AclRule[]) ?? []);
+    setEgress((acl.egress as AclRule[]) ?? []);
+    setEtag(acl.etag ?? null);
+    setStale(false);
+    setError(null);
+  }, [open, isEdit, editRead.data]);
+
+  const reading = isEdit && (editRead.isPending || editRead.isFetching);
+  const readFailed = isEdit && editRead.isError;
+  const reload = () => setNonce((n) => n + 1);
 
   const nameError =
     isEdit || name === ""
@@ -116,7 +157,13 @@ export function AclFormDialog({
 
   const rulesValid = [...ingress, ...egress].every((r) => !!r.action);
   const canSubmit =
-    !!host && (isEdit || (name !== "" && nameError === "")) && rulesValid && !submitting;
+    !!host &&
+    (isEdit || (name !== "" && nameError === "")) &&
+    rulesValid &&
+    !submitting &&
+    !reading &&
+    !readFailed &&
+    !stale;
 
   const setRule = (dir: Direction, index: number, patch: Partial<AclRule>) => {
     const apply = (rules: AclRule[]) =>
@@ -161,6 +208,7 @@ export function AclFormDialog({
           host,
           data: payload,
           project: existing!.project,
+          etag,
         });
       } else {
         await createACL.mutateAsync({ data: payload, host, project });
@@ -172,7 +220,13 @@ export function AclFormDialog({
       onOpenChange(false);
       onSaved?.();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to save the network ACL");
+      if (e instanceof APIError && e.status === 412) {
+        // Someone saved this ACL after it was read. The form keeps the operator's edits on
+        // screen until they choose Reload, so nothing is lost silently either way.
+        setStale(true);
+      } else {
+        setError(e instanceof Error ? e.message : "Failed to save the network ACL");
+      }
     } finally {
       submitInFlightRef.current = false;
       setSubmitting(false);
@@ -296,11 +350,48 @@ export function AclFormDialog({
               onChange={(e) => setDescription(e.target.value)}
               placeholder="What this policy is for"
               rows={2}
+              disabled={reading}
             />
           </div>
 
-          {ruleList("ingress", ingress)}
-          {ruleList("egress", egress)}
+          {stale && (
+            <Alert role="alert" data-testid="acl-stale-notice">
+              <RefreshCw className="h-4 w-4" />
+              <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  This ACL changed since you opened it. Reload to see the latest rules, then
+                  apply your change again.
+                </span>
+                <Button type="button" variant="outline" size="sm" onClick={reload} disabled={reading}>
+                  Reload
+                </Button>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {readFailed ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
+              <span>
+                Could not read this ACL:{" "}
+                {editRead.error instanceof Error ? editRead.error.message : "the cluster did not answer"}
+              </span>
+              <Button type="button" variant="outline" size="sm" onClick={reload}>
+                Retry
+              </Button>
+            </div>
+          ) : reading ? (
+            <div className="space-y-3" aria-busy="true" aria-label="Reading the ACL">
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-4 w-32" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          ) : (
+            <>
+              {ruleList("ingress", ingress)}
+              {ruleList("egress", egress)}
+            </>
+          )}
 
           {error && (
             <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">

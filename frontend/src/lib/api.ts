@@ -3,6 +3,7 @@
  */
 
 import {
+  NetworkACLDetail,
   VMListResponse,
   VMInfo,
   VMCreateRequest,
@@ -1134,7 +1135,7 @@ export const networkACLAPI = {
   },
 
   get: async (name: string, host: string, project?: string) => {
-    return fetchAPI(withQuery(`/network-acls/${name}`, { host, project }));
+    return fetchAPI<NetworkACLDetail>(withQuery(`/network-acls/${name}`, { host, project }));
   },
 
   create: async (data: any, host: string, project?: string) => {
@@ -1144,10 +1145,12 @@ export const networkACLAPI = {
     });
   },
 
-  update: async (name: string, host: string, data: any, project?: string) => {
+  /** `etag` is what the single read answered; with it the write is refused (412) if the ACL changed since. */
+  update: async (name: string, host: string, data: any, project?: string, etag?: string | null) => {
     return fetchAPI(withQuery(`/network-acls/${name}`, { host, project }), {
       method: "PUT",
       body: JSON.stringify(data),
+      ...(etag ? { headers: { "If-Match": etag } } : {}),
     });
   },
 

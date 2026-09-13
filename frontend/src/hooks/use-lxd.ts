@@ -1120,6 +1120,31 @@ export function useNetworkACL(name: string, host: string, project?: string) {
   });
 }
 
+/**
+ * The read an edit dialog seeds from: always fresh, never retried, keyed by a nonce so a
+ * Reload re-fetches rather than handing back the copy it is meant to replace.
+ *
+ * important: not useNetworkACL. That read is two minutes stale by design, and an edit that
+ * seeds from a stale record carries a stale etag, so every save would be refused as a 412.
+ */
+export function useNetworkACLForEdit(
+  name: string,
+  host: string,
+  project: string | undefined,
+  nonce: number,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: ["networkACL", "edit", name, host, project ?? null, nonce],
+    queryFn: () => api.networkACLs.get(name, host, project),
+    enabled: enabled && !!name && !!host,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+  });
+}
+
 export function useCreateNetworkACL() {
   const queryClient = useQueryClient();
   
@@ -1157,12 +1182,15 @@ export function useUpdateNetworkACL() {
       host,
       data,
       project,
+      etag,
     }: {
       name: string;
       host: string;
       data: any;
       project?: string;
-    }) => api.networkACLs.update(name, host, data, project),
+      /** From useNetworkACLForEdit; the write is refused with 412 if the ACL changed since. */
+      etag?: string | null;
+    }) => api.networkACLs.update(name, host, data, project, etag),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["networkACLs"] });
       queryClient.invalidateQueries({ queryKey: ["networkACL"] });
