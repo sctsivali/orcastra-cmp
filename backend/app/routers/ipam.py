@@ -296,12 +296,13 @@ async def list_ipam_allocations(
 
         # important: an outage must not be remembered as the answer, and neither may a partial
         # one or a read that an invalidation overtook. See instances.py and storage_pools.py.
-        if not cacheable:
-            logger.warning("Not caching IPAM list: %s", fan.node_errors or "no node answered")
-        elif _generation(cache) != generation:
-            logger.info("Not caching IPAM list: an instance changed during the read")
+        if cacheable:
+            if _generation(cache) != generation:
+                logger.info("Not caching IPAM list: an instance changed during the read")
+            else:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
         else:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
+            logger.warning("Not caching IPAM list: %s", fan.node_errors or "no node answered")
         return response
     except Exception as e:
         logger.error(f"Error listing IPAM: {e}")

@@ -1136,8 +1136,9 @@ class CachedPayloadsWrittenBeforeTheFieldStillParseTests(unittest.TestCase):
             [],
             "a cached payload written before this field existed would fail to parse",
         )
-        # a scan over nothing passes for the wrong reason
-        self.assertGreaterEqual(checked, 12)
+        # a scan over nothing passes for the wrong reason. 11: the IPAM wrapper moved its
+        # declaration into the shared FanoutReachability base, which is itself scanned.
+        self.assertGreaterEqual(checked, 11)
 
 
 class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):

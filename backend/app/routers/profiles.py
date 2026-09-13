@@ -3,11 +3,23 @@ API Router for Profile operations.
 Provides endpoints for managing LXD profiles.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
-from typing import Optional, List, Dict
+from fastapi import APIRouter, HTTPException, Depends, Query, Header, Response
+from typing import Any, Optional, List, Dict
 import logging
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
+
+import requests
+from pylxd.exceptions import LXDAPIException
+from app.services.lxd.profile_writes import (
+    PreconditionFailed,
+    ProfileInUse,
+    create_profile_sync,
+    delete_profile_sync,
+    read_profile_sync,
+    update_profile_sync,
+)
 
 from app.services.lxd_service import (
     LXDConnectionError,
@@ -27,7 +39,6 @@ from app.services.lxd.project_scope import (
     list_across_projects,
     list_in_project,
     list_project_configs,
-    project_params,
     resolve_owner,
 )
 from app.core.tenant_visibility import (
@@ -37,9 +48,9 @@ from app.core.tenant_visibility import (
 )
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from app.services.activity_logger import get_activity_logger
-from app.core.lxd_names import safe_segment
+from app.core.lxd_names import LXD_NAME_RE, MAX_NAME_LENGTH
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -52,6 +63,17 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+
+
+# LXD refuses almost nothing in a profile name (empty, a slash, "." and ".."); the house rule
+# is applied on create so a name the console would not accept is a 422 at the boundary. The
+# path routes stay permissive so a profile `lxc` created with another shape is still reachable.
+_PATH_NAME_RE = re.compile(r"^[^\s/]+$")
+
+STALE_PROFILE_DETAIL = (
+    "This profile changed since you opened it. Reload and apply your change again."
+)
+DEFAULT_PROFILE_DETAIL = "The default profile cannot be deleted. LXD keeps one in every project."
 
 
 class ProfileInfo(BaseModel):
@@ -68,12 +90,84 @@ class ProfileInfo(BaseModel):
     )
 
 
+class ProfileDetail(ProfileInfo):
+    """A single profile as read from the daemon, with the version it was read at."""
+    etag: Optional[str] = Field(
+        None,
+        description=(
+            "Opaque version of config, description and devices as LXD holds them. Send it "
+            "back as the If-Match header on PUT and a write over someone else's change is "
+            "refused with 412."
+        ),
+    )
+
+
 class ProfileCreateRequest(BaseModel):
     """Request body for creating a profile."""
-    name: str = Field(..., description="Profile name")
+    name: str = Field(..., min_length=1, max_length=MAX_NAME_LENGTH, description="Profile name")
     description: str = Field("", description="Profile description")
     config: Dict[str, str] = Field(default_factory=dict, description="Profile configuration")
     devices: Dict[str, Dict[str, str]] = Field(default_factory=dict, description="Profile devices")
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not LXD_NAME_RE.match(v):
+            raise ValueError(
+                "Name must start with a letter and contain only letters, numbers, dots, "
+                "underscores and hyphens"
+            )
+        return v
+
+
+class ProfileUpdateRequest(BaseModel):
+    """Request body for updating a profile. A map that is sent replaces LXD's whole map."""
+    description: Optional[str] = Field(None, description="Profile description")
+    config: Optional[Dict[str, str]] = Field(None, description="Profile configuration")
+    devices: Optional[Dict[str, Dict[str, str]]] = Field(None, description="Profile devices")
+
+
+def _check_path_name(profile_name: str) -> None:
+    if profile_name in (".", "..") or not _PATH_NAME_RE.match(profile_name):
+        raise HTTPException(status_code=400, detail="Not a profile name")
+
+
+def _detail_of(profile_name: str, data: Dict[str, Any], host: str,
+               owner: str, etag: Optional[str]) -> "ProfileDetail":
+    """The daemon's record as the caller may see it: used_by is filtered to their scope."""
+    return ProfileDetail(
+        name=data.get("name") or profile_name,
+        description=data.get("description") or "",
+        config=data.get("config") or {},
+        devices=data.get("devices") or {},
+        used_by=filter_visible_lxd_references(host, data.get("used_by") or []),
+        node=host,
+        project=data.get("project") or owner,
+        etag=etag,
+    )
+
+
+def _lxd_status(exc: Exception) -> Optional[int]:
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def _refusal(exc: Exception, profile_name: str) -> HTTPException:
+    """The daemon's own refusal as the operator should read it."""
+    status = _lxd_status(exc)
+    text = str(exc)
+    if status == 412:
+        return HTTPException(status_code=412, detail=STALE_PROFILE_DETAIL)
+    if status == 403 and "default" in text and "cannot be deleted" in text:
+        return HTTPException(status_code=403, detail=DEFAULT_PROFILE_DETAIL)
+    if status == 400 and "currently in use" in text:
+        return HTTPException(
+            status_code=409,
+            detail=f"Profile {profile_name} is still in use. Detach it from every instance before deleting it.",
+        )
+    if status in (400, 404, 409):
+        return HTTPException(status_code=status, detail=text)
+    # a 200 with an err body is a failed operation (utils.wait_for_lxd_operation raises it)
+    return HTTPException(status_code=400, detail=f"The cluster refused the change: {text}")
 
 
 class ProfileListResponse(BaseModel):
@@ -252,12 +346,16 @@ async def list_profiles(
 
 @router.get(
     "/{profile_name}",
-    response_model=ProfileInfo,
+    response_model=ProfileDetail,
     summary="Get profile details",
-    description="Get detailed information about a specific profile.",
+    description=(
+        "Get detailed information about a specific profile, with the ETag to send back as "
+        "If-Match on an update."
+    ),
 )
 async def get_profile(
     profile_name: str,
+    http_response: Response,
     host: str = Query(..., description="Target host node"),
     project: Optional[str] = Query(
         None, description="LXD project holding the profile (default project when omitted)"
@@ -266,6 +364,7 @@ async def get_profile(
 ):
     """Get details for a specific profile."""
     verify_cluster_access(host)
+    _check_path_name(profile_name)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -273,21 +372,13 @@ async def get_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-        response = client.api["profiles"][safe_segment(profile_name)].get(params=project_params(owner))
-        data = response.json().get("metadata") or {}
+        data, etag = await asyncio.to_thread(read_profile_sync, client, profile_name, owner)
         used_by = filter_visible_lxd_references(host, data.get("used_by") or [])
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-
-        return ProfileInfo(
-            name=data.get("name") or profile_name,
-            description=data.get("description") or "",
-            config=data.get("config") or {},
-            devices=data.get("devices") or {},
-            used_by=used_by,
-            node=host,
-            project=data.get("project") or owner,
-        )
+        if etag:
+            http_response.headers["ETag"] = etag
+        return _detail_of(profile_name, data, host, owner, etag)
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
         # itself, and the broad handler below rewrote it, so an unreachable cluster
@@ -327,18 +418,15 @@ async def create_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this project")
-        client.api["profiles"].post(
-            json={
+        created, etag = await asyncio.to_thread(
+            create_profile_sync, client, owner,
+            {
                 "name": request.name,
                 "config": request.config,
                 "devices": request.devices,
                 "description": request.description,
             },
-            params=project_params(owner),
         )
-        created = client.api["profiles"][safe_segment(request.name)].get(
-            params=project_params(owner)
-        ).json().get("metadata") or {}
         
         # Log activity: profile creation success
         activity_logger.log_activity(
@@ -346,6 +434,7 @@ async def create_profile(
             target_type="profile",
             target_id=request.name,
             target_host=host,
+            target_project=owner,
             result="success",
             details={"description": request.description}
         )
@@ -355,15 +444,7 @@ async def create_profile(
         return {
             "success": True,
             "message": f"Profile {request.name} created successfully",
-            "profile": ProfileInfo(
-                name=created.get("name") or request.name,
-                description=created.get("description") or "",
-                config=created.get("config") or {},
-                devices=created.get("devices") or {},
-                used_by=created.get("used_by") or [],
-                node=host,
-                project=created.get("project") or owner,
-            )
+            "profile": _detail_of(request.name, created, host, owner, etag),
         }
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
@@ -380,9 +461,10 @@ async def create_profile(
             target_id=request.name,
             target_host=host,
             result="failure",
+            error_code=type(e).__name__,
             error_message=str(e)
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _write_failure(e, request.name, host)
 
 
 @router.put(
@@ -397,15 +479,22 @@ async def update_profile(
     project: Optional[str] = Query(
         None, description="LXD project holding the profile (default project when omitted)"
     ),
-    config: Optional[Dict[str, str]] = Body(None),
-    devices: Optional[Dict[str, Dict[str, str]]] = Body(None),
-    description: Optional[str] = Body(None),
+    request: ProfileUpdateRequest = ProfileUpdateRequest(),
+    if_match: Optional[str] = Header(
+        None,
+        description=(
+            "The etag from the single read. When sent, the write is refused with 412 if the "
+            "profile changed since; when omitted the write is unconditional."
+        ),
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a profile."""
     verify_cluster_access(host)
+    _check_path_name(profile_name)
+    changed = [k for k in ("description", "config", "devices") if getattr(request, k) is not None]
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -413,24 +502,10 @@ async def update_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-        current = client.api["profiles"][safe_segment(profile_name)].get(
-            params=project_params(owner)
-        ).json().get("metadata") or {}
-
-        payload = {
-            "config": current.get("config") or {},
-            "devices": current.get("devices") or {},
-            "description": current.get("description") or "",
-        }
-        if config is not None:
-            payload["config"] = config
-        if devices is not None:
-            payload["devices"] = devices
-        if description is not None:
-            payload["description"] = description
-
-        client.api["profiles"][safe_segment(profile_name)].put(
-            json=payload, params=project_params(owner)
+        written, etag = await asyncio.to_thread(
+            update_profile_sync, client, profile_name, owner,
+            config=request.config, devices=request.devices, description=request.description,
+            if_match=if_match,
         )
         
         # Log activity: profile update success
@@ -439,14 +514,17 @@ async def update_profile(
             target_type="profile",
             target_id=profile_name,
             target_host=host,
-            result="success"
+            target_project=owner,
+            result="success",
+            details={"changed": changed, "etag_checked": bool(if_match)},
         )
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("profiles")
         return {
             "success": True,
-            "message": f"Profile {profile_name} updated successfully"
+            "message": f"Profile {profile_name} updated successfully",
+            "profile": _detail_of(profile_name, written, host, owner, etag),
         }
     except HTTPException:
         # important: let a deliberate status through. This try raises HTTPException
@@ -463,9 +541,11 @@ async def update_profile(
             target_id=profile_name,
             target_host=host,
             result="failure",
-            error_message=str(e)
+            error_code=type(e).__name__,
+            error_message=str(e),
+            details={"changed": changed, "etag_checked": bool(if_match)},
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _write_failure(e, profile_name, host)
 
 
 @router.delete(
@@ -486,6 +566,7 @@ async def delete_profile(
 ):
     """Delete a profile."""
     verify_cluster_access(host)
+    _check_path_name(profile_name)
     try:
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
@@ -493,7 +574,9 @@ async def delete_profile(
         owner = resolve_owner(client, "profiles", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
-        client.api["profiles"][safe_segment(profile_name)].delete(params=project_params(owner))
+        current, _etag = await asyncio.to_thread(read_profile_sync, client, profile_name, owner)
+        visible_used_by = filter_visible_lxd_references(host, current.get("used_by") or [])
+        await asyncio.to_thread(delete_profile_sync, client, profile_name, owner, visible_used_by)
         
         # Log activity: profile deletion success
         activity_logger.log_activity(
@@ -501,6 +584,7 @@ async def delete_profile(
             target_type="profile",
             target_id=profile_name,
             target_host=host,
+            target_project=owner,
             result="success"
         )
         
@@ -525,6 +609,28 @@ async def delete_profile(
             target_id=profile_name,
             target_host=host,
             result="failure",
+            error_code=type(e).__name__,
             error_message=str(e)
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _write_failure(e, profile_name, host)
+
+
+def _write_failure(exc: Exception, profile_name: str, host: str) -> HTTPException:
+    """What a failed profile write answers: the daemon's refusal, the precondition, the
+    in-use guard, or a transport failure, each with its own status and sentence."""
+    if isinstance(exc, PreconditionFailed):
+        return HTTPException(status_code=412, detail=STALE_PROFILE_DETAIL)
+    if isinstance(exc, ProfileInUse):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, LXDAPIException):
+        return _refusal(exc, profile_name)
+    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        # see instances.py: with Retry mounted a read timeout surfaces as ConnectionError
+        return HTTPException(
+            status_code=504,
+            detail=(
+                f"{host} did not finish the change in time. It may still be applying, so "
+                "refresh the profile before retrying."
+            ),
+        )
+    return HTTPException(status_code=500, detail=str(exc))
