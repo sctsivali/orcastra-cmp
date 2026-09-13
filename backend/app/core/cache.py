@@ -427,6 +427,9 @@ class CacheManager:
         self.delete_pattern("api_responses", "vms:*")
         self.delete_pattern("api_responses", "monitoring:*")
         self.delete_pattern("api_responses", "storage_volumes:*")
+        # a create, a delete or a NIC address pin changes the allocation table the IPAM page
+        # reads, and its 120 s TTL is long enough to pin an address and not see it
+        self.delete_pattern("api_responses", "ipam:*")
         # important: a list read that was already in flight when this ran still holds the old
         # picture and would write it back over the clearance a moment later (a fleet read takes
         # ten seconds with a dead cluster registered). The generation lets such a read notice.

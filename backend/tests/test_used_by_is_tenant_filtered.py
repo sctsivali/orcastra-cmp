@@ -46,7 +46,7 @@ ELEVATED = frozenset({"require_partner", "require_admin"})
 # reviewer can check the claim rather than trust it, and so an exemption cannot outlive the
 # filtering it depends on. Do not add an entry without that line reference.
 EXEMPT: dict[tuple[str, str], str] = {
-    ("ipam.py", "_fetch_ipam_for_node"): "list_ipam filters the gathered rows, ipam.py:206-214",
+    ("ipam.py", "_fetch_ipam_for_node"): "list_ipam filters the gathered rows, ipam.py:277-286",
     ("network_acls.py", "_fetch_acls_for_node"): "list_network_acls filters, network_acls.py:154-157",
     ("networks.py", "_fetch_networks_for_node"): "list_networks filters, networks.py:284-287",
     ("profiles.py", "_fetch_profiles_for_node"): "list_profiles filters, profiles.py:153-156",
