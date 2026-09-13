@@ -34,6 +34,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -101,7 +103,8 @@ export function AclFormDialog({
   // important: the node list comes from the fleet, not from the rows on the page. Deriving it
   // from the rows fails exactly when there are none to derive it from, which is the state an
   // operator is in the first time they open this.
-  const { options: nodeOptions } = useNodePickerOptions();
+  const nodePicker = useNodePickerOptions();
+  const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
@@ -347,18 +350,25 @@ export function AclFormDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <Label htmlFor="acl-node">Node *</Label>
-              <Select value={host} onValueChange={setHost} disabled={isEdit}>
-                <SelectTrigger id="acl-node">
-                  <SelectValue placeholder="Select a node" />
-                </SelectTrigger>
-                <SelectContent>
-                  {nodeOptions.map((n) => (
-                    <SelectItem key={n.value} value={n.value} disabled={n.disabled}>
-                      {n.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                id="acl-node"
+                value={host}
+                onValueChange={setHost}
+                options={nodeOptions}
+                placeholder={loadingNodes ? "Loading..." : "Select a node"}
+                searchPlaceholder="Search nodes..."
+                emptyText="No nodes found."
+                disabled={isEdit || loadingNodes}
+              />
+              <NodeStatusNotice
+                meta={host ? nodePicker.statusOf(host) : undefined}
+                reason={host ? nodePicker.availabilityOf(host)?.reason ?? undefined : undefined}
+                nodeLabel={host ? nodePicker.labelOf(host) : undefined}
+                unavailable={nodePicker.statusUnavailable}
+                noSelectableNodes={nodePicker.selectableCount === 0}
+                updatedAt={nodePicker.statusUpdatedAt}
+                onRecheck={nodePicker.refreshNow}
+              />
             </div>
             <div className="grid gap-2">
               <Label htmlFor="acl-name">Name *</Label>
