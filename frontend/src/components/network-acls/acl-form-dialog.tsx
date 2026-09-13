@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -46,40 +46,10 @@ import {
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import type { NetworkACLInfo } from "@/types/api";
 
-// LXD's own vocabulary for a rule. Anything outside these it rejects.
-const ACTIONS = ["allow", "drop", "reject"] as const;
-const PROTOCOLS = ["", "tcp", "udp", "icmp4", "icmp6"] as const;
-const STATES = ["enabled", "disabled", "logged"] as const;
+import { AclRuleRow } from "./acl-rule-row";
+import { NAME_RE, cleanRule, emptyRule, type AclRule, type Direction } from "./acl-rules";
 
-// Same rule LXD applies: start with a letter, letters, numbers and hyphens after it.
-const NAME_RE = /^[a-zA-Z][a-zA-Z0-9-]*$/;
-
-export interface AclRule {
-  action: string;
-  protocol?: string;
-  source?: string;
-  destination?: string;
-  source_port?: string;
-  destination_port?: string;
-  description?: string;
-  state?: string;
-}
-
-type Direction = "ingress" | "egress";
-
-function emptyRule(): AclRule {
-  return { action: "allow", state: "enabled" };
-}
-
-/** Strip the keys LXD has no use for, so an untouched field is absent rather than "". */
-function cleanRule(rule: AclRule): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(rule)) {
-    const trimmed = (value ?? "").trim();
-    if (trimmed) out[key] = trimmed;
-  }
-  return out;
-}
+export type { AclRule } from "./acl-rules";
 
 interface AclFormDialogProps {
   open: boolean;
@@ -228,105 +198,14 @@ export function AclFormDialog({
         </p>
       ) : (
         rules.map((rule, index) => (
-          <div
+          <AclRuleRow
             key={`${dir}-${index}`}
-            className="grid grid-cols-2 sm:grid-cols-[1fr_1fr_1fr_1fr_auto] gap-2 rounded-lg border p-3 items-end"
-          >
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Action</Label>
-              <Select
-                value={rule.action}
-                onValueChange={(v) => setRule(dir, index, { action: v })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ACTIONS.map((a) => (
-                    <SelectItem key={a} value={a}>
-                      {a}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Protocol</Label>
-              <Select
-                value={rule.protocol || "any"}
-                onValueChange={(v) =>
-                  setRule(dir, index, { protocol: v === "any" ? "" : v })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="any">any</SelectItem>
-                  {PROTOCOLS.filter(Boolean).map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {p}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">
-                {dir === "ingress" ? "Source" : "Destination"}
-              </Label>
-              <Input
-                value={dir === "ingress" ? rule.source ?? "" : rule.destination ?? ""}
-                onChange={(e) =>
-                  setRule(
-                    dir,
-                    index,
-                    dir === "ingress"
-                      ? { source: e.target.value }
-                      : { destination: e.target.value },
-                  )
-                }
-                placeholder="Any address"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">Destination port</Label>
-              <Input
-                value={rule.destination_port ?? ""}
-                onChange={(e) =>
-                  setRule(dir, index, { destination_port: e.target.value })
-                }
-                placeholder="Any port"
-              />
-            </div>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              onClick={() => removeRule(dir, index)}
-              aria-label={`Remove ${dir} rule ${index + 1}`}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-            <div className="col-span-2 sm:col-span-5 space-y-1">
-              <Label className="text-xs text-muted-foreground">State</Label>
-              <Select
-                value={rule.state || "enabled"}
-                onValueChange={(v) => setRule(dir, index, { state: v })}
-              >
-                <SelectTrigger className="sm:w-48">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {STATES.map((st) => (
-                    <SelectItem key={st} value={st}>
-                      {st}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
+            dir={dir}
+            index={index}
+            rule={rule}
+            onChange={(patch) => setRule(dir, index, patch)}
+            onRemove={() => removeRule(dir, index)}
+          />
         ))
       )}
     </div>
