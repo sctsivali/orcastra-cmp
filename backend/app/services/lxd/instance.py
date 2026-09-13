@@ -24,6 +24,7 @@ from .utils import (
     parse_vm_status,
     extract_ip_addresses,
     extract_ip_addresses_from_state,
+    image_source_key,
     find_instance_in_projects,
     jsonable_lxd,
     normalize_cluster_member,
@@ -952,11 +953,8 @@ class InstanceManager:
             # Determine source configuration
             source = {"type": "image"}
             
-            # Check if image is a fingerprint or alias
-            if len(image) == 64:  # Fingerprint
-                source["fingerprint"] = image
-            else:
-                source["alias"] = image
+            # A full fingerprint or the prefix `lxc image list` prints; anything else an alias
+            source[image_source_key(image)] = image
             
             # Create instance definition
             instance_def = {
@@ -1102,10 +1100,8 @@ class InstanceManager:
                     source["server"] = image_server
                     source["protocol"] = image_protocol or "simplestreams"
                     source["alias"] = image
-                elif len(image) == 64:  # Local fingerprint
-                    source["fingerprint"] = image
-                else:  # Local alias
-                    source["alias"] = image
+                else:  # local: a fingerprint (or its prefix) or an alias
+                    source[image_source_key(image)] = image
 
             instance_def = {
                 "name": name,

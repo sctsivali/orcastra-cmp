@@ -39,6 +39,19 @@ def parse_vm_status(status: str, status_code: int) -> VMStatus:
     return status_map.get(status, VMStatus.UNKNOWN)
 
 
+def image_source_key(image: str) -> str:
+    """
+    "fingerprint" for a full fingerprint or the prefix `lxc image list` prints, else "alias".
+
+    LXD resolves a fingerprint prefix itself, but only when it is sent as one; sent as an
+    alias, the 12 characters an operator pastes from the image list are "not found".
+    """
+    ref = image or ""
+    if 12 <= len(ref) <= 64 and all(c in "0123456789abcdef" for c in ref):
+        return "fingerprint"
+    return "alias"
+
+
 def is_display_address(addr: Dict[str, Any]) -> bool:
     """
     Whether one address from an instance's network state belongs in an IP column.
