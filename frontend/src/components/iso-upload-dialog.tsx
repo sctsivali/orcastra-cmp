@@ -211,8 +211,9 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
               />
             </div>
             <div className="grid gap-2">
-              <Label>Storage pool *</Label>
+              <Label htmlFor="iso-pool">Storage pool *</Label>
               <SearchableSelect
+                id="iso-pool"
                 value={pool}
                 onValueChange={setPool}
                 options={poolOptions}

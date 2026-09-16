@@ -581,40 +581,29 @@ function CreateKeyDialog({
           {formData.auth_level === "standard" && (
             <div className="grid gap-2">
               <Label htmlFor="project">Project</Label>
-              <Select
+              <SearchableSelect
+                id="project"
                 value={formData.project}
                 onValueChange={(value) =>
                   setFormData({ ...formData, project: value })
                 }
-                disabled={projectsLoading || !formData.node}
-              >
-                <SelectTrigger id="project">
-                  <SelectValue placeholder={
-                    !formData.node 
-                      ? "Select a node first" 
-                      : projectsLoading 
-                        ? "Loading projects..." 
+                options={uniqueProjects.map((project: any) => ({
+                  value: project.name,
+                  label: project.name,
+                }))}
+                placeholder={
+                  !formData.node
+                    ? "Select a node first"
+                    : projectsLoading
+                      ? "Loading projects..."
+                      : uniqueProjects.length === 0
+                        ? `No projects available for ${formData.node}`
                         : "Select a project"
-                  } />
-                </SelectTrigger>
-                <SelectContent>
-                  {!formData.node ? (
-                    <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                      Please select a node first
-                    </div>
-                  ) : uniqueProjects.length === 0 ? (
-                    <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                      No projects available for {formData.node}
-                    </div>
-                  ) : (
-                    uniqueProjects.map((project: any) => (
-                      <SelectItem key={`${formData.node}-${project.name}`} value={project.name}>
-                        {project.name}
-                      </SelectItem>
-                    ))
-                  )}
-                </SelectContent>
-              </Select>
+                }
+                searchPlaceholder="Search projects..."
+                emptyText="No projects found."
+                disabled={projectsLoading || !formData.node || uniqueProjects.length === 0}
+              />
             </div>
           )}
           <div className="grid gap-2">

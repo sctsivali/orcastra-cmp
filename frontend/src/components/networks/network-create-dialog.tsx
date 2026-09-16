@@ -267,22 +267,16 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
 
           <div className="grid gap-2">
             <Label htmlFor="net-project">Project</Label>
-            <Select
+            <SearchableSelect
+              id="net-project"
               value={project}
               onValueChange={setProject}
+              options={projectOptions.map((p) => ({ value: p, label: p }))}
+              placeholder="default"
+              searchPlaceholder="Search projects..."
+              emptyText="No projects found."
               disabled={type !== "ovn" || !node}
-            >
-              <SelectTrigger id="net-project">
-                <SelectValue placeholder="default" />
-              </SelectTrigger>
-              <SelectContent>
-                {projectOptions.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
             {projectError ? (
               <p className="text-xs text-destructive">{projectError}</p>
             ) : (

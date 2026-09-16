@@ -33,13 +33,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
@@ -324,18 +317,16 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="profile-project">Project</Label>
-                <Select value={project} onValueChange={setProject} disabled={!node}>
-                  <SelectTrigger id="profile-project">
-                    <SelectValue placeholder="default" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {projectOptions.map((p) => (
-                      <SelectItem key={p} value={p}>
-                        {p}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <SearchableSelect
+                  id="profile-project"
+                  value={project}
+                  onValueChange={setProject}
+                  options={projectOptions.map((p) => ({ value: p, label: p }))}
+                  placeholder="default"
+                  searchPlaceholder="Search projects..."
+                  emptyText="No projects found."
+                  disabled={!node}
+                />
                 <p className="text-xs text-muted-foreground">
                   A project holds its own profiles only when it isolates them; otherwise the
                   profile lands in default.

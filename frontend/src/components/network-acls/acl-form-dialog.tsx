@@ -32,13 +32,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -334,18 +327,16 @@ export function AclFormDialog({
             </div>
             <div className="grid gap-2">
               <Label htmlFor="acl-project">Project</Label>
-              <Select value={project} onValueChange={setProject} disabled={isEdit}>
-                <SelectTrigger id="acl-project">
-                  <SelectValue placeholder="default" />
-                </SelectTrigger>
-                <SelectContent>
-                  {projectOptions.map((p) => (
-                    <SelectItem key={p} value={p}>
-                      {p}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                id="acl-project"
+                value={project}
+                onValueChange={setProject}
+                options={projectOptions.map((p) => ({ value: p, label: p }))}
+                placeholder="default"
+                searchPlaceholder="Search projects..."
+                emptyText="No projects found."
+                disabled={isEdit}
+              />
               <p className="text-xs text-muted-foreground">
                 An ACL belongs to one project, and only a project that isolates its networks
                 holds its own.
