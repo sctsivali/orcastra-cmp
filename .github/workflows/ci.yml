@@ -111,6 +111,10 @@ jobs:
       # answering, and hand the hook's options to SearchableSelect rather than a plain Select.
       - name: Node picker status coverage
         run: node scripts/checks/check-node-picker-status.mjs .
+      # A list an API returns with no upper bound is a SearchableSelect, never a plain Select;
+      # the project picker on the create form outgrew its popover on one fleet.
+      - name: Long-list selects
+        run: node scripts/checks/check-long-list-selects.mjs .
       # The nav hides a route by role; the route itself must also refuse it. Two of the seven
       # partner destinations shipped with no page-level gate at all.
       - name: Role gates
