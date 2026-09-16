@@ -562,13 +562,18 @@ export interface ErrorResponse {
 
 // API Error
 export class APIError extends Error {
+  /** Seconds the server asked the client to wait (from Retry-After), set on a 429 or 503. */
+  public retryAfter?: number;
+
   constructor(
     message: string,
     public status: number,
-    public detail?: string | null
+    public detail?: string | null,
+    retryAfter?: number
   ) {
     super(message);
     this.name = "APIError";
+    if (retryAfter !== undefined) this.retryAfter = retryAfter;
   }
 }
 

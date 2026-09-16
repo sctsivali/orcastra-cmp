@@ -184,6 +184,16 @@ function clearAuthFailureState() {
 }
 
 // Timeout wrapper for fetch with AbortController
+/** Retry-After as whole seconds: an integer delay or an HTTP-date, undefined when absent or bad. */
+function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const value = header.trim();
+  if (/^\d+$/.test(value)) return Math.max(0, parseInt(value, 10));
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
+
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
@@ -367,6 +377,13 @@ async function _fetchAPIInternal<T>(
         errorMessage = JSON.stringify(errorDetail);
       }
 
+      // The same-origin proxy forwards upstream headers, so Retry-After reaches the browser.
+      // A 429 used to surface as the bare detail; the picker notices count down from this.
+      const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
+      if (response.status === 429) {
+        errorMessage = `Rate limited by the API. Try again in ${retryAfter ?? 30} s.`;
+      }
+
       // On 401, trigger session refresh and retry once after token is refreshed
       if (response.status === 401 && typeof window !== 'undefined') {
         const refreshTriggered = handle401();
@@ -389,10 +406,10 @@ async function _fetchAPIInternal<T>(
           return fetchAPI<T>(endpoint, options, timeoutMs, true);
         }
 
-        throw new APIError(errorMessage, response.status, errorDetail);
+        throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
       }
 
-      throw new APIError(errorMessage, response.status, errorDetail);
+      throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
     }
 
     // a request got through, so whatever was failing has cleared
