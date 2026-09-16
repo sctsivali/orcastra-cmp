@@ -52,6 +52,10 @@ export interface UseNodePickerOptionsResult {
   /** Options an operator can actually pick. Zero is a state the form has to explain. */
   selectableCount: number;
   refreshNow: () => Promise<unknown>;
+  /** Why the names read failed, for the notice under the picker. */
+  namesError: unknown;
+  /** Re-read the names. refreshNow only rechecks reachability. */
+  retryNames: () => Promise<unknown>;
 }
 
 export function useNodePickerOptions(
@@ -160,6 +164,10 @@ export function useNodePickerOptions(
     await availability.refreshNow?.();
   }, [availability]);
 
+  const retryNames = useCallback(async () => {
+    await names.refetch();
+  }, [names]);
+
   return {
     options,
     isLoading: names.isLoading,
@@ -173,5 +181,7 @@ export function useNodePickerOptions(
     totalCount: availability.data?.total_count ?? (names.data?.length ?? 0),
     selectableCount: options.filter((o) => !o.disabled).length,
     refreshNow,
+    namesError: names.error,
+    retryNames,
   };
 }
