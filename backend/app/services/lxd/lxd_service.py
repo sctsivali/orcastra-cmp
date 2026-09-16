@@ -298,7 +298,15 @@ class LXDService:
         to look for a backend fault when the node was simply not answering.
         """
         client = require_client(self.connection_manager.get_client(node_name), node_name)
-        return self.resource_manager.get_node_resources(client, node_name)
+        data = self.resource_manager.get_node_resources(client, node_name)
+        # A clustered host's body is one member's. The project quota pre-flight and the
+        # server resources route read this dict, and a cap bounded by one member's threads
+        # refused projects the cluster could hold. Same aggregate, same cache, as the card.
+        if (client.host_info.get("environment") or {}).get("server_clustered"):
+            aggregated = aggregate_microcloud_resources(client, node_name, data)
+            if aggregated is not None:
+                return aggregated.model_dump()
+        return data
 
     def get_node_resources_detail(self, node_name: str) -> NodeResources:
         """Full NodeResources for one node, GPU included.
