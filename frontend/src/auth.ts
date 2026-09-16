@@ -8,6 +8,7 @@
 import NextAuth from "next-auth";
 import type { NextAuthConfig, User, Session } from "next-auth";
 import type { JWT } from "next-auth/jwt";
+import { callbackPath, redirectTo } from "@/lib/auth-redirect";
 
 // Extend the built-in types to include custom fields
 declare module "next-auth" {
@@ -304,7 +305,9 @@ export const authConfig: NextAuthConfig = {
     },
 
     // Control which routes are authorized
-    authorized({ auth, request: { nextUrl } }) {
+    authorized({ auth, request }) {
+      const { nextUrl } = request;
+      const host = request.headers.get("host");
       const isLoggedIn = !!auth?.user;
       const isOnAuthPage = nextUrl.pathname.startsWith("/auth");
       const isApiRoute = nextUrl.pathname.startsWith("/api");
@@ -321,7 +324,7 @@ export const authConfig: NextAuthConfig = {
       // Redirect logged-in users away from auth pages
       if (isOnAuthPage) {
         if (isLoggedIn) {
-          return Response.redirect(new URL("/", nextUrl));
+          return Response.redirect(redirectTo(nextUrl, host, "/"));
         }
         return true; // Allow access to auth pages for non-logged-in users
       }
@@ -332,10 +335,12 @@ export const authConfig: NextAuthConfig = {
       // bare `false` is shadowed and never fires the sign-in redirect - leaving /console and /terminal
       // to render tokenless and fail their WebSocket. The redirect drives /auth/signin -> silent SSO
       // (shared IdP) -> back with a token, which those pages need.
+      // The redirect stays on the origin the request arrived on (see lib/auth-redirect.ts), so a
+      // loopback liveness probe is never sent through the public edge.
       if (!isLoggedIn) {
-        const signInUrl = new URL("/auth/signin", nextUrl.origin);
-        signInUrl.searchParams.set("callbackUrl", nextUrl.href);
-        return Response.redirect(signInUrl);
+        return Response.redirect(
+          redirectTo(nextUrl, host, "/auth/signin", { callbackUrl: callbackPath(nextUrl) })
+        );
       }
 
       // ---- Three-Tier Role-based route protection ----
@@ -362,7 +367,7 @@ export const authConfig: NextAuthConfig = {
       );
 
       if (isAdminOrPartnerRoute && !isPartner) {
-        return Response.redirect(new URL("/", nextUrl));
+        return Response.redirect(redirectTo(nextUrl, host, "/"));
       }
 
       return true;
