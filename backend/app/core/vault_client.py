@@ -24,6 +24,13 @@ logger = logging.getLogger(__name__)
 LAST_GOOD_LIST_NAMESPACE = "vault_list_last_good"
 LAST_GOOD_LIST_TTL = 7 * 24 * 3600
 
+# (connect, read) for the metadata LIST only. A KV-v2 LIST walks the storage backend, the one
+# Vault call here that is a scan rather than a point read, and on a loaded box it was the one
+# call that timed out while every per-cluster GET at (2, 3) kept answering. The read budget
+# is affordable because the LIST runs off the event loop (routers/nodes.py); point reads stay
+# at (2, 3) since they sit on the request path.
+VAULT_LIST_TIMEOUT = (3, 10)
+
 # Import cache manager - will be lazy loaded to avoid circular imports
 _cache_manager = None
 # Lazy-loaded audit logger to avoid circular imports
@@ -433,7 +440,7 @@ class VaultClient:
         url = f"{self.vault_addr}/v1/{path}"
         
         try:
-            response = self.session.request('LIST', url, headers=self.headers, timeout=(2, 3))
+            response = self.session.request('LIST', url, headers=self.headers, timeout=VAULT_LIST_TIMEOUT)
             response.raise_for_status()
             result = response.json()
             keys = result.get("data", {}).get("keys", [])

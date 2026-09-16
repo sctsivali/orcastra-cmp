@@ -3,6 +3,7 @@ Orcastra Dashboard Backend API
 Main FastAPI application entry point.
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -104,8 +105,9 @@ async def lifespan(app: FastAPI):
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                # List clusters from Vault
-                cluster_ids = cert_manager.list_clusters()
+                # List clusters from Vault, off the loop: the LIST carries a 13 s budget and
+                # the health probe must keep answering while it runs.
+                cluster_ids = await asyncio.to_thread(cert_manager.list_clusters)
 
                 # important: an empty list from a Vault that never answered is not the same fact
                 # as an empty registry, and list_clusters cannot raise because thirteen callers
@@ -131,7 +133,6 @@ async def lifespan(app: FastAPI):
                 
                 # Connect to ALL registered clusters in parallel for faster startup
                 # This ensures clusters stay connected even after Docker restart
-                import asyncio
                 
                 async def _connect_cluster(cluster_id: str) -> tuple[str, bool, str | None]:
                     """Connect to a single cluster; returns (id, success, error)."""
