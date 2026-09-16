@@ -1,6 +1,7 @@
 """Vault-backed storage for cluster metadata, secrets and certificate material."""
 
 import logging
+from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from app.core import vault_status
@@ -9,6 +10,17 @@ from app.core.vault_client import VaultClientError
 from .types import LXDCertManagerError
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RegistryRead:
+    """One read of the cluster registry: what it holds and whether Vault said so."""
+
+    cluster_ids: list = field(default_factory=list)
+    # "vault" when Vault answered, "last_known" when the memo was served, None when nothing
+    # was known and the list is empty because of that.
+    source: Optional[str] = None
+    readable: bool = False
 
 
 class VaultStorageMixin:
@@ -192,40 +204,67 @@ class VaultStorageMixin:
             logger.error(f"Failed to get cluster info for {cluster_id}: {e}")
             raise LXDCertManagerError(f"Failed to retrieve cluster info: {str(e)}")
     
+    def read_registry(self, use_cache: bool = True) -> "RegistryRead":
+        """The unfiltered cluster registry, or the last copy of it that Vault answered with.
+
+        important: this is the one read in the mixin that swallows instead of raising, and
+        thirteen callers depend on that. What it must never do is turn a LIST that was lost
+        (a sealed Vault's 503, a token whose policy denies the metadata LIST, a 2 s connect
+        budget on a busy box) into an empty fleet: that emptied every node picker for the
+        length of the blip, and at boot it emptied the whitelist for the life of the process.
+        The registry cannot change while Vault is unreachable, because registration and
+        deregistration both write to Vault first, so the last answer is served until Vault
+        answers again. The outcome is recorded in vault_status for startup and /health.
+        """
+        # Convert secret/data/clusters to secret/metadata/clusters for LIST operation
+        list_path = self.clusters_path.replace("/data/", "/metadata/")
+        if use_cache and not vault_status.retry_due():
+            known = self._last_known(list_path)
+            if known is not None:
+                return RegistryRead(cluster_ids=known, source="last_known", readable=False)
+        try:
+            cluster_ids = self.vault.vault_list(list_path, use_cache=use_cache)
+            # Remove trailing slashes from cluster IDs
+            cluster_ids = [cid.rstrip('/') for cid in cluster_ids]
+            logger.debug(f"Found {len(cluster_ids)} clusters in Vault (cached: {use_cache})")
+            vault_status.remember_registry(cluster_ids)
+            vault_status.mark_readable()
+            return RegistryRead(cluster_ids=cluster_ids, source="vault", readable=True)
+        except Exception as e:
+            known = self._last_known(list_path)
+            vault_status.mark_unreadable(
+                f"{type(e).__name__}: {e}", served_last_known=known is not None
+            )
+            # ERROR, not WARNING: the success line beside it is debug, so at production log
+            # level this is the only line about the registry and it has to stand out.
+            if known is not None:
+                logger.error(
+                    f"Failed to list clusters ({e}); serving the last known registry of "
+                    f"{len(known)} clusters until Vault answers again"
+                )
+                return RegistryRead(cluster_ids=known, source="last_known", readable=False)
+            logger.error(f"Failed to list clusters, registry is unreadable and nothing is known: {e}")
+            return RegistryRead(cluster_ids=[], source=None, readable=False)
+
+    def _last_known(self, list_path: str) -> Optional[list]:
+        """The shared (Redis) memo first, this process's copy when Redis is down too."""
+        reader = getattr(self.vault, "last_known_list", None)
+        known = reader(list_path) if reader else None
+        if known is not None:
+            return [cid.rstrip('/') for cid in known]
+        return vault_status.last_known_registry()
+
     def list_clusters(self, use_cache: bool = True) -> list:
         """
         List all registered clusters.
 
         Results are automatically filtered by the current request's
         org-scope context variable (set by ``org_scope_dependency``).
-        Admin / background tasks see all clusters.
+        Admin / background tasks see all clusters. A lost Vault LIST is answered from the
+        last known registry (see ``read_registry``), never as an empty fleet.
         """
-        try:
-            # Convert secret/data/clusters to secret/metadata/clusters for LIST operation
-            list_path = self.clusters_path.replace("/data/", "/metadata/")
-            cluster_ids = self.vault.vault_list(list_path, use_cache=use_cache)
-            # Remove trailing slashes from cluster IDs
-            cluster_ids = [cid.rstrip('/') for cid in cluster_ids]
-            logger.debug(f"Found {len(cluster_ids)} clusters in Vault (cached: {use_cache})")
-
-            # apply org-scope filter (no-op for admin / background tasks)
-            from app.core.org_scope import apply_cluster_filter
-            cluster_ids = apply_cluster_filter(cluster_ids)
-
-            vault_status.mark_readable()
-            return cluster_ids
-        except Exception as e:
-            # important: this is the one method in the mixin that swallows instead of raising,
-            # and thirteen callers depend on that. It stays, but the swallow is now recorded.
-            # A sealed Vault answers 503 to LIST, so without this an empty list from a Vault
-            # that never answered is indistinguishable from a Vault holding no clusters, and
-            # the deployment presents as healthy and empty. Startup and /health read
-            # vault_status to tell the two apart.
-            vault_status.mark_unreadable(f"{type(e).__name__}: {e}")
-            # ERROR, not WARNING: the success line beside it is debug, so at production log
-            # level this was the only line about the registry and it did not stand out.
-            logger.error(f"Failed to list clusters, registry is unreadable: {e}")
-            return []
+        from app.core.org_scope import apply_cluster_filter
+        return apply_cluster_filter(self.read_registry(use_cache).cluster_ids)
     
     def delete_cluster_data(self, cluster_id: str) -> bool:
         """

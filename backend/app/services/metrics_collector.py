@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 import threading
 
+from app.core import vault_status
 from app.core.blocking import BlockingTimeout, run_blocking
 
 logger = logging.getLogger(__name__)
@@ -476,8 +477,10 @@ class MetricsCollector:
             # cluster registered after boot, even once this sweep had connected it, so the
             # list pages named it unreachable from that worker until a restart. This sweep
             # runs in every worker outside any request context, so the Vault list it holds
-            # is the unfiltered fleet. Guarded on non-empty: a Vault blip must not blank it.
-            if cluster_ids:
+            # is the unfiltered fleet. Guarded on the read having answered rather than on
+            # non-empty: a lost LIST must not blank it, and a legitimately empty registry
+            # (every cluster deregistered) must still clear it.
+            if vault_status.registry_readable() is not False:
                 self._lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
 
             reconnected = 0

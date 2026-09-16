@@ -116,7 +116,7 @@ def test_the_snapshot_shape_is_what_health_renders():
     storage.list_clusters()
 
     snap = vault_status.snapshot()
-    assert set(snap) == {"registry_readable", "error", "checked_at"}
+    assert set(snap) == {"registry_readable", "registry_source", "error", "checked_at"}
     assert snap["checked_at"] is not None
 
 

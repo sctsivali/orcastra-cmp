@@ -67,9 +67,8 @@ def test_the_healer_tick_resyncs_the_whitelist_from_vault(manager, monkeypatch):
     assert sorted(manager.get_node_names()) == sorted(["blitz01", CLUSTER])
 
 
-def test_an_empty_vault_answer_does_not_blank_the_whitelist(manager, monkeypatch):
-    manager._registered_clusters = {"blitz01", CLUSTER}
-    manager._clients[CLUSTER] = object()
+def _sweep_with_registry(manager, monkeypatch, answer, *, readable: bool):
+    from app.core import vault_status
 
     settings = types.SimpleNamespace(vault_enabled=True, vault_token="t", vault_addr="http://v", vault_clusters_path="p")
     monkeypatch.setattr("app.core.config.get_settings", lambda: settings)
@@ -80,14 +79,43 @@ def test_an_empty_vault_answer_does_not_blank_the_whitelist(manager, monkeypatch
             pass
 
         def list_clusters(self):
-            return []
+            # The real list_clusters records the outcome of every read in vault_status; a fake
+            # that returns a list without saying whether Vault answered is not the real shape.
+            if readable:
+                vault_status.mark_readable()
+            else:
+                vault_status.mark_unreadable("VaultClientError: read timed out")
+            return answer
 
     monkeypatch.setattr("app.services.lxd_cert_manager.LXDCertificateManager", _CertManager)
     manager.get_client = lambda cid: manager._clients.get(cid)  # type: ignore[assignment]
     collector = mc.MetricsCollector()
     collector._lxd_service = types.SimpleNamespace(connection_manager=manager)
-    collector._ensure_cluster_connections_blocking()
+    vault_status.reset()
+    try:
+        collector._ensure_cluster_connections_blocking()
+    finally:
+        vault_status.reset()
+
+
+def test_a_lost_vault_list_does_not_blank_the_whitelist(manager, monkeypatch):
+    """A blip must not hide the fleet: the sweep only syncs what Vault actually answered."""
+    manager._registered_clusters = {"blitz01", CLUSTER}
+    manager._clients[CLUSTER] = object()
+
+    _sweep_with_registry(manager, monkeypatch, [], readable=False)
     assert manager.get_node_names() == [CLUSTER]
+
+
+def test_a_readable_empty_registry_does_clear_the_whitelist(manager, monkeypatch):
+    """The other half of the same rule. When Vault answered and said zero, every cluster has
+    been deregistered, and a worker that kept serving its old whitelist would keep naming
+    clusters that no longer exist. Guarding on "non-empty" got this case wrong."""
+    manager._registered_clusters = {"blitz01", CLUSTER}
+    manager._clients[CLUSTER] = object()
+
+    _sweep_with_registry(manager, monkeypatch, [], readable=True)
+    assert manager.get_node_names() == []
 
 
 def test_registering_one_cluster_never_starts_filtering_from_a_one_element_set(manager):

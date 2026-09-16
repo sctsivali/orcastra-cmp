@@ -408,10 +408,16 @@ class CacheManager:
 
         # Always clear list caches to force fresh fetch
         # These are the paths that cert_manager.list_clusters() uses
-        self.delete("vault_list", "secret/metadata/clusters")
-        self.delete("vault_list", "secret/metadata/clusters/")
-        self.delete("vault_list", "secret/data/clusters")
-        self.delete("vault_list", "secret/data/clusters/")
+        for list_path in (
+            "secret/metadata/clusters",
+            "secret/metadata/clusters/",
+            "secret/data/clusters",
+            "secret/data/clusters/",
+        ):
+            self.delete("vault_list", list_path)
+            # The last-good memo too: every caller of this method has just written Vault, so
+            # the copy it would serve during a later outage is the one that must be current.
+            self.delete("vault_list_last_good", list_path)
 
         logger.info(f"Invalidated cluster list cache{f' for {cluster_id}' if cluster_id else ' (all)'}")
 
