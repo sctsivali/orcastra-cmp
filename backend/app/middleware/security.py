@@ -7,6 +7,8 @@ from __future__ import annotations
 import logging
 import base64
 import json
+import math
+from dataclasses import dataclass
 import os
 import time
 from typing import Iterable, Optional
@@ -66,6 +68,18 @@ def _shared_allow(key: str, limit: int, window_seconds: int) -> Optional[bool]:
     except Exception as exc:  # noqa: BLE001 - any store failure must fall back, not block
         logger.warning("Shared rate limit unavailable, falling back to in-memory: %s", exc)
         return None
+
+
+def _shared_retry_after(key: str, window_seconds: int) -> int:
+    """Seconds left on the shared counter's window, the window itself when Redis cannot say."""
+    try:
+        from app.core.cache import get_cache_manager
+
+        client = get_cache_manager().redis_client
+        ttl = int(client.ttl(f"orcastra:ratelimit:{key}")) if client is not None else -1
+        return ttl if ttl > 0 else window_seconds
+    except Exception:  # noqa: BLE001 - a header hint must never fail the response
+        return window_seconds
 
 
 def _per_worker_share(limit: int) -> int:
@@ -134,6 +148,15 @@ def _rate_limit_subject(request: Request, client_ip: str) -> str:
             pass
     return f"ip:{client_ip}"
 
+@dataclass(frozen=True)
+class RateLimitHit:
+    """Which budget a request exhausted and when the client may come back."""
+
+    scope: str
+    limit: int
+    retry_after: int
+
+
 class WindowedRateLimiter:
     """Small in-memory sliding-window limiter with bounded storage."""
 
@@ -156,6 +179,20 @@ class WindowedRateLimiter:
         bucket.append(current_time)
         self._set_bucket(key, bucket)
         return True
+
+    def retry_after(self, key: str, window_seconds: int, now: float | None = None) -> int:
+        """Seconds until the oldest hit in the window ages out, never below one.
+
+        The window is sliding, so the client is admitted again the moment its oldest hit is
+        older than the window, which is what this reports. A constant here told a client
+        throttled one second before its window cleared to wait half a minute.
+        """
+        current_time = now if now is not None else time.time()
+        bucket = self.storage.get(key, [])
+        if not bucket:
+            return 1
+        remainder = window_seconds - (current_time - min(bucket))
+        return max(1, math.ceil(remainder))
 
     def _set_bucket(self, key: str, bucket: list[float]) -> None:
         if key not in self.storage and len(self.storage) >= self.max_buckets:
@@ -212,27 +249,40 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
                 self._log_security_event(request, client_ip, decision.reason)
                 return self._blocked_response(request, decision)
 
-        if self._rate_limit_exceeded(request, client_ip):
+        hit = self._rate_limit_exceeded(request, client_ip)
+        if hit is not None:
             logger.warning(
                 "Rate limit exceeded",
                 extra={
                     "client_ip": client_ip,
                     "client_subnet": get_client_subnet(client_ip),
                     "path": request.url.path,
+                    "rate_limit_scope": hit.scope,
+                    "rate_limit_limit": hit.limit,
+                    "retry_after": hit.retry_after,
                 },
             )
-            return self._rate_limit_response(request)
+            return self._rate_limit_response(request, hit)
 
         return await call_next(request)
 
-    def _rate_limit_exceeded(self, request: Request, client_ip: str) -> bool:
+    def _rate_limit_exceeded(self, request: Request, client_ip: str) -> Optional[RateLimitHit]:
+        """The budget this request exhausted, or None when it is admitted.
+
+        note: the ip and subnet buckets are enforced per worker at the full configured value.
+        A counter shared across workers would turn a deployment that sized RATE_LIMIT_REQUESTS
+        for one browser into that same number for the whole VM. The documented ceiling is
+        therefore the configured value per pinned client, up to WEB_CONCURRENCY times it in
+        aggregate; only the fresh bucket is deployment-wide.
+        """
         if not self.settings.rate_limit_enabled or request.method == "OPTIONS":
-            return False
+            return None
 
         limit_keys = self._rate_limit_keys(client_ip, request)
         now = time.time()
         window = self.settings.rate_limit_window_seconds
         for key, limit in limit_keys:
+            scope = key.split(":", 1)[0]
             # important: the bypass budget is meant to be a deployment-wide figure, and
             # the in-memory limiter cannot be one because each worker keeps its own
             # counters. Redis is already a hard dependency, so the shared counter lives
@@ -241,7 +291,7 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
                 shared = _shared_allow(key, limit, window)
                 if shared is not None:
                     if not shared:
-                        return True
+                        return RateLimitHit(scope, limit, _shared_retry_after(key, window))
                     continue
                 # Redis unavailable: fall back to the in-memory counter, divided so the
                 # aggregate across workers still approximates the configured figure.
@@ -252,8 +302,8 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
                 window_seconds=window,
                 now=now,
             ):
-                return True
-        return False
+                return RateLimitHit(scope, limit, self.limiter.retry_after(key, window, now))
+        return None
 
     def _rate_limit_keys(self, client_ip: str, request: Request) -> Iterable[tuple[str, int]]:
         yield f"ip:{client_ip}", self.settings.rate_limit_requests
@@ -283,11 +333,15 @@ class RequestSecurityMiddleware(BaseHTTPMiddleware):
         self._attach_cors_if_allowed(request, response)
         return apply_security_headers(response)
 
-    def _rate_limit_response(self, request: Request) -> Response:
+    def _rate_limit_response(self, request: Request, hit: RateLimitHit) -> Response:
         response = JSONResponse(
             status_code=429,
-            content={"detail": "Rate limit exceeded. Please try again later."},
-            headers={"Retry-After": "30"},
+            content={"detail": f"Rate limit exceeded. Try again in {hit.retry_after} seconds."},
+            headers={
+                "Retry-After": str(hit.retry_after),
+                "X-RateLimit-Limit": str(hit.limit),
+                "X-RateLimit-Scope": hit.scope,
+            },
         )
         self._attach_cors_if_allowed(request, response)
         return apply_security_headers(response)
