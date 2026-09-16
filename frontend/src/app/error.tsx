@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect } from "react";
+import { usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, RefreshCw, Home } from "lucide-react";
+import { ChunkLoadFallback } from "@/components/chunk-load-fallback";
+import { isChunkLoadError, reloadOnceForChunkError } from "@/lib/chunk-reload";
 
 export default function GlobalError({
   error,
@@ -11,10 +14,29 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  const pathname = usePathname();
+  const chunkFailed = isChunkLoadError(error);
+
   useEffect(() => {
+    // A missing chunk is the console having been updated or restarted under this page: one
+    // reload fetches the current build. The helper allows a single automatic reload per path.
+    if (chunkFailed && reloadOnceForChunkError(pathname)) return;
     // log only the message - avoid leaking stack traces, URLs, or tokens to browser console
     console.error("Unhandled error:", error.message || "Unknown error");
-  }, [error]);
+  }, [error, chunkFailed, pathname]);
+
+  if (chunkFailed) {
+    return (
+      <ChunkLoadFallback
+        secondary={
+          <Button variant="outline" onClick={() => (window.location.href = "/")}>
+            <Home className="h-4 w-4 mr-2" />
+            Home
+          </Button>
+        }
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4 p-8">
