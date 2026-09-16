@@ -830,6 +830,35 @@ class ProjectInfo(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Project tags for organization and filtering")
 
 
+class ProjectUsageLimits(BaseModel):
+    """A project's limits, None where unset."""
+    cpu: Optional[int] = Field(None, description="limits.cpu: vCPUs the project's instances may allocate in total")
+    memory_bytes: Optional[int] = Field(None, description="limits.memory in bytes")
+    instances: Optional[int] = Field(None, description="limits.instances")
+    containers: Optional[int] = Field(None, description="limits.containers")
+    virtual_machines: Optional[int] = Field(None, description="limits.virtual-machines")
+    disk_bytes: Optional[int] = Field(None, description="limits.disk in bytes")
+
+
+class ProjectUsageUsed(BaseModel):
+    """What the project's instances already allocate, summed the way LXD sums it."""
+    cpu: int = Field(0, description="Sum of every instance's expanded limits.cpu, whatever its state")
+    memory_bytes: int = Field(0, description="Sum of every instance's expanded limits.memory in bytes")
+    instances: int = Field(0)
+    containers: int = Field(0)
+    virtual_machines: int = Field(0)
+
+
+class ProjectUsageResponse(BaseModel):
+    """How much of each project limit is allocated. Aggregates only, never an instance name."""
+    host: str
+    project: str
+    limits: ProjectUsageLimits
+    used: ProjectUsageUsed
+    complete: bool = Field(True, description="False when the instance read failed: the limits are real, the usage is a floor of zero")
+    collected_at: datetime
+
+
 class ProjectListResponse(BaseModel):
     """Response for listing projects."""
     host: str

@@ -19,6 +19,7 @@ from .availability import require_client
 from .connection import LXDConnectionManager
 from .gpu import GpuInventory, build_gpu_inventory
 from .node_resources import aggregate_microcloud_resources, build_node_resources
+from .project_usage import ProjectUsage, read_project_usage
 from .freshness import read_resources
 from .resources import ResourceManager
 from .instance import InstanceManager
@@ -469,6 +470,17 @@ class LXDService:
         # Ensure connection (lazy loading)
         self.ensure_connection(host)
         return await self.project_manager.list_projects(host)
+
+    async def get_project_usage(self, host: str, project: str) -> ProjectUsage:
+        """How much of each of `project`'s limits is allocated (see services/lxd/project_usage)."""
+        return await asyncio.to_thread(self._read_project_usage_sync, host, project)
+
+    def _read_project_usage_sync(self, host: str, project: str) -> ProjectUsage:
+        # note: the client lookup revalidates the pooled connection with a live request, so it
+        # runs on the thread with the read, never inline on the loop.
+        self.ensure_connection(host)
+        client = require_client(self.connection_manager.get_client(host), host)
+        return read_project_usage(client, project)
     
     async def create_project(
         self, 

@@ -436,6 +436,8 @@ class CacheManager:
         # a create, a delete or a NIC address pin changes the allocation table the IPAM page
         # reads, and its 120 s TTL is long enough to pin an address and not see it
         self.delete_pattern("api_responses", "ipam:*")
+        # The create form's quota line: a create or delete changes what a project has used.
+        self.delete_pattern("api_responses", "project_usage:*")
         # important: a list read that was already in flight when this ran still holds the old
         # picture and would write it back over the clearance a moment later (a fleet read takes
         # ten seconds with a dead cluster registered). The generation lets such a read notice.

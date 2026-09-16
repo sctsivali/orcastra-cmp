@@ -6,6 +6,7 @@ Provides endpoints for listing and creating projects.
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Any, Dict, List, Optional
 import logging
+from datetime import datetime, timezone
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,6 +18,9 @@ from app.models.schemas import (
     ProjectUpdateRequest,
     ProjectUpdateResponse,
     ErrorResponse,
+    ProjectUsageResponse,
+    ProjectUsageLimits,
+    ProjectUsageUsed,
 )
 from app.services.lxd_service import (
     LXDService,
@@ -26,12 +30,15 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+
+# The create form reads this once per project pick; a create or delete drops it (cache.py).
+PROJECT_USAGE_CACHE_TTL = 30
 activity_logger = get_activity_logger()
 
 router = APIRouter(
@@ -251,6 +258,59 @@ async def list_projects(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get(
+    "/{host}/{project_name}/usage",
+    response_model=ProjectUsageResponse,
+    summary="Project limit usage",
+    description=(
+        "How much of each of the project's limits its instances already allocate, summed the "
+        "way LXD sums it (every instance whatever its state, expanded config). Aggregates only."
+    ),
+    responses={
+        200: {"description": "Usage read"},
+        404: {"model": ErrorResponse, "description": "Project not visible to the caller"},
+        503: {"model": ErrorResponse, "description": "LXD connection error"},
+    },
+)
+async def get_project_usage(
+    host: str,
+    project_name: str,
+    lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
+):
+    """Usage against the project's limits, for the create-instance form's quota line."""
+    verify_cluster_access(host)
+    # Same silence as the list route about a project the caller may not see.
+    if not project_is_visible(host, project_name) or not filter_projects_by_acl(host, [project_name]):
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
+
+    cache = get_cache_manager()
+    cache_key = get_scope_cache_key(f"project_usage:host={host}:project={project_name}")
+    cached = None if fresh else cache.get("api_responses", cache_key)
+    if cached is not None:
+        return ProjectUsageResponse(**cached)
+    try:
+        usage = await lxd_service.get_project_usage(host, project_name)
+    except HTTPException:
+        raise
+    except LXDConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except LXDOperationError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    response = ProjectUsageResponse(
+        host=host,
+        project=project_name,
+        limits=ProjectUsageLimits(**usage.limits),
+        used=ProjectUsageUsed(**usage.used),
+        complete=usage.complete,
+        collected_at=datetime.now(timezone.utc),
+    )
+    # Short, and dropped by invalidate_instance_cache, so a create or delete refreshes it.
+    if usage.complete:
+        cache.set("api_responses", cache_key, response.model_dump(mode="json"), ttl=PROJECT_USAGE_CACHE_TTL)
+    return response
+
+
 @router.post(
     "",
     response_model=ProjectCreateResponse,
@@ -455,6 +515,7 @@ async def update_project(
         cache.delete("api_responses", get_scope_cache_key(f"projects:list:{host}"))
         cache.delete("api_responses", "projects:list:all:scope=all")
         cache.delete("api_responses", f"projects:list:{host}:scope=all")
+        cache.delete_pattern("api_responses", f"project_usage:host={host}:project={project_name}:*")
         logger.debug(f"Invalidated project cache after updating '{project_name}' on {host}")
         
         project = ProjectInfo(**project_data)
