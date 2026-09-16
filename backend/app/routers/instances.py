@@ -29,6 +29,7 @@ from app.services.lxd_service import (
     LXDGracefulTimeoutError,
     get_lxd_service,
 )
+from app.services.lxd.exceptions import LXDProjectLimitError
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import (
@@ -313,6 +314,20 @@ async def create_instance(
             error_message=str(e),
             details={"image": request.image, "instance_type": request.instance_type}
         )
+
+        # A project limit refusal names a field the form can mark; precedent for a dict
+        # detail is the rebuild route's snapshot refusal.
+        if isinstance(e, LXDProjectLimitError):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "PROJECT_LIMIT_REACHED",
+                    "message": str(e),
+                    "limit": e.hit.limit,
+                    "project": e.hit.project,
+                    "max": e.hit.maximum,
+                },
+            )
 
         # Map to a meaningful status instead of a blanket 500.
         low = str(e).lower()

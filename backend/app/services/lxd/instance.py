@@ -13,12 +13,14 @@ from app.models.schemas import VMInfo
 from app.services.lxd.nic_preflight import NicPreflightError, check_nics
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from .project_limits import project_limit_from_lxd_error
 from .exceptions import (
     LXDConnectionError,
     LXDLocalStorageError,
     LXDOperationError,
     LXDGracefulTimeoutError,
     LXDSnapshotExistsError,
+    LXDProjectLimitError,
 )
 from .utils import (
     parse_vm_status,
@@ -1163,6 +1165,11 @@ class InstanceManager:
             # error so the router maps it to 503, not a blanket 500.
             raise LXDConnectionError(f"Failed to reach {host}: {e}")
         except LXDAPIException as e:
+            # A project limit refusal is the one synchronous 4xx the form can act on: it names
+            # a field. Everything else stays the free text it always was.
+            hit = project_limit_from_lxd_error(str(e))
+            if hit is not None:
+                raise LXDProjectLimitError(f"Failed to create VM: {str(e)}", hit)
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
 
     @staticmethod

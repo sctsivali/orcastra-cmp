@@ -62,3 +62,16 @@ class LXDSnapshotExistsError(LXDOperationError):
             f"Cannot rebuild: the instance has {len(self.snapshots)} snapshot(s) "
             f"({names}). Delete them first, then retry the rebuild."
         )
+
+
+class LXDProjectLimitError(LXDOperationError):
+    """A create was refused by a project limit (limits.cpu, limits.memory, an instance count).
+
+    Recoverable in a specific way: the operator lowers the request or picks another project.
+    The router maps it to a 400 whose detail names the limit, the project and the maximum, so
+    the form can mark the field rather than show the daemon's sentence and nothing else.
+    """
+
+    def __init__(self, message: str, hit):
+        self.hit = hit
+        super().__init__(message)
