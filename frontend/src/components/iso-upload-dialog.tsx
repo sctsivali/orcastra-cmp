@@ -80,7 +80,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
     };
   }, []);
 
-  const { data: poolsResp } = useStoragePools(node || undefined);
+  const { data: poolsResp } = useStoragePools(node || undefined, { enabled: !!node });
   const poolOptions = ((poolsResp as any)?.pools || [])
     .filter((p: any) => (p.node ? p.node === node : true))
     .map((p: any) => ({ value: p.name, label: p.name }));

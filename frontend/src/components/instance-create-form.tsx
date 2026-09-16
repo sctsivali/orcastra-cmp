@@ -255,7 +255,7 @@ export function InstanceCreateForm() {
     data: poolsResp,
     isLoading: loadingPools,
     isError: poolsFailed,
-  } = useStoragePoolList(form.selectedNode);
+  } = useStoragePoolList(form.selectedNode, { enabled: !!form.selectedNode });
   const poolOptions = (
     ((poolsResp as unknown as StoragePoolListResponse | undefined)?.pools ??
       []) as StoragePoolInfo[]
@@ -269,9 +269,13 @@ export function InstanceCreateForm() {
   // --- Additional disk devices ------------------------------------------------
   const [disks, setDisks] = useState<DiskDevice[]>([]);
   // All custom volumes on the node (filtered per-row by pool).
+  // note: every read below is gated on a node. Without the gate the form fired a fleet-wide
+  // pool, volume and network read on mount with no node chosen, which on a busy fleet cost
+  // three fan-outs and a share of the rate limit before the operator had touched anything.
   const { data: volumesResp, isLoading: loadingVolumes } = useStorageVolumes(
     undefined,
     form.selectedNode,
+    { enabled: !!form.selectedNode },
   );
   // important: the volume list now spans every project and, on a clustered host, lists a
   // per-member pool's volume once per member. A disk on this instance can only attach a custom
@@ -335,6 +339,7 @@ export function InstanceCreateForm() {
   const { data: networksResp } = useNetworks(
     form.selectedNode,
     form.selectedProject || undefined,
+    { enabled: !!form.selectedNode },
   );
   const projectNetworks = (
     ((networksResp as unknown as NetworkListResponse | undefined)?.networks ??

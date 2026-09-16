@@ -15,7 +15,7 @@ import {
   healthCheck,
   api 
 } from "@/lib/api";
-import { VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse, ProfileCreateRequest, ProfileUpdateRequest } from "@/types";
+import { APIError, VMCreateRequest, InstanceCreateRequest, VMActionRequest, ProjectCreateRequest, VMListResponse, ProfileCreateRequest, ProfileUpdateRequest } from "@/types";
 import {
   ATTENDED_DATA_CONFIG,
   DYNAMIC_DATA_CONFIG,
@@ -232,9 +232,10 @@ export function useInstanceMetrics(
 }
 
 // Images Hooks
-export function useImages(host?: string) {
+export function useImages(host?: string, opts?: { enabled?: boolean }) {
   return useRefreshableQuery({
     queryKey: host ? queryKeys.imagesByHost(host) : queryKeys.images,
+    enabled: opts?.enabled ?? true,
     queryFn: async ({ fresh }) => {
       if (host) {
         const result = await imageAPI.listByHost(host);
@@ -306,6 +307,9 @@ export function useNodeNames() {
     staleTime: 1000 * 60 * 3,
     gcTime: 1000 * 60 * 60 * 24, // keep in cache for 24 hours
     refetchOnWindowFocus: false,
+    // Catalog data does not poll; a first-load failure recovers through the retry here, the
+    // remount retry, and the Retry the picker offers. Never a 429: that would be a storm.
+    retry: STATIC_DATA_CONFIG.retry,
   });
 }
 
@@ -401,8 +405,9 @@ export function useAllProjects() {
     refetchInterval: 300000, // refresh every 5 minutes (300 seconds)
     staleTime: 30000, // Consider data stale after 30 seconds
     retry: (failureCount: number, error: unknown) => {
-      // don't retry auth/rate-limit errors
-      if (error instanceof Error && /401|403|429/.test(error.message)) return false;
+      // don't retry auth/rate-limit errors. On the status, not the message: the 429 text is
+      // human now and no longer carries the number.
+      if (error instanceof APIError && [401, 403, 429].includes(error.status)) return false;
       return failureCount < 2;
     },
     retryDelay: (attemptIndex: number) => Math.min(1000 * 2 ** attemptIndex, 10000),
@@ -887,16 +892,20 @@ function invalidateStoragePools(queryClient: ReturnType<typeof useQueryClient>) 
 // form builds `devices.root` from the resolved pool, so it read an unrelated cluster's timeout
 // as "no storage here" and refused a create it could have made. Anything that only needs the
 // list should use this; the storage-pools page still uses the combined hook for its usage bars.
-export function useStoragePoolList(host?: string) {
+export function useStoragePoolList(host?: string, opts?: { enabled?: boolean }) {
   return useRefreshableQuery({
     queryKey: [STORAGE_POOL_LIST_KEY, host],
     queryFn: ({ fresh }) => api.storagePools.list(host, { fresh }),
+    // note: `enabled` lets a form that has no node yet skip the fleet-wide read it would
+    // otherwise fire on mount. Default true, so the list pages are unchanged.
+    enabled: opts?.enabled ?? true,
     ...SEMI_STATIC_DATA_CONFIG,
   });
 }
 
-export function useStoragePools(host?: string) {
+export function useStoragePools(host?: string, opts?: { enabled?: boolean }) {
   return useRefreshableQuery({
+    enabled: opts?.enabled ?? true,
     queryKey: ["storagePools", host],
     queryFn: async ({ fresh }) => {
       const [poolsData, resourcesData] = await Promise.all([
@@ -959,9 +968,10 @@ export function useDeleteStoragePool() {
 }
 
 // Storage Volumes Hooks
-export function useStorageVolumes(pool?: string, host?: string) {
+export function useStorageVolumes(pool?: string, host?: string, opts?: { enabled?: boolean }) {
   return useRefreshableQuery({
     queryKey: ["storageVolumes", pool, host],
+    enabled: opts?.enabled ?? true,
     queryFn: ({ fresh }) => api.storageVolumes.list(host, pool, { fresh }),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
@@ -1048,11 +1058,12 @@ export function useSetNicAddress() {
  *   get the set that project can actually use, which is what a picker needs: a project only
  *   holds its own networks when it sets features.networks, otherwise it sees default's.
  */
-export function useNetworks(host?: string, project?: string) {
+export function useNetworks(host?: string, project?: string, opts?: { enabled?: boolean }) {
   return useRefreshableQuery({
     // important: the project belongs in the key. Without it React Query serves one project's
     // rows to another project's caller from cache.
     queryKey: ["networks", host, project ?? null],
+    enabled: opts?.enabled ?? true,
     queryFn: ({ fresh }) => api.networks.list(host, project, { fresh }),
     // Matched to the 180s backend response cache: capacity and state move without
     // anyone acting in this console, so a manual button alone was not enough.
@@ -1207,9 +1218,10 @@ export function useUpdateNetworkACL() {
 
 // Profiles Hooks
 /** @param project omit for every project. See useNetworks. */
-export function useProfiles(host?: string, project?: string) {
+export function useProfiles(host?: string, project?: string, opts?: { enabled?: boolean }) {
   return useRefreshableQuery({
     queryKey: ["profiles", host, project ?? null],
+    enabled: opts?.enabled ?? true,
     queryFn: ({ fresh }) => api.profiles.list(host, project, { fresh }),
     // Always enabled - fetches all profiles when host is undefined
     ...SEMI_STATIC_DATA_CONFIG,
@@ -1302,11 +1314,12 @@ export function useDeleteProfile() {
 }
 
 // Instances Hooks (alternative to VMs for LXD terminology)
-export function useInstances(host?: string, opts?: { realtime?: boolean }) {
+export function useInstances(host?: string, opts?: { realtime?: boolean; enabled?: boolean }) {
   return useRefreshableQuery({
     queryKey: ["instances", host],
     queryFn: ({ fresh }) =>
       api.instances.list(host, undefined, undefined, undefined, undefined, { fresh }),
+    enabled: opts?.enabled ?? true,
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
     // Default: poll so newly-created instances and status transitions show

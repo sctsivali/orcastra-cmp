@@ -119,7 +119,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
   // interfaces and the loopback. On one node in this fleet that is 11 unusable candidates out
   // of 23. Picking one produced a create the daemon rejected, and an instance that never
   // finished coming up.
-  const { data: networksResp } = useNetworks(node || undefined, "default");
+  const { data: networksResp } = useNetworks(node || undefined, "default", { enabled: !!node });
   const uplinkOptions = ((networksResp as any)?.networks || [])
     .filter((n: any) => (n.node ? n.node === node : true))
     .filter((n: any) => n.managed && (n.type === "bridge" || n.type === "physical"))

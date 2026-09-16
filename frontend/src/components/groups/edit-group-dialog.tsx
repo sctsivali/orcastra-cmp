@@ -169,15 +169,18 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const { data: imagesData, isLoading: loadingImages } = useImages(
     shouldFetchResources && entityType === "image" ? workingNode : undefined
   );
-  const { data: profilesData, isLoading: loadingProfiles } = useProfiles(
-    shouldFetchResources && entityType === "profile" ? workingNode : undefined
-  );
-  const { data: networksData, isLoading: loadingNetworks } = useNetworks(
-    shouldFetchResources && entityType === "network" ? workingNode : undefined
-  );
-  const { data: poolsData, isLoading: loadingPools } = useStoragePools(
-    shouldFetchResources && entityType === "storage_pool" ? workingNode : undefined
-  );
+  // An undefined host used to mean "read the whole fleet"; the dialog only ever needs the
+  // working node's rows of one entity type, so anything else is gated off.
+  const profileHost = shouldFetchResources && entityType === "profile" ? workingNode : undefined;
+  const networkHost = shouldFetchResources && entityType === "network" ? workingNode : undefined;
+  const poolHost = shouldFetchResources && entityType === "storage_pool" ? workingNode : undefined;
+  const { data: profilesData, isLoading: loadingProfiles } = useProfiles(profileHost, undefined, {
+    enabled: !!profileHost,
+  });
+  const { data: networksData, isLoading: loadingNetworks } = useNetworks(networkHost, undefined, {
+    enabled: !!networkHost,
+  });
+  const { data: poolsData, isLoading: loadingPools } = useStoragePools(poolHost, { enabled: !!poolHost });
   
   // Fetch all identities using the same hook as identities page
   const { data: identitiesData, isLoading: loadingIdentities } = useIdentities(workingNode);
