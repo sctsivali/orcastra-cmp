@@ -47,6 +47,11 @@ class _CertManager:
     def get_cluster_certificate(self, cluster_id):
         return {"client.crt": "crt", "client.key": "key"}
 
+    def read_registry(self, use_cache=True):
+        from app.services.lxd_certs.storage import RegistryRead
+
+        return RegistryRead(cluster_ids=list(ALL), source="vault", readable=True)
+
 
 class _Service:
     def __init__(self):
