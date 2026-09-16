@@ -604,9 +604,12 @@ class HardwareProfile(BaseModel):
 
 class NodeResources(BaseModel):
     """Node available resources information."""
-    cpu_total: int = Field(0, description="Total CPU cores")
-    cpu_used: int = Field(0, description="Used CPU cores")
-    cpu_available: int = Field(0, description="Available CPU cores")
+    cpu_total: int = Field(0, description="Hardware CPU threads")
+    cpu_used: int = Field(0, description="vCPUs allocated to running instances (the sum of their limits.cpu); may exceed cpu_total")
+    cpu_available: int = Field(0, description="Threads not yet allocated; 0 once the host is over-committed, never negative")
+    cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
+    cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total; above 1.0 the host is over-committed, which KVM allows")
+    cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
     cpu_sockets: int = Field(0, description="Number of CPU sockets")
     memory_total: int = Field(0, description="Total memory in bytes")
     memory_used: int = Field(0, description="Used memory in bytes")
@@ -632,10 +635,13 @@ class NodeResources(BaseModel):
 class MemberResources(BaseModel):
     """Cluster member resource information."""
     member_name: str = Field(..., description="Cluster member name")
-    cpu_total: int = Field(0, description="Total CPU cores")
-    cpu_used: int = Field(0, description="Used CPU cores")
-    cpu_available: int = Field(0, description="Available CPU cores")
-    cpu_usage_percent: float = Field(0.0, description="CPU usage percentage")
+    cpu_total: int = Field(0, description="Hardware CPU threads on this member")
+    cpu_used: int = Field(0, description="vCPUs allocated to the running instances placed here (the sum of their expanded limits.cpu); may exceed cpu_total")
+    cpu_available: int = Field(0, description="Threads not yet allocated; 0 once the member is over-committed, never negative")
+    cpu_usage_percent: float = Field(0.0, description="Allocation as a percentage of threads; above 100 the member is over-committed")
+    cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
+    cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total; above 1.0 the member is over-committed, which KVM allows")
+    cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
     memory_total: int = Field(0, description="Total memory in bytes")
     memory_used: int = Field(0, description="Used memory in bytes")
     memory_available: int = Field(0, description="Available memory in bytes")
@@ -1186,9 +1192,12 @@ class ClusterMonitoringMetrics(BaseModel):
     status_message: Optional[str] = Field(None, description="Status message for troubleshooting")
     
     # CPU Metrics
-    cpu_total: int = Field(0, description="Total CPU cores")
-    cpu_used: int = Field(0, description="Used CPU cores")
-    cpu_usage_percent: float = Field(0.0, description="CPU usage percentage")
+    cpu_total: int = Field(0, description="Hardware CPU threads")
+    cpu_used: int = Field(0, description="vCPUs allocated to running instances; may exceed cpu_total")
+    cpu_usage_percent: float = Field(0.0, description="Allocation as a percentage of threads; above 100 the node is over-committed")
+    cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
+    cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total")
+    cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
     
     # Memory Metrics
     memory_total_bytes: int = Field(0, description="Total memory in bytes")

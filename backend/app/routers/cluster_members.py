@@ -24,6 +24,7 @@ from app.models.schemas import (
     MemberResources, 
 )
 
+from app.services.lxd.cpu_allocation import allocated_cpu, allocation_ratio, clamp_available, parse_cpu_limit  # noqa: F401 (parse_cpu_limit re-exported for its tests)
 from app.services.lxd.gpu import build_gpu_inventory
 from app.services.lxd.project_scope import list_instance_records
 from app.services.lxd.node_resources import PoolReading, _read_pool_space
@@ -280,40 +281,16 @@ Additional endpoint for cluster members resources
 DEGRADED_CACHE_TTL = 10
 
 
-def parse_cpu_limit(limits_cpu: object) -> int:
-    """Cores an instance's `limits.cpu` allocates: a count, a range ("0-3") or a list ("0,2")."""
-    if limits_cpu is None or limits_cpu == "":
-        return 1
-    text = str(limits_cpu).strip()
-    try:
-        if "-" in text:
-            low, high = text.split("-", 1)
-            return int(high) - int(low) + 1
-        if "," in text:
-            return len([part for part in text.split(",") if part.strip()])
-        return int(text)
-    except (TypeError, ValueError):
-        return 1
-
-
 def count_member_instances(instances, member_name: str) -> Tuple[int, int, int]:
     """(instances on this member, of which running, cores those allocate).
 
-    note: "CPU used" here is allocation, the sum of `limits.cpu` of the running instances
-    placed on this member (one core for an instance with no limit). LXD's resources API has
-    no host utilisation figure and nothing here reads /1.0/metrics, so the UI must label it
-    as allocated, not as utilisation.
+    note: "CPU used" here is allocation, the sum of the expanded `limits.cpu` of the running
+    instances placed on this member (one core for an instance with no limit). LXD's resources
+    API has no host utilisation figure and nothing here reads /1.0/metrics, so the UI must
+    label it as allocated, not as utilisation. One counter for every read: cpu_allocation.
     """
-    count = running = cores = 0
-    for instance in instances:
-        if getattr(instance, "location", "") != member_name:
-            continue
-        count += 1
-        if getattr(instance, "status", "") == "Running":
-            running += 1
-            config = getattr(instance, "config", {}) or {}
-            cores += parse_cpu_limit(config.get("limits.cpu"))
-    return count, running, cores
+    got = allocated_cpu(instances, member=member_name)
+    return got.instances, got.running, got.cores
 
 
 class MemberUnavailableError(Exception):
@@ -456,8 +433,14 @@ def _read_member_resources(lxd_service: LXDService, node: str, member_name: str)
         member_name=member_name,
         cpu_total=cpu_total,
         cpu_used=cpu_used,
-        cpu_available=cpu_total - cpu_used,
+        # Allocation, not utilisation, so it may exceed the thread count: 307 vCPUs on 80
+        # threads is a legitimate KVM over-commit. The remainder is clamped and the ratio is
+        # what the UI presents; a negative "available" and a 383 % bar were the bug.
+        cpu_available=clamp_available(cpu_total, cpu_used),
         cpu_usage_percent=cpu_usage_percent,
+        cpu_allocated=cpu_used,
+        cpu_allocation_ratio=allocation_ratio(cpu_used, cpu_total),
+        cpu_overcommitted=cpu_used > cpu_total,
         memory_total=memory_total,
         memory_used=memory_used,
         memory_available=memory_available,

@@ -25,6 +25,7 @@ from .exceptions import LXDOperationError
 from .freshness import LiveRead, read_resources
 
 from app.services.lxd.project_scope import list_instance_records
+from app.services.lxd.cpu_allocation import allocated_cpu, allocation_ratio, clamp_available
 from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
@@ -192,33 +193,20 @@ class ResourceManager:
             memory_used = memory_info.get("used", 0)
             memory_available = memory_total - memory_used
             
-            # get all running instances to calculate CPU usage
+            # CPU allocation of the running instances this body is about. /1.0/resources on a
+            # clustered host answers for the member the connection landed on, so only the
+            # instances placed there count; summing every instance on the cluster against one
+            # member's threads is what produced "available CPU (-227)".
+            environment = (getattr(client, "host_info", None) or {}).get("environment") or {}
+            member = environment.get("server_name") if environment.get("server_clustered") else None
+            cpu_used = 0
             try:
                 instances, _ = list_instance_records(client)
-                cpu_used = 0
-                for instance in instances:
-                    if instance.status == "Running":
-                        # count CPU limits from instance config
-                        config = instance.config or {}
-                        limits_cpu = config.get("limits.cpu")
-                        if limits_cpu:
-                            try:
-                                cpu_used += int(limits_cpu)
-                            except (ValueError, TypeError):
-                                # non-integer value (ex; pinning "0-3") - count range
-                                try:
-                                    parts = limits_cpu.split("-")
-                                    cpu_used += int(parts[-1]) - int(parts[0]) + 1
-                                except Exception:
-                                    cpu_used += 1
-                        else:
-                            # no CPU limit set - count as 1 allocated vCPU
-                            cpu_used += 1
-                cpu_available = cpu_total - cpu_used
-                logger.debug(f"CPU on {node_name}: {cpu_total} total, {cpu_used} used, {cpu_available} available")
+                cpu_used = allocated_cpu(instances, member=member).cores
+                logger.debug(f"CPU on {node_name}: {cpu_total} threads, {cpu_used} allocated")
             except Exception as e:
                 logger.warning(f"Could not calculate CPU usage for {node_name}: {e}")
-                cpu_available = cpu_total
+            cpu_available = clamp_available(cpu_total, cpu_used)
             
             # get storage pools
             storage_pools = []
@@ -253,7 +241,10 @@ class ResourceManager:
             
             return {
                 "cpu_total": cpu_total,
+                "cpu_used": cpu_used,
                 "cpu_available": cpu_available,
+                "cpu_allocation_ratio": allocation_ratio(cpu_used, cpu_total),
+                "cpu_overcommitted": cpu_used > cpu_total,
                 "cpu_sockets": cpu_sockets,
                 "memory_total": memory_total,
                 "memory_available": memory_available,

@@ -18,6 +18,7 @@ from .storage_model import PoolReading, summarise_cluster_storage
 from .hardware import build_hardware_profile, merge_hardware_profiles
 
 from app.services.lxd.project_scope import list_instance_records
+from app.services.lxd.cpu_allocation import allocated_cpu, allocation_ratio, clamp_available
 from app.core.lxd_names import safe_segment
 
 logger = logging.getLogger(__name__)
@@ -32,10 +33,16 @@ def build_node_resources(resources_data: Dict[str, Any], gpu: GpuInventory) -> N
     """
     cpu_total = resources_data.get("cpu_total", 0)
     memory_total = resources_data.get("memory_total", 0)
+    # cpu_used comes from the dict when the read carried it: with cpu_available clamped at
+    # zero on an over-committed host, total minus available would say 80 for 307.
+    cpu_used = resources_data.get("cpu_used", cpu_total - resources_data.get("cpu_available", 0))
     return NodeResources(
         cpu_total=cpu_total,
-        cpu_used=cpu_total - resources_data.get("cpu_available", 0),
-        cpu_available=resources_data.get("cpu_available", 0),
+        cpu_used=cpu_used,
+        cpu_available=clamp_available(cpu_total, cpu_used),
+        cpu_allocated=cpu_used,
+        cpu_allocation_ratio=allocation_ratio(cpu_used, cpu_total),
+        cpu_overcommitted=cpu_used > cpu_total,
         cpu_sockets=resources_data.get("cpu_sockets", 0),
         memory_total=memory_total,
         memory_used=memory_total - resources_data.get("memory_available", 0),
@@ -284,35 +291,13 @@ def aggregate_microcloud_resources(
                         cpu_sockets_data = cpu_info.get("sockets", [])
                         cpu_sockets = len(cpu_sockets_data) if isinstance(cpu_sockets_data, list) else 0
                         
-                        # Get CPU usage by counting instances on this member
+                        # CPU allocation of the running instances placed on this member, from
+                        # the cluster-wide list fetched once above (one counter for every
+                        # read: cpu_allocation; the inline parser here read the instance-local
+                        # config and counted a profile-inherited limit as one core).
                         member_cpu_used = 0
                         try:
-                            # Reuse the cluster-wide list fetched once above rather than
-                            # re-listing every instance for every member.
-                            for instance in cluster_instances:
-                                # Check if instance is on this specific member
-                                instance_location = getattr(instance, 'location', '')
-                                if instance_location == member_name and instance.status == "Running":
-                                    # Count CPU
-                                    config = getattr(instance, 'config', {}) or {}
-                                    limits_cpu = config.get('limits.cpu')
-                                    if limits_cpu:
-                                        try:
-                                            if '-' in str(limits_cpu):
-                                                # Range like "0-3"
-                                                parts = str(limits_cpu).split('-')
-                                                member_cpu_used += int(parts[1]) - int(parts[0]) + 1
-                                            elif ',' in str(limits_cpu):
-                                                # List like "0,1,2"
-                                                member_cpu_used += len(str(limits_cpu).split(','))
-                                            else:
-                                                # Single number
-                                                member_cpu_used += int(limits_cpu)
-                                        except:
-                                            member_cpu_used += 1
-                                    else:
-                                        member_cpu_used += 1
-                                    
+                            member_cpu_used = allocated_cpu(cluster_instances, member=member_name).cores
                         except Exception as usage_err:
                             logger.debug(f"Could not calculate usage for member {member_name}: {usage_err}")
                         
@@ -358,7 +343,10 @@ def aggregate_microcloud_resources(
             aggregated = NodeResources(
                 cpu_total=total_cpu_cores,
                 cpu_used=total_cpu_used,
-                cpu_available=total_cpu_cores - total_cpu_used,
+                cpu_available=clamp_available(total_cpu_cores, total_cpu_used),
+                cpu_allocated=total_cpu_used,
+                cpu_allocation_ratio=allocation_ratio(total_cpu_used, total_cpu_cores),
+                cpu_overcommitted=total_cpu_used > total_cpu_cores,
                 cpu_sockets=total_cpu_sockets,
                 memory_total=total_memory,
                 memory_used=total_memory_used,

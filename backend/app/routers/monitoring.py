@@ -22,6 +22,7 @@ from app.models.schemas import (
     MetricsHistoryPoint,
     WarningsSummary,
 )
+from app.services.lxd.cpu_allocation import allocation_ratio
 from app.services.lxd_service import (
     LXDService,
     LXDConnectionError,
@@ -508,6 +509,9 @@ async def get_monitoring_dashboard(
                         cpu_usage_percent=round(
                             (resources.cpu_used / resources.cpu_total * 100) if resources.cpu_total > 0 else 0, 2
                         ),
+                        cpu_allocated=resources.cpu_used,
+                        cpu_allocation_ratio=allocation_ratio(resources.cpu_used, resources.cpu_total),
+                        cpu_overcommitted=resources.cpu_used > resources.cpu_total,
                         memory_total_bytes=resources.memory_total,
                         memory_used_bytes=resources.memory_used,
                         memory_usage_percent=round(
