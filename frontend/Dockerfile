@@ -94,8 +94,10 @@ EXPOSE 2025
 ENV PORT=2025
 ENV HOSTNAME="0.0.0.0"
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:2025 || exit 1
+# Health check: liveness only, must stay in sync with docker-compose.prod.yml. /healthz answers
+# from the process and calls nothing; Node's http.get never follows a redirect, so an auth 3xx
+# can never turn into a probe of the public edge (that loop restarted a healthy frontend).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["node", "-e", "require('http').get({host:'127.0.0.1',port:2025,path:'/healthz',timeout:5000},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1)).on('timeout',()=>process.exit(1))"]
 
 ENTRYPOINT ["./entrypoint.sh"]
