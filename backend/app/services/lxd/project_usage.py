@@ -13,9 +13,12 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from pylxd.exceptions import NotFound
+
 from app.core.lxd_names import safe_segment
 
 from .cpu_allocation import parse_cpu_limit
+from .exceptions import LXDProjectNotFoundError
 from .project_scope import ALL_PROJECTS_READ_TIMEOUT, list_in_project
 
 logger = logging.getLogger(__name__)
@@ -62,7 +65,10 @@ class ProjectUsage:
 
 
 def _read_project_config(client: Any, project: str) -> Dict[str, str]:
-    response = client.api.projects[safe_segment(project)].get(timeout=ALL_PROJECTS_READ_TIMEOUT)
+    try:
+        response = client.api.projects[safe_segment(project)].get(timeout=ALL_PROJECTS_READ_TIMEOUT)
+    except NotFound:
+        raise LXDProjectNotFoundError(project) from None
     return (response.json().get("metadata") or {}).get("config") or {}
 
 

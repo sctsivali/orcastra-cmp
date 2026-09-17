@@ -203,3 +203,31 @@ def test_an_unreachable_cluster_is_503(monkeypatch):
 
     r = _client(_Service(error=LXDConnectionError("Could not connect to nuc1")), monkeypatch).get("/projects/nuc1/p/usage")
     assert r.status_code == 503
+
+
+def test_a_project_the_daemon_no_longer_has_is_404_not_500(monkeypatch):
+    # note: the visibility gate answers from the caller's policy, which can name a project that
+    # was deleted a moment ago; the daemon's NotFound then has to be a 404 like the gate's own
+    from app.services.lxd.exceptions import LXDProjectNotFoundError
+
+    r = _client(_Service(error=LXDProjectNotFoundError("gone")), monkeypatch).get("/projects/mc-lab/gone/usage")
+    assert r.status_code == 404
+    assert "gone" in r.json()["detail"]
+
+
+def test_the_reader_names_a_missing_project(monkeypatch):
+    from pylxd.exceptions import NotFound
+
+    from app.services.lxd import project_usage as mod
+    from app.services.lxd.exceptions import LXDProjectNotFoundError
+
+    class _Missing:
+        def get(self, timeout=None):
+            raise NotFound(SimpleNamespace(status_code=404, json=lambda: {"error": "Project not found"}))
+
+    client = SimpleNamespace(api=SimpleNamespace(projects={"gone": _Missing()}))
+    monkeypatch.setattr(mod, "safe_segment", lambda name: name)
+    with pytest.raises(LXDProjectNotFoundError) as excinfo:
+        read_project_usage(client, "gone")
+    assert excinfo.value.project == "gone"
+

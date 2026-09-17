@@ -28,6 +28,7 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
+from app.services.lxd.exceptions import LXDProjectNotFoundError
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible
@@ -295,6 +296,8 @@ async def get_project_usage(
         raise
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    except LXDProjectNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
     except LXDOperationError as e:
         raise HTTPException(status_code=500, detail=str(e))
     response = ProjectUsageResponse(

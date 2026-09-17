@@ -75,3 +75,16 @@ class LXDProjectLimitError(LXDOperationError):
     def __init__(self, message: str, hit):
         self.hit = hit
         super().__init__(message)
+
+
+class LXDProjectNotFoundError(LXDOperationError):
+    """The daemon has no project by that name (deleted after the caller's policy last saw it).
+
+    The router answers 404, the same as the visibility gate, so a stale name never reads as a
+    server fault.
+    """
+
+    def __init__(self, project: str):
+        self.project = project
+        super().__init__(f"Project '{project}' not found")
+
