@@ -14,7 +14,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { clusterStatusMeta } from "@/lib/cluster-status";
+import { clusterStatusMeta, clusterSublabel } from "@/lib/cluster-status";
 import { ClusterStatus } from "@/types/api";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -222,8 +222,8 @@ function RuleEditor({
                     const meta = clusterStatusMeta(c.status);
                     return {
                       value: c.cluster_id,
-                      label: c.display_name,
-                      sublabel: c.endpoint,
+                      label: c.display_name || c.cluster_id,
+                      sublabel: clusterSublabel(c.cluster_id, c.display_name, c.endpoint),
                       status: {
                         label: meta.label,
                         dotClassName: meta.dotClassName,
@@ -896,7 +896,7 @@ function PolicyManagementSectionContent() {
                                   </Button>
                                 </DialogTrigger>
                                 <DialogContent>
-                                  <DialogHeader>
+                                  <DialogHeader className="pb-4">
                                     <DialogTitle>Delete Policy</DialogTitle>
                                     <DialogDescription>
                                       Delete <strong>&quot;{policy.name}&quot;</strong>?

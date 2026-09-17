@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
 import { useSearchParams } from "next/navigation";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -27,6 +27,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { GpuPickerDialog } from "@/components/instance-create/gpu-picker-dialog";
+import { DiskRow } from "@/components/instance-create/disk-row";
+import { NicRow } from "@/components/instance-create/nic-row";
+import type { DiskDevice, NicDevice } from "@/components/instance-create/devices";
+import { PickerNotice } from "@/components/ui/picker-notice";
+import { derivePickerState } from "@/lib/picker-state";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { SubmitBlockers, submitBlockers } from "@/components/instance-create/submit-blockers";
+import { ProjectQuotaLine, quotaCheck } from "@/components/instance-create/quota-line";
+import {
+  fieldRefusalText,
+  mapCreateError,
+  type CreateError,
+} from "@/components/instance-create/daemon-error";
+import {
+  ProjectChangeNotice,
+  projectChangeNotice,
+} from "@/components/instance-create/project-change-notice";
+import { formatLimitBytes, parseLxdSize, projectSetsLimits, readProjectLimits } from "@/lib/lxd-limits";
 import {
   gpuCardLabel,
   gpuClassOf,
@@ -77,6 +95,7 @@ import {
   useImagesByHost,
   useStoragePoolList,
   useProjects,
+  useProjectUsage,
   useRemoteImages,
   useStorageVolumes,
   useNetworks,
@@ -105,16 +124,6 @@ import type {
   RemoteImageInfo,
 } from "@/types/api";
 
-// A network interface (NIC) attached to a managed LXD network at create time.
-type NicDevice = {
-  id: string;
-  network: string; // managed network name
-  name: string; // guest interface name (eth0, eth1, ...)
-  // Optional fixed IPv4. LXD writes it as the device's ipv4.address, which pins the
-  // allocation instead of leaving it to DHCP. Empty means DHCP.
-  ipv4Address?: string;
-};
-
 // A physical GPU passed through to the instance, identified by PCI address or id.
 type GpuDevice = {
   id: string; // react key
@@ -125,15 +134,6 @@ type GpuDevice = {
   // Local only, never sent: what the operator saw when they picked this card.
   label?: string;
   gpuClass?: GpuClass;
-};
-
-// An additional disk device attached at create time.
-type DiskDevice = {
-  id: string;
-  kind: "volume" | "host"; // existing custom volume, or host path mount (containers)
-  pool: string; // for volume
-  source: string; // volume name (volume) or host path (host)
-  path: string; // mount point inside the instance
 };
 
 // LXD byte-size suffixes. LXD only accepts INTEGER values with these suffixes.
@@ -240,6 +240,9 @@ function InstanceCreateFormContent() {
   const [seedDropped, setSeedDropped] = useState<string | null>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState<string | null>(null);
+  // A refusal the cluster tied to a field (a project limit), cleared when that field changes.
+  const [fieldError, setFieldError] = useState<CreateError | null>(null);
+  const [changeNotice, setChangeNotice] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
 
   // Inline tag editor helpers (write straight to form.tags).
@@ -257,29 +260,89 @@ function InstanceCreateFormContent() {
   // --- Data sources -----------------------------------------------------------
   const nodePicker = useNodePickerOptions();
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
+  const nodeLabel = form.selectedNode ? nodePicker.labelOf(form.selectedNode) : undefined;
+  // note: "No nodes found." is reserved for a read that answered with nothing. A read that
+  // failed (a lost registry, a 429, a timeout) disables the picker and says why underneath,
+  // because an empty list here used to be the only thing the operator saw.
+  const nodeState = derivePickerState({
+    isLoading: loadingNodes,
+    isError: nodePicker.isError,
+    error: nodePicker.namesError,
+    optionCount: nodeOptions.length,
+    subject: "Nodes",
+    selectText: "Select node",
+    emptyText: "No nodes found.",
+  });
 
-  const { data: projectsResp, isLoading: loadingProjects } = useProjects(
-    form.selectedNode,
-  );
-  const projectOptions = Array.from(
-    new Set([
-      "default",
-      ...(
-        ((projectsResp as unknown as ProjectListResponse | undefined)?.projects ??
-          []) as ProjectInfo[]
-      ).map((p) => p.name),
-    ]),
-  );
+  const {
+    data: projectsResp,
+    isLoading: loadingProjects,
+    isError: projectsFailed,
+    error: projectsError,
+    refetch: refetchProjects,
+  } = useProjects(form.selectedNode);
+  // Built from a successful response only. On failure this used to collapse to ["default"],
+  // which looked like an answer and hid that the read never happened.
+  const projectOptions = projectsFailed
+    ? []
+    : Array.from(
+        new Set([
+          "default",
+          ...(
+            ((projectsResp as unknown as ProjectListResponse | undefined)?.projects ??
+              []) as ProjectInfo[]
+          ).map((p) => p.name),
+        ]),
+      ).map((name) => ({ value: name, label: name }));
+  const projectState = derivePickerState({
+    gated: !form.selectedNode,
+    isLoading: loadingProjects,
+    isError: projectsFailed,
+    error: projectsError,
+    optionCount: projectOptions.length,
+    subject: "Projects",
+    nodeLabel,
+    selectText: "Select project",
+  });
+  const selectedProjectInfo = (
+    ((projectsResp as unknown as ProjectListResponse | undefined)?.projects ?? []) as ProjectInfo[]
+  ).find((p) => p.name === (form.selectedProject || "default"));
+  const projectLimits = readProjectLimits(selectedProjectInfo?.config);
+  const projectLimited = projectSetsLimits(projectLimits);
+  // note: read only when the project sets a limit, so an unlimited project costs no request.
+  const { data: projectUsage } = useProjectUsage(form.selectedNode, form.selectedProject || "default", {
+    enabled: !!form.selectedNode && projectLimited,
+  });
+  const projectUsed =
+    projectUsage && projectUsage.complete
+      ? {
+          cpu: projectUsage.used.cpu,
+          memoryBytes: projectUsage.used.memory_bytes,
+          instances: projectUsage.used.instances,
+        }
+      : null;
 
   const {
     data: poolsResp,
     isLoading: loadingPools,
     isError: poolsFailed,
-  } = useStoragePoolList(form.selectedNode);
+    error: poolsError,
+    refetch: refetchPools,
+  } = useStoragePoolList(form.selectedNode, { enabled: !!form.selectedNode });
   const poolOptions = (
     ((poolsResp as unknown as StoragePoolListResponse | undefined)?.pools ??
       []) as StoragePoolInfo[]
   ).map((p) => ({ value: p.name, label: `${p.name} (${p.driver})` }));
+  const poolState = derivePickerState({
+    gated: !form.selectedNode,
+    isLoading: loadingPools,
+    isError: poolsFailed,
+    error: poolsError,
+    optionCount: poolOptions.length,
+    subject: "Storage pools",
+    nodeLabel,
+    selectText: "Select storage pool",
+  });
   const defaultPool =
     poolOptions.find((p) => p.value === "default")?.value ||
     poolOptions[0]?.value ||
@@ -289,18 +352,73 @@ function InstanceCreateFormContent() {
   // --- Additional disk devices ------------------------------------------------
   const [disks, setDisks] = useState<DiskDevice[]>([]);
   // All custom volumes on the node (filtered per-row by pool).
-  const { data: volumesResp, isLoading: loadingVolumes } = useStorageVolumes(
-    undefined,
-    form.selectedNode,
-  );
-  const customVolumes = (
-    ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
-      []) as StorageVolumeInfo[]
-  ).filter((v) => v.type === "custom");
+  // note: every read below is gated on a node. Without the gate the form fired a fleet-wide
+  // pool, volume and network read on mount with no node chosen, which on a busy fleet cost
+  // three fan-outs and a share of the rate limit before the operator had touched anything.
+  const {
+    data: volumesResp,
+    isLoading: loadingVolumes,
+    isError: volumesFailed,
+    error: volumesError,
+    refetch: refetchVolumes,
+  } = useStorageVolumes(undefined, form.selectedNode, { enabled: !!form.selectedNode });
+  // important: the volume list now spans every project and, on a clustered host, lists a
+  // per-member pool's volume once per member. A disk on this instance can only attach a custom
+  // volume from the instance's own project (or default, which a project without its own
+  // volumes sees), and one option per (pool, name) is what the operator picks; the member is
+  // decided by placement.
+  const volumeProject = form.selectedProject || "default";
+  const customVolumes = useMemo(() => {
+    const rows = (
+      ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
+        []) as StorageVolumeInfo[]
+    ).filter((v) => v.type === "custom");
+    const scoped = rows.filter((v) => (v.project ?? "default") === volumeProject);
+    const pool = scoped.length ? scoped : rows.filter((v) => (v.project ?? "default") === "default");
+    const seen = new Set<string>();
+    return pool.filter((v) => {
+      const key = `${v.pool}/${v.name}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [volumesResp, volumeProject]);
+  // The project fallback above, evaluated for a project the form is about to switch to.
+  const isoVisibleIn = (project: string, pool: string, name: string) => {
+    const rows = (
+      ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
+        []) as StorageVolumeInfo[]
+    ).filter((v) => v.type === "custom" && v.content_type === "iso");
+    const scoped = rows.filter((v) => (v.project ?? "default") === project);
+    const visible = scoped.length ? scoped : rows.filter((v) => (v.project ?? "default") === "default");
+    return visible.some((v) => v.pool === pool && v.name === name);
+  };
   const volumesInPool = (pool: string) =>
     customVolumes.filter((v) => v.pool === pool);
   const volumeContentType = (pool: string, name: string) =>
     customVolumes.find((v) => v.pool === pool && v.name === name)?.content_type;
+  // One notice for every disk row: the volume read is per node, not per row.
+  const volumesNotice = derivePickerState({
+    gated: !form.selectedNode,
+    isLoading: loadingVolumes,
+    isError: volumesFailed,
+    error: volumesError,
+    optionCount: customVolumes.length,
+    subject: "Custom volumes",
+    nodeLabel,
+  }).notice;
+  const volumeStateFor = (disk: DiskDevice, poolVolumes: StorageVolumeInfo[]) =>
+    derivePickerState({
+      gated: !disk.pool,
+      gatedText: "Select pool first",
+      isLoading: loadingVolumes,
+      isError: volumesFailed,
+      error: volumesError,
+      optionCount: poolVolumes.length,
+      subject: "Custom volumes",
+      emptyText: `No custom volumes in ${disk.pool}.`,
+      selectText: "Select volume",
+    });
 
   // Custom ISO volumes on the node, for the "From ISO" boot-source picker. The
   // option value encodes pool + name so we can rebuild the cdrom device on submit.
@@ -335,10 +453,15 @@ function InstanceCreateFormContent() {
   // Offering every network the default project holds is what let an operator attach an
   // instance in an isolated project to a network that project cannot reach, which the
   // daemon then failed in the background with nothing to show for it.
-  const { data: networksResp } = useNetworks(
-    form.selectedNode,
-    form.selectedProject || undefined,
-  );
+  const {
+    data: networksResp,
+    isLoading: loadingNetworks,
+    isError: networksFailed,
+    error: networksError,
+    refetch: refetchNetworks,
+  } = useNetworks(form.selectedNode, form.selectedProject || undefined, {
+    enabled: !!form.selectedNode,
+  });
   const projectNetworks = (
     ((networksResp as unknown as NetworkListResponse | undefined)?.networks ??
       []) as NetworkInfo[]
@@ -347,6 +470,17 @@ function InstanceCreateFormContent() {
     value: n.name,
     label: `${n.name} (${n.type})`,
   }));
+  const networkState = derivePickerState({
+    gated: !form.selectedNode,
+    isLoading: loadingNetworks,
+    isError: networksFailed,
+    error: networksError,
+    optionCount: networkOptions.length,
+    subject: "Managed networks",
+    nodeLabel,
+    emptyText: `No managed networks in project ${form.selectedProject || "default"}.`,
+    selectText: "Select network",
+  });
   const networksByName = new Map(projectNetworks.map((n) => [n.name, n]));
 
   // Inherited NICs from the instance's profile(s) (the form applies "default"),
@@ -725,6 +859,7 @@ function InstanceCreateFormContent() {
     setImageDialogOpen(true);
   };
   const selectImage = (row: ImageRow) => {
+    setChangeNotice(null);
     setForm((prev) => ({
       ...prev,
       selectedImage: row.value,
@@ -754,16 +889,28 @@ function InstanceCreateFormContent() {
   // sourceType "none" now means "boot from ISO": an empty root disk plus a
   // required ISO (no bare blank VM). Kept named `bootFromIso` for clarity.
   const bootFromIso = form.sourceType === "none";
-  const canSubmit =
-    !isSubmitting &&
-    nameValid &&
-    !!form.selectedNode &&
-    // Image mode needs an image; ISO mode needs an ISO. No bare blank.
-    (bootFromIso ? !!form.selectedIso : !!form.selectedImage) &&
-    resourcesValid &&
-    disksValid &&
-    nicsValid &&
-    gpusValid;
+  const requestedCpu = cpuValid ? parseInt(form.cpu.trim(), 10) : null;
+  const requestedMemoryBytes = memoryValid
+    ? parseLxdSize(`${form.memoryValue.trim()}${form.memoryUnit}`)
+    : null;
+  const quota = quotaCheck(projectLimits, requestedCpu, requestedMemoryBytes, projectUsed);
+  // What still stands between the form and a create. The buttons are disabled exactly when
+  // this is non-empty, so the line under them and the disabled state cannot disagree.
+  const blockers = submitBlockers({
+    nameValid,
+    hasNode: !!form.selectedNode,
+    bootFromIso,
+    hasImage: !!form.selectedImage,
+    hasIso: !!form.selectedIso,
+    resourcesValid,
+    hasPool: !!effectivePool || loadingPools,
+    disksValid,
+    nicsValid,
+    gpusValid,
+    cpuWithinLimit: !quota.cpuExceeds,
+    memoryWithinLimit: !quota.memoryExceeds,
+  });
+  const canSubmit = !isSubmitting && blockers.length === 0;
 
   // --- Field updates ----------------------------------------------------------
   const updateField = <K extends keyof FormState>(field: K, value: FormState[K]) =>
@@ -807,19 +954,35 @@ function InstanceCreateFormContent() {
     }));
     setDisks([]);
   };
-  // Local images and networks are both project-scoped; clear what the old project chose.
+  // A remote image belongs to no project and is kept. A local image and the NICs are
+  // project-scoped and cleared; an ISO is kept when the new project can still see its volume.
+  // Whatever was cleared is said under the picker rather than silently dropped.
   const selectProject = (project: string) => {
+    const clearedNics = nics.length;
     setNics([]);
-    setForm((prev) => ({
-      ...prev,
-      selectedProject: project,
-      selectedImage: "",
-      imageServer: "",
-      imageLabel: "",
-      selectedIso: "",
-      selectedIsoPool: "",
-      selectedIsoLabel: "",
-    }));
+    setFieldError(null);
+    setForm((prev) => {
+      const keepImage = !!prev.selectedImage && prev.imageServer !== "";
+      const keepIso = !!prev.selectedIso && isoVisibleIn(project, prev.selectedIsoPool, prev.selectedIso);
+      setChangeNotice(
+        projectChangeNotice({
+          project,
+          clearedLocalImage: !!prev.selectedImage && !keepImage,
+          clearedIso: !!prev.selectedIso && !keepIso,
+          clearedNics,
+        }),
+      );
+      return {
+        ...prev,
+        selectedProject: project,
+        selectedImage: keepImage ? prev.selectedImage : "",
+        imageServer: keepImage ? prev.imageServer : "",
+        imageLabel: keepImage ? prev.imageLabel : "",
+        selectedIso: keepIso ? prev.selectedIso : "",
+        selectedIsoPool: keepIso ? prev.selectedIsoPool : "",
+        selectedIsoLabel: keepIso ? prev.selectedIsoLabel : "",
+      };
+    });
   };
 
   // --- Submit -----------------------------------------------------------------
@@ -1031,7 +1194,9 @@ function InstanceCreateFormContent() {
       });
       navigate("/inventory/instances");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create instance");
+      const mapped = mapCreateError(err);
+      setError(mapped.message);
+      setFieldError(mapped.field ? mapped : null);
     } finally {
       // Released on the failure path so the operator can correct and retry. On success the
       // form has already navigated away, so this only tidies up the unmounting component.
@@ -1245,15 +1410,23 @@ function InstanceCreateFormContent() {
               {/* Node + project */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label>Node *</Label>
+                  <Label htmlFor="create-node">Node *</Label>
                   <SearchableSelect
+                    id="create-node"
                     value={form.selectedNode}
                     onValueChange={selectNodeWithDisks}
                     options={nodeOptions}
-                    placeholder={loadingNodes ? "Loading..." : "Select node"}
+                    placeholder={nodeState.placeholder}
                     searchPlaceholder="Search nodes..."
-                    emptyText="No nodes found."
-                    disabled={loadingNodes}
+                    emptyText={nodeState.emptyText}
+                    disabled={nodeState.disabled}
+                    ariaDescribedBy={nodeState.notice ? "create-node-notice" : undefined}
+                    ariaInvalid={nodeState.notice?.kind === "error"}
+                  />
+                  <PickerNotice
+                    id="create-node-notice"
+                    notice={nodeState.notice}
+                    onRetry={nodePicker.retryNames}
                   />
                   <NodeStatusNotice
                     meta={form.selectedNode ? nodePicker.statusOf(form.selectedNode) : undefined}
@@ -1266,31 +1439,25 @@ function InstanceCreateFormContent() {
                   />
                 </div>
                 <div className="grid gap-2">
-                  <Label>Project</Label>
-                  <Select
+                  <Label htmlFor="create-project">Project</Label>
+                  <SearchableSelect
+                    id="create-project"
                     value={form.selectedProject}
                     onValueChange={selectProject}
-                    disabled={!form.selectedNode || loadingProjects}
-                  >
-                    <SelectTrigger>
-                      <SelectValue
-                        placeholder={
-                          !form.selectedNode
-                            ? "Select a node first"
-                            : loadingProjects
-                              ? "Loading projects..."
-                              : "Select project"
-                        }
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {projectOptions.map((project) => (
-                        <SelectItem key={project} value={project}>
-                          {project}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                    options={projectOptions}
+                    placeholder={projectState.placeholder}
+                    searchPlaceholder="Search projects..."
+                    emptyText={projectState.emptyText}
+                    disabled={projectState.disabled}
+                    ariaDescribedBy={projectState.notice ? "create-project-notice" : undefined}
+                    ariaInvalid={projectState.notice?.kind === "error"}
+                  />
+                  <PickerNotice
+                    id="create-project-notice"
+                    notice={projectState.notice}
+                    onRetry={() => refetchProjects()}
+                  />
+                  <ProjectChangeNotice id="create-project-change" text={changeNotice} />
                 </div>
               </div>
 
@@ -1441,19 +1608,34 @@ function InstanceCreateFormContent() {
                   CPU Cores
                 </div>
                 <Input
+                  id="create-cpu"
                   type="number"
                   min={1}
                   step={1}
                   value={form.cpu}
-                  onChange={(e) => updateField("cpu", e.target.value)}
+                  onChange={(e) => {
+                    if (fieldError?.field === "cpu") setFieldError(null);
+                    updateField("cpu", e.target.value);
+                  }}
                   placeholder="e.g. 2"
-                  aria-invalid={!cpuValid && form.cpu.trim() !== ""}
+                  aria-invalid={(!cpuValid && form.cpu.trim() !== "") || quota.cpuExceeds || fieldError?.field === "cpu"}
+                  aria-describedby={
+                    quota.cpuExceeds || fieldError?.field === "cpu" ? "create-cpu-error" : undefined
+                  }
                 />
-                {!cpuValid && form.cpu.trim() !== "" && (
+                {!cpuValid && form.cpu.trim() !== "" ? (
                   <p className="text-xs text-destructive">
                     Must be a positive whole number.
                   </p>
-                )}
+                ) : fieldError?.field === "cpu" ? (
+                  <p id="create-cpu-error" className="text-xs text-destructive">
+                    {fieldRefusalText(fieldError)}
+                  </p>
+                ) : quota.cpuExceeds ? (
+                  <p id="create-cpu-error" className="text-xs text-destructive">
+                    Exceeds the project limit of {projectLimits.cpu} vCPU.
+                  </p>
+                ) : null}
               </div>
 
               <div className="space-y-2">
@@ -1463,14 +1645,25 @@ function InstanceCreateFormContent() {
                 </div>
                 <div className="flex gap-2">
                   <Input
+                    id="create-memory"
                     type="number"
                     min={1}
                     step={1}
                     value={form.memoryValue}
-                    onChange={(e) => updateField("memoryValue", e.target.value)}
+                    onChange={(e) => {
+                      if (fieldError?.field === "memory") setFieldError(null);
+                      updateField("memoryValue", e.target.value);
+                    }}
                     placeholder="e.g. 2"
                     className="flex-1"
-                    aria-invalid={!memoryValid && form.memoryValue.trim() !== ""}
+                    aria-invalid={
+                      (!memoryValid && form.memoryValue.trim() !== "") ||
+                      quota.memoryExceeds ||
+                      fieldError?.field === "memory"
+                    }
+                    aria-describedby={
+                      quota.memoryExceeds || fieldError?.field === "memory" ? "create-memory-error" : undefined
+                    }
                   />
                   <Select
                     value={form.memoryUnit}
@@ -1488,12 +1681,30 @@ function InstanceCreateFormContent() {
                     </SelectContent>
                   </Select>
                 </div>
-                {!memoryValid && form.memoryValue.trim() !== "" && (
+                {!memoryValid && form.memoryValue.trim() !== "" ? (
                   <p className="text-xs text-destructive">
                     Must be a positive whole number.
                   </p>
-                )}
+                ) : fieldError?.field === "memory" ? (
+                  <p id="create-memory-error" className="text-xs text-destructive">
+                    {fieldRefusalText(fieldError)}
+                  </p>
+                ) : quota.memoryExceeds ? (
+                  <p id="create-memory-error" className="text-xs text-destructive">
+                    Exceeds the project limit of {formatLimitBytes(projectLimits.memoryBytes ?? 0)}.
+                  </p>
+                ) : null}
               </div>
+
+              {projectLimited && (
+                <ProjectQuotaLine
+                  id="create-quota"
+                  project={form.selectedProject || "default"}
+                  limits={projectLimits}
+                  used={projectUsed}
+                  check={quota}
+                />
+              )}
 
               {/* Memory swap, containers only */}
               {form.type === "container" && (
@@ -1615,38 +1826,30 @@ function InstanceCreateFormContent() {
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Label
+                  htmlFor="create-pool"
+                  className="flex items-center gap-2 text-sm font-normal text-muted-foreground"
+                >
                   <HardDrive className="h-4 w-4" />
                   Storage Pool
-                </div>
-                <Select
+                </Label>
+                <SearchableSelect
+                  id="create-pool"
                   value={effectivePool}
                   onValueChange={(v) => updateField("selectedPool", v)}
-                  disabled={
-                    !form.selectedNode || loadingPools || poolOptions.length === 0
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue
-                      placeholder={
-                        !form.selectedNode
-                          ? "Select a node first"
-                          : loadingPools
-                            ? "Loading pools..."
-                            : poolOptions.length === 0
-                              ? "No storage pools"
-                              : "Select storage pool"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {poolOptions.map((pool) => (
-                      <SelectItem key={pool.value} value={pool.value}>
-                        {pool.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                  options={poolOptions}
+                  placeholder={poolState.placeholder}
+                  searchPlaceholder="Search storage pools..."
+                  emptyText={poolState.emptyText}
+                  disabled={poolState.disabled}
+                  ariaDescribedBy={poolState.notice ? "create-pool-notice" : undefined}
+                  ariaInvalid={poolState.notice?.kind === "error"}
+                />
+                <PickerNotice
+                  id="create-pool-notice"
+                  notice={poolState.notice}
+                  onRetry={() => refetchPools()}
+                />
               </div>
 
               {/* Additional disk devices */}
@@ -1673,112 +1876,33 @@ function InstanceCreateFormContent() {
                   </p>
                 )}
 
+                {disks.length > 0 && (
+                  <PickerNotice
+                    id="create-volumes-notice"
+                    notice={volumesNotice}
+                    onRetry={() => refetchVolumes()}
+                  />
+                )}
+
                 {disks.map((disk) => {
                   const poolVolumes = volumesInPool(disk.pool);
-                  const isBlock =
-                    volumeContentType(disk.pool, disk.source) === "block";
                   return (
-                    <div
+                    <DiskRow
                       key={disk.id}
-                      className="space-y-2 rounded-lg border p-3"
-                    >
-                      <div className="flex items-center gap-2">
-                        <Select
-                          value={disk.kind}
-                          onValueChange={(v) =>
-                            updateDisk(disk.id, {
-                              kind: v as DiskDevice["kind"],
-                              source: "",
-                              path: "",
-                            })
-                          }
-                        >
-                          <SelectTrigger className="w-40">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="volume">Custom volume</SelectItem>
-                            {form.type === "container" && (
-                              <SelectItem value="host">Host path</SelectItem>
-                            )}
-                          </SelectContent>
-                        </Select>
-                        <div className="flex-1" />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => removeDisk(disk.id)}
-                          aria-label="Remove disk"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-
-                      {disk.kind === "volume" ? (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <Select
-                            value={disk.pool}
-                            onValueChange={(v) =>
-                              updateDisk(disk.id, { pool: v, source: "" })
-                            }
-                          >
-                            <SelectTrigger>
-                              <SelectValue placeholder="Pool" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {poolOptions.map((pool) => (
-                                <SelectItem key={pool.value} value={pool.value}>
-                                  {pool.label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Select
-                            value={disk.source}
-                            onValueChange={(v) => updateDisk(disk.id, { source: v })}
-                            disabled={!disk.pool || poolVolumes.length === 0}
-                          >
-                            <SelectTrigger>
-                              <SelectValue
-                                placeholder={
-                                  !disk.pool
-                                    ? "Select pool first"
-                                    : poolVolumes.length === 0
-                                      ? "No custom volumes"
-                                      : "Select volume"
-                                }
-                              />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {poolVolumes.map((vol) => (
-                                <SelectItem key={vol.name} value={vol.name}>
-                                  {vol.name} ({vol.content_type})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      ) : (
-                        <Input
-                          value={disk.source}
-                          onChange={(e) =>
-                            updateDisk(disk.id, { source: e.target.value })
-                          }
-                          placeholder="Host path (e.g. /srv/data)"
-                        />
-                      )}
-
-                      {!(disk.kind === "volume" && isBlock) && (
-                        <Input
-                          value={disk.path}
-                          onChange={(e) =>
-                            updateDisk(disk.id, { path: e.target.value })
-                          }
-                          placeholder="Mount path (e.g. /data)"
-                        />
-                      )}
-                    </div>
+                      disk={disk}
+                      instanceType={form.type}
+                      poolOptions={poolOptions}
+                      poolState={poolState}
+                      volumeOptions={poolVolumes.map((vol) => ({
+                        value: vol.name,
+                        label: `${vol.name} (${vol.content_type})`,
+                      }))}
+                      volumeState={volumeStateFor(disk, poolVolumes)}
+                      isBlock={volumeContentType(disk.pool, disk.source) === "block"}
+                      volumeNoticeId="create-volumes-notice"
+                      onUpdate={(patch) => updateDisk(disk.id, patch)}
+                      onRemove={() => removeDisk(disk.id)}
+                    />
                   );
                 })}
               </div>
@@ -1851,122 +1975,29 @@ function InstanceCreateFormContent() {
                   </p>
                 )}
 
+                {nics.length > 0 && (
+                  <PickerNotice
+                    id="create-networks-notice"
+                    notice={networkState.notice}
+                    onRetry={() => refetchNetworks()}
+                  />
+                )}
+
                 {nics.map((nic) => (
-                  <div
+                  <NicRow
                     key={nic.id}
-                    className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-2 rounded-lg border p-3 items-end"
-                  >
-                    <div className="space-y-1">
-                      <Label className="text-xs text-muted-foreground">
-                        Network
-                      </Label>
-                      <Select
-                        value={nic.network}
-                        onValueChange={(v) => updateNic(nic.id, { network: v })}
-                        disabled={networkOptions.length === 0}
-                      >
-                        <SelectTrigger>
-                          <SelectValue
-                            placeholder={
-                              networkOptions.length === 0
-                                ? "No managed networks"
-                                : "Select network"
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {networkOptions.map((net) => (
-                            <SelectItem key={net.value} value={net.value}>
-                              {net.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-1">
-                      <Label
-                        className="text-xs text-muted-foreground"
-                        htmlFor={`nic-name-${nic.id}`}
-                      >
-                        Interface name
-                      </Label>
-                      <Input
-                        id={`nic-name-${nic.id}`}
-                        value={nic.name}
-                        onChange={(e) =>
-                          updateNic(nic.id, { name: e.target.value })
-                        }
-                        placeholder="eth0"
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeNic(nic.id)}
-                      aria-label="Remove network interface"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                    <div className="sm:col-span-3 space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Checkbox
-                          id={`nic-static-${nic.id}`}
-                          checked={nic.ipv4Address !== undefined}
-                          onCheckedChange={(checked) =>
-                            updateNic(nic.id, {
-                              ipv4Address: checked ? "" : undefined,
-                            })
-                          }
-                        />
-                        <Label
-                          htmlFor={`nic-static-${nic.id}`}
-                          className="text-xs font-normal"
-                        >
-                          Assign a fixed IPv4 address
-                        </Label>
-                      </div>
-                      {nic.ipv4Address !== undefined && (
-                        <div className="space-y-1">
-                          <Label
-                            className="text-xs text-muted-foreground"
-                            htmlFor={`nic-ipv4-${nic.id}`}
-                          >
-                            IPv4 address
-                          </Label>
-                          <Input
-                            id={`nic-ipv4-${nic.id}`}
-                            value={nic.ipv4Address}
-                            onChange={(e) =>
-                              updateNic(nic.id, { ipv4Address: e.target.value })
-                            }
-                            placeholder={
-                              subnetOf(networksByName.get(nic.network)?.config) ??
-                              "No subnet on this network"
-                            }
-                            aria-invalid={!!nicAddressError(nic)}
-                            aria-describedby={
-                              nicAddressError(nic)
-                                ? `nic-ipv4-error-${nic.id}`
-                                : undefined
-                            }
-                          />
-                          {nicAddressError(nic) ? (
-                            <p
-                              id={`nic-ipv4-error-${nic.id}`}
-                              className="text-xs text-destructive"
-                            >
-                              {nicAddressError(nic)}
-                            </p>
-                          ) : (
-                            <p className="text-xs text-muted-foreground">
-                              Leave empty to let DHCP choose.
-                            </p>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                    nic={nic}
+                    networkOptions={networkOptions}
+                    networkState={networkState}
+                    networkNoticeId="create-networks-notice"
+                    subnetHint={
+                      subnetOf(networksByName.get(nic.network)?.config) ??
+                      "No subnet on this network"
+                    }
+                    addressError={nicAddressError(nic)}
+                    onUpdate={(patch) => updateNic(nic.id, patch)}
+                    onRemove={() => removeNic(nic.id)}
+                  />
                 ))}
                 {!nicsValid && nics.length > 0 && (
                   <p className="text-xs text-destructive">
@@ -2200,32 +2231,40 @@ function InstanceCreateFormContent() {
         </Card>
 
         {error && (
-          <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-            {error}
-          </div>
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => navigate("/inventory/instances")}
-            disabled={isSubmitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => submit(false)}
-            disabled={!canSubmit}
-          >
-            Create
-          </Button>
-          <Button type="submit" disabled={!canSubmit}>
-            {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Create &amp; Start
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+          <SubmitBlockers id="create-blockers" blockers={blockers} />
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate("/inventory/instances")}
+              disabled={isSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => submit(false)}
+              disabled={!canSubmit}
+              aria-describedby={blockers.length ? "create-blockers" : undefined}
+            >
+              Create
+            </Button>
+            <Button
+              type="submit"
+              disabled={!canSubmit}
+              aria-describedby={blockers.length ? "create-blockers" : undefined}
+            >
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create &amp; Start
+            </Button>
+          </div>
         </div>
       </form>
 
@@ -2247,7 +2286,7 @@ function InstanceCreateFormContent() {
       {/* Select base image dialog: Local + Custom + Ubuntu catalogs */}
       <Dialog open={imageDialogOpen} onOpenChange={setImageDialogOpen}>
         <DialogContent className="sm:max-w-[75rem] max-h-[85vh] overflow-hidden flex flex-col">
-          <DialogHeader>
+          <DialogHeader className="pb-4">
             <DialogTitle>Select Base Image</DialogTitle>
             <DialogDescription>
               Local images, plus the Custom (images.lxd.canonical.com) and Ubuntu

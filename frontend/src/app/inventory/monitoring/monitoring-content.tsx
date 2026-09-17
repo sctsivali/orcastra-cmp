@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef } from "react";
+import { cpuAllocation } from "@/lib/cpu-allocation";
 import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 // note: the alarm cards point at /inventory/warnings with distinct query strings, which
@@ -631,7 +632,7 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>
             {getTitle()}
           </DialogTitle>
@@ -1622,7 +1623,8 @@ export default function MonitoringContent() {
                 statusMessage={isPartner && filteredStats.realtime_cpu_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
-                Allocated: {filteredStats.used_cpu} / {filteredStats.total_cpu} cores
+                Allocated: {filteredStats.used_cpu} / {filteredStats.total_cpu} threads (
+                {cpuAllocation({ cpu_total: filteredStats.total_cpu, cpu_used: filteredStats.used_cpu }).ratioLabel})
               </p>
             </div>
             <div className="text-center">

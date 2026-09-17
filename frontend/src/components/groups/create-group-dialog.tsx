@@ -110,12 +110,15 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   const [resourcePage, setResourcePage] = useState(1);
   
   // Fetch resources based on selected node
+  // Gated on a node: the dialog mounts closed and used to read (and poll) the whole fleet's
+  // instances, images, profiles, networks and pools before the operator had picked anything.
+  const hasNode = !!formData.node;
   const { data: projectsData, isLoading: loadingProjects } = useProjects(formData.node);
-  const { data: instancesData, isLoading: loadingInstances } = useInstances(formData.node);
-  const { data: imagesData, isLoading: loadingImages } = useImages(formData.node);
-  const { data: profilesData, isLoading: loadingProfiles } = useProfiles(formData.node);
-  const { data: networksData, isLoading: loadingNetworks } = useNetworks(formData.node);
-  const { data: poolsData, isLoading: loadingPools } = useStoragePools(formData.node);
+  const { data: instancesData, isLoading: loadingInstances } = useInstances(formData.node, { enabled: hasNode });
+  const { data: imagesData, isLoading: loadingImages } = useImages(formData.node, { enabled: hasNode });
+  const { data: profilesData, isLoading: loadingProfiles } = useProfiles(formData.node, undefined, { enabled: hasNode });
+  const { data: networksData, isLoading: loadingNetworks } = useNetworks(formData.node, undefined, { enabled: hasNode });
+  const { data: poolsData, isLoading: loadingPools } = useStoragePools(formData.node, { enabled: hasNode });
 
   // Get available resources based on entity type
   const getAvailableResources = (): Resource[] => {
@@ -345,7 +348,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[85vh] overflow-y-auto p-6">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>Create New Group</DialogTitle>
           <DialogDescription>
             Create a new authentication group with custom permissions

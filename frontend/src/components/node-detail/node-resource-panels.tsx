@@ -17,6 +17,7 @@ import type { NodeResources } from "@/types";
 import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { UsageMeter } from "@/components/ui/usage-meter";
 import { usagePercent } from "@/lib/usage-tone";
+import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
 
 /**
  * The four tabs that read NodeResources.
@@ -48,6 +49,7 @@ export function NodeCpuPanel({
   resources: NodeResources | null;
   architecture: string;
 }) {
+  const cpu = cpuAllocation(resources ?? { cpu_total: 0, cpu_used: 0 });
   return (
     <Card>
       <CardHeader>
@@ -61,10 +63,10 @@ export function NodeCpuPanel({
           <>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Architecture" value={architecture} />
-              <Field label="Total Cores" value={String(resources.cpu_total)} />
+              <Field label="Total Threads" value={String(resources.cpu_total)} />
               <Field label="CPU Sockets" value={String(resources.cpu_sockets)} />
               <Field
-                label="Cores per Socket"
+                label="Threads per Socket"
                 value={
                   resources.cpu_sockets > 0
                     ? String(Math.floor(resources.cpu_total / resources.cpu_sockets))
@@ -77,18 +79,17 @@ export function NodeCpuPanel({
               <h4 className="mb-3 text-sm font-semibold">Resource Usage</h4>
               <div className="space-y-3">
                 <UsageMeter
-                  label="Used"
-                  total={resources.cpu_total}
-                  used={resources.cpu_used}
-                  value={`${resources.cpu_used} / ${resources.cpu_total} cores (${usagePercent(
-                    resources.cpu_used,
-                    resources.cpu_total,
-                  ).toFixed(1)}%)`}
+                  label="Allocated"
+                  total={cpu.threads}
+                  used={cpu.allocated}
+                  value={`${cpu.allocated} / ${cpu.threads} threads (${cpu.ratioLabel})`}
                 />
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Available</span>
-                  <span className="font-semibold tabular-nums">
-                    {resources.cpu_available} cores
+                  <span className="text-muted-foreground">
+                    {cpu.over > 0 ? "Beyond capacity" : "Unallocated"}
+                  </span>
+                  <span className={`font-semibold tabular-nums ${cpu.over > 0 ? cpu.textClassName : ""}`}>
+                    {cpu.over > 0 ? `${cpu.over} vCPU (${cpuAllocationText(cpu)})` : `${cpu.unallocated} threads`}
                   </span>
                 </div>
               </div>

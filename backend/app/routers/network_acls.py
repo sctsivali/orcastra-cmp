@@ -3,16 +3,18 @@ API Router for Network ACL operations.
 Provides endpoints for managing LXD network ACLs.
 """
 
-from fastapi import APIRouter, HTTPException, Depends, Query, Body
+import requests.exceptions as requests_exc
+from fastapi import APIRouter, HTTPException, Depends, Query, Body, Header, Response
 from typing import Optional, List, Dict, Any
 import logging
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
 
-from pylxd.exceptions import LXDAPIException
-
-from app.core.lxd_errors import lxd_http_error
+from app.services.lxd.acl_rules import rule_list_problem, validate_rules
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.fanout import NodeRead, collect
+from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -37,9 +39,12 @@ from app.core.tenant_visibility import (
     tenant_may_see_project,
 )
 from app.services.activity_logger import get_activity_logger
-from app.services.lxd.lazy_client import client_for
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from app.core.error_sanitizer import sanitize_error
+from app.core.lxd_errors import lxd_transport_error
 from app.core.lxd_path import safe_segment
+from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
+from app.services.lxd.lazy_client import client_for
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -52,6 +57,8 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+# an ACL write on LXD 6.9 is an operation; see NETWORK_WRITE_WAIT_SECONDS in networks.py
+ACL_WRITE_WAIT_SECONDS = 60
 
 
 class NetworkACLInfo(BaseModel):
@@ -69,85 +76,137 @@ class NetworkACLInfo(BaseModel):
     )
 
 
+class NetworkACLDetail(NetworkACLInfo):
+    """A single ACL as read from the daemon, with the version it was read at."""
+    etag: Optional[str] = Field(
+        None,
+        description=(
+            "Opaque version of the ACL as LXD holds it. Send it back as the If-Match header "
+            "on PUT and a write over someone else's change is refused with 412."
+        ),
+    )
+
+
+# LXD's own rule for an ACL name. Checked here so a bad name is a 422 at the boundary, not
+# the daemon's refusal surfacing as a 500.
+_ACL_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
+
+STALE_ACL_DETAIL = (
+    "This ACL changed since it was read. Reload it and apply the change again."
+)
+
+
+def _http_status_for(exc: Exception) -> int:
+    """The daemon's own 4xx is the caller's mistake and keeps its status; anything else is ours."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    return status if status in (400, 404, 409, 412) else 500
+
+
+def _detail_for(exc: Exception) -> str:
+    """LXD's 412 text names two hashes; the operator needs the sentence, not the hashes.
+
+    Anything else is the daemon's own text, so it goes through the sanitiser the way every
+    other router's error does: a 4xx keeps its status but never carries a host or a path.
+    """
+    return STALE_ACL_DETAIL if _http_status_for(exc) == 412 else sanitize_error(str(exc))
+
+
+def _write_error(exc: Exception, host: str, action: str) -> HTTPException:
+    """Map a failed ACL write onto the status that tells an operator what to do.
+
+    important: a transport failure is answered before the daemon-status rule. A write that
+    never reached the daemon, or timed out waiting for it, carries no LXD status and used to
+    fall through to a 500, which main.py replaces with an opaque reference; the 503/504 from
+    lxd_transport_error is the diagnosis (host down versus host slow) the operator acts on.
+    """
+    if isinstance(exc, (requests_exc.ConnectionError, requests_exc.Timeout)):
+        return lxd_transport_error(exc, host, action)
+    return HTTPException(status_code=_http_status_for(exc), detail=_detail_for(exc))
+
+
+def _etag_of(response: Any) -> Optional[str]:
+    """The ETag header of a raw pylxd read, or None when the daemon (or a fake) sent none."""
+    headers = getattr(response, "headers", None)
+    return headers.get("ETag") if headers else None
+
+
+def _etags_match(sent: str, current: Optional[str]) -> bool:
+    """LXD trims the quotes before comparing, so a client that strips them is not refused."""
+    return current is None or sent.strip().strip('"') == current.strip().strip('"')
+
+
 class NetworkACLCreateRequest(BaseModel):
     """Request body for creating a network ACL."""
-    name: str = Field(..., description="ACL name")
+    name: str = Field(..., min_length=1, max_length=63, description="ACL name")
     description: str = Field("", description="ACL description")
     ingress: List[Dict[str, Any]] = Field(default_factory=list, description="Ingress rules")
     egress: List[Dict[str, Any]] = Field(default_factory=list, description="Egress rules")
     config: Dict[str, str] = Field(default_factory=dict, description="ACL configuration")
 
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, v: str) -> str:
+        if not _ACL_NAME_RE.fullmatch(v):
+            raise ValueError(
+                "Name must start with a letter and contain only letters, numbers and hyphens"
+            )
+        return v
 
-class NetworkACLListResponse(BaseModel):
+    @field_validator("ingress", "egress")
+    @classmethod
+    def _validate_rule_ports(cls, v: List[Dict[str, Any]], info: Any) -> List[Dict[str, Any]]:
+        problem = rule_list_problem(v, info.field_name)
+        if problem:
+            raise ValueError(problem)
+        return v
+
+
+class NetworkACLListResponse(FanoutReachability):
     """Response for listing network ACLs."""
     total: int = Field(..., description="Total number of ACLs")
     acls: List[NetworkACLInfo] = Field(..., description="List of network ACLs")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
-    )
-    partial_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that answered but could not be read for every project, so their entries "
-            "may be incomplete. A short list is never presented as the whole truth."
-        ),
-    )
 
 
 def _fetch_acls_for_node(
     lxd_service: LXDService, node_name: str, project: Optional[str] = None
-) -> tuple[List[NetworkACLInfo], bool]:
+) -> NodeRead[NetworkACLInfo]:
     """Fetch network ACLs for a single node - runs in thread pool.
 
-    Returns (acls, complete). LXD scopes network ACLs by project and gives them no feature
-    key of their own, so they follow features.networks: a project holding its own networks
-    holds its own ACLs too.
+    LXD scopes network ACLs by project and gives them no feature key of their own, so they
+    follow features.networks: a project holding its own networks holds its own ACLs too. A
+    read that could not cover every project is a partial read; a listing that failed
+    propagates and the caller names the cluster.
     """
-    acls: List[NetworkACLInfo] = []
-    complete = True
-    try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        if client is None:
-            # important: unreachable is not empty. Without this the next line
-            # raises AttributeError on None, which the generic handler below
-            # turns into a partial result and the node is never named.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        if project:
-            owner = resolve_owner(client, "network-acls", project)
-            rows = list_in_project(client, "network-acls", owner)
-        else:
-            rows, complete = list_across_projects(client, "network-acls")
-        for acl_data in rows:
-            try:
-                acls.append(NetworkACLInfo(
-                    name=acl_data.get('name', ''),
-                    description=acl_data.get('description', ''),
-                    ingress=acl_data.get('ingress', []),
-                    egress=acl_data.get('egress', []),
-                    config=acl_data.get('config', {}),
-                    used_by=acl_data.get('used_by', []),
-                    node=node_name,
-                    project=acl_data.get('project') or DEFAULT_PROJECT,
-                ))
-            except Exception as e:
-                # important: not unreachability. See networks.py: an item
-                # vanishing mid-listing must not condemn the whole node.
-                logger.warning(f"Error parsing ACL data on {node_name}: {e}")
-                complete = False
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing network ACLs on {node_name}: {e}")
-        complete = False
-    return acls, complete
+    client = lxd_service.connection_manager.get_client(node_name)
+    if client is None:
+        # important: unreachable is not empty. Without this the next line
+        # raises AttributeError on None, which the generic handler below
+        # turns into a partial result and the node is never named.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    read: NodeRead[NetworkACLInfo] = NodeRead()
+    if project:
+        owner = resolve_owner(client, "network-acls", project)
+        rows = list_in_project(client, "network-acls", owner)
+    else:
+        rows, complete = list_across_projects(client, "network-acls")
+        if not complete:
+            read.lost("not every project could be read")
+    for acl_data in rows:
+        try:
+            read.rows.append(NetworkACLInfo(
+                name=acl_data.get('name', ''),
+                description=acl_data.get('description', ''),
+                ingress=acl_data.get('ingress', []),
+                egress=acl_data.get('egress', []),
+                config=acl_data.get('config', {}),
+                used_by=acl_data.get('used_by', []),
+                node=node_name,
+                project=acl_data.get('project') or DEFAULT_PROJECT,
+            ))
+        except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+            read.lost(f"ACL {acl_data.get('name', '?')}: {type(exc).__name__}")
+    return read
 
 
 @router.get(
@@ -183,8 +242,6 @@ async def list_network_acls(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        all_acls = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
@@ -193,16 +250,11 @@ async def list_network_acls(
         unreachable_nodes: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        partial_nodes: List[str] = []
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, tuple):
-                rows, complete = result
-                all_acls.extend(rows)
-                if not complete:
-                    partial_nodes.append(node_name)
-            elif isinstance(result, Exception):
-                logger.error(f"Error fetching network ACLs: {result}")
-                unreachable_nodes.append(node_name)
+        fan = collect(
+            nodes_to_query, results, noun="network ACLs", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_acls = fan.rows
 
         # important: a Partner is scoped by cluster, not by project, and the used_by filter
         # below never runs for them. An ACL body is a firewall policy, so on a shared cluster
@@ -225,7 +277,8 @@ async def list_network_acls(
             acls=all_acls,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
-            partial_nodes=sorted(partial_nodes),
+            partial_nodes=sorted(fan.partial_nodes),
+            node_errors=fan.node_errors,
         )
     except HTTPException:
         # note: an authorization refusal is a 403, not a server fault. The generic handler
@@ -239,12 +292,16 @@ async def list_network_acls(
 
 @router.get(
     "/{acl_name}",
-    response_model=NetworkACLInfo,
+    response_model=NetworkACLDetail,
     summary="Get network ACL details",
-    description="Get detailed information about a specific network ACL.",
+    description=(
+        "Get detailed information about a specific network ACL, with the ETag to send back "
+        "as If-Match on an update."
+    ),
 )
 async def get_network_acl(
     acl_name: str,
+    http_response: Response,
     host: str = Query(..., description="Target host node"),
     project: Optional[str] = Query(
         None, description="LXD project holding the ACL (default project when omitted)"
@@ -266,7 +323,10 @@ async def get_network_acl(
             used_by = filter_visible_lxd_references(host, acl_data.get('used_by', []))
             if tenant_acl_active() and not used_by:
                 raise HTTPException(status_code=403, detail="Access denied to this network ACL")
-            return NetworkACLInfo(
+            etag = _etag_of(response)
+            if etag:
+                http_response.headers["ETag"] = etag
+            return NetworkACLDetail(
                 name=acl_data.get('name', ''),
                 description=acl_data.get('description', ''),
                 ingress=acl_data.get('ingress', []),
@@ -275,6 +335,7 @@ async def get_network_acl(
                 used_by=used_by,
                 node=host,
                 project=acl_data.get('project') or owner,
+                etag=etag,
             )
         else:
             raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
@@ -318,7 +379,12 @@ async def create_network_acl(
             "config": request.config
         }
         
-        response = client.api["network-acls"].post(json=acl_data, params=scope)
+        response = client.api["network-acls"].post(
+            json=acl_data, params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
+        )
+        # LXD 6.9 answers with an operation (storage_and_network_operations); settle it before
+        # reporting success, or the list right after the create does not hold the ACL yet
+        wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if response.status_code in [200, 201, 202]:
             # Log activity for audit trail
@@ -362,7 +428,7 @@ async def create_network_acl(
             error_code=type(e).__name__,
             error_message=str(e),
         )
-        raise lxd_http_error(e, "Network ACL", request.name)
+        raise _write_error(e, host, f"creating network ACL '{request.name}'")
 
 
 @router.put(
@@ -381,12 +447,21 @@ async def update_network_acl(
     project: Optional[str] = Query(
         None, description="LXD project holding the ACL (default project when omitted)"
     ),
+    if_match: Optional[str] = Header(
+        None,
+        description=(
+            "The etag from the single read. When sent, the write is refused with 412 if the "
+            "ACL changed since; when omitted the write is unconditional."
+        ),
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a network ACL."""
     verify_cluster_access(host)
+    validate_rules(ingress, "ingress")
+    validate_rules(egress, "egress")
     try:
         client = require_client(await client_for(lxd_service, host), host)
         owner = resolve_owner(client, "network-acls", project)
@@ -398,6 +473,11 @@ async def update_network_acl(
         get_response = client.api["network-acls"][safe_segment(acl_name)].get(params=scope)
         if get_response.status_code != 200:
             raise HTTPException(status_code=404, detail=f"Network ACL {acl_name} not found")
+        # important: compared here as well as by the daemon. The read-modify-write below is
+        # built on this read, so a precondition the read already contradicts must not be
+        # turned into a PUT at all, and a daemon that ignored If-Match would still be caught.
+        if if_match and not _etags_match(if_match, _etag_of(get_response)):
+            raise HTTPException(status_code=412, detail=STALE_ACL_DETAIL)
         
         acl_data = get_response.json().get('metadata', {})
         
@@ -412,7 +492,15 @@ async def update_network_acl(
             acl_data['config'] = config
         
         # Put updated ACL
-        put_response = client.api["network-acls"][safe_segment(acl_name)].put(json=acl_data, params=scope)
+        put_kwargs: Dict[str, Any] = {
+            "json": acl_data,
+            "params": scope,
+            "timeout": write_timeout(ACL_WRITE_WAIT_SECONDS),
+        }
+        if if_match:
+            put_kwargs["headers"] = {"If-Match": if_match}
+        put_response = client.api["network-acls"][safe_segment(acl_name)].put(**put_kwargs)
+        wait_for_lxd_operation(client, put_response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if put_response.status_code in [200, 202]:
             return {
@@ -423,12 +511,9 @@ async def update_network_acl(
             raise HTTPException(status_code=500, detail="Failed to update network ACL")
     except HTTPException:
         raise
-    except LXDAPIException as e:
-        logger.error(f"Error updating network ACL {acl_name}: {e}")
-        raise lxd_http_error(e, "Network ACL", acl_name)
     except Exception as e:
         logger.error(f"Error updating network ACL {acl_name}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _write_error(e, host, f"updating network ACL '{acl_name}'")
 
 
 @router.delete(
@@ -455,7 +540,10 @@ async def delete_network_acl(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network ACL")
         scope = project_params(owner)
-        response = client.api["network-acls"][safe_segment(acl_name)].delete(params=scope)
+        response = client.api["network-acls"][safe_segment(acl_name)].delete(
+            params=scope, timeout=write_timeout(ACL_WRITE_WAIT_SECONDS)
+        )
+        wait_for_lxd_operation(client, response, timeout=ACL_WRITE_WAIT_SECONDS)
         
         if response.status_code in [200, 202]:
             # Log activity for audit trail
@@ -494,4 +582,4 @@ async def delete_network_acl(
             error_code=type(e).__name__,
             error_message=str(e),
         )
-        raise lxd_http_error(e, "Network ACL", acl_name)
+        raise _write_error(e, host, f"deleting network ACL '{acl_name}'")

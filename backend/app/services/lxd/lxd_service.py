@@ -20,6 +20,7 @@ from .connection import LXDConnectionManager
 from .gpu import GpuInventory, build_gpu_inventory
 from .lazy_client import connect_or_get_client
 from .node_resources import resources_for_host
+from .project_usage import ProjectUsage, read_project_usage
 from .freshness import read_resources
 from .resources import ResourceManager
 from .instance import InstanceManager
@@ -352,7 +353,16 @@ class LXDService:
         to look for a backend fault when the node was simply not answering.
         """
         client = require_client(self.connection_manager.get_client(node_name), node_name)
-        return self.resource_manager.get_node_resources(client, node_name)
+        data = self.resource_manager.get_node_resources(client, node_name)
+        # A clustered host's body is one member's. The project quota pre-flight and the
+        # server resources route read this dict, and a cap bounded by one member's threads
+        # refused projects the cluster could hold. Same aggregate, same cache, as the card,
+        # through the one place that decision is made (resources_for_host).
+        if resolve_clustered(client=client):
+            return resources_for_host(
+                client, node_name, data, GpuInventory.empty(), True
+            ).model_dump()
+        return data
 
     def get_node_resources_detail(self, node_name: str) -> NodeResources:
         """Full NodeResources for one node, GPU included.
@@ -524,6 +534,17 @@ class LXDService:
         # Ensure connection (lazy loading)
         self.ensure_connection(host)
         return await self.project_manager.list_projects(host)
+
+    async def get_project_usage(self, host: str, project: str) -> ProjectUsage:
+        """How much of each of `project`'s limits is allocated (see services/lxd/project_usage)."""
+        return await asyncio.to_thread(self._read_project_usage_sync, host, project)
+
+    def _read_project_usage_sync(self, host: str, project: str) -> ProjectUsage:
+        # note: the client lookup revalidates the pooled connection with a live request, so it
+        # runs on the thread with the read, never inline on the loop.
+        self.ensure_connection(host)
+        client = require_client(self.connection_manager.get_client(host), host)
+        return read_project_usage(client, project)
     
     async def create_project(
         self, 

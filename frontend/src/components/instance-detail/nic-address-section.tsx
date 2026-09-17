@@ -3,7 +3,7 @@
 /**
  * Per-interface IPv4 addressing on an existing instance.
  *
- * Chapter 5.1 of the EcoBytes audit: LXD's own web UI has no control for a fixed address, so
+ * LXD's own web UI has no control for a fixed address, so
  * pinning one meant `lxc config device set` on the hypervisor over SSH. An operator on the NOC
  * desk has no business needing a root shell to give a database node the address it was planned
  * with.

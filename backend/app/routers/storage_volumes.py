@@ -9,7 +9,16 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from pylxd.exceptions import LXDAPIException
+
 from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.fanout import NodeRead, collect, unattempted
+from app.services.lxd.project_scope import (
+    ALL_PROJECTS_READ_TIMEOUT,
+    DEFAULT_PROJECT,
+    list_pool_volumes,
+)
+from app.models.schemas import FanoutReachability
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -17,7 +26,13 @@ from app.services.lxd_service import (
 )
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    get_scope_cache_key,
+    project_is_visible,
+)
+from urllib.parse import unquote
 from app.core.lxd_errors import lxd_http_error
 from app.core.lxd_names import (
     LXD_NAME_PATTERN,
@@ -33,11 +48,15 @@ from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
-from app.services.lxd.lazy_client import client_for
 from app.core.lxd_path import safe_segment
+from app.services.lxd.lazy_client import client_for
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
+
+# A body naming a known-down cluster is right today and may be wrong once the healer
+# reconnects it, so it is remembered for one healer cadence rather than three minutes.
+DEGRADED_CACHE_TTL = 60
 
 router = APIRouter(
     prefix="/storage/volumes",
@@ -75,6 +94,11 @@ class StorageVolumeInfo(BaseModel):
     used_by: List[str] = Field(default_factory=list, description="Resources using this volume")
     node: str = Field("", description="Node name where volume is defined")
     content_type: str = Field("", description="Content type")
+    project: str = Field(DEFAULT_PROJECT, description="Project that holds the volume")
+    location: str = Field(
+        "",
+        description="Cluster member that holds the volume; empty for a shared pool or a single host",
+    )
 
 
 class StorageVolumeCreateRequest(BaseModel):
@@ -91,63 +115,95 @@ class StorageVolumeCreateRequest(BaseModel):
     content_type: str = Field("filesystem", description="Content type")
 
 
-class StorageVolumeListResponse(BaseModel):
+class StorageVolumeListResponse(FanoutReachability):
     """Response for listing storage volumes."""
     total: int = Field(..., description="Total number of volumes")
     volumes: List[StorageVolumeInfo] = Field(..., description="List of storage volumes")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
+
+
+def _volume_node(client, pool: str, volume_type: str, volume_name: str):
+    """The raw API node for one volume, so a project or a member can be named on the call."""
+    return client.api["storage-pools"][safe_segment(pool)]["volumes"][safe_segment(volume_type)][safe_segment(volume_name)]
+
+
+def _address_params(project: Optional[str], location: Optional[str]) -> Dict[str, str]:
+    """Query parameters that address a volume outside the default project or on one member.
+
+    note: the list now carries `project` and `location` on every row (the volumes of a
+    per-member pool exist once per member, and other projects hold their own). A detail,
+    update or delete that names only (pool, type, name) would land on the default project's
+    copy, so callers pass the row's own values back.
+    """
+    params: Dict[str, str] = {}
+    if project and project != DEFAULT_PROJECT:
+        params["project"] = project
+    if location:
+        params["target"] = location
+    return params
+
+
+def _pool_names(client, pool_filter: Optional[str]) -> List[str]:
+    """The pools to read, from one recursion=0 listing (or the filter alone)."""
+    if pool_filter:
+        return [pool_filter]
+    response = client.api.storage_pools.get(
+        params={"recursion": 0}, timeout=ALL_PROJECTS_READ_TIMEOUT
     )
+    names: List[str] = []
+    for entry in response.json().get("metadata") or []:
+        if isinstance(entry, str):
+            # the URL carries the name percent-escaped; safe_segment escapes it again later
+            names.append(unquote(entry.rstrip("/").rsplit("/", 1)[-1].split("?")[0]))
+        elif isinstance(entry, dict) and entry.get("name"):
+            names.append(entry["name"])
+    return names
 
 
-def _fetch_volumes_for_node(lxd_service: LXDService, node_name: str, pool_filter: Optional[str]) -> List[StorageVolumeInfo]:
-    """Fetch storage volumes for a single node - runs in thread pool."""
-    volumes_list = []
-    try:
-        client = lxd_service.connection_manager.get_client(node_name)
-        if client is None:
-            # important: unreachable is not empty. See the sibling routers.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        # Get all storage pools
-        pools = client.storage_pools.all()
-        
-        for storage_pool in pools:
-            if pool_filter and storage_pool.name != pool_filter:
-                continue
-            
+def _fetch_volumes_for_node(
+    lxd_service: LXDService, node_name: str, pool_filter: Optional[str]
+) -> NodeRead[StorageVolumeInfo]:
+    """Every volume on one cluster, one request per pool. Runs in the thread pool.
+
+    important: pylxd's collection manager listed at recursion 0 in the default project and
+    then synced every volume one request at a time. On a clustered host a per-member pool
+    lists its volumes as `.../volumes/custom/backups?target=member-a`, which the sync
+    could not read, and the first refusal dropped the rest of that pool. Nothing is synced
+    now, every project is read, and a pool that cannot be read is named, not skipped.
+    """
+    client = lxd_service.connection_manager.get_client(node_name)
+    if client is None:
+        # important: unreachable is not empty. See the sibling routers.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    read: NodeRead[StorageVolumeInfo] = NodeRead()
+    for pool_name in _pool_names(client, pool_filter):
+        try:
+            rows, complete = list_pool_volumes(client, pool_name)
+        except LXDAPIException as exc:
+            # note: only LXD's own refusal is a per-pool problem; a transport error means the
+            # rest of the cluster cannot be read either and is classified by the caller.
+            read.lost(f"pool {pool_name}: LXD answered {getattr(exc.response, 'status_code', '?')}: "
+                      f"{' '.join(str(exc).split())[:200]}")
+            continue
+        if not complete:
+            read.lost(f"pool {pool_name}: not every project could be read")
+        for row in rows:
             try:
-                volumes = storage_pool.volumes.all()
-                for volume in volumes:
-                    volumes_list.append(StorageVolumeInfo(
-                        name=volume.name,
-                        type=volume.type,
-                        pool=storage_pool.name,
-                        description=getattr(volume, 'description', '') or "",
-                        config=volume.config or {},
-                        used_by=volume.used_by or [],
-                        content_type=getattr(volume, 'content_type', ''),
-                        node=node_name
-                    ))
-            except LXDConnectionError:
-                # a missing client IS unreachability: let it through
-                raise
-            except Exception as e:
-                # important: not unreachability. See networks.py: an item
-                # vanishing mid-listing must not condemn the whole node.
-                logger.warning(f"Error listing volumes in pool {storage_pool.name}: {e}")
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing storage volumes on {node_name}: {e}")
-    return volumes_list
+                read.rows.append(StorageVolumeInfo(
+                    name=row.get("name") or "",
+                    type=row.get("type") or "",
+                    pool=pool_name,
+                    description=row.get("description") or "",
+                    config=row.get("config") or {},
+                    used_by=row.get("used_by") or [],
+                    content_type=row.get("content_type") or "",
+                    node=node_name,
+                    project=row.get("project") or DEFAULT_PROJECT,
+                    location=row.get("location") or "",
+                ))
+            except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+                read.lost(f"volume {row.get('name', '?')} in pool {pool_name}: {type(exc).__name__}")
+    return read
 
 
 @router.get(
@@ -186,24 +242,32 @@ async def list_storage_volumes(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Flatten results
-        all_volumes = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
-        unreachable_nodes: List[str] = (
+        seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        answered = 0
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, list):
-                answered += 1
-                all_volumes.extend(result)
-            elif isinstance(result, Exception):
-                logger.warning(f"Error fetching storage volumes: {result}")
-                unreachable_nodes.append(node_name)
+        unreachable_nodes: List[str] = list(seeded)
+        fan = collect(
+            nodes_to_query, results, noun="storage volumes", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        # important: the rows now span every project, and a Partner is scoped by cluster, not
+        # by project. On a cluster bound to two organizations this is the only thing keeping
+        # one organization's volumes out of the other's console. The cache key already
+        # carries the bound (get_scope_cache_key), so the cached body is per scope.
+        all_volumes = [v for v in fan.rows if project_is_visible(v.node, v.project)]
+        # important: the seeding names two kinds of cluster, and only one of them may be
+        # remembered. A cluster this worker tried and found down is a correct answer, cached
+        # as it always was (a shorter TTL, so recovery shows within the healer's cadence). A
+        # cluster this worker has never tried, registered seconds ago, must not be: the cache
+        # is shared by every worker, and the one that did connect it would then serve
+        # "unreachable" for the whole TTL. See fanout.unattempted.
+        cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
+        ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
 
         if tenant_acl_active():
             visible_volumes = []
@@ -219,14 +283,18 @@ async def list_storage_volumes(
             volumes=all_volumes,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
         
-        # important: an outage must not be remembered as the answer. See instances.py.
-        if answered:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug("Cached storage volumes list for 180 seconds")
+        # important: an outage must not be remembered as the answer, and neither may a
+        # partial one: a cluster that failed its listing was cached as "no volumes" for
+        # 180 seconds. See instances.py.
+        if cacheable:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
+            logger.debug("Cached storage volumes list for %s seconds", ttl)
         else:
-            logger.warning("Not caching storage volumes list: no node answered")
+            logger.warning("Not caching storage volumes list: %s", fan.node_errors or "no node answered")
 
         return response
     except Exception as e:
@@ -247,27 +315,39 @@ async def get_storage_volume(
     ),
     host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
     pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
+    project: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Project that holds the volume (the row's project)"
+    ),
+    location: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Cluster member that holds it (the row's location)"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get details for a specific storage volume."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project or DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(safe_segment(pool))
-        volume = storage_pool.volumes.get(volume_type, volume_name)
-        used_by = filter_visible_lxd_references(host, volume.used_by or [])
+        row = _volume_node(client, pool, volume_type, volume_name).get(
+            params=_address_params(project, location) or None
+        ).json().get("metadata") or {}
+        used_by = filter_visible_lxd_references(host, row.get("used_by") or [])
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this storage volume")
         
+        loc = row.get("location") or ""
         return StorageVolumeInfo(
-            name=volume.name,
-            type=volume.type,
+            name=row.get("name") or volume_name,
+            type=row.get("type") or volume_type,
             pool=pool,
-            description=getattr(volume, 'description', '') or "",
-            config=volume.config or {},
+            description=row.get("description") or "",
+            config=row.get("config") or {},
             used_by=used_by,
-            content_type=getattr(volume, 'content_type', ''),
+            content_type=row.get("content_type") or "",
             node=host,
+            project=row.get("project") or project or DEFAULT_PROJECT,
+            location="" if loc == "none" else loc,
         )
     except HTTPException:
         # broad handler below converts it into a 500
@@ -379,23 +459,36 @@ async def update_storage_volume(
     pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
     config: Optional[Dict[str, str]] = Body(None),
     description: Optional[str] = Body(None),
+    project: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Project that holds the volume (the row's project)"
+    ),
+    location: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Cluster member that holds it (the row's location)"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update a storage volume."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project or DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(safe_segment(pool))
-        volume = storage_pool.volumes.get(volume_type, volume_name)
-        
+        node = _volume_node(client, pool, volume_type, volume_name)
+        params = _address_params(project, location) or None
+        current = node.get(params=params).json().get("metadata") or {}
+        body: Dict[str, object] = {}
         if config is not None:
-            volume.config = config
-        if description is not None and hasattr(volume, 'description'):
-            volume.description = description
-        
-        volume.save()
+            body["config"] = config
+        elif current.get("config") is not None:
+            body["config"] = current.get("config")
+        if description is not None:
+            body["description"] = description
+        elif current.get("description") is not None:
+            body["description"] = current.get("description")
+        # PATCH would merge; the previous pylxd save() sent the whole object, which is PUT
+        node.put(json=body, params=params)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_volumes")
@@ -461,26 +554,38 @@ async def delete_storage_volume(
     ),
     host: str = Query(..., pattern=LXD_NAME_PATTERN, description="Target host node"),
     pool: str = Query(..., pattern=LXD_VOLUME_NAME_PATTERN, description="Storage pool name"),
+    project: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Project that holds the volume (the row's project)"
+    ),
+    location: Optional[str] = Query(
+        None, pattern=LXD_NAME_PATTERN, description="Cluster member that holds it (the row's location)"
+    ),
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a storage volume."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project or DEFAULT_PROJECT):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         client = require_client(await client_for(lxd_service, host), host)
-        storage_pool = client.storage_pools.get(safe_segment(pool))
-        volume = storage_pool.volumes.get(volume_type, volume_name)
+        node = _volume_node(client, pool, volume_type, volume_name)
+        params = _address_params(project, location) or None
 
         # important: refuse before asking the daemon. LXD rejects an attached volume anyway,
         # but its message arrived here as a bare Exception and left as a 500, so an operator
         # error read as a server fault and the fix it needs was never stated. Unlike an image,
         # there is no force: an attached volume genuinely cannot be removed.
-        attached = list(getattr(volume, "used_by", None) or [])
+        current = node.get(params=params).json().get("metadata") or {}
+        attached = list(current.get("used_by") or [])
         if attached:
             raise HTTPException(status_code=409, detail=_in_use_detail(volume_name, attached))
 
-        volume.delete()
+        # important: on a clustered host a per-member pool holds one volume of this name per
+        # member. Without a target LXD refuses the ambiguity; the caller passes the row's
+        # location, and this never guesses a member.
+        node.delete(params=params)
 
         # Announce the lifecycle change to any subscribed add-on. Volumes have no operation in
         # the integrations proxy vocabulary, so this router is their only source: without it two
@@ -504,7 +609,7 @@ async def delete_storage_volume(
             details={"pool": pool, "type": volume_type}
         )
         
-        schedule_orcahub_event("volume.deleted", host, getattr(volume, "project", None), volume_name, resource_type="VOLUME")
+        schedule_orcahub_event("volume.deleted", host, project or DEFAULT_PROJECT, volume_name, resource_type="VOLUME")
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_volumes")
         return {

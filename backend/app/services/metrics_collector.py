@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional
 import threading
 
+from app.core import vault_status
 from app.core.blocking import BlockingTimeout, run_blocking
 
 logger = logging.getLogger(__name__)
@@ -468,9 +469,23 @@ class MetricsCollector:
                 clusters_path=settings.vault_clusters_path
             )
             
-            # Get all registered cluster IDs
-            cluster_ids = cert_manager.list_clusters()
-            
+            # Get all registered cluster IDs. A fresh read on purpose: this sweep runs in a
+            # thread every 30 s and is the one caller that should pay the Vault LIST budget,
+            # refreshing the list cache and the last-known memo for every request on the
+            # loop, and recording an outage before a request can meet it.
+            cluster_ids = cert_manager.list_clusters(use_cache=False)
+
+            # important: the whitelist behind get_node_names() was synced at boot and in the
+            # one worker that served a registration. Every other worker went on omitting a
+            # cluster registered after boot, even once this sweep had connected it, so the
+            # list pages named it unreachable from that worker until a restart. This sweep
+            # runs in every worker outside any request context, so the Vault list it holds
+            # is the unfiltered fleet. Guarded on the read having answered rather than on
+            # non-empty: a lost LIST must not blank it, and a legitimately empty registry
+            # (every cluster deregistered) must still clear it.
+            if vault_status.registry_readable() is not False:
+                self._lxd_service.connection_manager.sync_registered_clusters(cluster_ids)
+
             reconnected = 0
             
             for cluster_id in cluster_ids:

@@ -14,6 +14,9 @@ from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
 )
+from app.services.lxd.fanout import NodeRead, collect, unattempted
+from app.services.lxd.project_scope import ALL_PROJECTS_READ_TIMEOUT
+from app.models.schemas import FanoutReachability
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, get_tenant_acl
@@ -22,6 +25,8 @@ from app.core.cache import get_cache_manager
 from pydantic import BaseModel, Field
 from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
+from app.services.lxd.utils import wait_for_lxd_operation, write_timeout
+from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -39,6 +44,23 @@ def _serialize_pool_resources(resources) -> dict:
     }
 
 
+# Storage pool keys LXD stores per member (lxd/db/cluster/storage_pools.go,
+# NodeSpecificStorageConfig). On a cluster these go in the per-member define step; the daemon
+# refuses them in the cluster-wide create and refuses every other key in the define.
+MEMBER_SPECIFIC_POOL_KEYS = frozenset({
+    "size",
+    "source",
+    "source.wipe",
+    "volatile.initial_source",
+    "zfs.pool_name",
+    "lvm.thinpool_name",
+    "lvm.vg_name",
+})
+
+# A body naming a known-down cluster is right today and may be wrong once the healer
+# reconnects it, so it is remembered for one healer cadence rather than three minutes.
+DEGRADED_CACHE_TTL = 60
+
 router = APIRouter(
     prefix="/storage/pools",
     tags=["Storage Pools"],
@@ -47,6 +69,8 @@ router = APIRouter(
 
 # Thread pool for parallel operations
 _executor = ThreadPoolExecutor(max_workers=5)
+# a pool write on LXD 6.9 is an operation; see NETWORK_WRITE_WAIT_SECONDS in networks.py
+POOL_WRITE_WAIT_SECONDS = 120
 
 
 class StoragePoolInfo(BaseModel):
@@ -68,48 +92,46 @@ class StoragePoolCreateRequest(BaseModel):
     config: Dict[str, str] = Field(default_factory=dict, description="Pool configuration")
 
 
-class StoragePoolListResponse(BaseModel):
+class StoragePoolListResponse(FanoutReachability):
     """Response for listing storage pools."""
     total: int = Field(..., description="Total number of pools")
     pools: List[StoragePoolInfo] = Field(..., description="List of storage pools")
     nodes: List[str] = Field(..., description="List of nodes")
-    unreachable_nodes: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Nodes that could not be reached. Their entries are missing from this list, "
-            "so an unreachable node is distinguishable from one that has none."
-        ),
+
+
+def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> NodeRead[StoragePoolInfo]:
+    """Every storage pool on one cluster, in one request. Runs in the thread pool.
+
+    A storage pool is a cluster-wide object, so one recursion=1 listing carries every pool
+    with its driver, status and config; pylxd's manager listed at recursion 0 and synced each
+    pool afterwards. A failure of the listing itself propagates to the caller, which names the
+    cluster rather than reporting it as having no pools.
+    """
+    client = lxd_service.get_client_with_reconnect(node_name)
+    if client is None:
+        # important: unreachable is not empty. Returning a bare list here
+        # made a dead node indistinguishable from one with nothing.
+        raise LXDConnectionError(f"Could not connect to {node_name}")
+    response = client.api.storage_pools.get(
+        params={"recursion": 1}, timeout=ALL_PROJECTS_READ_TIMEOUT
     )
-
-
-def _fetch_pools_for_node(lxd_service: LXDService, node_name: str) -> List[StoragePoolInfo]:
-    """Fetch storage pools for a single node - runs in thread pool."""
-    pools_list = []
-    try:
-        client = lxd_service.get_client_with_reconnect(node_name)
-        if client is None:
-            # important: unreachable is not empty. Returning a bare list here
-            # made a dead node indistinguishable from one with nothing.
-            raise LXDConnectionError(f"Could not connect to {node_name}")
-        pools = client.storage_pools.all()
-        for pool in pools:
-            pools_list.append(StoragePoolInfo(
-                name=pool.name,
-                description=getattr(pool, 'description', '') or "",
-                driver=pool.driver,
-                config=pool.config or {},
-                used_by=pool.used_by or [],
-                status=getattr(pool, 'status', ''),
-                node=node_name
+    read: NodeRead[StoragePoolInfo] = NodeRead()
+    for row in response.json().get("metadata") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            read.rows.append(StoragePoolInfo(
+                name=row.get("name") or "",
+                description=row.get("description") or "",
+                driver=row.get("driver") or "",
+                config=row.get("config") or {},
+                used_by=row.get("used_by") or [],
+                status=row.get("status") or "",
+                node=node_name,
             ))
-    except LXDConnectionError:
-        # a missing client IS unreachability: let it through
-        raise
-    except Exception as e:
-        # important: not unreachability. See networks.py: an item
-        # vanishing mid-listing must not condemn the whole node.
-        logger.warning(f"Error listing storage pools on {node_name}: {e}")
-    return pools_list
+        except Exception as exc:  # noqa: BLE001 - one malformed row is named, not fatal
+            read.lost(f"pool {row.get('name', '?')}: {type(exc).__name__}")
+    return read
 
 
 @router.get(
@@ -145,23 +167,28 @@ async def list_storage_pools(
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        all_pools = []
         # important: two different things make a node absent, and both must be named.
         # A node can fail during the fan-out, or never be asked at all, because
         # connection_manager.get_node_names() returns only nodes with a live client while
         # the fleet is whatever Vault has registered. Reporting only the first kind left a
         # dead cluster silently missing rather than merely empty.
-        unreachable_nodes: List[str] = (
+        seeded: List[str] = (
             [] if host else sorted(set(lxd_service.get_node_names()) - set(nodes_to_query))
         )
-        answered = 0
-        for node_name, result in zip(nodes_to_query, results):
-            if isinstance(result, list):
-                answered += 1
-                all_pools.extend(result)
-            elif isinstance(result, Exception):
-                logger.warning(f"Error fetching pools: {result}")
-                unreachable_nodes.append(node_name)
+        unreachable_nodes: List[str] = list(seeded)
+        fan = collect(
+            nodes_to_query, results, noun="storage pools", reasons_visible=not tenant_acl_active()
+        )
+        unreachable_nodes.extend(fan.unreachable_nodes)
+        all_pools = fan.rows
+        # important: the seeding names two kinds of cluster, and only one of them may be
+        # remembered. A cluster this worker tried and found down is a correct answer, cached
+        # as it always was (a shorter TTL, so recovery shows within the healer's cadence). A
+        # cluster this worker has never tried, registered seconds ago, must not be: the cache
+        # is shared by every worker, and the one that did connect it would then serve
+        # "unreachable" for the whole TTL. See fanout.unattempted.
+        cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
+        ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
 
         if tenant_acl_active():
             visible_pools = []
@@ -176,14 +203,18 @@ async def list_storage_pools(
             pools=all_pools,
             nodes=lxd_service.connection_manager.get_node_names(),
             unreachable_nodes=unreachable_nodes,
+            partial_nodes=fan.partial_nodes,
+            node_errors=fan.node_errors,
         )
 
-        # important: an outage must not be remembered as the answer. See instances.py.
-        if answered:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
-            logger.debug("Cached storage pools list for 180 seconds")
+        # important: an outage must not be remembered as the answer, and neither may a
+        # partial one: a cluster that failed its listing was cached as "no pools" for
+        # 180 seconds. See instances.py.
+        if cacheable:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=ttl)
+            logger.debug("Cached storage pools list for %s seconds", ttl)
         else:
-            logger.warning("Not caching storage pools list: no node answered")
+            logger.warning("Not caching storage pools list: %s", fan.node_errors or "no node answered")
 
         return response
     except Exception as e:
@@ -338,12 +369,52 @@ async def create_storage_pool(
         client = lxd_service.get_client_with_reconnect(host)
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
-        pool = client.storage_pools.create({
-            "name": request.name,
-            "driver": request.driver,
-            "config": request.config,
-            "description": request.description
-        })
+        if is_clustered(client):
+            # important: on a cluster a pool must be DEFINED on every member first
+            # (POST ?target=<member>, carrying only the member-specific keys) and then
+            # CREATED cluster-wide with the rest. One cluster-wide POST answered
+            # 'Pool not pending on any node (use --target <node> first)' on a 3-member
+            # MicroCloud, so no pool could be created from the console there. The console
+            # sends one config, so every member is defined with the same source and size,
+            # which is how MicroCloud itself lays out its local pool.
+            member_config = {
+                k: v for k, v in (request.config or {}).items()
+                if k in MEMBER_SPECIFIC_POOL_KEYS
+            }
+            cluster_config = {
+                k: v for k, v in (request.config or {}).items()
+                if k not in MEMBER_SPECIFIC_POOL_KEYS
+            }
+            for member in cluster_member_names(client):
+                wait_for_lxd_operation(
+                    client,
+                    client.api.storage_pools.post(
+                        json={"name": request.name, "driver": request.driver, "config": member_config},
+                        params={"target": member},
+                        timeout=write_timeout(POOL_WRITE_WAIT_SECONDS),
+                    ),
+                    timeout=POOL_WRITE_WAIT_SECONDS,
+                )
+            # LXD 6.9 answers with an operation (storage_and_network_operations); reading the
+            # pool back before it settles is a 404 for a pool the daemon is still creating
+            wait_for_lxd_operation(
+                client,
+                client.api.storage_pools.post(json={
+                    "name": request.name,
+                    "driver": request.driver,
+                    "config": cluster_config,
+                    "description": request.description,
+                }, timeout=write_timeout(POOL_WRITE_WAIT_SECONDS)),
+                timeout=POOL_WRITE_WAIT_SECONDS,
+            )
+            pool = client.storage_pools.get(safe_segment(request.name))
+        else:
+            pool = client.storage_pools.create({
+                "name": request.name,
+                "driver": request.driver,
+                "config": request.config,
+                "description": request.description
+            })
         
         # Log activity: storage pool creation success
         activity_logger.log_activity(
@@ -418,7 +489,7 @@ async def update_storage_pool(
         if description is not None and hasattr(pool, 'description'):
             pool.description = description
         
-        pool.save()
+        pool.save(wait=True)
         
         # Readers hold a cached list; without this the change is invisible until the TTL.
         get_cache_manager().invalidate_resource_cache("storage_pools", "storage_pool_resources")
@@ -457,7 +528,7 @@ async def delete_storage_pool(
         if client is None:
             raise HTTPException(status_code=503, detail=f"Could not connect to {host}")
         pool = client.storage_pools.get(safe_segment(pool_name))
-        pool.delete()
+        pool.delete(wait=True)
         
         # Log activity: storage pool deletion success
         activity_logger.log_activity(

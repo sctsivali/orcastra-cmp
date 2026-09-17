@@ -566,7 +566,7 @@ function CertificatesContent() {
         }}
       >
         <DialogContent className="max-w-2xl">
-          <DialogHeader>
+          <DialogHeader className="pb-4">
             <DialogTitle>
               {showManualTrust ? "Complete Certificate Renewal" : "Renew Certificate"}
             </DialogTitle>

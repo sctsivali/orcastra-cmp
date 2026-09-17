@@ -1,6 +1,6 @@
 """An operator can pin a NIC's IPv4 from the console, and hand it back to DHCP.
 
-Chapter 5.1 of the EcoBytes audit. LXD's own web UI has no control for this, so the address of
+LXD's own web UI has no control for this, so the address of
 a database node or a DNS server was decided by editing YAML on the hypervisor over SSH. Setting
 it at create time is half the answer; an address planned against an IPAM catalogue also has to
 be changeable on an instance that already exists.

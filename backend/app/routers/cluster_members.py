@@ -5,7 +5,7 @@ Provides endpoints for listing cluster members in a MicroCloud setup.
 
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, HTTPException, Depends, Query
-from typing import List, Optional
+from typing import List, Optional, Tuple
 import logging
 
 import requests.exceptions as requests_exc
@@ -27,7 +27,10 @@ from app.models.schemas import (
 )
 
 from app.services.lxd.gpu import build_gpu_inventory
+from app.services.lxd.cpu_allocation import allocation_ratio, clamp_available
 from app.services.lxd.member_resources import (
+    PART_INSTANCES,
+    PART_STORAGE,
     collect_member_fanout,
     count_member_instances,
 )
@@ -42,6 +45,8 @@ from app.core.org_scope import (
 from app.core.tenant_visibility import tenant_acl_has_permission
 from app.services.lxd.lazy_client import client_for
 from app.core.lxd_path import safe_segment
+from app.services.lxd.node_resources import PoolReading
+from app.services.lxd.storage_model import summarise_cluster_storage
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +56,36 @@ _connect_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="member
 MEMBER_CONNECT_TIMEOUT: float = 30.0
 # A body carrying floors instead of measurements must not sit in the cache for a full minute.
 DEGRADED_CACHE_TTL: int = 10
+
+
+class MemberUnavailableError(Exception):
+    """The cluster's own record says this member is not Online, so it will not answer a read."""
+
+    def __init__(self, member_name: str, status: str, message: str) -> None:
+        super().__init__(f"Member '{member_name}' is {status}" + (f": {message}" if message else ""))
+        self.member_name, self.status, self.message = member_name, status, message
+
+
+def _member_record_status(client, member_name: str) -> Optional[Tuple[str, str]]:
+    """(status, message) as the cluster's member record has it, or None when it cannot be read."""
+    try:
+        record = client.api.cluster.members[safe_segment(member_name)].get().json().get("metadata") or {}
+    except Exception:
+        return None
+    return (str(record.get("status") or ""), str(record.get("message") or ""))
+
+
+def _refuse_offline_member(client, member_name: str) -> None:
+    """Refuse at once when the cluster reports the member as not Online.
+
+    important: a member the cluster itself reports as Offline never answers `?target=`: the
+    request hangs on the cluster until the pooled read timeout, and the dialog waited through
+    that and a retry for a generic failure. The member record answers at once, so ask it
+    first and let the operator read the cluster's own reason.
+    """
+    record = _member_record_status(client, member_name)
+    if record and record[0] and record[0].lower() != "online":
+        raise MemberUnavailableError(member_name, *record)
 
 
 def _percent(used: float, total: float) -> float:
@@ -234,18 +269,16 @@ async def get_cluster_member(
         response = client.api.cluster.members[safe_segment(member_name)].get()
         member_data = response.json().get("metadata", {})
         
-        # Parse roles
-        roles = []
-        if member_data.get("database", False):
-            roles.append("database-leader" if member_data.get("database") else "database")
-        
+        # important: LXD reports roles itself, as the list endpoint above already reads them.
+        # Deriving them from the `database` flag named every database member the leader,
+        # which is how a 3-member MicroCloud read as three leaders on the member page.
         return ClusterMember(
             server_name=member_data.get("server_name", member_name),
             url=member_data.get("url", ""),
             database=member_data.get("database", False),
             status=member_data.get("status", "Online"),
             message=member_data.get("message", "Fully operational"),
-            roles=roles,
+            roles=member_data.get("roles", []) or [],
             architecture=member_data.get("architecture"),
             failure_domain=member_data.get("failure_domain", "default"),
             description=member_data.get("description"),
@@ -308,6 +341,15 @@ async def get_member_resources(
         )
         client = require_client(raw_client, node)
 
+        await run_blocking(
+            _refuse_offline_member,
+            client,
+            member_name,
+            timeout=MEMBER_CONNECT_TIMEOUT,
+            label=f"member_record[{node}/{member_name}]",
+            executor=_connect_executor,
+        )
+
         fanout = await collect_member_fanout(client, node, member_name)
 
         cpu_info = fanout.resources_body.get("cpu", {}) or {}
@@ -339,8 +381,43 @@ async def get_member_resources(
 
         usage = count_member_instances(fanout.instances, member_name)
 
-        storage_total = sum(pool.space_total for pool in fanout.pools)
-        storage_used = sum(pool.space_used for pool in fanout.pools)
+        # Storage: a storage pool is a cluster-wide object, so the member's pool list carries
+        # the cluster's shared ceph pools on top of its own disks, and summing them gave each
+        # member the whole cluster's storage (local 1.7 TB reported as 12.4 TB). The readings
+        # are folded by summarise_cluster_storage, the same rule the node card uses: a local
+        # pool is this member's, a shared pool is the cluster's and is reported once, marked
+        # `scope: shared` with the members it is defined on.
+        fold = summarise_cluster_storage(
+            PoolReading(
+                member=member_name,
+                name=pool.name,
+                driver=pool.driver,
+                space_total=pool.space_total,
+                space_used=pool.space_used,
+            )
+            for pool in fanout.pools
+        )
+        pool_members = {pool.name: list(pool.members) for pool in fanout.pools}
+        storage_pools = []
+        storage_local_total = storage_local_used = 0
+        storage_shared_total = storage_shared_used = 0
+        for pool in fold.pools:
+            entry = dict(pool)
+            if entry.get("scope") == "shared":
+                entry["members"] = pool_members.get(str(entry["name"])) or entry.get("members") or []
+                storage_shared_total += int(entry["space_total"])
+                storage_shared_used += int(entry["space_used"])
+            else:
+                storage_local_total += int(entry["space_total"])
+                storage_local_used += int(entry["space_used"])
+            storage_pools.append(entry)
+        # storage_total keeps its meaning of "the sum of the pool rows below": what this member
+        # can place work on, shared pools included. The local and shared subtotals are what
+        # make the per-member figures additive across the cluster.
+        storage_total = storage_local_total + storage_shared_total
+        storage_used = storage_local_used + storage_shared_used
+        storage_partial = any(part.startswith(PART_STORAGE) for part in fanout.degraded_parts)
+        instances_partial = PART_INSTANCES in fanout.degraded_parts
 
         # GPU capacity, allocation and card detail from the canonical inventory, scoped to
         # this member. Counting cards here by hand is what made this endpoint report two GPUs
@@ -353,8 +430,14 @@ async def get_member_resources(
             member_name=member_name,
             cpu_total=cpu_total,
             cpu_used=usage.cpu_used,
-            cpu_available=cpu_total - usage.cpu_used,
+            # Allocation, not utilisation, so it may exceed the thread count: 307 vCPUs on 80
+            # threads is a legitimate KVM over-commit. The remainder is clamped and the ratio
+            # is what the UI presents; a negative "available" and a 383 % bar were the bug.
+            cpu_available=clamp_available(cpu_total, usage.cpu_used),
             cpu_usage_percent=_percent(usage.cpu_used, cpu_total),
+            cpu_allocated=usage.cpu_used,
+            cpu_allocation_ratio=allocation_ratio(usage.cpu_used, cpu_total),
+            cpu_overcommitted=usage.cpu_used > cpu_total,
             memory_total=memory_total,
             memory_used=memory_used,
             memory_available=memory_total - memory_used,
@@ -374,9 +457,15 @@ async def get_member_resources(
             storage_used=storage_used,
             storage_available=storage_total - storage_used,
             storage_usage_percent=_percent(storage_used, storage_total),
-            storage_pools=[pool.as_dict() for pool in fanout.pools],
+            storage_local_total=storage_local_total,
+            storage_local_used=storage_local_used,
+            storage_shared_total=storage_shared_total,
+            storage_shared_used=storage_shared_used,
+            storage_partial=storage_partial,
+            storage_pools=storage_pools,
             instances_count=usage.count,
             instances_running=usage.running,
+            instances_partial=instances_partial,
             collected_at=fanout.collected_at,
             degraded=fanout.degraded,
             degraded_parts=fanout.degraded_parts,
@@ -406,6 +495,9 @@ async def get_member_resources(
         # important: let require_client's 503 through, so an offline cluster does not read as a
         # server fault. Without this the broad handler below converts it into a 500.
         raise
+    except MemberUnavailableError as e:
+        logger.info(f"Member {member_name} on {node} is {e.status}: {e.message}")
+        raise HTTPException(status_code=503, detail=str(e)) from None
     except BlockingTimeout:
         raise HTTPException(
             status_code=504,

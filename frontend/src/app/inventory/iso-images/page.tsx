@@ -14,12 +14,13 @@ import {
   TableHead,
   TableHeader,
   TableRow } from "@/components/ui/table";
-import { TableEmptyRow } from "@/components/ui/table-text";
+import { EMPTY_VALUE, TableEmptyRow } from "@/components/ui/table-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { IsoUploadDialog } from "@/components/iso-upload-dialog";
 import { useDeleteStorageVolume, useStorageVolumes } from "@/hooks/use-lxd";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
@@ -63,13 +64,24 @@ const ISOS = defineTable<any>()({
       facetSpec: { role: "node", primary: true } },
     { field: "used_by", label: "Used By", sort: (i) => i.used_by?.length ?? 0, filter: fromSort("number", { unit: "count", presets: [{ label: "None", min: null, max: 0 }, { label: "Any", min: 1, max: null }] }) },
     {
+      field: "project",
+      label: "Project",
+      // The project that HOLDS the image; `projects` below answers who consumes it.
+      sort: (i) => i.project ?? "",
+      facet: (i) => i.project ?? "",
+      facetSpec: { role: "project", primary: true },
+    },
+    {
+      // filter-coverage: this is not the project dimension. It answers which projects
+      // CONSUME the image, derived from used_by, while the "project" column above answers
+      // which one holds it, and that is the column carrying the project role.
       field: "projects",
-      label: "Projects",
+      label: "Used By Projects",
       // The one page in the used_by family that never had this column, though the rows have
       // always carried used_by. Same shape as storage-volumes.
       sort: (i) => projectsFromUsedBy(i.used_by).length,
       facet: (i) => projectsFromUsedBy(i.used_by),
-      facetSpec: { role: "project", emptyLabel: "(no project)" },
+      facetSpec: { emptyLabel: "(no project)" },
     },
     {
       field: "usage",
@@ -82,6 +94,10 @@ const ISOS = defineTable<any>()({
 function IsoImagesContent() {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStorageVolumes();
   const allVolumes = (data as any)?.volumes || [];
+  // The ISO list is the volume list filtered, so a cluster the volume read lost is a
+  // cluster whose ISOs are missing here too. Without this banner the page said "No ISO
+  // images yet" for a cluster holding two.
+  const reach = reachabilityOf(data);
   // ISOs are custom storage volumes with content-type "iso".
   const isos = useMemo(
     () => allVolumes.filter((v: any) => v.content_type === "iso"),
@@ -119,7 +135,7 @@ function IsoImagesContent() {
   );
 
   // Header, cell and the empty row's width move together; a mismatch renders a short row.
-  const columnCount = 4 + (nodes.length > 0 ? 1 : 0) + (canManage ? 1 : 0);
+  const columnCount = 5 + (nodes.length > 0 ? 1 : 0) + (canManage ? 1 : 0);
 
   const availableFields = useMemo(
     () =>
@@ -265,6 +281,9 @@ function IsoImagesContent() {
         </div>
       </div>
 
+      <UnreachableNodesBanner noun="ISO images" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="ISO images" nodes={reach.partial} reasons={reach.reasons} partial />
+
       <Card>
         <CardHeader className="space-y-4">
           <CardTitle>ISO Images</CardTitle>
@@ -280,7 +299,8 @@ function IsoImagesContent() {
                   <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 )}
                 <SortableTableHead label="Used By" field="used_by" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Used By Projects" field="projects" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                 {/* Not sortable and not a value, so it carries its name for a screen reader
                     rather than a visible label that would read as another column of data. */}
                 {canManage && (
@@ -319,6 +339,7 @@ function IsoImagesContent() {
                         onOpen={() => usedBy.openUsage(isoSubject(v))}
                       />
                     </TableCell>
+                    <TableCell>{v.project || EMPTY_VALUE}</TableCell>
                     <TableCell>
                       <ProjectsCell
                         usedBy={v.used_by}

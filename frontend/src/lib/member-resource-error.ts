@@ -46,6 +46,21 @@ export function memberResourceFailure(
   const member = ctx.member || "this member";
   const status = error instanceof APIError ? error.status : null;
 
+  // The cluster's own verdict on the member ("Member 'mc3' is Offline: No heartbeat for 27s")
+  // arrives as a 503 too, but it is not the cluster being down: the cluster answered, at once,
+  // and said the member will not. A generic line here sent the operator looking for a dashboard
+  // fault when the member was simply powered off.
+  const detail = error instanceof APIError && typeof error.detail === "string" ? error.detail : "";
+  if (status === 503 && /^Member '.+' is \S+/.test(detail)) {
+    return {
+      icon: ServerOff,
+      title: "This member could not be read",
+      description: detail,
+      retryable: true,
+      gone: false,
+    };
+  }
+
   switch (status) {
     case 503:
       return {

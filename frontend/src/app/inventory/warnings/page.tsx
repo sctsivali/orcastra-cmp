@@ -6,7 +6,7 @@ import { IntentLink } from "@/components/navigation/route-intent";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -172,7 +172,7 @@ function WarningsContent() {
   const allWarnings = useMemo(() => (data as any)?.warnings || [], [data]);
   // Clusters that never answered: their warnings are absent from the list, so warn rather
   // than showing a shorter list with nothing to explain it.
-  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+  const reach = reachabilityOf(data);
 
   // Certificate and node warnings from system warnings
   const certWarnings = useMemo(() => systemWarnings?.certificate_warnings || [], [systemWarnings]);
@@ -351,7 +351,8 @@ function WarningsContent() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="warnings" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="warnings" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="warnings" nodes={reach.partial} reasons={reach.reasons} partial />
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-4">

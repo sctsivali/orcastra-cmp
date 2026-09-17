@@ -80,7 +80,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
     };
   }, []);
 
-  const { data: poolsResp } = useStoragePools(node || undefined);
+  const { data: poolsResp } = useStoragePools(node || undefined, { enabled: !!node });
   const poolOptions = ((poolsResp as any)?.pools || [])
     .filter((p: any) => (p.node ? p.node === node : true))
     .map((p: any) => ({ value: p.name, label: p.name }));
@@ -211,8 +211,9 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
               />
             </div>
             <div className="grid gap-2">
-              <Label>Storage pool *</Label>
+              <Label htmlFor="iso-pool">Storage pool *</Label>
               <SearchableSelect
+                id="iso-pool"
                 value={pool}
                 onValueChange={setPool}
                 options={poolOptions}

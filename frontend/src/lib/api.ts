@@ -3,6 +3,12 @@
  */
 
 import {
+  IPAMListResponse,
+  NetworkACLDetail,
+  ProfileCreateRequest,
+  ProfileDetail,
+  ProfileUpdateRequest,
+  ProfileWriteResponse,
   VMListResponse,
   VMInfo,
   VMCreateRequest,
@@ -18,6 +24,7 @@ import {
   NodeResources,
   GpuCardListResponse,
   ProjectListResponse,
+  ProjectUsageResponse,
   ProjectCreateRequest,
   ProjectCreateResponse,
   InstanceMetrics,
@@ -193,6 +200,16 @@ function clearAuthFailureState() {
 }
 
 // Timeout wrapper for fetch with AbortController
+/** Retry-After as whole seconds: an integer delay or an HTTP-date, undefined when absent or bad. */
+function parseRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const value = header.trim();
+  if (/^\d+$/.test(value)) return Math.max(0, parseInt(value, 10));
+  const at = Date.parse(value);
+  if (Number.isNaN(at)) return undefined;
+  return Math.max(0, Math.ceil((at - Date.now()) / 1000));
+}
+
 async function fetchWithTimeout(
   url: string,
   options: RequestInit = {},
@@ -386,6 +403,13 @@ async function _fetchAPIInternal<T>(
         errorMessage = JSON.stringify(errorDetail);
       }
 
+      // The same-origin proxy forwards upstream headers, so Retry-After reaches the browser.
+      // A 429 used to surface as the bare detail; the picker notices count down from this.
+      const retryAfter = parseRetryAfter(response.headers.get('Retry-After'));
+      if (response.status === 429) {
+        errorMessage = `Rate limited by the API. Try again in ${retryAfter ?? 30} s.`;
+      }
+
       // On 401, trigger session refresh and retry once after token is refreshed
       if (response.status === 401 && typeof window !== 'undefined') {
         const refreshTriggered = handle401();
@@ -408,10 +432,10 @@ async function _fetchAPIInternal<T>(
           return fetchAPI<T>(endpoint, options, timeoutMs, true);
         }
 
-        throw new APIError(errorMessage, response.status, errorDetail);
+        throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
       }
 
-      throw new APIError(errorMessage, response.status, errorDetail);
+      throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
     }
 
     // a request got through, so whatever was failing has cleared
@@ -649,6 +673,12 @@ export const projectAPI = {
 
   list: async (host: string): Promise<ProjectListResponse> => {
     return fetchAPI<ProjectListResponse>(`/projects/${encodeURIComponent(host)}`);
+  },
+
+  usage: async (host: string, project: string): Promise<ProjectUsageResponse> => {
+    return fetchAPI<ProjectUsageResponse>(
+      `/projects/${encodeURIComponent(host)}/${encodeURIComponent(project)}/usage`
+    );
   },
 
   create: async (data: ProjectCreateRequest): Promise<ProjectCreateResponse> => {
@@ -1102,25 +1132,27 @@ export const profileAPI = {
   },
 
   get: async (name: string, host: string, project?: string) => {
-    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }));
+    return fetchAPI<ProfileDetail>(withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }));
   },
 
-  create: async (data: any, host: string, project?: string) => {
-    return fetchAPI(withQuery("/profiles", { host, project }), {
+  create: async (data: ProfileCreateRequest, host: string, project?: string) => {
+    return fetchAPI<ProfileWriteResponse>(withQuery("/profiles", { host, project }), {
       method: "POST",
       body: JSON.stringify(data),
     });
   },
 
-  update: async (name: string, host: string, data: any, project?: string) => {
-    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }), {
+  /** `etag` is what the single read answered; with it the write is refused (412) if the profile changed since. */
+  update: async (name: string, host: string, data: ProfileUpdateRequest, project?: string, etag?: string | null) => {
+    return fetchAPI<ProfileWriteResponse>(withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }), {
       method: "PUT",
       body: JSON.stringify(data),
+      ...(etag ? { headers: { "If-Match": etag } } : {}),
     });
   },
 
   delete: async (name: string, host: string, project?: string) => {
-    return fetchAPI(withQuery(`/profiles/${name}`, { host, project }), {
+    return fetchAPI(withQuery(`/profiles/${encodeURIComponent(name)}`, { host, project }), {
       method: "DELETE",
     });
   },
@@ -1189,7 +1221,7 @@ export const networkACLAPI = {
   },
 
   get: async (name: string, host: string, project?: string) => {
-    return fetchAPI(withQuery(`/network-acls/${name}`, { host, project }));
+    return fetchAPI<NetworkACLDetail>(withQuery(`/network-acls/${name}`, { host, project }));
   },
 
   create: async (data: any, host: string, project?: string) => {
@@ -1199,10 +1231,12 @@ export const networkACLAPI = {
     });
   },
 
-  update: async (name: string, host: string, data: any, project?: string) => {
+  /** `etag` is what the single read answered; with it the write is refused (412) if the ACL changed since. */
+  update: async (name: string, host: string, data: any, project?: string, etag?: string | null) => {
     return fetchAPI(withQuery(`/network-acls/${name}`, { host, project }), {
       method: "PUT",
       body: JSON.stringify(data),
+      ...(etag ? { headers: { "If-Match": etag } } : {}),
     });
   },
 
@@ -1702,7 +1736,8 @@ export const clusterAPI = {
 export const ipamAPI = {
   list: async (host?: string, opts: ReadOptions = {}) => {
     const url = host ? `/ipam?host=${encodeURIComponent(host)}` : "/ipam";
-    return fetchRead(url, opts);
+    // three all-projects reads plus one per project per node: the heavy budget on a fresh read
+    return fetchHeavyRead<IPAMListResponse>(url, opts);
   },
 };
 

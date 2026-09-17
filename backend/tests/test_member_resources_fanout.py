@@ -201,7 +201,11 @@ def test_the_fake_reproduces_the_lazy_sync_defect():
 def test_a_member_read_never_lazily_syncs_an_instance():
     client = FakeClient()
     fanout = _collect(client)
-    assert client.instance_recursions == [2], (
+    # recursion=1 carries expanded_config, expanded_devices, location and status, which is
+    # everything the readers duck-type; recursion=2 (state, snapshots, backups on top) was
+    # measured at 4.6 s against 0.8 s on a 62-instance MicroCloud. What must stay true is that
+    # the list asks for recursion at all, so no attribute read below becomes its own GET.
+    assert client.instance_recursions == [1], (
         f"the instance list must ask for recursion, got {client.instance_recursions}"
     )
     assert client.instance_all_projects == ["true"], (

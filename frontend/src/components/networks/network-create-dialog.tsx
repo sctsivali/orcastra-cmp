@@ -1,16 +1,18 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { Loader2 } from "lucide-react";
 
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { BackLink } from "@/components/ui/back-link";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -22,50 +24,75 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useToast } from "@/hooks/use-toast";
 import { useCreateNetwork, useNetworks, useProjects } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
-import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import { NetworkCreateRequest } from "@/types/api";
-import { Loader2 } from "lucide-react";
+import type { NetworkCreateRequest } from "@/types/api";
+import { AddressField } from "@/components/networks/address-field";
+import {
+  NETWORK_TYPES,
+  ipv4AddressError,
+  ipv6AddressError,
+  networkNameError,
+  networkNameMax,
+  type IpMode,
+  type NetworkType,
+} from "@/components/networks/network-rules";
 
-type IpMode = "auto" | "none" | "custom";
-
-/** LXD wants a real CIDR: "not-an-ip", a bare address, or /33 must be rejected. */
-function isValidIpv4Cidr(value: string): boolean {
-  const m = value.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
-  if (!m) return false;
-  const octets = [m[1], m[2], m[3], m[4]].map(Number);
-  if (octets.some((o) => o > 255)) return false;
-  const prefix = Number(m[5]);
-  return prefix >= 0 && prefix <= 32;
+interface NetworkCreateDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Called after a successful create, once the dialog has closed. */
+  onSaved?: () => void;
 }
 
-function isValidIpv6Cidr(value: string): boolean {
-  const m = value.trim().match(/^([0-9a-fA-F:]+)\/(\d{1,3})$/);
-  if (!m) return false;
-  const prefix = Number(m[2]);
-  if (prefix > 128) return false;
-  const addr = m[1];
-  if ((addr.match(/::/g) || []).length > 1) return false; // at most one "::"
-  const groups = addr.split(":").filter((g) => g !== "");
-  if (groups.length === 0 || groups.length > 8) return false;
-  return groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g));
+/**
+ * Create Network as a dialog on the Networks page, the same shape as Create Network ACL and
+ * Upload ISO. The form body is a child of DialogContent on purpose: Radix unmounts it while
+ * the dialog is closed, so its node, project and uplink queries (useNetworks is always enabled
+ * and polls the fleet) run only while an operator is actually creating a network, and every
+ * reopen starts from a blank form.
+ */
+export function NetworkCreateDialog({ open, onOpenChange, onSaved }: NetworkCreateDialogProps) {
+  const [busy, setBusy] = useState(false);
+
+  // A create that resolves after the body unmounted would drop its error on the floor, so
+  // Escape, the overlay, the X and Cancel are all refused while the request is in flight.
+  const handleOpenChange = (next: boolean) => {
+    if (!next && busy) return;
+    onOpenChange(next);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-w-3xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0 pr-8 pb-4">
+          <DialogTitle>Create Network</DialogTitle>
+          <DialogDescription>Create a Bridge or OVN network on a node.</DialogDescription>
+        </DialogHeader>
+        <NetworkCreateBody
+          onBusyChange={setBusy}
+          onDone={() => {
+            onOpenChange(false);
+            onSaved?.();
+          }}
+          onCancel={() => handleOpenChange(false)}
+        />
+      </DialogContent>
+    </Dialog>
+  );
 }
 
-// Orcastra only supports Bridge and OVN networks.
-const NETWORK_TYPES = [
-  { value: "bridge", label: "Bridge" },
-  { value: "ovn", label: "OVN" },
-];
+interface NetworkCreateBodyProps {
+  onBusyChange: (busy: boolean) => void;
+  onDone: () => void;
+  onCancel: () => void;
+}
 
-export function NetworkCreateForm() {
-  // note: navigate() rather than a bare push, so the leaving transition raises the
-  // global progress bar. These hops follow a mutation and are the slowest in the app.
-  const { navigate } = useNavigationProgress();
+function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBodyProps) {
   const { toast } = useToast();
-
   const nodePicker = useNodePickerOptions();
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
   const createNetwork = useCreateNetwork();
@@ -73,7 +100,7 @@ export function NetworkCreateForm() {
 
   const [node, setNode] = useState("");
   const [project, setProject] = useState("default");
-  const [type, setType] = useState<"bridge" | "ovn">("bridge");
+  const [type, setType] = useState<NetworkType>("bridge");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [uplink, setUplink] = useState("");
@@ -92,7 +119,7 @@ export function NetworkCreateForm() {
   // interfaces and the loopback. On one node in this fleet that is 11 unusable candidates out
   // of 23. Picking one produced a create the daemon rejected, and an instance that never
   // finished coming up.
-  const { data: networksResp } = useNetworks(node || undefined, "default");
+  const { data: networksResp } = useNetworks(node || undefined, "default", { enabled: !!node });
   const uplinkOptions = ((networksResp as any)?.networks || [])
     .filter((n: any) => (n.node ? n.node === node : true))
     .filter((n: any) => n.managed && (n.type === "bridge" || n.type === "physical"))
@@ -109,36 +136,11 @@ export function NetworkCreateForm() {
     return Array.from(seen).sort();
   })();
 
-  // Bridge network names become Linux interface names (<= 15 chars). OVN names
-  // don't map to a host interface, so they can be longer. LXD also rejects a
-  // leading hyphen and all-digit names, so require a leading letter.
-  const nameMax = type === "bridge" ? 15 : 63;
-  const nameError =
-    name === ""
-      ? ""
-      : !/^[a-zA-Z][a-zA-Z0-9-]*$/.test(name)
-        ? "Must start with a letter and contain only letters, numbers and hyphens."
-        : name.length > nameMax
-          ? `Name must be at most ${nameMax} characters (${type}).`
-          : "";
+  const nameMax = networkNameMax(type);
+  const nameError = networkNameError(name, type);
   const nameValid = name !== "" && nameError === "";
-
-  const ipv4Error =
-    ipv4Mode !== "custom"
-      ? ""
-      : ipv4Custom.trim() === ""
-        ? "Enter an IPv4 address in CIDR notation."
-        : !isValidIpv4Cidr(ipv4Custom)
-          ? "Invalid IPv4 CIDR, for example 10.10.10.1/24."
-          : "";
-  const ipv6Error =
-    ipv6Mode !== "custom"
-      ? ""
-      : ipv6Custom.trim() === ""
-        ? "Enter an IPv6 address in CIDR notation."
-        : !isValidIpv6Cidr(ipv6Custom)
-          ? "Invalid IPv6 CIDR, for example fd42:1:2:3::1/64."
-          : "";
+  const ipv4Error = ipv4AddressError(ipv4Mode, ipv4Custom);
+  const ipv6Error = ipv6AddressError(ipv6Mode, ipv6Custom);
   const uplinkError =
     type === "ovn" && !uplink ? "Select an uplink network for the OVN network." : "";
   const projectError =
@@ -167,6 +169,7 @@ export function NetworkCreateForm() {
     submitInFlightRef.current = true;
     setError(null);
     setSubmitting(true);
+    onBusyChange(true);
     try {
       const config: Record<string, string> = {
         "ipv4.address": ipv4Mode === "custom" ? ipv4Custom.trim() : ipv4Mode,
@@ -192,83 +195,34 @@ export function NetworkCreateForm() {
             ? `"${name}" created on ${node}.`
             : `"${name}" created on ${node} in project ${landed}.`,
       });
-      navigate("/inventory/networks");
+      onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create network");
     } finally {
       submitInFlightRef.current = false;
       setSubmitting(false);
+      onBusyChange(false);
     }
   };
 
-  const ipField = (
-    label: string,
-    mode: IpMode,
-    setMode: (m: IpMode) => void,
-    custom: string,
-    setCustom: (v: string) => void,
-    which: string,
-    fieldError: string,
-  ) => (
-    <div className="grid gap-2">
-      <Label>{label}</Label>
-      <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-        <Select value={mode} onValueChange={(v) => setMode(v as IpMode)}>
-          <SelectTrigger className="sm:w-40">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="auto">Auto</SelectItem>
-            <SelectItem value="none">None</SelectItem>
-            <SelectItem value="custom">Custom</SelectItem>
-          </SelectContent>
-        </Select>
-        {mode === "custom" && (
-          <Input
-            value={custom}
-            onChange={(e) => setCustom(e.target.value)}
-            placeholder={
-              which === "IPv4" ? "10.10.10.1/24" : "fd42:1:2:3::1/64"
-            }
-            className="flex-1"
-            aria-invalid={!!fieldError}
-          />
-        )}
-      </div>
-      {fieldError ? (
-        <p className="text-xs text-destructive">{fieldError}</p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Use CIDR notation. <span className="font-mono">auto</span> generates an
-          unused subnet, <span className="font-mono">none</span> disables {which}.
-        </p>
-      )}
-    </div>
-  );
-
   return (
-    <div className="space-y-6 animate-fade-in">
-      <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:gap-4">
-        <BackLink href="/inventory/networks" label="Networks" />
-        <div className="min-w-0">
-          <h1 className="text-3xl font-bold">Create New Network</h1>
-          <p className="text-muted-foreground mt-2">
-            Create a Bridge or OVN network on a node
-          </p>
-        </div>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>General</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    <>
+      <DialogBody className="space-y-6 pr-2">
+        <section className="space-y-4">
+          <h3 className="text-sm font-semibold">General</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
               <Label>Node *</Label>
               <SearchableSelect
                 value={node}
-                onValueChange={setNode}
+                onValueChange={(next) => {
+                  if (next === node) return;
+                  setNode(next);
+                  // The uplink and the project were read from the previous node; a stale
+                  // uplink from node A used to survive a switch to node B and pass canSubmit.
+                  setUplink("");
+                  setProject("default");
+                }}
                 options={nodeOptions}
                 placeholder={loadingNodes ? "Loading..." : "Select node"}
                 searchPlaceholder="Search nodes..."
@@ -290,7 +244,7 @@ export function NetworkCreateForm() {
               <Select
                 value={type}
                 onValueChange={(v) => {
-                  const next = v as "bridge" | "ovn";
+                  const next = v as NetworkType;
                   setType(next);
                   // LXD refuses every type except OVN outside the default project, so
                   // leaving a project selected here would build a create it always rejects.
@@ -313,22 +267,16 @@ export function NetworkCreateForm() {
 
           <div className="grid gap-2">
             <Label htmlFor="net-project">Project</Label>
-            <Select
+            <SearchableSelect
+              id="net-project"
               value={project}
               onValueChange={setProject}
+              options={projectOptions.map((p) => ({ value: p, label: p }))}
+              placeholder="default"
+              searchPlaceholder="Search projects..."
+              emptyText="No projects found."
               disabled={type !== "ovn" || !node}
-            >
-              <SelectTrigger id="net-project">
-                <SelectValue placeholder="default" />
-              </SelectTrigger>
-              <SelectContent>
-                {projectOptions.map((p) => (
-                  <SelectItem key={p} value={p}>
-                    {p}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            />
             {projectError ? (
               <p className="text-xs text-destructive">{projectError}</p>
             ) : (
@@ -402,29 +350,41 @@ export function NetworkCreateForm() {
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Addresses</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {ipField("IPv4 address", ipv4Mode, setIpv4Mode, ipv4Custom, setIpv4Custom, "IPv4", ipv4Error)}
-          {ipField("IPv6 address", ipv6Mode, setIpv6Mode, ipv6Custom, setIpv6Custom, "IPv6", ipv6Error)}
-        </CardContent>
-      </Card>
+        <section className="space-y-4">
+          <h3 className="text-sm font-semibold">Addresses</h3>
+          <AddressField
+            label="IPv4 address"
+            mode={ipv4Mode}
+            onModeChange={setIpv4Mode}
+            custom={ipv4Custom}
+            onCustomChange={setIpv4Custom}
+            which="IPv4"
+            error={ipv4Error}
+          />
+          <AddressField
+            label="IPv6 address"
+            mode={ipv6Mode}
+            onModeChange={setIpv6Mode}
+            custom={ipv6Custom}
+            onCustomChange={setIpv6Custom}
+            which="IPv6"
+            error={ipv6Error}
+          />
+        </section>
 
-      {error && (
-        <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-          {error}
-        </div>
-      )}
+        {error && (
+          <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
+            {error}
+          </div>
+        )}
+      </DialogBody>
 
-      <div className="flex items-center justify-end gap-3">
+      <DialogFooter className="shrink-0 pt-4 sm:items-center">
         {/* A disabled button shows no title tooltip, so state the reason inline. */}
         {!canSubmit && !submitting && (
-          <span className="text-xs text-muted-foreground">
+          <span className="text-xs text-muted-foreground sm:mr-auto">
             {isReadOnly
               ? "Disabled in read-only mode"
               : !node
@@ -434,17 +394,14 @@ export function NetworkCreateForm() {
                   : nameError || ipv4Error || ipv6Error || uplinkError || ""}
           </span>
         )}
-        <Button
-          variant="outline"
-          onClick={() => navigate("/inventory/networks")}
-        >
+        <Button variant="outline" onClick={onCancel} disabled={submitting}>
           Cancel
         </Button>
         <Button onClick={submit} disabled={!canSubmit}>
           {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           Create
         </Button>
-      </div>
-    </div>
+      </DialogFooter>
+    </>
   );
 }

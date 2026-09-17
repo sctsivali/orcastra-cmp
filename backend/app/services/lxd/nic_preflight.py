@@ -1,17 +1,17 @@
 """Refusing an instance create whose network the target project cannot reach.
 
-BUG-ORC-002. The create form offered every network the default project held, whatever project
+The create form offered every network the default project held, whatever project
 the instance was going into, so an operator could pick one the project cannot see. LXD accepts
 the create as an async operation and only fails the background job, and the dashboard's
 placeholder row has nothing to clear it, so the instance sat at "Creating..." with empty
-columns and no reason shown. The audit is explicit about the fix it wants: reject at the
-boundary with a clear message, or succeed.
+columns and no reason shown. The fix is to reject at the boundary with a clear message, or
+succeed.
 
 Two things the obvious version of this check gets wrong:
 
 - The NIC usually is not in the request. It comes from a profile, because the form submits
   `profiles: ["default"]` and lets the project's default profile supply eth0. Checking only
-  `devices` passes exactly the case the audit filed.
+  `devices` passes exactly the case seen in the field.
 - A NIC can name its network with `parent` instead of `network`. The console already reads
   both when it displays inherited NICs, so the check has to as well.
 """

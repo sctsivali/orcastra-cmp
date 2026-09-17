@@ -11,6 +11,7 @@ Reachability is a one-round-trip question. `GET {endpoint}/1.0` with the client 
 returns `metadata.auth`, which is the entire online / not_authorized / offline discriminator.
 """
 
+import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -25,7 +26,7 @@ from app.core.cache import (
 )
 from app.core.config import get_settings
 from app.core.node_metadata import get_node_metadata_store
-from app.core.org_scope import get_scope_cache_key
+from app.core.org_scope import apply_cluster_filter, get_scope_cache_key
 from app.core.single_flight import single_flight
 from app.core.type_utils import resolve_cluster_type
 from app.models.cluster_status import AvailabilityReason, ClusterStatus, derive_status
@@ -356,6 +357,10 @@ def _build_response(cache, cache_key: str, rows, source: str) -> ClusterAvailabi
     return response
 
 
+class RegistryUnavailable(Exception):
+    """The cluster registry could not be read and nothing is known from before."""
+
+
 @single_flight("nodes:availability")
 async def resolve_availability(
     lxd_service, *, fresh: bool = False
@@ -404,9 +409,18 @@ async def resolve_availability(
                 cache, availability_key, project_from_nodes_body(nodes_body), "nodes_cache"
             )
 
+    # note: the registry read is a Vault LIST with its own budget (core/vault_client), so it
+    # runs off the loop; inline it parked every request for the length of a lost LIST. A lost
+    # registry with nothing known is the one case this cannot answer: probing an empty fleet
+    # would report "no clusters". While the last known registry is served the probe runs over
+    # it like any other read.
+    registry = await asyncio.to_thread(lxd_service.cert_manager.read_registry)
+    if not registry.readable and registry.source is None:
+        raise RegistryUnavailable()
+    cluster_ids = apply_cluster_filter(registry.cluster_ids)
     rows = await run_blocking(
         probe_clusters,
-        lxd_service.get_node_names(),
+        cluster_ids,
         cert_manager=lxd_service.cert_manager,
         connection_manager=lxd_service.connection_manager,
         settings=get_settings(),

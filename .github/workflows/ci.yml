@@ -108,10 +108,15 @@ jobs:
       - name: Unreachable-cluster banners
         run: node scripts/checks/check-unreachable-banner.mjs .
       # A control that asks an operator to choose a cluster must say whether that cluster is
-      # answering. The vocabulary existed; four pickers were simply never wired to it, and two
-      # of them hid the unreachable clusters instead of marking them.
+      # answering, and hand the hook's options to SearchableSelect rather than a plain Select.
+      # The vocabulary existed; four pickers were simply never wired to it, and two of them hid
+      # the unreachable clusters instead of marking them.
       - name: Node picker status coverage
         run: node scripts/checks/check-node-picker-status.mjs .
+      # A list an API returns with no upper bound is a SearchableSelect, never a plain Select;
+      # the project picker on the create form outgrew its popover on one fleet.
+      - name: Long-list selects
+        run: node scripts/checks/check-long-list-selects.mjs .
       # The nav hides a route by role; the route itself must also refuse it. Two of the seven
       # partner destinations shipped with no page-level gate at all.
       - name: Role gates

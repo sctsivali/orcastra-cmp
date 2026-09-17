@@ -14,16 +14,20 @@ from app.models.schemas import VMInfo
 from app.services.lxd.nic_preflight import NicPreflightError, check_nics
 from app.core.config import get_settings
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from .project_limits import project_limit_from_lxd_error
 from .exceptions import (
     LXDConnectionError,
     LXDLocalStorageError,
     LXDOperationError,
     LXDGracefulTimeoutError,
     LXDSnapshotExistsError,
+    LXDProjectLimitError,
 )
 from .utils import (
     parse_vm_status,
     extract_ip_addresses,
+    extract_ip_addresses_from_state,
+    image_source_key,
     find_instance_in_projects,
     jsonable_lxd,
     normalize_cluster_member,
@@ -252,17 +256,7 @@ class InstanceManager:
                 timeout=(1, 3)  # Aggressive timeout for parallel calls
             )
             state_data = state_resp.json()['metadata']
-            network_data = state_data.get('network', {})
-            
-            for iface_name, iface_data in network_data.items():
-                addresses = iface_data.get('addresses', [])
-                for addr in addresses:
-                    family = addr.get('family')
-                    address = addr.get('address')
-                    scope = addr.get('scope', '')
-                    if family == 'inet' or (family == 'inet6' and scope == 'global'):
-                        if address:
-                            ip_addrs.append(address)
+            ip_addrs = extract_ip_addresses_from_state(state_data)
         except Exception as e:
             logger.debug(f"Could not get state for {instance_name}: {e}")
         
@@ -1082,11 +1076,8 @@ class InstanceManager:
             # Determine source configuration
             source = {"type": "image"}
             
-            # Check if image is a fingerprint or alias
-            if len(image) == 64:  # Fingerprint
-                source["fingerprint"] = image
-            else:
-                source["alias"] = image
+            # A full fingerprint or the prefix `lxc image list` prints; anything else an alias
+            source[image_source_key(image)] = image
             
             # Create instance definition
             instance_def = {
@@ -1200,7 +1191,7 @@ class InstanceManager:
             # important: fail fast on a NIC the project cannot reach. LXD accepts a create
             # like that as an async 202 and only fails the background operation, and the
             # console's placeholder row has nothing to clear it, so the instance sits at
-            # "Creating..." with empty columns and no reason. That is BUG-ORC-002.
+            # "Creating..." with empty columns and no reason.
             #
             # The pooled client, not create_client: pylxd overwrites an explicit project
             # parameter with the client's own, so a project-bound client would check the
@@ -1233,10 +1224,8 @@ class InstanceManager:
                     source["server"] = image_server
                     source["protocol"] = image_protocol or "simplestreams"
                     source["alias"] = image
-                elif len(image) == 64:  # Local fingerprint
-                    source["fingerprint"] = image
-                else:  # Local alias
-                    source["alias"] = image
+                else:  # local: a fingerprint (or its prefix) or an alias
+                    source[image_source_key(image)] = image
 
             instance_def = {
                 "name": name,
@@ -1298,7 +1287,21 @@ class InstanceManager:
             # error so the router maps it to 503, not a blanket 500.
             raise LXDConnectionError(f"Failed to reach {host}: {e}")
         except LXDAPIException as e:
+            # A project limit refusal is the one synchronous 4xx the form can act on: it names
+            # a field. Everything else stays the free text it always was.
+            hit = project_limit_from_lxd_error(str(e))
+            if hit is not None:
+                raise LXDProjectLimitError(f"Failed to create VM: {str(e)}", hit)
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
+
+    @staticmethod
+    def _invalidate_lists_after_background_change(name: str, host: str) -> None:
+        """Clear the list caches a background job has just made stale. Never raises."""
+        try:
+            from app.core.cache import get_cache_manager
+            get_cache_manager().invalidate_instance_cache()
+        except Exception as e:  # noqa: BLE001 - a cache miss is cheaper than a lost start
+            logger.warning(f"Could not clear the instance list cache after {name} on {host} changed: {e}")
 
     async def _judge_create_operation(self, client, name: str, operation_id: Optional[str],
                                       host: str, project: str) -> bool:
@@ -1404,6 +1407,10 @@ class InstanceManager:
             instance = await asyncio.to_thread(client.instances.get, name)
             await asyncio.to_thread(self._start_and_wait, instance, host, project)
             logger.info(f"Auto-started {name} on {host} (project={project})")
+            # important: the list cache was cleared when the create was accepted, and the
+            # console re-read it while the instance was still Stopped. Without clearing it
+            # again here the row read Stopped for a full TTL after the cluster had it Running.
+            self._invalidate_lists_after_background_change(name, host)
         except Exception as e:
             logger.error(
                 f"Auto-start failed for {name} on {host} (project={project}): {e}"

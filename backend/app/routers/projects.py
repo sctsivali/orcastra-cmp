@@ -4,8 +4,9 @@ Provides endpoints for listing and creating projects.
 """
 
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
+from datetime import datetime, timezone
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,6 +18,9 @@ from app.models.schemas import (
     ProjectUpdateRequest,
     ProjectUpdateResponse,
     ErrorResponse,
+    ProjectUsageResponse,
+    ProjectUsageLimits,
+    ProjectUsageUsed,
 )
 from app.services.lxd_service import (
     LXDService,
@@ -24,14 +28,18 @@ from app.services.lxd_service import (
     LXDOperationError,
     get_lxd_service,
 )
+from app.services.lxd.exceptions import LXDProjectNotFoundError
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.services.orcahub_webhook import schedule_orcahub_event
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
 
 logger = logging.getLogger(__name__)
+
+# The create form reads this once per project pick; a create or delete drops it (cache.py).
+PROJECT_USAGE_CACHE_TTL = 30
 activity_logger = get_activity_logger()
 
 router = APIRouter(
@@ -65,6 +73,49 @@ def _parse_size_to_bytes(size_str: str) -> int:
     else:
         raise ValueError(f"Unsupported unit: {unit}")
 
+
+
+def _refuse_cap_above_hardware(
+    resources: Dict[str, Any],
+    *,
+    max_cpu: Optional[int],
+    ram_bytes: Optional[int],
+    storage_bytes: Optional[int],
+    labels: tuple,
+) -> None:
+    """Refuse a project limit larger than the hardware it would run on, naming both numbers.
+
+    Compared against totals on purpose: cpu_available is threads minus allocation and goes to
+    zero on an over-committed cluster, memory_available is live free memory, and neither is
+    what a cap means. On a clustered host the totals are the cluster's (see
+    LXDService.get_node_resources).
+    """
+    cpu_label, ram_label, storage_label = labels
+    gib = 1024 ** 3
+    if max_cpu is not None and max_cpu > resources.get("cpu_total", 0):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Max CPU ({cpu_label}) exceeds the {resources.get('cpu_total', 0)} CPU threads "
+                f"this host has"
+            ),
+        )
+    if ram_bytes is not None and ram_bytes > resources.get("memory_total", 0):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Max RAM ({ram_label}) exceeds the {resources.get('memory_total', 0) / gib:.1f} GiB "
+                f"this host has"
+            ),
+        )
+    if storage_bytes is not None and storage_bytes > resources.get("storage_total", 0):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Max Storage ({storage_label}) exceeds the {resources.get('storage_total', 0) / gib:.1f} GiB "
+                f"of storage this host has"
+            ),
+        )
 
 @router.get(
     "",
@@ -208,6 +259,61 @@ async def list_projects(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get(
+    "/{host}/{project_name}/usage",
+    response_model=ProjectUsageResponse,
+    summary="Project limit usage",
+    description=(
+        "How much of each of the project's limits its instances already allocate, summed the "
+        "way LXD sums it (every instance whatever its state, expanded config). Aggregates only."
+    ),
+    responses={
+        200: {"description": "Usage read"},
+        404: {"model": ErrorResponse, "description": "Project not visible to the caller"},
+        503: {"model": ErrorResponse, "description": "LXD connection error"},
+    },
+)
+async def get_project_usage(
+    host: str,
+    project_name: str,
+    lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
+):
+    """Usage against the project's limits, for the create-instance form's quota line."""
+    verify_cluster_access(host)
+    # Same silence as the list route about a project the caller may not see.
+    if not project_is_visible(host, project_name) or not filter_projects_by_acl(host, [project_name]):
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
+
+    cache = get_cache_manager()
+    cache_key = get_scope_cache_key(f"project_usage:host={host}:project={project_name}")
+    cached = None if fresh else cache.get("api_responses", cache_key)
+    if cached is not None:
+        return ProjectUsageResponse(**cached)
+    try:
+        usage = await lxd_service.get_project_usage(host, project_name)
+    except HTTPException:
+        raise
+    except LXDConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except LXDProjectNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
+    except LXDOperationError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    response = ProjectUsageResponse(
+        host=host,
+        project=project_name,
+        limits=ProjectUsageLimits(**usage.limits),
+        used=ProjectUsageUsed(**usage.used),
+        complete=usage.complete,
+        collected_at=datetime.now(timezone.utc),
+    )
+    # Short, and dropped by invalidate_instance_cache, so a create or delete refreshes it.
+    if usage.complete:
+        cache.set("api_responses", cache_key, response.model_dump(mode="json"), ttl=PROJECT_USAGE_CACHE_TTL)
+    return response
+
+
 @router.post(
     "",
     response_model=ProjectCreateResponse,
@@ -230,32 +336,19 @@ async def create_project(
     """Create a new project on a specific LXD host."""
     verify_cluster_access(request.host)
     try:
-        # validate resource limits against available resources
+        # important: a project limit is a cap, not a reservation. LXD allows any limit and any
+        # over-commit, so the only figure that makes a cap nonsensical is the hardware total.
+        # Comparing against cpu_available (threads minus allocation) refused every project on
+        # an over-committed cluster with "exceeds available CPU (-227)".
         try:
             node_resources = lxd_service.get_node_resources(request.host)
-            
-            # validate CPU
-            if request.max_cpu > node_resources["cpu_available"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Max CPU ({request.max_cpu}) exceeds available CPU ({node_resources['cpu_available']})"
-                )
-            
-            # validate RAM
-            ram_bytes = _parse_size_to_bytes(request.max_ram)
-            if ram_bytes > node_resources["memory_available"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Max RAM ({request.max_ram}) exceeds available RAM ({node_resources['memory_available'] / 1024 / 1024 / 1024:.1f} GiB)"
-                )
-            
-            # validate Storage
-            storage_bytes = _parse_size_to_bytes(request.max_storage)
-            if storage_bytes > node_resources["storage_available"]:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Max Storage ({request.max_storage}) exceeds available storage ({node_resources['storage_available'] / 1024 / 1024 / 1024:.1f} GiB)"
-                )
+            _refuse_cap_above_hardware(
+                node_resources,
+                max_cpu=request.max_cpu,
+                ram_bytes=_parse_size_to_bytes(request.max_ram),
+                storage_bytes=_parse_size_to_bytes(request.max_storage),
+                labels=(str(request.max_cpu), request.max_ram, request.max_storage),
+            )
         except LXDOperationError:
             # if we can't get resources, just log and continue
             logger.warning(f"Could not validate resources for {request.host}, proceeding anyway")
@@ -405,51 +498,21 @@ async def update_project(
                 available = None
 
         if has_real_limits and available is not None:
-            # Add back current project's limits to available pool
-            current_cpu = int(project["config"].get("limits.cpu", 0)) if project["config"].get("limits.cpu") else 0
-            current_ram_str = project["config"].get("limits.memory")
-            current_storage_str = project["config"].get("limits.disk")
-            
-            available_cpu = available["cpu_available"] + current_cpu
-            available_ram = available["memory_available"]
-            available_storage = available["storage_available"]
-            
-            if current_ram_str:
-                try:
-                    available_ram += _parse_size_to_bytes(current_ram_str)
-                except:
-                    pass
-            
-            if current_storage_str:
-                try:
-                    available_storage += _parse_size_to_bytes(current_storage_str)
-                except:
-                    pass
-            
-            # Validate new limits (skip validation for 0 = clear limit)
-            if request.max_cpu and request.max_cpu > 0 and request.max_cpu > available_cpu:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Requested CPU ({request.max_cpu} cores) exceeds available ({available_cpu} cores)"
-                )
-            
-            if request.max_ram and request.max_ram != "0":
-                ram_bytes = _parse_size_to_bytes(request.max_ram)
-                if ram_bytes > available_ram:
-                    available_gb = available_ram / (1024**3)
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Requested RAM exceeds available ({available_gb:.1f} GiB)"
-                    )
-            
-            if request.max_storage and request.max_storage != "0":
-                storage_bytes = _parse_size_to_bytes(request.max_storage)
-                if storage_bytes > available_storage:
-                    available_gb = available_storage / (1024**3)
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Requested storage exceeds available ({available_gb:.1f} GiB)"
-                    )
+            # Same rule as create: a cap is refused only above the hardware total. 0 clears a
+            # limit and None leaves it alone, so neither is compared.
+            _refuse_cap_above_hardware(
+                available,
+                max_cpu=request.max_cpu if request.max_cpu and request.max_cpu > 0 else None,
+                ram_bytes=(
+                    _parse_size_to_bytes(request.max_ram)
+                    if request.max_ram and request.max_ram != "0" else None
+                ),
+                storage_bytes=(
+                    _parse_size_to_bytes(request.max_storage)
+                    if request.max_storage and request.max_storage != "0" else None
+                ),
+                labels=(str(request.max_cpu), request.max_ram or "", request.max_storage or ""),
+            )
         
         # Update project
         project_data = await lxd_service.update_project(
@@ -467,6 +530,7 @@ async def update_project(
         cache.delete("api_responses", get_scope_cache_key(f"projects:list:{host}"))
         cache.delete("api_responses", "projects:list:all:scope=all")
         cache.delete("api_responses", f"projects:list:{host}:scope=all")
+        cache.delete_pattern("api_responses", f"project_usage:host={host}:project={project_name}:*")
         logger.debug(f"Invalidated project cache after updating '{project_name}' on {host}")
         
         project = ProjectInfo(**project_data)

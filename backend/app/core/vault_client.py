@@ -12,12 +12,24 @@ Secret VALUES are NEVER logged - only access paths and operation results.
 
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
+
+# The last LIST answer per path, shared by every worker and surviving a restart. Read only when
+# a LIST fails (see services/lxd_certs/storage.py); cleared by invalidate_cluster_cache.
+LAST_GOOD_LIST_NAMESPACE = "vault_list_last_good"
+LAST_GOOD_LIST_TTL = 7 * 24 * 3600
+
+# (connect, read) for the metadata LIST only. A KV-v2 LIST walks the storage backend, the one
+# Vault call here that is a scan rather than a point read, and on a loaded box it was the one
+# call that timed out while every per-cluster GET at (2, 3) kept answering. The read budget
+# is affordable because the LIST runs off the event loop (routers/nodes.py); point reads stay
+# at (2, 3) since they sit on the request path.
+VAULT_LIST_TIMEOUT = (3, 10)
 
 # Import cache manager - will be lazy loaded to avoid circular imports
 _cache_manager = None
@@ -463,14 +475,22 @@ class VaultClient:
         url = _safe_vault_url(self.vault_addr, path)
         
         try:
-            response = self.session.request('LIST', url, headers=self.headers, timeout=(2, 3))
+            response = self.session.request('LIST', url, headers=self.headers, timeout=VAULT_LIST_TIMEOUT)
             response.raise_for_status()
             result = response.json()
             keys = result.get("data", {}).get("keys", [])
             
-            # Cache the result with longer TTL for list operations
-            if use_cache and cache:
+            # Cache the result with longer TTL for list operations. Written on a fresh read
+            # too: use_cache only decides whether the cache is READ, and a bypass that left a
+            # stale entry behind is what let the request path pay a Vault round trip later.
+            if cache:
                 cache.set("vault_list", path, keys, 600)  # Cache list for 10 minutes
+            # note: not a cache but a memo of the last answer, written even when the caller
+            # bypassed the cache, so a lost LIST later can be served from it. Seven days:
+            # a registry cannot change while Vault is down (every change writes Vault first),
+            # and an outage longer than that is not one worth serving stale.
+            if cache:
+                cache.set(LAST_GOOD_LIST_NAMESPACE, path, keys, LAST_GOOD_LIST_TTL)
 
             duration = round((time.perf_counter() - start) * 1000, 2)
             _audit_vault_operation(
@@ -492,6 +512,19 @@ class VaultClient:
             )
             logger.error(f"Failed to list Vault path {path}: {e}")
             raise VaultClientError(f"Vault list failed: {str(e)}")
+
+    def last_known_list(self, path: str) -> Optional[List[str]]:
+        """The keys the last successful LIST of ``path`` returned, from the shared memo."""
+        cache = get_cache()
+        if not cache:
+            return None
+        keys = cache.get(LAST_GOOD_LIST_NAMESPACE, path)
+        return list(keys) if isinstance(keys, list) else None
+
+    def forget_last_known_list(self, path: str) -> None:
+        cache = get_cache()
+        if cache:
+            cache.delete(LAST_GOOD_LIST_NAMESPACE, path)
     
     def generate_lxd_certificate(
         self,

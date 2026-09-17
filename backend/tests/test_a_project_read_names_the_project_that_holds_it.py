@@ -1,6 +1,6 @@
 """The project-scoped reader must name the project a record really lives in.
 
-Six findings in the EcoBytes audit came from one fact: the pooled pylxd client is bound to
+Six reported findings came from one fact: the pooled pylxd client is bound to
 LXD's `default` project, so every read answered about one project and the answer was presented
 as the whole cluster. These tests pin the reader that replaces it, including the two ways it
 can quietly go wrong: asking a project-bound client for every project (LXD 400s the cluster),

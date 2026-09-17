@@ -41,6 +41,8 @@ import pylxd
 from app.core.blocking import run_blocking
 from app.services.lxd.project_scope import list_instance_records
 from app.core.lxd_path import safe_segment
+from app.services.lxd.cpu_allocation import allocated_cpu
+from app.services.lxd.cpu_allocation import parse_cpu_limit as _parse_cpu_limit
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,10 @@ class PoolUsage:
     driver: str
     space_total: int
     space_used: int
+    # The members the pool is defined on, from the pool record's `locations`. A shared pool
+    # (ceph, cephfs) lists every member; the router reports it once, scoped `shared`, with
+    # this list, so the dialog can say which members it serves.
+    members: Tuple[str, ...] = ()
 
     @property
     def space_available(self) -> int:
@@ -171,7 +177,7 @@ def list_cluster_instances(client: pylxd.Client) -> Tuple[List[Any], bool]:
 
     important: EVERY project, not just default. `client.instances.all()` reads through the
     pooled client, which pylxd binds to `default`, so a member was measured by whatever share
-    of its work happened to live there. The EcoBytes audit recorded 1 of 1 on a member holding
+    of its work happened to live there. A field report recorded 1 of 1 on a member holding
     44, and the same list feeds `build_gpu_inventory`, so `gpu_used` was wrong by the same
     margin, which reads as spare capacity.
 
@@ -187,35 +193,22 @@ def parse_cpu_limit(limits_cpu: Any) -> int:
     """How many cores a `limits.cpu` value claims.
 
     LXD accepts a count ("4"), a pinned set ("0,1,2") and a pinned range ("0-3"). An instance
-    with no limit is counted as one, which is what the surface has always reported.
+    with no limit is counted as one, which is what the surface has always reported. One
+    grammar for every read: services/lxd/cpu_allocation.
     """
-    if not limits_cpu:
-        return 1
-    raw = str(limits_cpu)
-    try:
-        if "-" in raw:
-            low, high = raw.split("-", 1)
-            return int(high) - int(low) + 1
-        if "," in raw:
-            return len(raw.split(","))
-        return int(raw)
-    except (ValueError, IndexError):
-        return 1
+    return _parse_cpu_limit(limits_cpu, default=1)
 
 
 def count_member_instances(instances: Iterable[Any], member_name: str) -> InstanceUsage:
-    """Instance totals for one member, scoped by `instance.location`."""
-    count = running = cpu_used = 0
-    for instance in instances:
-        if getattr(instance, "location", "") != member_name:
-            continue
-        count += 1
-        if getattr(instance, "status", "") != "Running":
-            continue
-        running += 1
-        config = getattr(instance, "config", {}) or {}
-        cpu_used += parse_cpu_limit(config.get("limits.cpu"))
-    return InstanceUsage(count=count, running=running, cpu_used=cpu_used)
+    """Instance totals for one member, scoped by `instance.location`.
+
+    note: "CPU used" is allocation, the sum of the expanded `limits.cpu` of the running
+    instances placed on this member (a limit inherited from a profile counts; one core for an
+    instance with no limit). LXD's resources API has no host utilisation figure, so the UI
+    labels it as allocated. One counter for every read: cpu_allocation.
+    """
+    got = allocated_cpu(instances, member=member_name)
+    return InstanceUsage(count=got.instances, running=got.running, cpu_used=got.cores)
 
 
 async def _leaf(fn, *args, label: str):
@@ -245,11 +238,13 @@ async def _collect_pools(
 
     # A daemon that honoured recursion returns objects; one that did not returns paths.
     named: List[Tuple[str, Optional[str]]] = []
+    locations: Dict[str, Tuple[str, ...]] = {}
     for entry in raw:
         if isinstance(entry, dict):
             name = entry.get("name")
             if name:
                 named.append((name, entry.get("driver") or "unknown"))
+                locations[name] = tuple(str(m) for m in (entry.get("locations") or []))
         elif isinstance(entry, str) and entry:
             named.append((entry.rstrip("/").split("/")[-1], None))
 
@@ -282,6 +277,7 @@ async def _collect_pools(
             driver=driver,
             space_total=space["total"],
             space_used=space["used"],
+            members=locations.get(name, ()),
         )
 
     results = await asyncio.gather(

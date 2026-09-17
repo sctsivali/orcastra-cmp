@@ -1,6 +1,6 @@
 """Changing one device on an existing instance.
 
-Chapter 5.1 of the EcoBytes audit asks for a fixed IPv4 that can be set from the console rather
+Operators asked for a fixed IPv4 that can be set from the console rather
 than through `lxc config device set` on the hypervisor. Setting it at create time is half the
 answer; an address planned against a corporate IPAM catalogue also has to be changeable on an
 instance that already exists, and for an operator without SSH to the host that is the whole

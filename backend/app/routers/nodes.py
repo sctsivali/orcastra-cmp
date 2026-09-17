@@ -3,7 +3,7 @@ API Router for LXD node status and health checks.
 Provides endpoints for monitoring node connectivity.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 import logging
 import asyncio
 from datetime import datetime, timezone
@@ -18,7 +18,7 @@ from app.models.schemas import (
     GpuCardListResponse,
 )
 from app.services.lxd import status as lxd_status
-from app.core.blocking import BlockingPoolFull, BlockingTimeout
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.services.lxd_service import (
     LXDService,
     get_lxd_service,
@@ -29,6 +29,9 @@ from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
 from app.core.vault_client import get_vault_client
+from app.core import vault_status
+from app.core.org_scope import apply_cluster_filter
+from app.services.lxd_certs.storage import RegistryRead
 from app.core.cache import (
     get_cache_manager,
     MEMBER_RESOURCES_CACHE_PREFIX,
@@ -49,6 +52,46 @@ router = APIRouter(
 # Thread pool for parallel node status fetching
 _node_executor = ThreadPoolExecutor(max_workers=10)
 
+# Availability probes get their own pool so a slow reachability sweep cannot starve the
+# node-status fan-out, and vice versa.
+_availability_executor = ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="nodes_availability"
+)
+# One connect budget (3s) plus one read budget (8s) plus margin. The probes run in parallel,
+# so this bounds the whole sweep, not one cluster.
+NODES_AVAILABILITY_PROBE_TIMEOUT = 20.0
+# The Vault LIST budget (3s connect, 10s read, see core/vault_client.VAULT_LIST_TIMEOUT) plus
+# margin. Past it the request is answered from the last known registry, never left waiting.
+REGISTRY_READ_TIMEOUT = 12.0
+REGISTRY_UNAVAILABLE_DETAIL = "Cluster registry is temporarily unavailable"
+
+
+async def _read_registry(lxd_service: LXDService) -> RegistryRead:
+    """The registered cluster ids for this request, read off the event loop.
+
+    important: the Vault LIST used to run synchronously inside this async route, so a slow
+    Vault held every request on the worker for the length of its timeout, and a lost LIST
+    came back as an empty fleet. It now runs on the availability pool with its own budget;
+    on expiry or a full pool the last known registry answers. The org-scope filter is applied
+    here, on the loop, because the ContextVar it reads does not travel into the thread.
+    """
+    try:
+        read = await run_blocking(
+            lxd_service.cert_manager.read_registry,
+            timeout=REGISTRY_READ_TIMEOUT,
+            label="nodes.registry",
+            executor=_availability_executor,
+            max_in_flight=4,
+        )
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        logger.warning("Cluster registry read unavailable: %s", exc)
+        known = vault_status.last_known_registry()
+        read = RegistryRead(
+            cluster_ids=known or [], source="last_known" if known is not None else None, readable=False
+        )
+    return RegistryRead(
+        cluster_ids=apply_cluster_filter(read.cluster_ids), source=read.source, readable=read.readable
+    )
 
 
 @router.get(
@@ -114,10 +157,27 @@ async def get_nodes_status(
     deprecated=True,
 )
 async def get_node_names(
+    response: Response,
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Get list of configured node names."""
-    return lxd_service.get_node_names()
+    """Get list of configured node names.
+
+    The body stays a bare list for the API-key clients of this deprecated route. What changed
+    is what a lost registry looks like: the last known fleet with the degraded header, or 503
+    when nothing is known, never an empty list dressed as an answer.
+    """
+    read = await _read_registry(lxd_service)
+    if read.readable:
+        return read.cluster_ids
+    if read.source is None:
+        raise HTTPException(
+            status_code=503,
+            detail=REGISTRY_UNAVAILABLE_DETAIL,
+            headers={"X-Orcastra-Registry-Readable": "false", "Cache-Control": "no-store"},
+        )
+    response.headers["X-Orcastra-Registry-Readable"] = "false"
+    response.headers["Cache-Control"] = "no-store"
+    return read.cluster_ids
 
 
 # important: declared before any /{node_name}/... route. FastAPI matches in declaration order,
@@ -144,6 +204,10 @@ async def get_nodes_availability(
     """
     try:
         return await lxd_status.resolve_availability(lxd_service, fresh=fresh)
+    except lxd_status.RegistryUnavailable:
+        # A lost registry with nothing known: the probe would read an empty fleet and report
+        # it as "no clusters". While the last known registry is served the probe runs over it.
+        raise HTTPException(status_code=503, detail=REGISTRY_UNAVAILABLE_DETAIL)
     except (BlockingTimeout, BlockingPoolFull) as exc:
         # Degrade to "we could not tell", never to "everything is offline". A picker that
         # marks a healthy fleet dead because a probe was slow is worse than one with no marks.

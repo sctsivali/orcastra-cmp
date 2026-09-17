@@ -69,6 +69,10 @@ interface SearchableSelectProps {
   // SelectTrigger took an id and several call sites still pass one to a label that would
   // otherwise dangle.
   id?: string;
+  // The notice under the field that says why the list is empty or the read failed.
+  ariaDescribedBy?: string;
+  // True when the read behind this list failed, so assistive tech announces it as invalid.
+  ariaInvalid?: boolean;
 }
 
 // Single-select combobox with optional in-list search. Drop-in replacement for a shadcn Select
@@ -87,6 +91,8 @@ export function SearchableSelect({
   icon: Icon,
   ariaLabel,
   id,
+  ariaDescribedBy,
+  ariaInvalid,
 }: SearchableSelectProps) {
   const [open, setOpen] = React.useState(false);
   const selected = options.find((o) => o.value === value);
@@ -122,11 +128,13 @@ export function SearchableSelect({
           aria-label={ariaLabel}
           aria-expanded={open}
           aria-controls={listboxId}
+          aria-describedby={ariaDescribedBy}
+          aria-invalid={ariaInvalid || undefined}
           disabled={disabled}
           className={cn(
             // gap-2, not only justify-between: on a w-auto trigger the two groups fill the
             // width and justify-between then leaves no space at all, so the value and its
-            // status label rendered as one word ("central2Online").
+            // status label rendered as one word ("nodeOnline").
             "flex h-10 w-full items-center justify-between gap-2 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50",
             className
           )}

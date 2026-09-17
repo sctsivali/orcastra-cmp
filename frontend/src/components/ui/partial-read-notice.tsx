@@ -11,10 +11,18 @@ import { AlertTriangle } from "lucide-react";
  * and "we could not find out". Every surface that can serve a partial reading says so with
  * this, so the two never look the same again.
  */
-export function PartialReadNotice({ children }: { children: React.ReactNode }) {
+export function PartialReadNotice({
+  children,
+  "data-testid": testId,
+}: {
+  children: React.ReactNode;
+  /** A hook for the browser harness, which asserts the notice on a degraded reading. */
+  "data-testid"?: string;
+}) {
   return (
     <div
       className="flex items-start gap-3 rounded-md border border-status-pending/40 bg-muted/50 p-3"
+      data-testid={testId}
       role="status"
     >
       <AlertTriangle

@@ -163,6 +163,17 @@ const nextConfig = {
       fallback: [],
     };
   },
+  // Create Network moved from its own page into a dialog on the Networks page. The old route
+  // was public for a few weeks, so a bookmark to it lands on the list rather than a 404.
+  async redirects() {
+    return [
+      {
+        source: '/inventory/networks/create',
+        destination: '/inventory/networks',
+        permanent: false,
+      },
+    ];
+  },
 };
 
 module.exports = nextConfig;

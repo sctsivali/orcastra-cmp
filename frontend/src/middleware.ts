@@ -32,7 +32,8 @@ export const config = {
     /*
      * Match all request paths except for the ones starting with:
      * - api (API routes: NextAuth + backend proxy)
-     * - health (health check proxy)
+     * - health (readiness proxy) and healthz (the Docker liveness probe): both must stay
+     *   reachable without a session, so the prefix stays here
      * - _next/static (static files)
      * - _next/image (image optimization files)
      * - favicon (favicon files)

@@ -4,7 +4,9 @@ import { useMemo, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Server } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -63,7 +65,7 @@ function ConfigMapLink({
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col overflow-hidden">
-          <DialogHeader className="pr-8 flex-shrink-0">
+          <DialogHeader className="pr-8 flex-shrink-0 pb-4">
             <DialogTitle className="text-xl">{title}</DialogTitle>
             <DialogDescription>
               {itemCount} {noun}
@@ -111,11 +113,11 @@ function ConfigMapLink({
 
 export default function ServerPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
+  const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useServerInfo();
   const servers: any[] = useMemo(() => (data as any)?.servers || [], [data]);
   // Clusters that never answered: their server details are absent from the grid, so warn
   // rather than showing fewer cards with nothing to explain it.
-  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+  const reach = reachabilityOf(data);
   const { toast } = useToast();
 
   // The grid is one, two or three columns wide, so it takes the grid page sizes rather than the
@@ -154,7 +156,38 @@ export default function ServerPage() {
         />
       </div>
 
-      <UnreachableNodesBanner noun="server details" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="server details" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="server details" nodes={reach.partial} reasons={reach.reasons} partial />
+
+      {isError ? (
+        // a request that failed is not a fleet with nothing: say which, so "No cluster
+        // answered" is only ever reached on a successful response with zero rows
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={Server}
+              title="Could not load server details"
+              description={error instanceof Error ? error.message : "The request failed. Use Refresh to try again."}
+            />
+          </CardContent>
+        </Card>
+      ) : servers.length === 0 ? (
+        // note: an empty grid said nothing at all. With every cluster named in a banner above,
+        // this tells the operator the page itself is fine and the fleet is what it is.
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={Server}
+              title="No server details to show"
+              description={
+                reach.unreachable.length || reach.partial.length
+                  ? "The clusters named above could not be read. Their details will appear once they answer."
+                  : "No cluster answered with server details."
+              }
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {pagedServers.map((server: any) => (

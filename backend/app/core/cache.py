@@ -35,7 +35,12 @@ logger = logging.getLogger(__name__)
 # (which was zero in practice, because the read was against a key LXD does not send) to usable
 # capacity with a shared backing store counted once. A v6 body deserializes fine and reports a
 # different number under the same name, which is the one thing a cached body must never do.
-RESOURCE_SCHEMA_VERSION = "v7"
+# v8: member resources gained the local/shared storage split, storage_partial and
+# instances_partial, and every resource body gained cpu_allocated, cpu_allocation_ratio and
+# cpu_overcommitted (allocation counted from expanded_config per member). A v7 body would
+# render a member's shared pools as its own disk and an over-committed member as idle for a
+# TTL after deploy.
+RESOURCE_SCHEMA_VERSION = "v8"
 NODES_STATUS_CACHE_KEY = f"nodes:status:all:{RESOURCE_SCHEMA_VERSION}"
 REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 # Cheap per-cluster reachability for pickers. Short TTL paired with the metrics collector's
@@ -43,6 +48,8 @@ REGIONS_OVERVIEW_CACHE_KEY = f"regions:overview:{RESOURCE_SCHEMA_VERSION}"
 NODES_AVAILABILITY_CACHE_KEY = f"nodes:availability:{RESOURCE_SCHEMA_VERSION}"
 NODES_AVAILABILITY_CACHE_TTL = 45
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
+# Not under the `instances:` pattern on purpose: it must survive the clearance it records.
+INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
 MICROCLOUD_RESOURCES_CACHE_PREFIX = f"microcloud_resources:{RESOURCE_SCHEMA_VERSION}"
 
 # Lazy import encryption to avoid circular imports
@@ -417,10 +424,16 @@ class CacheManager:
 
         # Always clear list caches to force fresh fetch
         # These are the paths that cert_manager.list_clusters() uses
-        self.delete("vault_list", "secret/metadata/clusters")
-        self.delete("vault_list", "secret/metadata/clusters/")
-        self.delete("vault_list", "secret/data/clusters")
-        self.delete("vault_list", "secret/data/clusters/")
+        for list_path in (
+            "secret/metadata/clusters",
+            "secret/metadata/clusters/",
+            "secret/data/clusters",
+            "secret/data/clusters/",
+        ):
+            self.delete("vault_list", list_path)
+            # The last-good memo too: every caller of this method has just written Vault, so
+            # the copy it would serve during a later outage is the one that must be current.
+            self.delete("vault_list_last_good", list_path)
 
         logger.info(f"Invalidated cluster list cache{f' for {cluster_id}' if cluster_id else ' (all)'}")
 
@@ -441,9 +454,26 @@ class CacheManager:
         self.delete_pattern("api_responses", "monitoring:*")
         self.delete_pattern("api_responses", "storage_volumes:*")
         self.delete_pattern("api_responses", "snapshots_fleet:*")
+        # a create, a delete or a NIC address pin changes the allocation table the IPAM page
+        # reads, and its 120 s TTL is long enough to pin an address and not see it
+        self.delete_pattern("api_responses", "ipam:*")
+        # The create form's quota line: a create or delete changes what a project has used.
+        self.delete_pattern("api_responses", "project_usage:*")
+        # important: a list read that was already in flight when this ran still holds the old
+        # picture and would write it back over the clearance a moment later (a fleet read takes
+        # ten seconds with a dead cluster registered). The generation lets such a read notice.
+        try:
+            self.set("api_responses", INSTANCE_LIST_GENERATION_KEY, str(time.time_ns()), ttl=3600)
+        except Exception as e:  # noqa: BLE001 - the clearance above is what matters
+            logger.debug(f"Could not record the instance list generation: {e}")
         logger.info(
-            "Cleared instance, VM, monitoring, storage volume and fleet snapshot caches"
+            "Cleared instance, VM, monitoring, storage volume, IPAM, project usage and fleet snapshot caches"
         )
+
+    def instance_list_generation(self) -> Optional[str]:
+        """The token the last instance invalidation left; None when none has run yet."""
+        value = self.get("api_responses", INSTANCE_LIST_GENERATION_KEY)
+        return str(value) if value is not None else None
 
     def invalidate_resource_cache(self, *kinds: str):
         """Drop the cached list responses for the named resource kinds.

@@ -3,6 +3,7 @@ Orcastra CMP Backend API
 Main FastAPI application entry point.
 """
 
+import asyncio
 import logging
 from contextlib import AsyncExitStack, asynccontextmanager
 from fastapi import FastAPI, Request
@@ -130,8 +131,9 @@ async def lifespan(app: FastAPI):
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                # List clusters from Vault
-                cluster_ids = cert_manager.list_clusters()
+                # List clusters from Vault, off the loop: the LIST carries a 13 s budget and
+                # the health probe must keep answering while it runs.
+                cluster_ids = await asyncio.to_thread(cert_manager.list_clusters)
 
                 # important: an empty list from a Vault that never answered is not the same fact
                 # as an empty registry, and list_clusters cannot raise because thirteen callers
@@ -157,7 +159,6 @@ async def lifespan(app: FastAPI):
                 
                 # Connect to ALL registered clusters in parallel for faster startup
                 # This ensures clusters stay connected even after Docker restart
-                import asyncio
                 
                 async def _connect_cluster(cluster_id: str) -> tuple[str, bool, str | None]:
                     """Connect to a single cluster; returns (id, success, error)."""
@@ -798,11 +799,19 @@ Ensure your client certificates are properly configured.
         # process. `error` carries a class name and a short reason, never a Vault address.
         vault = vault_status.snapshot()
         if vault.get("registry_readable") is False:
-            logger.error(
-                "Vault cluster registry is unreadable (%s). Every cluster will appear absent "
-                "until this clears; check whether Vault is sealed.",
-                vault.get("error"),
-            )
+            if vault.get("registry_source") == "last_known":
+                logger.error(
+                    "Vault cluster registry is unreadable (%s); the last known registry is being "
+                    "served until Vault answers again. Check whether Vault is sealed or the "
+                    "token's policy denies LIST on the clusters path.",
+                    vault.get("error"),
+                )
+            else:
+                logger.error(
+                    "Vault cluster registry is unreadable (%s) and nothing is known. Every cluster "
+                    "will appear absent until this clears; check whether Vault is sealed.",
+                    vault.get("error"),
+                )
         # important: "service" is an identifier monitoring keys on, and Authentik registers
         # the same string as the OAuth2 audience. It does not follow the product name.
         # important: the version and nothing else. f270eb0 took the build commit and date off the

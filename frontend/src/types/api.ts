@@ -424,9 +424,15 @@ export interface HardwareProfile {
 }
 
 export interface NodeResources {
+  /** Hardware threads. */
   cpu_total: number;
+  /** vCPUs allocated to running instances; may exceed cpu_total. */
   cpu_used: number;
+  /** Threads not yet allocated, 0 once over-committed. */
   cpu_available: number;
+  cpu_allocated?: number;
+  cpu_allocation_ratio?: number;
+  cpu_overcommitted?: boolean;
   cpu_sockets: number;
   memory_total: number;
   memory_used: number;
@@ -557,6 +563,30 @@ export interface ProjectInfo {
   tags: string[];
 }
 
+// Project usage against its limits (GET /projects/{host}/{project}/usage)
+export interface ProjectUsageResponse {
+  host: string;
+  project: string;
+  limits: {
+    cpu: number | null;
+    memory_bytes: number | null;
+    instances: number | null;
+    containers: number | null;
+    virtual_machines: number | null;
+    disk_bytes: number | null;
+  };
+  used: {
+    cpu: number;
+    memory_bytes: number;
+    instances: number;
+    containers: number;
+    virtual_machines: number;
+  };
+  /** False when the instance read failed: the limits are real, the usage is a floor of zero. */
+  complete: boolean;
+  collected_at: string;
+}
+
 // Project List Response
 export interface ProjectListResponse {
   host: string;
@@ -595,13 +625,18 @@ export interface ErrorResponse {
 
 // API Error
 export class APIError extends Error {
+  /** Seconds the server asked the client to wait (from Retry-After), set on a 429 or 503. */
+  public retryAfter?: number;
+
   constructor(
     message: string,
     public status: number,
-    public detail?: string | null
+    public detail?: string | null,
+    retryAfter?: number
   ) {
     super(message);
     this.name = "APIError";
+    if (retryAfter !== undefined) this.retryAfter = retryAfter;
   }
 }
 
@@ -619,7 +654,75 @@ export interface ProfileInfo {
   project?: string;
 }
 
-export interface ProfileListResponse {
+/** A single profile as read from the daemon, with the version it was read at. */
+export interface ProfileDetail extends ProfileInfo {
+  /** Send it back as If-Match on an update; a write over someone else's change is a 412. */
+  etag?: string | null;
+}
+
+export interface ProfileCreateRequest {
+  name: string;
+  description?: string;
+  config?: Record<string, string>;
+  devices?: Record<string, Record<string, string>>;
+}
+
+/** A map that is sent replaces LXD's whole map; an omitted one is carried through. */
+export interface ProfileUpdateRequest {
+  description?: string;
+  config?: Record<string, string>;
+  devices?: Record<string, Record<string, string>>;
+}
+
+export interface ProfileWriteResponse {
+  success: boolean;
+  message: string;
+  profile?: ProfileDetail;
+}
+
+/**
+ * What a fan-out list could not read, cluster by cluster. Every field is optional because a
+ * payload cached by an older build carries none of them.
+ */
+export interface FanoutReachability {
+  /** Clusters whose rows are missing: never reached, refused, or the listing itself failed. */
+  unreachable_nodes?: string[];
+  /** Clusters that answered but lost some rows; node_errors names what was lost. */
+  partial_nodes?: string[];
+  /**
+   * Reason per cluster in either list, prefixed "unreachable:", "forbidden:", "error:" or
+   * "partial:". Absent for Tenant callers, who see the banner without the diagnosis.
+   */
+  node_errors?: Record<string, string>;
+}
+
+/** How an IPAM row's address came to be held. See the backend's IPAMAllocation.allocation. */
+export type IPAMAllocationKind = "static" | "dhcp" | "gateway" | "forward" | "load_balancer" | "unknown";
+
+export interface IPAMAllocation {
+  address: string;
+  type: string;
+  used_by: string;
+  hardware_address: string;
+  network: string;
+  node: string;
+  project: string;
+  allocation: IPAMAllocationKind;
+  /** bridge, ovn, macvlan, physical; empty when the network was not found. */
+  network_type: string;
+  /** The project that holds the network record; empty when the network was not found. */
+  network_project: string;
+  subnet_ipv4: string;
+  subnet_ipv6: string;
+}
+
+export interface IPAMListResponse extends FanoutReachability {
+  total: number;
+  allocations: IPAMAllocation[];
+  nodes: string[];
+}
+
+export interface ProfileListResponse extends FanoutReachability {
   total: number;
   profiles: ProfileInfo[];
   nodes: string[];
@@ -681,7 +784,13 @@ export interface NetworkACLInfo {
   project?: string;
 }
 
-export interface NetworkACLListResponse {
+/** A single ACL as read from the daemon, with the version it was read at. */
+export interface NetworkACLDetail extends NetworkACLInfo {
+  /** Send it back as If-Match on an update; a write over someone else's change is a 412. */
+  etag?: string | null;
+}
+
+export interface NetworkACLListResponse extends FanoutReachability {
   total: number;
   acls: NetworkACLInfo[];
   nodes: string[];
@@ -710,7 +819,7 @@ export interface StoragePoolInfo {
   node?: string;
 }
 
-export interface StoragePoolListResponse {
+export interface StoragePoolListResponse extends FanoutReachability {
   total: number;
   pools: StoragePoolInfo[];
   nodes: string[];
@@ -733,9 +842,13 @@ export interface StorageVolumeInfo {
   used_by: string[];
   content_type: string;
   node?: string;
+  /** The LXD project that holds the volume. */
+  project?: string;
+  /** Cluster member that holds it; empty for a shared pool or a single host. */
+  location?: string;
 }
 
-export interface StorageVolumeListResponse {
+export interface StorageVolumeListResponse extends FanoutReachability {
   total: number;
   volumes: StorageVolumeInfo[];
   nodes: string[];
@@ -791,7 +904,7 @@ export interface WarningInfo {
   status: string;
 }
 
-export interface WarningListResponse {
+export interface WarningListResponse extends FanoutReachability {
   total: number;
   warnings: WarningInfo[];
   nodes: string[];
@@ -808,7 +921,7 @@ export interface ServerInfo {
   public: boolean;
 }
 
-export interface ServerListResponse {
+export interface ServerListResponse extends FanoutReachability {
   servers: ServerInfo[];
   total: number;
 }
@@ -823,7 +936,7 @@ export interface IdentityInfo {
   node: string;
 }
 
-export interface IdentityListResponse {
+export interface IdentityListResponse extends FanoutReachability {
   total: number;
   identities: IdentityInfo[];
   nodes: string[];
@@ -843,7 +956,7 @@ export interface GroupInfo {
   node: string;
 }
 
-export interface GroupListResponse {
+export interface GroupListResponse extends FanoutReachability {
   total: number;
   groups: GroupInfo[];
   nodes: string[];
@@ -927,10 +1040,17 @@ export interface ClusterMembersResponse {
 
 export interface MemberResources {
   member_name: string;
+  /** Hardware threads. */
   cpu_total: number;
+  /** vCPUs allocated to the running instances placed here; may exceed cpu_total. */
   cpu_used: number;
+  /** Threads not yet allocated, 0 once over-committed. */
   cpu_available: number;
+  /** Allocation as a percentage of threads; above 100 the member is over-committed. */
   cpu_usage_percent: number;
+  cpu_allocated?: number;
+  cpu_allocation_ratio?: number;
+  cpu_overcommitted?: boolean;
   memory_total: number;
   memory_used: number;
   memory_available: number;
@@ -946,19 +1066,33 @@ export interface MemberResources {
   gpu_vendors?: string[];
   gpu_models?: string[];
   gpu_utilization_supported?: boolean;
+  /** Sum of every pool row below: what this member can place work on, shared pools included. */
   storage_total: number;
   storage_used: number;
   storage_available: number;
   storage_usage_percent: number;
+  /** Pools on this member's own disks. */
+  storage_local_total?: number;
+  storage_local_used?: number;
+  /** Cluster-wide pools (ceph and the like) reachable from this member; counted once at cluster level. */
+  storage_shared_total?: number;
+  storage_shared_used?: number;
+  /** A pool's space could not be read for this member, so the storage figures are a floor. */
+  storage_partial?: boolean;
   storage_pools: Array<{
     name: string;
     driver: string;
     space_total: number;
     space_used: number;
     space_available: number;
+    /** "local" is this member's own disk, "shared" is the cluster's store seen from here. */
+    scope?: "local" | "shared";
+    members?: string[];
   }>;
   instances_count: number;
   instances_running: number;
+  /** The instance list could not be read in full: the counts and the CPU allocation are a floor. */
+  instances_partial?: boolean;
   /** When this sample was read off the cluster. Absent means unknown, never "now". */
   collected_at?: string | null;
   /** At least one part of the read did not come back, so the numbers above are floors. */
@@ -1241,6 +1375,9 @@ export interface ClusterMonitoringMetrics {
   cpu_total: number;
   cpu_used: number;
   cpu_usage_percent: number;
+  cpu_allocated?: number;
+  cpu_allocation_ratio?: number;
+  cpu_overcommitted?: boolean;
   memory_total_bytes: number;
   memory_used_bytes: number;
   memory_usage_percent: number;
@@ -1381,12 +1518,78 @@ export interface MonitoringDashboardResponse {
 // System Resource Usage Types
 // ========================
 
+/** Cgroup limits and usage of the backend container itself. `memory`, `cpu` and `workers`
+ *  are the detailed reads; the flat `memory_limit`/`cpu_limit` stay for older clients. */
+export interface ContainerMemory {
+  limit: number | null;
+  current: number | null;
+  anon: number | null;
+  file: number | null;
+  /** current minus reclaimable page cache: the figure docker stats prints. */
+  used: number | null;
+  percent: number | null;
+}
+
+export interface ContainerCPU {
+  /** CPUs the cgroup quota allows, null when unlimited. */
+  limit: number | null;
+  usage_usec: number | null;
+  /** Percent of the quota over `window_seconds`, null on the first read of a worker. */
+  percent: number | null;
+  window_seconds: number | null;
+  nr_throttled: number | null;
+  throttled_usec: number | null;
+}
+
+export interface WorkerInfo {
+  pid: number;
+  memory_rss: number;
+  uptime_seconds: number;
+}
+
+export interface WorkersInfo {
+  count: number;
+  /** WEB_CONCURRENCY as configured, null when unset. */
+  expected: number | null;
+  answering_pid: number;
+  master_pid: number | null;
+  master_uptime_seconds: number | null;
+  total_rss: number;
+  workers: WorkerInfo[];
+}
+
 export interface ContainerInfo {
   is_containerized: boolean;
   runtime: string;
   cgroup_version: string | null;
   memory_limit: number | null;
   cpu_limit: number | null;
+  container_id: string | null;
+  memory: ContainerMemory | null;
+  cpu: ContainerCPU | null;
+  workers: WorkersInfo | null;
+}
+
+/** One host filesystem, with every mountpoint the container reaches it through. */
+export interface HostFilesystem {
+  device: string;
+  fstype: string;
+  mountpoints: string[];
+  total: number;
+  used: number;
+  free: number;
+  percent: number;
+}
+
+/** The kernel's view of the machine the backend runs on: on an LXD virtual machine, the VM. */
+export interface HostInfo {
+  cpu: CPUInfo;
+  memory: MemoryInfo;
+  filesystems: HostFilesystem[];
+  boot_time: string;
+  uptime_seconds: number;
+  is_virtual_machine: boolean | null;
+  platform_vendor: string | null;
 }
 
 export interface CPUInfo {
@@ -1462,6 +1665,9 @@ export interface OSInfo {
   uptime_seconds: number;
 }
 
+// note: `cpu`, `memory`, `disks`, `process` and `os` predate the split into scopes and mix them
+// (cgroup counts and limits beside host-wide percent, load and uptime). They stay for older
+// clients; new consumers read `host` and `container`.
 export interface SystemResourceUsage {
   timestamp: string;
   container: ContainerInfo | null;
@@ -1472,6 +1678,10 @@ export interface SystemResourceUsage {
   process: ProcessInfo | null;
   python: PythonInfo;
   os: OSInfo;
+  /** The kernel's view; null from a backend older than this field. */
+  host: HostInfo | null;
+  /** Which namespace `network` describes: the container's when containerised. */
+  network_scope: "container" | "host";
 }
 
 // ========================

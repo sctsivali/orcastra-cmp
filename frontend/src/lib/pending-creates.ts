@@ -33,7 +33,7 @@ export interface PendingCreate {
 /**
  * How long a create may sit with no signal before the row stops claiming to be in progress.
  *
- * important: this store had no expiry at all, and that is half of BUG-ORC-002. A placeholder
+ * important: this store had no expiry at all, and that is half of the stuck-Creating defect. A placeholder
  * is cleared by an operation frame, a lifecycle frame, or the instance appearing in a list.
  * A create that LXD refused in the background produces none of the three, and the events feed
  * is subscribed without a project so a create into a non-default project may not produce them

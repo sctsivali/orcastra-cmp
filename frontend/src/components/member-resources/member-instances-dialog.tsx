@@ -71,7 +71,7 @@ export function MemberInstancesDialog({
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>
             {filter === "running" ? "Running" : "Stopped"} Instances on {memberName}
           </DialogTitle>

@@ -781,7 +781,13 @@ class FailureIsLabelledTests(unittest.TestCase):
             if "unreachable_nodes" not in source:
                 offenders.append(f"{filename}: no unreachable_nodes anywhere")
                 continue
-            if "unreachable_nodes.append(" not in source:
+            # a handler records failed nodes one by one, or takes the classified list from
+            # services.lxd.fanout.collect, which names every cluster that failed its listing
+            records = (
+                "unreachable_nodes.append(" in source
+                or "unreachable_nodes.extend(fan.unreachable_nodes)" in source
+            )
+            if not records:
                 offenders.append(f"{filename}: never records a failed node")
             if "unreachable_nodes=unreachable_nodes" not in source:
                 offenders.append(f"{filename}: records failures but never returns them")
@@ -1182,8 +1188,9 @@ class CachedPayloadsWrittenBeforeTheFieldStillParseTests(unittest.TestCase):
             [],
             "a cached payload written before this field existed would fail to parse",
         )
-        # a scan over nothing passes for the wrong reason
-        self.assertGreaterEqual(checked, 12)
+        # a scan over nothing passes for the wrong reason. 11: the IPAM wrapper moved its
+        # declaration into the shared FanoutReachability base, which is itself scanned.
+        self.assertGreaterEqual(checked, 11)
 
 
 class PrewarmMustFillWhatTheEndpointFillsTests(unittest.TestCase):

@@ -119,7 +119,7 @@ export function MicroCloudVersionChecker({ currentVersion }: MicroCloudVersionCh
         </Badge>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>
             MicroCloud Update Available
           </DialogTitle>

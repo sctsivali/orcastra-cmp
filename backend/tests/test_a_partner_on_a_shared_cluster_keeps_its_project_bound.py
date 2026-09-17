@@ -210,6 +210,9 @@ def test_every_project_spanning_list_applies_the_bound():
         # ship unbounded after the other four were fixed, which is why the discovery check
         # below exists as well.
         "vms.py": "list_vms",
+        # volumes and warnings span every project since the hotfix1 re-cut
+        "storage_volumes.py": "list_storage_volumes",
+        "lxd_warnings.py": "list_warnings",
     }
     missing = []
     for filename, func in expected.items():

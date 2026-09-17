@@ -35,13 +35,15 @@ from urllib.parse import quote
 # LXD names: a letter first, then letters, digits and hyphens. Instances, networks, profiles
 # and ACLs all share it. Snapshots add a `/`, which is why this is applied per segment and not
 # to a whole path.
+# Always `fullmatch`: `$` matches before a trailing newline, so "web\n" passed `match` and
+# rendered beside "web".
 LXD_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9._-]*$")
 
 MAX_NAME_LENGTH = 63
 
 
 def is_valid_lxd_name(name: str) -> bool:
-    return bool(name) and len(name) <= MAX_NAME_LENGTH and bool(LXD_NAME_RE.match(name))
+    return bool(name) and len(name) <= MAX_NAME_LENGTH and bool(LXD_NAME_RE.fullmatch(name))
 
 
 def safe_segment(value: str) -> str:

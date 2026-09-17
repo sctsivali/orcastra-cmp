@@ -17,6 +17,8 @@ import { GpuSummary } from "./gpu-summary";
 interface GpuPanelProps {
   src: GpuSummarySource;
   dense?: boolean;
+  /** The instance list behind the allocation could not be read; show the allocation as unknown. */
+  allocationUnknown?: boolean;
   className?: string;
 }
 
@@ -27,7 +29,7 @@ interface GpuPanelProps {
  * the compute count is what made a display-only node say "No GPU cards detected on this node"
  * while the API was returning two cards.
  */
-export function GpuPanel({ src, dense = false, className }: GpuPanelProps) {
+export function GpuPanel({ src, dense = false, allocationUnknown = false, className }: GpuPanelProps) {
   const summary = summarizeGpus(src);
   const cards = sortGpuCards(src.gpu_cards ?? []);
 
@@ -44,7 +46,7 @@ export function GpuPanel({ src, dense = false, className }: GpuPanelProps) {
   return (
     <div className={cn("space-y-4", className)}>
       {summary.hasCompute ? (
-        <GpuSummary src={src} />
+        <GpuSummary src={src} allocationUnknown={allocationUnknown} />
       ) : (
         <div className="rounded-lg border border-dashed p-4">
           <p className="font-medium">{GPU_NO_COMPUTE_TITLE}</p>

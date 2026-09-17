@@ -19,7 +19,7 @@ import { RefreshButton } from "@/components/ui/refresh-button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { clusterStatusMeta } from "@/lib/cluster-status";
+import { clusterStatusMeta, clusterSublabel } from "@/lib/cluster-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
@@ -220,8 +220,11 @@ function ClusterMembersContent() {
     <div className="container py-8">
       <div className="mb-6">
         <div className="flex items-center gap-4 mb-4">
-          <label className="text-sm font-medium">Select Clustered Node:</label>
+          <label htmlFor="members-node" className="text-sm font-medium">
+            Select Clustered Node:
+          </label>
           <SearchableSelect
+            id="members-node"
             value={node}
             onValueChange={handleNodeChange}
             className="w-[300px]"
@@ -238,6 +241,7 @@ function ClusterMembersContent() {
               return {
                 value: cluster.cluster_id,
                 label: cluster.display_name || cluster.cluster_id,
+                sublabel: clusterSublabel(cluster.cluster_id, cluster.display_name, cluster.endpoint),
                 badge: formatHypervisorType(cluster.cluster_type),
                 status: {
                   label: meta.label,

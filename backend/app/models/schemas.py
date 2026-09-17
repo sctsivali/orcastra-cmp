@@ -118,6 +118,32 @@ class VMInfo(BaseModel):
         }
 
 
+class FanoutReachability(BaseModel):
+    """What a fan-out list could not read, cluster by cluster.
+
+    important: every field has a default. A payload cached by the previous build carries none
+    of them, and a required field would fail every cached read until its TTL expired.
+    """
+    unreachable_nodes: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Clusters whose entries are missing from this list: never reached, refused, or "
+            "the listing itself failed. node_errors says which."
+        ),
+    )
+    partial_nodes: List[str] = Field(
+        default_factory=list,
+        description="Clusters that answered but lost some rows; node_errors names what was lost",
+    )
+    node_errors: Dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Reason per cluster in unreachable_nodes or partial_nodes, prefixed with "
+            "unreachable:, forbidden:, error: or partial:. Empty for Tenant callers."
+        ),
+    )
+
+
 class VMListResponse(BaseModel):
     """Response for listing all VMs."""
     total: int = Field(..., description="Total number of VMs (before pagination)")
@@ -624,9 +650,12 @@ class HardwareProfile(BaseModel):
 
 class NodeResources(BaseModel):
     """Node available resources information."""
-    cpu_total: int = Field(0, description="Total CPU cores")
-    cpu_used: int = Field(0, description="Used CPU cores")
-    cpu_available: int = Field(0, description="Available CPU cores")
+    cpu_total: int = Field(0, description="Hardware CPU threads")
+    cpu_used: int = Field(0, description="vCPUs allocated to running instances (the sum of their limits.cpu); may exceed cpu_total")
+    cpu_available: int = Field(0, description="Threads not yet allocated; 0 once the host is over-committed, never negative")
+    cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
+    cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total; above 1.0 the host is over-committed, which KVM allows")
+    cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
     cpu_sockets: int = Field(0, description="Number of CPU sockets")
     memory_total: int = Field(0, description="Total memory in bytes")
     memory_used: int = Field(0, description="Used memory in bytes")
@@ -664,10 +693,13 @@ class NodeResources(BaseModel):
 class MemberResources(BaseModel):
     """Cluster member resource information."""
     member_name: str = Field(..., description="Cluster member name")
-    cpu_total: int = Field(0, description="Total CPU cores")
-    cpu_used: int = Field(0, description="Used CPU cores")
-    cpu_available: int = Field(0, description="Available CPU cores")
-    cpu_usage_percent: float = Field(0.0, description="CPU usage percentage")
+    cpu_total: int = Field(0, description="Hardware CPU threads on this member")
+    cpu_used: int = Field(0, description="vCPUs allocated to the running instances placed here (the sum of their expanded limits.cpu); may exceed cpu_total")
+    cpu_available: int = Field(0, description="Threads not yet allocated; 0 once the member is over-committed, never negative")
+    cpu_usage_percent: float = Field(0.0, description="Allocation as a percentage of threads; above 100 the member is over-committed")
+    cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
+    cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total; above 1.0 the member is over-committed, which KVM allows")
+    cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
     memory_total: int = Field(0, description="Total memory in bytes")
     memory_used: int = Field(0, description="Used memory in bytes")
     memory_available: int = Field(0, description="Available memory in bytes")
@@ -687,9 +719,34 @@ class MemberResources(BaseModel):
     storage_used: int = Field(0, description="Used storage in bytes")
     storage_available: int = Field(0, description="Available storage in bytes")
     storage_usage_percent: float = Field(0.0, description="Storage usage percentage")
-    storage_pools: List[Dict[str, Any]] = Field(default_factory=list, description="Storage pools info")
+    storage_local_total: int = Field(0, description="Bytes in pools local to this member (its own disks)")
+    storage_local_used: int = Field(0, description="Used bytes in this member's local pools")
+    storage_shared_total: int = Field(
+        0,
+        description=(
+            "Bytes in cluster-wide pools (ceph and the like) reachable from this member. Counted "
+            "once at cluster level; every member reports the same store."
+        ),
+    )
+    storage_shared_used: int = Field(0, description="Used bytes in the cluster-wide pools")
+    storage_partial: bool = Field(
+        False,
+        description="True when a pool's space could not be read for this member, so the storage figures are a floor",
+    )
+    storage_pools: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Storage pools info; each row carries scope (local or shared) and members",
+    )
     instances_count: int = Field(0, description="Number of instances on this member")
     instances_running: int = Field(0, description="Number of running instances")
+    instances_partial: bool = Field(
+        False,
+        description=(
+            "True when the instance read could not cover every project, so the counts and "
+            "the GPU allocation below them are a floor rather than a total. An undercount "
+            "reads as free capacity, so it is never reported silently."
+        ),
+    )
     collected_at: Optional[datetime] = Field(None, description="When this sample was read off the cluster. None means unknown, which a client must not render as \"now\"")
     # important: a partial read used to answer 200 with zeroes, which is not a degraded answer
     # but a wrong one: storage_total=0 renders as "0 B / 0 B" and drops the pools card entirely,
@@ -888,6 +945,35 @@ class ProjectInfo(BaseModel):
     used_by: List[str] = Field(default_factory=list, description="Resources using this project")
     host: str = Field(..., description="LXD host node name")
     tags: List[str] = Field(default_factory=list, description="Project tags for organization and filtering")
+
+
+class ProjectUsageLimits(BaseModel):
+    """A project's limits, None where unset."""
+    cpu: Optional[int] = Field(None, description="limits.cpu: vCPUs the project's instances may allocate in total")
+    memory_bytes: Optional[int] = Field(None, description="limits.memory in bytes")
+    instances: Optional[int] = Field(None, description="limits.instances")
+    containers: Optional[int] = Field(None, description="limits.containers")
+    virtual_machines: Optional[int] = Field(None, description="limits.virtual-machines")
+    disk_bytes: Optional[int] = Field(None, description="limits.disk in bytes")
+
+
+class ProjectUsageUsed(BaseModel):
+    """What the project's instances already allocate, summed the way LXD sums it."""
+    cpu: int = Field(0, description="Sum of every instance's expanded limits.cpu, whatever its state")
+    memory_bytes: int = Field(0, description="Sum of every instance's expanded limits.memory in bytes")
+    instances: int = Field(0)
+    containers: int = Field(0)
+    virtual_machines: int = Field(0)
+
+
+class ProjectUsageResponse(BaseModel):
+    """How much of each project limit is allocated. Aggregates only, never an instance name."""
+    host: str
+    project: str
+    limits: ProjectUsageLimits
+    used: ProjectUsageUsed
+    complete: bool = Field(True, description="False when the instance read failed: the limits are real, the usage is a floor of zero")
+    collected_at: datetime
 
 
 class ProjectListResponse(BaseModel):
@@ -1263,9 +1349,12 @@ class ClusterMonitoringMetrics(BaseModel):
     status_message: Optional[str] = Field(None, description="Status message for troubleshooting")
     
     # CPU Metrics
-    cpu_total: int = Field(0, description="Total CPU cores")
-    cpu_used: int = Field(0, description="Used CPU cores")
-    cpu_usage_percent: float = Field(0.0, description="CPU usage percentage")
+    cpu_total: int = Field(0, description="Hardware CPU threads")
+    cpu_used: int = Field(0, description="vCPUs allocated to running instances; may exceed cpu_total")
+    cpu_usage_percent: float = Field(0.0, description="Allocation as a percentage of threads; above 100 the node is over-committed")
+    cpu_allocated: int = Field(0, description="Same figure as cpu_used, named for what it is")
+    cpu_allocation_ratio: float = Field(0.0, description="cpu_allocated / cpu_total")
+    cpu_overcommitted: bool = Field(False, description="True when cpu_allocated exceeds cpu_total")
     
     # Memory Metrics
     memory_total_bytes: int = Field(0, description="Total memory in bytes")

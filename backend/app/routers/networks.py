@@ -16,7 +16,7 @@ from app.services.lxd_service import (
     LXDConnectionError,
     get_lxd_service,
 )
-from app.services.lxd.utils import jsonable_lxd
+from app.services.lxd.utils import jsonable_lxd, wait_for_lxd_operation, write_timeout
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import (
@@ -25,6 +25,7 @@ from app.core.org_scope import (
     get_scope_cache_key,
     project_is_visible,
 )
+from app.services.lxd.cluster_topology import cluster_member_names, is_clustered
 from app.services.lxd.project_scope import (
     DEFAULT_PROJECT,
     list_across_projects,
@@ -43,6 +44,7 @@ from app.core.cache import get_cache_manager
 from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from pydantic import BaseModel, Field, field_validator, model_validator
 from app.services.activity_logger import get_activity_logger
+from app.core.lxd_path import safe_segment
 from types import SimpleNamespace
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,12 @@ _executor = ThreadPoolExecutor(max_workers=5)
 # already bounded to the pooled (3, 8) by TimeoutHTTPAdapter, so this only has to cover a
 # realistic member count rather than an unbounded wait.
 NETWORK_CREATE_TIMEOUT = 90.0
+# important: LXD 6.9 (api extension storage_and_network_operations) answers a network create,
+# update or delete with an operation instead of finishing first. Read back before it settles
+# and the daemon says "Network not found" about a network it is still creating; list after a
+# delete and the row is still there. Every write below waits on the operation it got, which
+# on an older daemon is a no-op because there is none.
+NETWORK_WRITE_WAIT_SECONDS = 60
 # Shed rather than queue: the pool is 5 wide and shared with the list fan-out.
 NETWORK_MAX_IN_FLIGHT = 10
 
@@ -101,10 +109,15 @@ _NETWORK_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9-]*$")
 # An OVN network reaches the outside world through an uplink, and LXD accepts only a managed
 # Bridge or Physical network for the job. The dashboard used to hand the daemon whatever the
 # operator picked, and the picker offered every interface it could see: other OVN networks,
-# macvlan interfaces, and the loopback. On nuc1 today that is 11 candidates LXD cannot accept
-# out of 23 offered. Choosing one produced a failure at the daemon, or an instance that never
-# finished creating (BUG-ORC-006, and BUG-ORC-002 downstream of it).
+# macvlan interfaces, and the loopback. On one LXD 6.9 host that is 11 candidates LXD cannot
+# accept out of 23 offered. Choosing one produced a failure at the daemon, or an instance that
+# never finished creating.
 OVN_UPLINK_TYPES = frozenset({"bridge", "physical"})
+
+# Network types that carry member-specific config on a cluster, and so must be defined on
+# every member (POST ?target=) before the cluster-wide create. OVN is the one type without
+# any, and LXD refuses the define step for it. See create_network.
+MEMBER_DEFINED_NETWORK_TYPES = frozenset({"bridge", "macvlan", "physical", "sriov"})
 
 
 def _uplink_candidates(client, host: str) -> Dict[str, Dict]:
@@ -235,35 +248,12 @@ def validate_network_config(config: Dict[str, str]) -> Dict[str, str]:
 # global 5xx handler and the image and storage-volume delete paths share one definition
 # rather than growing variants that drift.
 from app.core.lxd_errors import lxd_http_error, lxd_transport_error  # noqa: E402
-from app.core.lxd_path import safe_segment
 
 
-def _is_clustered(client) -> bool:
-    """True when the LXD host is a multi-member cluster.
-
-    On a cluster, network creation is two-phase (define per member, then create
-    cluster-wide). Unknown/unsupported -> treat as standalone (previous behavior).
-    """
-    try:
-        meta = client.api.cluster.get().json().get("metadata", {}) or {}
-        if not meta.get("enabled"):
-            return False
-        return len(_cluster_member_names(client)) > 1
-    except Exception as e:
-        logger.debug(f"Could not determine cluster state, assuming standalone: {e}")
-        return False
-
-
-def _cluster_member_names(client) -> List[str]:
-    """Member names from /1.0/cluster/members (returns URLs at recursion=0)."""
-    members = client.api.cluster.members.get().json().get("metadata", []) or []
-    names = []
-    for m in members:
-        if isinstance(m, str):
-            names.append(m.rstrip("/").rsplit("/", 1)[-1])
-        elif isinstance(m, dict) and m.get("server_name"):
-            names.append(m["server_name"])
-    return names
+# note: module-level aliases, not direct imports at the call sites. create_network resolves
+# these by name at call time, which is what lets a test swap the cluster shape.
+_is_clustered = is_clustered
+_cluster_member_names = cluster_member_names
 
 
 def _lxd_http_error(exc: Exception, network_name: str) -> HTTPException:
@@ -581,10 +571,10 @@ async def create_network(
             raise HTTPException(status_code=403, detail="Access denied to this project")
 
         # important: LXD refuses any network type except OVN in a project other than default,
-        # with "Network type does not support non-default projects". Verified against LXD 6.9
-        # on nuc1. Saying so here is the difference between an operator learning the rule and
-        # an operator reading a daemon string, and it is why a project-scoped network in the
-        # partner's cluster is an OVN one.
+        # with "Network type does not support non-default projects". Verified against LXD 6.9.
+        # Saying so here is the difference between an operator learning the rule and an
+        # operator reading a daemon string, and it is why a project-scoped network on a
+        # cluster is an OVN one.
         if owner != DEFAULT_PROJECT and request.type != "ovn":
             raise HTTPException(
                 status_code=400,
@@ -602,34 +592,56 @@ async def create_network(
         )
         scope = project_params(owner)
 
-        if _is_clustered(client):
+        if _is_clustered(client) and request.type in MEMBER_DEFINED_NETWORK_TYPES:
             # Clustered LXD: a network must first be DEFINED on every member
             # (POST ?target=<member>, member-scoped, no cluster-wide config) and
             # then CREATED cluster-wide (POST with no target). pylxd 2.4.1's
             # networks.create() has no target parameter, so drive the raw API.
+            #
+            # important: only for the types that carry member-specific config. An OVN
+            # network is a cluster-wide object with none, and the daemon refuses the define
+            # step outright: 'Network type "ovn" does not support member specific config'.
+            # Measured against a 3-member MicroCloud: every OVN create from the console
+            # answered 400 while a bridge went through, so the one network type a MicroCloud
+            # tenant can create in its project was the one it could not create.
             for member in _cluster_member_names(client):
-                client.api.networks.post(
-                    json={"name": request.name, "type": request.type},
-                    params={**scope, "target": member},
+                wait_for_lxd_operation(
+                    client,
+                    client.api.networks.post(
+                        json={"name": request.name, "type": request.type},
+                        params={**scope, "target": member},
+                        timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
+                    ),
+                    timeout=NETWORK_WRITE_WAIT_SECONDS,
                 )
-            client.api.networks.post(
-                json={
-                    "name": request.name,
-                    "type": request.type,
-                    "config": request.config,
-                    "description": request.description,
-                },
-                params=scope,
+            wait_for_lxd_operation(
+                client,
+                client.api.networks.post(
+                    json={
+                        "name": request.name,
+                        "type": request.type,
+                        "config": request.config,
+                        "description": request.description,
+                    },
+                    params=scope,
+                    timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
+                ),
+                timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
         else:
-            client.api.networks.post(
-                json={
-                    "name": request.name,
-                    "type": request.type,
-                    "config": request.config,
-                    "description": request.description,
-                },
-                params=scope,
+            wait_for_lxd_operation(
+                client,
+                client.api.networks.post(
+                    json={
+                        "name": request.name,
+                        "type": request.type,
+                        "config": request.config,
+                        "description": request.description,
+                    },
+                    params=scope,
+                    timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS),
+                ),
+                timeout=NETWORK_WRITE_WAIT_SECONDS,
             )
         created = client.api.networks[safe_segment(request.name)].get(params=scope).json().get(
             "metadata"
@@ -758,8 +770,8 @@ async def update_network(
         ) or {}
 
         # important: the create path validates the OVN uplink and this one did not, while
-        # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect the audit filed
-        # (BUG-ORC-006) was still reachable through update. Reuse the same validator rather
+        # "network" is in ALLOWED_NETWORK_CONFIG_KEYS, so the uplink defect was still
+        # reachable through update. Reuse the same validator rather
         # than growing a second copy of the rule: it reads only .type and .config.
         if config is not None and "network" in config:
             merged = {**(current.get("config") or {}), **config}
@@ -777,7 +789,13 @@ async def update_network(
             payload["config"] = config
         if description is not None:
             payload["description"] = description
-        client.api.networks[safe_segment(network_name)].put(json=payload, params=scope)
+        wait_for_lxd_operation(
+            client,
+            client.api.networks[safe_segment(network_name)].put(
+                json=payload, params=scope, timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
+            ),
+            timeout=NETWORK_WRITE_WAIT_SECONDS,
+        )
 
         get_cache_manager().delete_pattern("api_responses", "networks:*")
 
@@ -820,7 +838,13 @@ async def delete_network(
         owner = resolve_owner(client, "networks", project)
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this network")
-        client.api.networks[safe_segment(network_name)].delete(params=project_params(owner))
+        wait_for_lxd_operation(
+            client,
+            client.api.networks[safe_segment(network_name)].delete(
+                params=project_params(owner), timeout=write_timeout(NETWORK_WRITE_WAIT_SECONDS)
+            ),
+            timeout=NETWORK_WRITE_WAIT_SECONDS,
+        )
 
         get_cache_manager().delete_pattern("api_responses", "networks:*")
 

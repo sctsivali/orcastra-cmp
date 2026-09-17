@@ -1,4 +1,4 @@
-import { Box, FolderKanban, Network, Server, type LucideIcon } from "lucide-react";
+import { Box, FolderKanban, Server, type LucideIcon } from "lucide-react";
 import type { PermissionFlags, RoleGate } from "@/components/sidebar/types";
 
 // Single source of truth for the global create menu. The header renders this list twice, as the
@@ -24,6 +24,9 @@ export interface CreateAction {
 
 // Ordered as NAV_GROUPS is: Compute, then Networking, then Cluster. Icons are the ones the
 // matching sidebar entries already use, so the menu and the nav read as one product.
+// note: a create that lives in a dialog on its own list page (networks, network ACLs, ISO and
+// image uploads) is not offered here. The menu is a list of destinations, real links an
+// operator can open in a new tab, and a dialog is not a destination.
 export const CREATE_ACTIONS: readonly CreateAction[] = [
   {
     id: "instance",
@@ -39,14 +42,6 @@ export const CREATE_ACTIONS: readonly CreateAction[] = [
     icon: FolderKanban,
     href: "/create",
     section: "compute",
-    role: "partner",
-  },
-  {
-    id: "network",
-    label: "Create Network",
-    icon: Network,
-    href: "/inventory/networks/create",
-    section: "networking",
     role: "partner",
   },
   {

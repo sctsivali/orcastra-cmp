@@ -204,8 +204,11 @@ def test_the_instance_list_is_fetched_with_recursion() -> None:
     each under the same 8s socket budget, and nothing at the call site showed it.
 
     The read is now one all-projects request rather than pylxd's instances.all(), because that
-    one only ever saw the default project. What has to stay true is that it asks for recursion,
-    and it asks for 2 now because build_gpu_inventory needs expanded_devices."""
+    one only ever saw the default project. What has to stay true is that it asks for recursion.
+    It asks for 1: LXD's Instance body already carries expanded_config and expanded_devices,
+    which is everything build_gpu_inventory duck-types, and recursion=2 (state, snapshots,
+    backups on top) was measured at 4.6 s against 0.8 s on a 62-instance MicroCloud, which
+    left the member dialog past its budget."""
     client = _cluster()
     nr.aggregate_microcloud_resources(client, "microcloud", {})
-    assert client.recursions == [2], f"expected one recursion=2 call, got {client.recursions}"
+    assert client.recursions == [1], f"expected one recursion=1 call, got {client.recursions}"

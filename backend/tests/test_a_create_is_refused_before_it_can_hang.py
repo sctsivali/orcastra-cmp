@@ -1,13 +1,13 @@
 """An instance create must be refused at the boundary, not left spinning.
 
-BUG-ORC-002. Picking a network the target project cannot reach produced an LXD create that
+Picking a network the target project cannot reach produced an LXD create that
 was accepted as an async operation and then failed in the background. The console's placeholder
 row has no path to learn that, so the instance sat at "Creating..." with empty IP, Profiles and
-Root Disk columns until someone went looking in the daemon log. The audit asks for the
+Root Disk columns until someone went looking in the daemon log. The right behaviour is the
 opposite: refuse it up front with a reason, or succeed.
 
 The two cases a naive version of this check misses are pinned first, because they are the ones
-the audit actually filed: the NIC normally arrives from a profile rather than from the request,
+the field reports: the NIC normally arrives from a profile rather than from the request,
 and it can name its network with `parent` instead of `network`.
 """
 
@@ -99,7 +99,7 @@ def client_with_isolated_project():
 
 class TestTheCasesTheAuditFiled:
     def test_a_network_from_another_project_is_refused(self):
-        """The audit's exact sequence: create in UAT-Hermes, pick br-uplink from the global
+        """The sequence as reported: create in UAT-Hermes, pick br-uplink from the global
         list the form offered, watch it hang."""
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError) as exc:
@@ -201,7 +201,7 @@ class TestTheCasesTheAuditFiled:
         check_nics(client, None, {}, ["default"])
 
     def test_an_explicit_network_is_still_refused_when_the_project_lacks_it(self):
-        """The audit's own case must keep failing: `network=` is a managed reference."""
+        """The reported case must keep failing: `network=` is a managed reference."""
         client = client_with_isolated_project()
         with pytest.raises(NicPreflightError):
             check_nics(

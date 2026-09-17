@@ -199,7 +199,7 @@ export function LXDVersionChecker({ currentVersion, nodeType }: LXDVersionChecke
         </Badge>
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+        <DialogHeader className="pb-4">
           <DialogTitle>{productName} Update Available</DialogTitle>
           <DialogDescription>
             A newer version of {productName} is available for your system.

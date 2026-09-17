@@ -748,7 +748,9 @@ async def list_clusters(
         # important: apply org-scope filter so partners/tenants only see their own
         # org's clusters (admin = unfiltered). Matches overview/nodes behaviour and
         # closes the cross-tenant visibility hole. Cache key is already scope-aware.
-        cluster_ids = apply_cluster_filter(cert_manager.list_clusters(use_cache=not fresh))
+        cluster_ids = apply_cluster_filter(
+            await asyncio.to_thread(cert_manager.list_clusters, use_cache=not fresh)
+        )
         
         # Fetch all cluster info in parallel for better performance
         tasks = [_get_cluster_info_async(cluster_id, cert_manager) for cluster_id in cluster_ids]
@@ -800,7 +802,7 @@ async def get_facility_suggestions(
     seen = set()
     
     try:
-        cluster_ids = cert_manager.list_clusters(use_cache=True)
+        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=True)
         
         for cluster_id in cluster_ids:
             try:

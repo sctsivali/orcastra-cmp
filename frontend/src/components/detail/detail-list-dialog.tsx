@@ -67,7 +67,7 @@ export function DetailListDialog<T>({
       <DialogContent
         className={cn(SIZES[size], "max-h-[calc(100dvh-2rem)] flex flex-col overflow-hidden")}
       >
-        <DialogHeader className="pr-8">
+        <DialogHeader className="pr-8 pb-4">
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>

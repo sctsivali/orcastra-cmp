@@ -6,6 +6,9 @@ const config: Config = {
     "./src/pages/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/components/**/*.{js,ts,jsx,tsx,mdx}",
     "./src/app/**/*.{js,ts,jsx,tsx,mdx}",
+    // lib/ declares class names too (cluster-status.ts, cpu-allocation.ts); until now they
+    // were emitted only because a component happened to repeat the same literal.
+    "./src/lib/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
     container: {

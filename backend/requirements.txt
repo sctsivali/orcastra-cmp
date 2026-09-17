@@ -21,7 +21,7 @@ greenlet>=3.0.0,<4.0.0  # running 3.5.5
 alembic>=1.13.0,<2.0.0  # running 1.19.1
 
 # LXD client
-pylxd>=2.3.2,<3.0.0  # running 2.4.2
+pylxd>=2.3.7,<3.0.0  # running 2.4.2; save/delete(wait=True) on async LXD 6.9 operations
 
 # HTTP client (used by pylxd)
 requests>=2.31.0,<3.0.0  # running 2.34.2

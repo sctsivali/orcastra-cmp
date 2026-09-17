@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { ChunkReloadReset } from "@/components/chunk-reload-reset";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { ThemeProvider } from "./theme-provider";
 import { PersonalizationProvider } from "./personalization-provider";
@@ -111,6 +112,7 @@ export function Providers({
     <AuthProvider>
       <QueryClientProvider client={queryClient}>
         <QueryInvalidationBridge />
+        <ChunkReloadReset />
         <StorageCleanupProvider>
           <PersonalizationProvider initialSettings={initialPersonalization}>
             <ThemeProvider>

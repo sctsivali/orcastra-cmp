@@ -38,39 +38,45 @@ class _FakeVolume:
         self.deleted = True
 
 
-class _FakePool:
-    def __init__(self, volume):
-        self.name = POOL
+class _FakeResponse:
+    def __init__(self, body):
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+class _FakeNode:
+    """The raw API node the route addresses: storage-pools/<pool>/volumes/<type>/<name>.
+
+    The daemon answers a name it cannot resolve with an opaque "not found" string, so the
+    fake does the same and lets the router's error mapper decide the status.
+    """
+
+    def __init__(self, volume, path=()):
         self._volume = volume
+        self._path = tuple(path)
 
-    class _Volumes:
-        def __init__(self, volume):
-            self._volume = volume
+    def __getitem__(self, segment):
+        return _FakeNode(self._volume, self._path + (segment,))
 
-        def get(self, volume_type, volume_name):
-            if self._volume is None or volume_name != self._volume.name:
-                raise Exception(f"not found: {volume_name}")
-            return self._volume
+    def _resolve(self):
+        name = self._path[-1]
+        if self._volume is None or name != self._volume.name:
+            raise Exception(f"not found: {name}")
+        return self._volume
 
-    @property
-    def volumes(self):
-        return self._Volumes(self._volume)
+    def get(self, params=None):
+        volume = self._resolve()
+        return _FakeResponse({"metadata": {"used_by": list(volume.used_by)}})
+
+    def delete(self, params=None):
+        self._resolve().delete()
 
 
 class _FakeClient:
     def __init__(self, volume):
-        self._volume = volume
-
-    class _Pools:
-        def __init__(self, volume):
-            self._volume = volume
-
-        def get(self, name):
-            return _FakePool(self._volume)
-
-    @property
-    def storage_pools(self):
-        return self._Pools(self._volume)
+        self.api = _FakeNode(volume)
 
 
 class _ConnectionManager:

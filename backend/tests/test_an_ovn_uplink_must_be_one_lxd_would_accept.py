@@ -1,11 +1,11 @@
 """An OVN network can only be uplinked to a managed bridge or physical network.
 
-BUG-ORC-006. The create form offered every interface the node reported and the API forwarded
+The create form offered every interface the node reported and the API forwarded
 whatever came back, so an operator could pick another OVN network, a macvlan interface or the
 loopback as an OVN uplink. LXD refuses all of those, and the refusal arrived late enough that
-the audit recorded an instance stuck in Creating with no reason shown.
+operators saw an instance stuck in Creating with no reason shown.
 
-The candidate list here is the real inventory of nuc1 as captured on 2026-09-09: 23 networks,
+The candidate list here is the real inventory of one LXD 6.9 host as captured on 2026-09-09: 23 networks,
 of which 11 are unmanaged, loopback or of a type LXD does not accept. That is the shape the
 partner's dropdown had too.
 """
@@ -39,8 +39,8 @@ NUC1_NETWORKS = {
     "tap8d1a7464": {"type": "unknown", "managed": False},
 }
 
-# The EcoBytes MicroCloud shape: a real uplink bridge beside networks that cannot be one.
-ECOBYTES_NETWORKS = {
+# A MicroCloud's shape: a real uplink bridge beside networks that cannot be one.
+FIELD_NETWORKS = {
     "br-uplink": {"type": "bridge", "managed": True},
     "uplink": {"type": "physical", "managed": True},
     "ovn-production": {"type": "ovn", "managed": True},
@@ -56,18 +56,18 @@ def ovn(uplink=None, name="test"):
 
 
 def test_a_managed_bridge_is_accepted():
-    validate_uplink(ovn("br-uplink"), ECOBYTES_NETWORKS)
+    validate_uplink(ovn("br-uplink"), FIELD_NETWORKS)
 
 
 def test_a_managed_physical_network_is_accepted():
-    validate_uplink(ovn("uplink"), ECOBYTES_NETWORKS)
+    validate_uplink(ovn("uplink"), FIELD_NETWORKS)
 
 
 @pytest.mark.parametrize("uplink", ["ovn-production", "ovn-sealion"])
 def test_another_ovn_network_is_refused(uplink):
-    """The circular dependency the audit called out: OVN cannot uplink to OVN."""
+    """The circular dependency: OVN cannot uplink to OVN."""
     with pytest.raises(HTTPException) as exc:
-        validate_uplink(ovn(uplink), ECOBYTES_NETWORKS)
+        validate_uplink(ovn(uplink), FIELD_NETWORKS)
     assert exc.value.status_code == 400
     assert "ovn" in exc.value.detail
 
@@ -75,7 +75,7 @@ def test_another_ovn_network_is_refused(uplink):
 @pytest.mark.parametrize("uplink", ["lo", "mv-mgmt"])
 def test_loopback_and_macvlan_are_refused(uplink):
     with pytest.raises(HTTPException) as exc:
-        validate_uplink(ovn(uplink), ECOBYTES_NETWORKS)
+        validate_uplink(ovn(uplink), FIELD_NETWORKS)
     assert exc.value.status_code == 400
 
 
@@ -87,20 +87,20 @@ def test_an_unmanaged_bridge_is_refused_even_though_its_type_is_right():
 
 def test_a_missing_uplink_is_refused_before_the_daemon_sees_it():
     with pytest.raises(HTTPException) as exc:
-        validate_uplink(ovn(), ECOBYTES_NETWORKS)
+        validate_uplink(ovn(), FIELD_NETWORKS)
     assert "needs an uplink" in exc.value.detail
 
 
 def test_a_name_that_does_not_exist_is_refused():
     with pytest.raises(HTTPException) as exc:
-        validate_uplink(ovn("ovn-uat-hermes"), ECOBYTES_NETWORKS)
+        validate_uplink(ovn("ovn-uat-hermes"), FIELD_NETWORKS)
     assert "does not exist" in exc.value.detail
 
 
 def test_the_refusal_names_the_uplinks_that_would_work():
     """A rejection that does not say what to pick instead just moves the guessing."""
     with pytest.raises(HTTPException) as exc:
-        validate_uplink(ovn("lo"), ECOBYTES_NETWORKS)
+        validate_uplink(ovn("lo"), FIELD_NETWORKS)
     assert "br-uplink" in exc.value.detail
     assert "uplink" in exc.value.detail
 
@@ -138,14 +138,14 @@ def test_a_bridge_create_may_not_carry_an_ovn_uplink_key():
         name="br0", type="bridge", config={"network": "br-uplink"}
     )
     with pytest.raises(HTTPException) as exc:
-        validate_uplink(request, ECOBYTES_NETWORKS)
+        validate_uplink(request, FIELD_NETWORKS)
     assert "only applies to an OVN network" in exc.value.detail
 
 
 def test_a_plain_bridge_create_is_untouched():
     validate_uplink(
         NetworkCreateRequest(name="br0", type="bridge", config={"ipv4.nat": "true"}),
-        ECOBYTES_NETWORKS,
+        FIELD_NETWORKS,
     )
 
 
@@ -158,9 +158,9 @@ class TestRestrictedUplinks:
     }
 
     def test_a_restricted_project_may_only_use_the_uplinks_it_names(self):
-        validate_uplink(ovn("br-uplink"), ECOBYTES_NETWORKS, self.RESTRICTED)
+        validate_uplink(ovn("br-uplink"), FIELD_NETWORKS, self.RESTRICTED)
         with pytest.raises(HTTPException) as exc:
-            validate_uplink(ovn("uplink"), ECOBYTES_NETWORKS, self.RESTRICTED)
+            validate_uplink(ovn("uplink"), FIELD_NETWORKS, self.RESTRICTED)
         assert "restricts uplinks" in exc.value.detail
 
     def test_the_list_is_ignored_when_the_project_is_not_restricted(self):
@@ -168,14 +168,14 @@ class TestRestrictedUplinks:
         projects on this fleet set it to false explicitly. Honouring the list regardless
         would narrow the choice for nearly every project."""
         config = {"restricted": "false", "restricted.networks.uplinks": "br-uplink"}
-        validate_uplink(ovn("uplink"), ECOBYTES_NETWORKS, config)
+        validate_uplink(ovn("uplink"), FIELD_NETWORKS, config)
 
     def test_a_restricted_project_with_no_list_is_not_narrowed(self):
-        validate_uplink(ovn("uplink"), ECOBYTES_NETWORKS, {"restricted": "true"})
+        validate_uplink(ovn("uplink"), FIELD_NETWORKS, {"restricted": "true"})
 
     def test_the_offer_shown_to_a_restricted_project_is_the_restricted_one(self):
         with pytest.raises(HTTPException) as exc:
-            validate_uplink(ovn("lo"), ECOBYTES_NETWORKS, self.RESTRICTED)
+            validate_uplink(ovn("lo"), FIELD_NETWORKS, self.RESTRICTED)
         assert "br-uplink" in exc.value.detail
         assert "uplink," not in exc.value.detail
 
@@ -184,8 +184,8 @@ def test_both_write_paths_validate_the_uplink():
     """A ratchet, because create was guarded and update was not.
 
     `network` is in ALLOWED_NETWORK_CONFIG_KEYS, so PUT /networks/{name} could set an OVN
-    uplink LXD refuses while POST /networks refused the identical value. The audit filed that
-    defect (BUG-ORC-006); guarding only the create left it reachable through the other door.
+    uplink LXD refuses while POST /networks refused the identical value. Guarding only the
+    create left the defect reachable through the other door.
     """
     import ast
     import pathlib

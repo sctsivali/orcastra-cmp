@@ -5,6 +5,27 @@ import { AlertTriangle } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { cn } from "@/lib/utils";
+import type { FanoutReachability } from "@/types/api";
+
+export interface Reachability {
+  unreachable: string[];
+  partial: string[];
+  reasons?: Record<string, string>;
+}
+
+/**
+ * The reachability fields of a list payload, with the shape every page expects. A payload
+ * cached by an older build carries none of them, and several hooks type their payload as a
+ * plain record, so this reads them once instead of each page casting.
+ */
+export function reachabilityOf(payload: unknown): Reachability {
+  const data = (payload ?? {}) as FanoutReachability;
+  return {
+    unreachable: Array.isArray(data.unreachable_nodes) ? data.unreachable_nodes : [],
+    partial: Array.isArray(data.partial_nodes) ? data.partial_nodes : [],
+    reasons: data.node_errors && typeof data.node_errors === "object" ? data.node_errors : undefined,
+  };
+}
 
 interface UnreachableNodesBannerProps {
   /** Nodes the backend could not reach while building this list. */
@@ -21,6 +42,12 @@ interface UnreachableNodesBannerProps {
    * travels on the same role gate as the names and never reaches a role without cluster:read.
    */
   reasons?: Record<string, string>;
+  /**
+   * The nodes answered but lost some rows (a pool that refused, a project that could not be
+   * read). The lead clause changes so a regex on "Could not reach" cannot mistake a partial
+   * read for an outage, and the tail says "some of", because most rows are there.
+   */
+  partial?: boolean;
   className?: string;
 }
 
@@ -70,20 +97,24 @@ function UnreachableNodesNotice({ noun, className }: { noun: string; className?:
 }
 
 /** What Admin and Partner see. Unchanged from the shape that shipped. */
-function UnreachableNodesDetail({ nodes, noun, reasons, className }: DetailProps) {
+function UnreachableNodesDetail({ nodes, noun, reasons, partial = false, className }: DetailProps) {
   // important: the leading "Could not reach N node(s)" clause is matched by regex in four
   // specs, so it stays byte-identical in both shapes. Only what follows it moves.
   const detailed = nodes.some((node) => reasons?.[node]);
+  const lead = partial ? "Could not fully read" : "Could not reach";
+  const tail = partial
+    ? `Some of their ${noun} are not shown, so this list may be incomplete.`
+    : `Their ${noun} are not shown, so this list may be incomplete.`;
 
   return (
     <BannerShell className={className}>
       <div>
         <span className="font-medium">
-          Could not reach {nodes.length} node{nodes.length === 1 ? "" : "s"}
+          {lead} {nodes.length} node{nodes.length === 1 ? "" : "s"}
           {detailed ? "." : ":"}
         </span>{" "}
         {detailed ? null : <>{nodes.join(", ")}. </>}
-        Their {noun} are not shown, so this list may be incomplete.
+        {tail}
       </div>
       {detailed ? (
         <ul className="space-y-0.5">
@@ -128,6 +159,7 @@ export function UnreachableNodesBanner({
   nodes,
   noun,
   reasons,
+  partial = false,
   className,
 }: UnreachableNodesBannerProps) {
   // important: the hook runs before every early return, so the emptiness check cannot move above it.
@@ -153,6 +185,12 @@ export function UnreachableNodesBanner({
   }
 
   return (
-    <UnreachableNodesDetail nodes={nodes} noun={noun} reasons={reasons} className={className} />
+    <UnreachableNodesDetail
+      nodes={nodes}
+      noun={noun}
+      reasons={reasons}
+      partial={partial}
+      className={className}
+    />
   );
 }

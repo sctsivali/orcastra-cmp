@@ -29,10 +29,17 @@ from app.services.lxd_service import (
     LXDGracefulTimeoutError,
     get_lxd_service,
 )
+from app.services.lxd.exceptions import LXDProjectLimitError
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import project_is_visible
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission, verify_tenant_permission
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    get_scope_cache_key,
+    check_tenant_permission,
+    verify_tenant_permission,
+    project_is_visible,
+)
 from app.core.config import get_settings
 from app.services.orcahub_webhook import schedule_orcahub_event
 from app.core.cache import get_cache_manager
@@ -115,6 +122,7 @@ async def list_instances(
         return VMListResponse(**cached_response)
     
     try:
+        generation = cache.instance_list_generation()
         all_vms, connected_nodes = await lxd_service.list_all_vms()
         
         # Filter by host if provided
@@ -172,8 +180,15 @@ async def list_instances(
         # emptiness for the whole TTL and, on a forced refresh, overwrite good
         # data the operator could still see. No node answered means no result.
         if connected_nodes:
-            cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
-            logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
+            if cache.instance_list_generation() != generation:
+                # important: an invalidation ran while this read was in flight (a create
+                # landed, a background start finished). What was read is already the old
+                # picture; writing it back would pin it for the TTL right after the clearance
+                # meant to remove it.
+                logger.info("Not caching instances list: an instance changed during the read")
+            else:
+                cache.set("api_responses", cache_key, response.model_dump(), ttl=30)
+                logger.debug(f"Cached instances list for 30 seconds: {cache_key}")
         else:
             logger.warning("Not caching instances list: no cluster answered")
         
@@ -316,6 +331,20 @@ async def create_instance(
             error_message=str(e),
             details={"image": request.image, "instance_type": request.instance_type}
         )
+
+        # A project limit refusal names a field the form can mark; precedent for a dict
+        # detail is the rebuild route's snapshot refusal.
+        if isinstance(e, LXDProjectLimitError):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "PROJECT_LIMIT_REACHED",
+                    "message": str(e),
+                    "limit": e.hit.limit,
+                    "project": e.hit.project,
+                    "max": e.hit.maximum,
+                },
+            )
 
         # Map to a meaningful status instead of a blanket 500.
         low = str(e).lower()

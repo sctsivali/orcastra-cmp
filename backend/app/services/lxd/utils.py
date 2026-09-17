@@ -3,8 +3,9 @@ Utility functions for LXD operations.
 Includes helpers for parsing status, extracting IPs, and finding instances.
 """
 
+import ipaddress
 import logging
-from typing import Any, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 import pylxd
 from pylxd import exceptions as pylxd_exceptions
 
@@ -38,60 +39,72 @@ def parse_vm_status(status: str, status_code: int) -> VMStatus:
     return status_map.get(status, VMStatus.UNKNOWN)
 
 
+def image_source_key(image: str) -> str:
+    """
+    "fingerprint" for a full fingerprint or the prefix `lxc image list` prints, else "alias".
+
+    LXD resolves a fingerprint prefix itself, but only when it is sent as one; sent as an
+    alias, the 12 characters an operator pastes from the image list are "not found".
+    """
+    ref = image or ""
+    if 12 <= len(ref) <= 64 and all(c in "0123456789abcdef" for c in ref):
+        return "fingerprint"
+    return "alias"
+
+
+def is_display_address(addr: Dict[str, Any]) -> bool:
+    """
+    Whether one address from an instance's network state belongs in an IP column.
+
+    important: the loopback used to sit beside the real address on every running instance,
+    because one collector walked `lo` and kept every inet address. Skipping `lo` by name is
+    not enough either (a loopback address can live on another interface), so the address
+    itself decides: reachable from outside the instance, so not loopback, not link-local,
+    and not scope "local".
+    """
+    address = addr.get("address") or ""
+    family = addr.get("family")
+    if not address or family not in ("inet", "inet6"):
+        return False
+    if addr.get("scope") in ("local", "link"):
+        return False
+    try:
+        parsed = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return not address.startswith(("127.", "fe80", "::1"))
+    return not (parsed.is_loopback or parsed.is_link_local)
+
+
+def _display_addresses(network_data: Dict[str, Any]) -> List[str]:
+    return [
+        addr.get("address")
+        for iface_name, iface_data in (network_data or {}).items()
+        if iface_name != "lo"
+        for addr in (iface_data or {}).get("addresses", [])
+        if is_display_address(addr)
+    ]
+
+
 def extract_ip_addresses(instance) -> List[str]:
     """Extract IP addresses from instance network state."""
-    ip_addresses = []
-    
     try:
         if instance.status != "Running":
-            return ip_addresses
-        
+            return []
         state = instance.state()
         if state and state.network:
-            for iface_name, iface_data in state.network.items():
-                if iface_name == "lo":
-                    continue
-                
-                for addr in iface_data.get("addresses", []):
-                    if addr.get("family") == "inet":
-                        ip_addresses.append(addr.get("address"))
-                    elif addr.get("family") == "inet6":
-                        ip_addr = addr.get("address")
-                        # Skip link-local addresses
-                        if not ip_addr.startswith("fe80"):
-                            ip_addresses.append(ip_addr)
+            return _display_addresses(state.network)
     except Exception as e:
         logger.debug(f"Could not get IP addresses for {instance.name}: {e}")
-    
-    return ip_addresses
+    return []
 
 
 def extract_ip_addresses_from_state(state_data: dict) -> List[str]:
     """Extract IP addresses from instance state data dictionary."""
-    ip_addresses = []
-    
     try:
-        network_data = state_data.get('network', {})
-        if not network_data:
-            return ip_addresses
-        
-        for iface_name, iface_data in network_data.items():
-            if iface_name == "lo":
-                continue
-            
-            addresses = iface_data.get('addresses', [])
-            for addr in addresses:
-                if addr.get('family') == 'inet':
-                    ip_addresses.append(addr.get('address'))
-                elif addr.get('family') == 'inet6':
-                    ip_addr = addr.get('address')
-                    # Skip link-local addresses
-                    if ip_addr and not ip_addr.startswith('fe80'):
-                        ip_addresses.append(ip_addr)
+        return _display_addresses(state_data.get('network', {}))
     except Exception as e:
         logger.debug(f"Could not extract IP addresses from state data: {e}")
-    
-    return ip_addresses
+    return []
 
 
 def find_instance_in_projects(
@@ -135,12 +148,36 @@ def find_instance_in_projects(
     return None, None
 
 
+# important: one blocking wait on the pooled client dies at its 8 s read timeout however long
+# the caller asked for (see connection.DEFAULT_LXD_TIMEOUT), so a bounded wait is taken in
+# slices shorter than that and the operation is re-polled until it settles or the deadline
+# passes. A slice that returns with the operation still Running is not a failure.
+OPERATION_WAIT_SLICE_SECONDS = 5
+# The pooled client reads for 8 s. A daemon without storage_and_network_operations (LXD 5.21)
+# finishes a network, ACL or pool write before it answers, and an OVN network create on a
+# three-member cluster ran past those 8 s: the console reported "Failed to create network"
+# while the daemon created it. A write is sent with a read timeout that outlives it.
+WRITE_CONNECT_TIMEOUT_SECONDS = 5
+
+
+def write_timeout(read_seconds: int) -> tuple:
+    """A (connect, read) timeout for one synchronous write, passed per call to pylxd."""
+    return (WRITE_CONNECT_TIMEOUT_SECONDS, read_seconds)
+_TERMINAL_OPERATION_STATUSES = {"Success", "Done", "Failure", "Cancelled"}
+
+
 def wait_for_lxd_operation(
     client: pylxd.Client,
     response: object,
     timeout: Optional[int] = None,
 ) -> None:
-    """Wait for an async LXD operation response to complete."""
+    """Wait for an async LXD operation response to complete.
+
+    A synchronous response (no operation in the body) returns at once, so a write can be
+    wrapped unconditionally: LXD 6.9 with the storage_and_network_operations extension
+    answers 202 with an operation for network, ACL and storage pool writes that older
+    daemons complete before answering.
+    """
     try:
         response_data = response.json()
     except Exception:
@@ -161,12 +198,31 @@ def wait_for_lxd_operation(
     if not operation_id:
         return
 
-    if timeout is not None:
-        wait_response = client.api.operations[safe_segment(operation_id)].wait.get(
-            params={"timeout": timeout}
-        )
+    operation = client.api.operations[safe_segment(operation_id)]
+    wait_endpoint = operation.wait
+    if timeout is None:
+        wait_response = wait_endpoint.get()
     else:
-        wait_response = client.api.operations[safe_segment(operation_id)].wait.get()
+        remaining = float(timeout)
+        while True:
+            slice_seconds = max(1, int(min(OPERATION_WAIT_SLICE_SECONDS, remaining)))
+            try:
+                wait_response = wait_endpoint.get(params={"timeout": slice_seconds})
+            except pylxd_exceptions.LXDAPIException as exc:
+                # important: LXD answers an elapsed wait timeout with an error body, "context
+                # deadline exceeded", in the same shape as a failed request, while the operation
+                # keeps running. Read the operation itself before believing the error: a device
+                # write on a clustered OVN instance takes longer than one slice and was reported
+                # as refused while the cluster applied it.
+                wait_response = _operation_record(operation, exc)
+            remaining -= slice_seconds
+            status = _operation_status(wait_response)
+            if status in _TERMINAL_OPERATION_STATUSES:
+                break
+            if remaining <= 0:
+                raise pylxd_exceptions.LXDAPIException(_SyntheticResponse(
+                    f"Operation {operation_id} is still {status or 'running'} after {timeout}s"
+                ))
 
     try:
         wait_metadata = wait_response.json().get("metadata", {})
@@ -179,6 +235,34 @@ def wait_for_lxd_operation(
         raise pylxd_exceptions.LXDAPIException(wait_response)
 
 
+def _operation_record(operation: object, wait_error: Exception) -> object:
+    """The operation as LXD holds it now, or the wait's own error if it cannot be read."""
+    try:
+        return operation.get()
+    except pylxd_exceptions.LXDAPIException:
+        raise wait_error
+
+
+class _SyntheticResponse:
+    """An LXD-shaped error body for a deadline of our own, so callers see one exception type."""
+
+    status_code = 200
+
+    def __init__(self, error: str) -> None:
+        self._body = {"type": "error", "error": error, "metadata": None}
+
+    def json(self) -> dict:
+        return self._body
+
+
+def _operation_status(wait_response: object) -> Optional[str]:
+    try:
+        metadata = wait_response.json().get("metadata", {})
+    except Exception:
+        return None
+    return metadata.get("status") if isinstance(metadata, dict) else None
+
+
 class InstanceWrapper:
     """
     Wrapper class for LXD instance that works across projects.
@@ -189,6 +273,11 @@ class InstanceWrapper:
         self._data = data
         self._client = client
         self._project = project
+        # important: the project the instance was found in, under the name the VMInfo
+        # conversion reads. Without it every wrapper-backed read (the single instance GET,
+        # start, stop, restart) reported `default` for an instance in any other project, and
+        # the detail dialog then sent its device writes to the wrong project.
+        self.project = project
         self.name = data.get('name', '')
         self.status = data.get('status', 'Unknown')
         self.status_code = data.get('status_code', 0)

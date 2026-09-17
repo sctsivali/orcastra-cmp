@@ -1,0 +1,70 @@
+/**
+ * CPU allocation as the console presents it. The figure the API calls cpu_used is the sum of
+ * the running instances' CPU limits, which KVM lets exceed the hardware thread count: 307
+ * vCPUs on 80 threads is a legitimate over-commit, not a fault, and it must not read as
+ * "383.8 % used" with a bar that leaves its track. It is presented as a ratio, with a warning
+ * tone only past the point a general-purpose fleet is normally sized to.
+ */
+
+// 4:1 is the conventional ceiling for general workloads (the KVM and OpenStack default
+// cpu_allocation_ratio); latency-sensitive fleets tune lower. Kept here so a per-tenant
+// override later is one line.
+export const CPU_OVERCOMMIT_WARN_RATIO = 4;
+
+export type CpuTone = "within" | "overcommitted" | "warning";
+
+export interface CpuAllocationSource {
+  cpu_total: number;
+  cpu_used: number;
+  cpu_allocated?: number;
+  cpu_allocation_ratio?: number;
+}
+
+export interface CpuAllocationView {
+  allocated: number;
+  threads: number;
+  ratio: number;
+  /** "3.8x" */
+  ratioLabel: string;
+  /** Allocation as a percentage of threads, held inside [0, 100] for a meter. */
+  percentClamped: number;
+  /** vCPUs beyond the thread count, 0 when within capacity. */
+  over: number;
+  /** Threads not yet allocated, 0 when over-committed. */
+  unallocated: number;
+  tone: CpuTone;
+  /** Utility for a Progress track's fill, ex; "[&>div]:bg-success". Literal so Tailwind emits it. */
+  meterClassName: string;
+  textClassName: string;
+}
+
+export function cpuAllocation(src: CpuAllocationSource): CpuAllocationView {
+  const allocated = src.cpu_allocated ?? src.cpu_used ?? 0;
+  const threads = src.cpu_total ?? 0;
+  const ratio = src.cpu_allocation_ratio ?? (threads > 0 ? allocated / threads : 0);
+  const tone: CpuTone = ratio <= 1 ? "within" : ratio <= CPU_OVERCOMMIT_WARN_RATIO ? "overcommitted" : "warning";
+  return {
+    allocated,
+    threads,
+    ratio,
+    ratioLabel: `${ratio.toFixed(1)}x`,
+    percentClamped: threads > 0 ? Math.min(100, Math.max(0, (allocated / threads) * 100)) : 0,
+    over: Math.max(0, allocated - threads),
+    unallocated: Math.max(0, threads - allocated),
+    tone,
+    meterClassName:
+      tone === "within"
+        ? "[&>div]:bg-success"
+        : tone === "overcommitted"
+          ? "[&>div]:bg-status-unknown"
+          : "[&>div]:bg-status-pending",
+    textClassName: tone === "warning" ? "text-status-pending" : "text-muted-foreground",
+  };
+}
+
+/** "3.8x allocated (over-committed)", "0.4x allocated", or "5.2x allocated (above 4x)". */
+export function cpuAllocationText(view: CpuAllocationView): string {
+  if (view.tone === "within") return `${view.ratioLabel} allocated`;
+  if (view.tone === "overcommitted") return `${view.ratioLabel} allocated (over-committed)`;
+  return `${view.ratioLabel} allocated (above ${CPU_OVERCOMMIT_WARN_RATIO}x)`;
+}

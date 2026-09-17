@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { parseLimitsCpu } from "@/lib/lxd-limits";
 // note: these alert cards all point at /inventory/warnings with distinct query strings,
 // which are distinct router cache keys. Prefetching them on sight cost seven RSC requests
 // on every dashboard paint, so they warm on intent like the sidebar does.
@@ -16,7 +17,6 @@ import { TagManager, TagFilter } from "@/components/tag-manager";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
-import { parseCpuLimit } from "@/lib/utils";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { SortSelect } from "@/components/ui/sort-select";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -578,12 +578,12 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
     let storageUsedBytes = 0;
 
     instances.forEach((vm) => {
-      // important: parseCpuLimit, not parseInt. LXD accepts a pinned range ("0-3") and a pinned
-      // set ("1,3") as well as a count, and parseInt read those as 0 and 1, so a four-core
-      // instance contributed nothing to the fleet total and a two-core one contributed half.
-      const vmCpu = parseCpuLimit(vm.config?.["limits.cpu"]);
+      // count CPU the way the backend does (a range or a set is its size, not 0). The row
+      // carries the instance-local config only, so a profile-inherited limit still counts as
+      // unset here; the per-node figures come from the API and are exact.
+      const vmCpu = vm.config?.["limits.cpu"];
       if (vmCpu) {
-        cpuUsed += vmCpu;
+        cpuUsed += parseLimitsCpu(vmCpu, 0);
       }
 
       // count RAM

@@ -2,7 +2,7 @@
 
 import { Suspense, useState, useMemo } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
+import { UnreachableNodesBanner, reachabilityOf } from "@/components/ui/unreachable-nodes-banner";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import {
@@ -101,7 +101,7 @@ function GroupsContent() {
   const { toast } = useToast();
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
-  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
+  const reach = reachabilityOf(data);
   const deleteGroupMutation = useDeleteGroup();
   const { isReadOnly } = useReadOnlyMode();
   
@@ -232,7 +232,8 @@ function GroupsContent() {
         </div>
       </div>
 
-      <UnreachableNodesBanner noun="groups" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="groups" nodes={reach.unreachable} reasons={reach.reasons} />
+      <UnreachableNodesBanner noun="groups" nodes={reach.partial} reasons={reach.reasons} partial />
 
       <Card>
         <CardHeader className="space-y-4">

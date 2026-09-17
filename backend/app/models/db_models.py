@@ -21,7 +21,7 @@ class TagCategory(Base):
     Predefined categories:
     - loc_  : Location-based (ex; loc_jakarta, loc_surabaya)
     - reg_  : Region-based (ex; reg_jawa-timur, reg_kalimantan)
-    - vend_ : Vendor (ex; vend_canonical, vend_ecobytes)
+    - vend_ : Vendor (ex; vend_canonical, vend_acme)
     - own_  : Ownership (ex; own_sivali, own_partner)
     - env_  : Environment (ex; env_production, env_staging)
     - app_  : Application type (ex; app_banking, app_hci)

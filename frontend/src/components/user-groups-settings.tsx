@@ -611,7 +611,7 @@ function UserGroupsSettingsContent() {
                             </Tooltip>
                           </TooltipProvider>
                           <DialogContent>
-                            <DialogHeader>
+                            <DialogHeader className="pb-4">
                               <DialogTitle>Remove User</DialogTitle>
                               <DialogDescription>
                                 Remove <strong>{user.user_email}</strong> from

@@ -8,7 +8,7 @@ import time
 import os
 import atexit
 import gc
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 import requests
 import pylxd
 from requests.adapters import HTTPAdapter
@@ -91,6 +91,16 @@ class LXDConnectionManager:
         # should be visible via get_node_names(). Prevents stale or
         # unregistered nodes from leaking into API responses.
         self._registered_clusters: Optional[set] = None
+        # Clusters this worker has tried to connect to since it started, whatever the outcome.
+        # A cluster in the whitelist but not here is one this worker has not caught up with
+        # yet (registered seconds ago, connected by the next healer tick); one that is here
+        # and still has no client is known to be down. The list routers cache a body that
+        # names a known-down cluster and refuse to cache one that names a cluster they have
+        # simply not tried, because the cache is shared by every worker.
+        self._attempted: Set[str] = set()
+        # (count, first_at) of tolerated read timeouts of the validation probe, per cluster.
+        # See _validate_connection; cleared whenever the client is evicted or rebuilt.
+        self._slow_validations: Dict[str, Tuple[int, float]] = {}
         
         # Register cleanup on exit
         atexit.register(self._cleanup_all_temp_files)
@@ -159,6 +169,16 @@ class LXDConnectionManager:
         
         return session
     
+    # A probe that times out on the read has completed TCP and TLS: the daemon is there and
+    # busy. One such probe used to evict the pooled client, and when the reconnect's own probe
+    # timed out as well the breaker tripped for 60 seconds, so a healthy MicroCloud under load
+    # flipped to "Could not reach" and back. A second read timeout at least
+    # SLOW_VALIDATION_SPACING seconds after the first still means a wedged daemon and takes
+    # the existing path; a burst of parallel callers hitting one slow moment counts as one.
+    # Connect, TLS and untrusted answers always take the existing path.
+    SLOW_VALIDATION_TOLERANCE = 2
+    SLOW_VALIDATION_SPACING = 5.0
+
     def _validate_connection(self, client: pylxd.Client, node_name: str) -> bool:
         """
         Validate if connection is still alive and authenticated.
@@ -178,12 +198,30 @@ class LXDConnectionManager:
                     metadata = data.get("metadata")
                     if metadata:
                         client.host_info = metadata
+                    self._slow_validations.pop(node_name, None)
                     return True
                 else:
                     logger.warning(f"Connection to {node_name} not trusted (auth={auth_status})")
                     return False
             return True
         except Exception as e:
+            from app.services.lxd.fanout import is_read_timeout
+
+            if is_read_timeout(e):
+                now = time.time()
+                count, first_at = self._slow_validations.get(node_name, (0, now))
+                if count == 0 or (now - first_at) < self.SLOW_VALIDATION_SPACING:
+                    # first slow probe, or one of a burst landing on the same slow moment
+                    self._slow_validations[node_name] = (max(count, 1), first_at if count else now)
+                    logger.info(
+                        "Validation of %s timed out on the read; TCP and TLS completed, keeping "
+                        "the pooled client (evicts on a second timeout %.0fs or more later)",
+                        node_name, self.SLOW_VALIDATION_SPACING,
+                    )
+                    return True
+                self._slow_validations.pop(node_name, None)
+            else:
+                self._slow_validations.pop(node_name, None)
             logger.warning(f"Connection validation failed for {node_name}: {e}")
             return False
     
@@ -318,6 +356,7 @@ class LXDConnectionManager:
         registration, auth checks and certificate rotation. Those are the operations that fix
         a broken cluster, so refusing them would make the breaker self-sealing.
         """
+        self._attempted.add(cluster_id)
         if not force and health.is_tripped(cluster_id):
             logger.debug(
                 "Skipping connect to %s: recently unreachable (%s)",
@@ -369,6 +408,7 @@ class LXDConnectionManager:
             # Cache the client
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
+            self._slow_validations.pop(cluster_id, None)
             health.clear(cluster_id)
             logger.info(f"Connected to cluster {cluster_id} using Vault certificate")
 
@@ -555,10 +595,14 @@ class LXDConnectionManager:
                 timeout=(3, 8)
             )
             
-            # Verify authentication
-            response = client.api.get(timeout=(2, 5))
-            if response.status_code == 200:
-                data = response.json()
+            # Verify authentication. pylxd.Client() has just read /1.0 under the (3, 8)
+            # budget and holds the body in host_info; a second probe under a tighter budget
+            # was one more chance for a busy daemon to look absent.
+            data = {"metadata": getattr(client, "host_info", None) or {}}
+            if not data["metadata"]:
+                response = client.api.get(timeout=(3, 8))
+                data = response.json() if response.status_code == 200 else {}
+            if data:
                 if data.get("metadata", {}).get("auth") != "trusted":
                     logger.warning(f"Reconnect failed: cert not trusted by {cluster_id}")
                     # important: evict the cached credentials before recording. This method
@@ -584,9 +628,14 @@ class LXDConnectionManager:
                         cluster_id, "certificate not trusted", kind=health.KIND_UNAUTHORIZED
                     )
                     return None
-            
+
+            # note: the boot path configures the session (pool size, retry policy, default
+            # timeout) and this path did not, so a worker that had reconnected once ran a
+            # different HTTP stack for the same cluster than its sibling.
+            self._configure_client_session(client)
             self._clients[cluster_id] = client
             self._connection_times[cluster_id] = time.time()
+            self._slow_validations.pop(cluster_id, None)
             health.clear(cluster_id)
             logger.info(f"Auto-reconnected to {cluster_id}")
 
@@ -643,10 +692,13 @@ class LXDConnectionManager:
         logger.debug(f"Synced registered clusters whitelist: {self._registered_clusters}")
 
     def register_cluster(self, cluster_id: str) -> None:
-        """Add a single cluster to the registered whitelist."""
-        if self._registered_clusters is None:
-            self._registered_clusters = set()
-        self._registered_clusters.add(cluster_id)
+        """Add a single cluster to the registered whitelist.
+
+        note: None means "unfiltered" (the boot sync failed). Turning it into a one-element
+        set here would hide every other connected cluster in this worker.
+        """
+        if self._registered_clusters is not None:
+            self._registered_clusters.add(cluster_id)
 
     def unregister_cluster(self, cluster_id: str) -> None:
         """Remove a single cluster from the registered whitelist."""
@@ -670,6 +722,10 @@ class LXDConnectionManager:
     def has_connection_info(self, cluster_id: str) -> bool:
         """Check if we have stored connection info for a cluster."""
         return cluster_id in self._connection_info
+
+    def has_attempted(self, cluster_id: str) -> bool:
+        """True once this worker has tried to connect to the cluster, whatever came of it."""
+        return cluster_id in self._attempted
     
     def cleanup_connection(self, cluster_id: str) -> None:
         """
@@ -684,6 +740,8 @@ class LXDConnectionManager:
             del self._clients[cluster_id]
         if cluster_id in self._connection_times:
             del self._connection_times[cluster_id]
+        # the tolerance describes the client that was just evicted, not the next one
+        self._slow_validations.pop(cluster_id, None)
         # Keep _connection_info for auto-reconnect
     
     def remove_connection(self, cluster_id: str) -> None:

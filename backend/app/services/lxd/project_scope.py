@@ -34,6 +34,7 @@ ALL_PROJECTS_EXTENSION: Dict[str, str] = {
     "network-acls": "network_acls_all_projects",
     "profiles": "profiles_all_projects",
     "instances": "instance_all_projects",
+    "storage-volumes": "storage_volumes_all_projects",
 }
 
 # Which project feature flag decides whether a collection is isolated per project.
@@ -42,6 +43,7 @@ FEATURE_FOR_COLLECTION: Dict[str, str] = {
     "networks": "features.networks",
     "network-acls": "features.networks",
     "profiles": "features.profiles",
+    "storage-volumes": "features.storage.volumes",
 }
 
 # How many projects the fallback path will walk on one cluster before it stops and says so.
@@ -175,15 +177,25 @@ def project_params(project: Optional[str], **extra: Any) -> Dict[str, Any]:
     return params
 
 
+def _api_node(client: Any, path: str) -> Any:
+    """The pylxd API node for a slash-separated path such as storage-pools/local/volumes."""
+    node = client.api
+    for segment in path.split("/"):
+        node = node[segment]
+    return node
+
+
 def list_in_project(
-    client: Any, collection: str, project: str, recursion: int = 1
+    client: Any, collection: str, project: str, recursion: int = 1, path: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """One project's records, each stamped with the project it was read from.
 
     LXD stamps `project` itself on an all-projects listing but not always on a single-project
-    one, and the callers key on that field either way.
+    one, and the callers key on that field either way. `path` is the API path when it is not
+    the collection name (a pool's volumes live under storage-pools/<pool>/volumes while the
+    extension and feature keys are those of "storage-volumes").
     """
-    response = client.api[collection].get(
+    response = _api_node(client, path or collection).get(
         params={"recursion": recursion, "project": project},
         timeout=ALL_PROJECTS_READ_TIMEOUT,
     )
@@ -196,18 +208,18 @@ def list_in_project(
 
 
 def list_across_projects(
-    client: Any, collection: str, recursion: int = 1
+    client: Any, collection: str, recursion: int = 1, path: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Every record of `collection` on the cluster, whatever project holds it.
 
     Returns (rows, complete). `complete` is False when the fallback could not read every
     project, so the caller can say the list is partial rather than presenting a short list as
-    the whole truth.
+    the whole truth. `path` overrides the API path (see list_in_project).
     """
     _assert_pooled(client, collection)
 
     if supports_all_projects(client, collection):
-        response = client.api[collection].get(
+        response = _api_node(client, path or collection).get(
             params={"recursion": recursion, "all-projects": "true"},
             timeout=ALL_PROJECTS_READ_TIMEOUT,
         )
@@ -224,11 +236,11 @@ def list_across_projects(
             len(unstamped),
         )
 
-    return _walk_projects(client, collection, recursion)
+    return _walk_projects(client, collection, recursion, path)
 
 
 def _walk_projects(
-    client: Any, collection: str, recursion: int
+    client: Any, collection: str, recursion: int, path: Optional[str] = None
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """The fallback: enumerate projects and read each one.
 
@@ -250,6 +262,9 @@ def _walk_projects(
 
     configs = list_project_configs(client)
 
+    if collection == "storage-volumes":
+        return _walk_projects_for_volumes(client, names, configs, recursion, path, complete)
+
     # Resolve every project to the one that really holds its records, then read each of those
     # once. On a fleet where most projects inherit, this is the difference between 47 requests
     # and two, and it is also what stops the same bridge appearing 47 times.
@@ -262,7 +277,7 @@ def _walk_projects(
     rows: List[Dict[str, Any]] = []
     for owner in owners:
         try:
-            for row in list_in_project(client, collection, owner, recursion):
+            for row in list_in_project(client, collection, owner, recursion, path):
                 row["project"] = owner
                 rows.append(row)
         except Exception as exc:  # noqa: BLE001 - reported as a partial read, not an outage
@@ -271,6 +286,37 @@ def _walk_projects(
             logger.warning("Could not read %s in project %s: %s", collection, owner, exc)
             complete = False
 
+    return rows, complete
+
+
+def _walk_projects_for_volumes(
+    client: Any,
+    names: List[str],
+    configs: Dict[str, Dict[str, str]],
+    recursion: int,
+    path: Optional[str],
+    complete: bool,
+) -> Tuple[List[Dict[str, Any]], bool]:
+    """The volume walk reads every project, not only the owners.
+
+    `features.storage.volumes` governs custom volumes only: a project with the flag false sees
+    default's custom volumes, but the root volumes of its own instances still live in that
+    project. Reading owners alone dropped those. So every project is read; from a project that
+    does not own its custom volumes only the instance volumes are kept, custom and image rows
+    being default's repeated.
+    """
+    rows: List[Dict[str, Any]] = []
+    for name in names:
+        owner = effective_project("storage-volumes", name, configs)
+        try:
+            for row in list_in_project(client, "storage-volumes", name, recursion, path):
+                if owner != name and row.get("type") not in ("container", "virtual-machine"):
+                    continue
+                row["project"] = name
+                rows.append(row)
+        except Exception as exc:  # noqa: BLE001 - reported as a partial read, not an outage
+            logger.warning("Could not read storage volumes in project %s: %s", name, exc)
+            complete = False
     return rows, complete
 
 
@@ -310,8 +356,32 @@ class InstanceRecord:
 def list_instance_records(client: Any) -> Tuple[List[InstanceRecord], bool]:
     """Every instance on the cluster, in every project, with its config expanded.
 
-    recursion=2 because the GPU reader needs `expanded_devices`, which a recursion=1 listing
-    does not carry. Returns (records, complete).
+    recursion=1: LXD's Instance body already carries `expanded_config`, `expanded_devices`,
+    `location` and `status`, which is everything the readers duck-type. recursion=2 only adds
+    `state`, `snapshots` and `backups`, and on a 62-instance MicroCloud it cost 4.6 s against
+    0.8 s, against a 25 s budget that a busier cluster exceeded, which left the member dialog
+    reporting zero instances. Returns (records, complete).
     """
-    rows, complete = list_across_projects(client, "instances", recursion=2)
+    rows, complete = list_across_projects(client, "instances", recursion=1)
     return [InstanceRecord(row) for row in rows], complete
+
+
+def list_pool_volumes(client: Any, pool: str) -> Tuple[List[Dict[str, Any]], bool]:
+    """Every volume of one pool, in every project, in one request where LXD allows it.
+
+    On a clustered host a per-member pool lists its volumes with `?target=<member>` in the
+    URL, so pylxd's per-volume sync (one GET each, without the target) cannot read them. The
+    recursion=1 rows carry `location` and `project` themselves, so nothing is synced.
+    Returns (rows, complete); a row's `location` is "" when LXD reports "none".
+    """
+    from app.core.lxd_path import safe_segment
+
+    rows, complete = list_across_projects(
+        client, "storage-volumes", recursion=1, path=f"storage-pools/{safe_segment(pool)}/volumes"
+    )
+    for row in rows:
+        row.setdefault("project", DEFAULT_PROJECT)
+        location = row.get("location")
+        row["location"] = "" if not location or location == "none" else location
+    return rows, complete
+

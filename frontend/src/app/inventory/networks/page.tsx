@@ -27,7 +27,7 @@ import { TableLink } from "@/components/ui/table-link";
 import { Plus, Network as NetworkIcon } from "lucide-react";
 import { useNetworks } from "@/hooks/use-lxd";
 import { Button } from "@/components/ui/button";
-import { useNavigationProgress } from "@/components/navigation/navigation-progress";
+import { NetworkCreateDialog } from "@/components/networks/network-create-dialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import type { NetworkInfo } from "@/types/api";
@@ -123,10 +123,10 @@ function NetworksContent() {
   const { data, isLoading, refreshNow, dataUpdatedAt } = useNetworks();
   const networks: NetworkInfo[] = useMemo(() => (data as any)?.networks || [], [data]);
 
-  const { navigate } = useNavigationProgress();
   const { hasRole } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
   const canCreateNetwork = hasRole(Role.PARTNER);
+  const [createOpen, setCreateOpen] = useState(false);
   // Nodes we could not reach: their networks are absent from the list, so warn
   // rather than silently showing "0 networks" (indistinguishable from empty).
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
@@ -200,10 +200,11 @@ function NetworksContent() {
             lastUpdatedAt={dataUpdatedAt}
             onRefresh={refreshNow}
           />
-          {/* Only Partner+ can create; the create page enforces this too. */}
+          {/* Only Partner+ can create; the dialog is mounted for them alone and guards
+              read-only mode itself. */}
           {canCreateNetwork && (
             <Button
-              onClick={() => navigate("/inventory/networks/create")}
+              onClick={() => setCreateOpen(true)}
               disabled={isReadOnly}
               title={isReadOnly ? "Action disabled in read-only mode" : "Create a new network"}
             >
@@ -346,6 +347,16 @@ function NetworksContent() {
       </Card>
 
       <UsedByDialog {...usedBy.dialogProps} />
+      {canCreateNetwork && (
+        <NetworkCreateDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          // the create already succeeded; a refresh that fails is the list's own error state
+          onSaved={() => {
+            void Promise.resolve(refreshNow()).catch(() => undefined);
+          }}
+        />
+      )}
     </div>
   );
 }
