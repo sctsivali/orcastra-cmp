@@ -14,21 +14,14 @@
  * reflected, so this is not an open redirect.
  */
 
-const LOOPBACK_NAMES = new Set(["localhost", "[::1]", "::1"]);
-
-function bareHost(hostHeader: string): string {
-  const host = hostHeader.trim().toLowerCase();
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    return end === -1 ? host : host.slice(0, end + 1);
-  }
-  return host.replace(/:\d+$/, "");
-}
+// The whole header, port included, or nothing: a prefix match let "[::1]@evil.com" through
+// (the bracket form was cut at the first "]" and the raw header was reflected), which is the
+// one shape that turns this control into an open redirect.
+const LOOPBACK_HOST = /^(?:localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])(?::\d{1,5})?$/;
 
 export function isLoopbackHost(hostHeader: string | null | undefined): boolean {
   if (!hostHeader) return false;
-  const bare = bareHost(hostHeader);
-  return LOOPBACK_NAMES.has(bare) || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(bare);
+  return LOOPBACK_HOST.test(hostHeader.trim().toLowerCase());
 }
 
 /** The origin a redirect should carry: the request's own loopback host, else the app origin. */
