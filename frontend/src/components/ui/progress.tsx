@@ -21,9 +21,15 @@ interface ProgressProps extends React.ComponentPropsWithoutRef<typeof ProgressPr
 const Progress = React.forwardRef<
   React.ElementRef<typeof ProgressPrimitive.Root>,
   ProgressProps
->(({ className, value, animated = false, gradient = false, ...props }, ref) => (
+>(({ className, value, animated = false, gradient = false, ...props }, ref) => {
+  // important: held inside [0, 100]. Radix rejects a value past max (it logs and falls back to
+  // indeterminate) and the transform below slid the fill out of its track at 383 %, which is
+  // what an over-committed member's CPU bar did. No caller can want a fill outside the track.
+  const clamped = Math.min(100, Math.max(0, value ?? 0));
+  return (
   <ProgressPrimitive.Root
     ref={ref}
+    value={clamped}
     className={cn(
       "relative h-4 w-full overflow-hidden rounded-full bg-secondary",
       className
@@ -38,7 +44,7 @@ const Progress = React.forwardRef<
           : "bg-primary",
         animated && "relative overflow-hidden"
       )}
-      style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+      style={{ transform: `translateX(-${100 - clamped}%)` }}
     >
       {/* Shimmer effect for animated progress */}
       {animated && (
@@ -52,7 +58,8 @@ const Progress = React.forwardRef<
       )}
     </ProgressPrimitive.Indicator>
   </ProgressPrimitive.Root>
-))
+  );
+})
 Progress.displayName = ProgressPrimitive.Root.displayName
 
 export { Progress }

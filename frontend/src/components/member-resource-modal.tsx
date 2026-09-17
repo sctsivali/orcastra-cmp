@@ -16,7 +16,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { EmptyState } from "@/components/ui/empty-state";
 import { TableLink } from "@/components/ui/table-link";
 import { Progress } from "@/components/ui/progress";
-import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, Sparkles } from "lucide-react";
+import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
+import { Cpu, MemoryStick, HardDrive, Layers, Server, Activity, Sparkles, AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 import { formatLabel, formatInstanceType } from "@/lib/utils";
 import type { VMInfo, MemberResources } from "@/types/api";
@@ -86,6 +87,7 @@ export function MemberResourceModal({
   // What the storage card headlines. A build that reports the local/shared split headlines
   // the member's own disks; an older payload (no split) falls back to the sum of its rows,
   // which is what it always showed.
+  const cpu = cpuAllocation(resources ?? { cpu_total: 0, cpu_used: 0 });
   const storage = React.useMemo(() => {
     const local = resources?.storage_local_total;
     const hasSplit = typeof local === "number" && typeof resources?.storage_shared_total === "number";
@@ -187,15 +189,18 @@ export function MemberResourceModal({
                       resources API carries no host CPU utilisation. */}
                   <div className="space-y-2" data-partial={resources.instances_partial ? "true" : undefined}>
                     <div className="flex items-baseline justify-center gap-1">
-                      <span className="text-2xl font-bold">{resources.instances_partial ? "?" : resources.cpu_used}</span>
-                      <span className="text-sm text-muted-foreground">/ {resources.cpu_total} cores</span>
+                      <span className="text-2xl font-bold">{resources.instances_partial ? "?" : cpu.allocated}</span>
+                      <span className="text-sm text-muted-foreground">vCPU on {cpu.threads} threads</span>
                     </div>
-                    <Progress 
-                      value={resources.instances_partial ? 0 : resources.cpu_usage_percent} 
-                      className="h-2"
+                    <Progress
+                      value={resources.instances_partial ? 0 : cpu.percentClamped}
+                      className={`h-2 ${cpu.meterClassName}`}
                     />
-                    <p className={`text-sm font-medium text-center ${resources.instances_partial ? "text-muted-foreground" : getUsageColor(resources.cpu_usage_percent)}`}>
-                      {resources.instances_partial ? "allocation unknown" : `${resources.cpu_usage_percent.toFixed(1)}% allocated`}
+                    <p className={`flex items-center justify-center gap-1 text-sm font-medium ${resources.instances_partial ? "text-muted-foreground" : cpu.textClassName}`}>
+                      {cpu.tone === "warning" && !resources.instances_partial && (
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+                      )}
+                      {resources.instances_partial ? "allocation unknown" : cpuAllocationText(cpu)}
                     </p>
                   </div>
                 </CardContent>
@@ -375,8 +380,14 @@ export function MemberResourceModal({
               <CardContent>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
                   <div>
-                    <p className="text-muted-foreground mb-1">Unallocated CPU</p>
-                    <p className="font-medium">{resources.instances_partial ? "unknown" : `${resources.cpu_available} cores`}</p>
+                    <p className="text-muted-foreground mb-1">{cpu.over > 0 ? "CPU over-commit" : "Unallocated CPU"}</p>
+                    <p className="font-medium">
+                      {resources.instances_partial
+                        ? "unknown"
+                        : cpu.over > 0
+                          ? `${cpu.over} vCPU beyond capacity (${cpu.ratioLabel})`
+                          : `${cpu.unallocated} threads`}
+                    </p>
                   </div>
                   <div>
                     <p className="text-muted-foreground mb-1">Available Memory</p>

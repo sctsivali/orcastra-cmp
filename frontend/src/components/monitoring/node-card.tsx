@@ -1,6 +1,7 @@
 "use client";
 
 import { memo } from "react";
+import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
 import { Play, Server } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,7 @@ interface NodeCardProps {
 
 export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
   const gpu = summarizeGpus(node);
+  const cpu = cpuAllocation(node);
   const { isPartner } = usePermissions();
   const rawStatus = clusterStatusMeta(node);
   // important: "Pending Trust" and "Error" are certificate-handshake and platform vocabulary a
@@ -86,10 +88,10 @@ export const NodeCard = memo(function NodeCard({ node }: NodeCardProps) {
             <div className="space-y-1.5">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">CPU</span>
-                <span className="font-medium">{node.cpu_used} / {node.cpu_total} cores</span>
+                <span className="font-medium">{cpu.allocated} / {cpu.threads} threads</span>
               </div>
-              <Progress value={node.cpu_usage_percent} className="h-2" />
-              <p className="text-xs text-muted-foreground text-right">{node.cpu_usage_percent.toFixed(1)}%</p>
+              <Progress value={cpu.percentClamped} className={`h-2 ${cpu.meterClassName}`} />
+              <p className={`text-xs text-right ${cpu.textClassName}`}>{cpuAllocationText(cpu)}</p>
             </div>
             
             {/* Memory */}

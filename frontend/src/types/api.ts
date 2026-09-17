@@ -410,9 +410,15 @@ export interface HardwareProfile {
 }
 
 export interface NodeResources {
+  /** Hardware threads. */
   cpu_total: number;
+  /** vCPUs allocated to running instances; may exceed cpu_total. */
   cpu_used: number;
+  /** Threads not yet allocated, 0 once over-committed. */
   cpu_available: number;
+  cpu_allocated?: number;
+  cpu_allocation_ratio?: number;
+  cpu_overcommitted?: boolean;
   cpu_sockets: number;
   memory_total: number;
   memory_used: number;
@@ -993,10 +999,17 @@ export interface ClusterMembersResponse {
 
 export interface MemberResources {
   member_name: string;
+  /** Hardware threads. */
   cpu_total: number;
+  /** vCPUs allocated to the running instances placed here; may exceed cpu_total. */
   cpu_used: number;
+  /** Threads not yet allocated, 0 once over-committed. */
   cpu_available: number;
+  /** Allocation as a percentage of threads; above 100 the member is over-committed. */
   cpu_usage_percent: number;
+  cpu_allocated?: number;
+  cpu_allocation_ratio?: number;
+  cpu_overcommitted?: boolean;
   memory_total: number;
   memory_used: number;
   memory_available: number;
@@ -1301,6 +1314,9 @@ export interface ClusterMonitoringMetrics {
   cpu_total: number;
   cpu_used: number;
   cpu_usage_percent: number;
+  cpu_allocated?: number;
+  cpu_allocation_ratio?: number;
+  cpu_overcommitted?: boolean;
   memory_total_bytes: number;
   memory_used_bytes: number;
   memory_usage_percent: number;

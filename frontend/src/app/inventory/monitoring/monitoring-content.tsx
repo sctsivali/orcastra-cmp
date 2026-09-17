@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useCallback, memo, useTransition, useRef, type ReactNode } from "react";
+import { cpuAllocation } from "@/lib/cpu-allocation";
 import { useQueryClient } from "@tanstack/react-query";
 import dynamic from "next/dynamic";
 // note: the alarm cards point at /inventory/warnings with distinct query strings, which
@@ -1642,7 +1643,8 @@ export default function MonitoringContent() {
                 statusMessage={filteredStats.realtime_cpu_percent === 0 && filteredStats.status_message ? filteredStats.status_message : undefined}
               />
               <p className="text-sm text-muted-foreground mt-2">
-                Allocated: {filteredStats.used_cpu} / {filteredStats.total_cpu} cores
+                Allocated: {filteredStats.used_cpu} / {filteredStats.total_cpu} threads (
+                {cpuAllocation({ cpu_total: filteredStats.total_cpu, cpu_used: filteredStats.used_cpu }).ratioLabel})
               </p>
             </div>
             <div className="text-center">

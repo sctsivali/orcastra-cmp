@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { parseLimitsCpu } from "@/lib/lxd-limits";
 // note: these alert cards all point at /inventory/warnings with distinct query strings,
 // which are distinct router cache keys. Prefetching them on sight cost seven RSC requests
 // on every dashboard paint, so they warm on intent like the sidebar does.
@@ -530,10 +531,12 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
     let storageUsedBytes = 0;
 
     instances.forEach((vm) => {
-      // count CPU
+      // count CPU the way the backend does (a range or a set is its size, not 0). The row
+      // carries the instance-local config only, so a profile-inherited limit still counts as
+      // unset here; the per-node figures come from the API and are exact.
       const vmCpu = vm.config?.["limits.cpu"];
       if (vmCpu) {
-        cpuUsed += parseInt(vmCpu) || 0;
+        cpuUsed += parseLimitsCpu(vmCpu, 0);
       }
 
       // count RAM

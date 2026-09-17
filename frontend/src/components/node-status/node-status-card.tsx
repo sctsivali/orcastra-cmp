@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { cpuAllocation, cpuAllocationText } from "@/lib/cpu-allocation";
 import {
   GPU_EMPTY_TITLE,
   GPU_NO_COMPUTE_TITLE,
@@ -135,6 +136,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
     return ((used / total) * 100).toFixed(0);
   };
 
+  const cpu = cpuAllocation(node.resources ?? { cpu_total: 0, cpu_used: 0 });
   const NodeIcon = node.node_type?.toLowerCase() === "microcloud" ? Cloud : Server;
   const statusMeta = clusterStatusMeta(node);
   const StatusIcon = statusMeta.icon;
@@ -234,11 +236,9 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               </div>
               <div className="text-xs">
                 <div className="font-semibold text-foreground">
-                  {node.resources.cpu_used} / {node.resources.cpu_total} cores
+                  {cpu.allocated} / {cpu.threads} threads
                 </div>
-                <div className="text-muted-foreground">
-                  {getUsagePercentage(node.resources.cpu_used, node.resources.cpu_total)}% used
-                </div>
+                <div className={cpu.textClassName}>{cpuAllocationText(cpu)}</div>
               </div>
             </div>
 
