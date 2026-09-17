@@ -445,8 +445,10 @@ class VaultClient:
             result = response.json()
             keys = result.get("data", {}).get("keys", [])
             
-            # Cache the result with longer TTL for list operations
-            if use_cache and cache:
+            # Cache the result with longer TTL for list operations. Written on a fresh read
+            # too: use_cache only decides whether the cache is READ, and a bypass that left a
+            # stale entry behind is what let the request path pay a Vault round trip later.
+            if cache:
                 cache.set("vault_list", path, keys, 600)  # Cache list for 10 minutes
             # note: not a cache but a memo of the last answer, written even when the caller
             # bypassed the cache, so a lost LIST later can be served from it. Seven days:

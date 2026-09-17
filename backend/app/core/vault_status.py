@@ -31,10 +31,14 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-# How long a lost LIST is served from the last known copy before Vault is asked again. Short,
-# because the metrics sweep and every picker open would otherwise each pay the LIST budget
-# during an outage; long enough that a burst of requests costs one round trip, not one each.
+# How long a lost LIST is served from the last known copy before Vault is asked again.
+# Threads (the metrics sweep, run_blocking, to_thread) re-probe after RETRY_HOLD_SECONDS, so a
+# burst costs one round trip rather than one each. A caller on the event loop waits
+# LOOP_RETRY_HOLD_SECONDS: the sweep probes every 30 s from a thread and refreshes the
+# failure time, so during an outage a request never pays the LIST budget on the loop, and if
+# the sweep is not running a request probes at most once every two minutes.
 RETRY_HOLD_SECONDS = 15.0
+LOOP_RETRY_HOLD_SECONDS = 120.0
 
 _lock = threading.Lock()
 # None means nothing has tried yet, which is not the same as a failure and must not read as one.
@@ -103,6 +107,12 @@ def retry_due() -> bool:
     """False while a recent failure is still being served from the last known copy."""
     with _lock:
         return time.time() >= _hold_until
+
+
+def failed_within(seconds: float) -> bool:
+    """True when the last read failed less than `seconds` ago."""
+    with _lock:
+        return _last_ok is False and _last_at is not None and time.time() - _last_at < seconds
 
 
 def registry_readable() -> Optional[bool]:

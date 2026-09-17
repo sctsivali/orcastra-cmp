@@ -1,6 +1,7 @@
 """Vault-backed storage for cluster metadata, secrets and certificate material."""
 
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -204,7 +205,7 @@ class VaultStorageMixin:
             logger.error(f"Failed to get cluster info for {cluster_id}: {e}")
             raise LXDCertManagerError(f"Failed to retrieve cluster info: {str(e)}")
     
-    def read_registry(self, use_cache: bool = True) -> "RegistryRead":
+    def read_registry(self, use_cache: bool = True, *, on_loop: Optional[bool] = None) -> "RegistryRead":
         """The unfiltered cluster registry, or the last copy of it that Vault answered with.
 
         important: this is the one read in the mixin that swallows instead of raising, and
@@ -218,7 +219,15 @@ class VaultStorageMixin:
         """
         # Convert secret/data/clusters to secret/metadata/clusters for LIST operation
         list_path = self.clusters_path.replace("/data/", "/metadata/")
-        if use_cache and not vault_status.retry_due():
+        # important: a caller on the event loop (uvicorn runs it in the main thread; every
+        # off-loop call here is a worker thread) must not pay the LIST budget during an
+        # outage. The metrics sweep probes from a thread every 30 s, so the loop waits the
+        # longer hold and is served the memo; measured on the production-shaped stack, an
+        # on-loop probe held /health past five seconds while the LIST timed out.
+        if on_loop is None:
+            on_loop = threading.current_thread() is threading.main_thread()
+        hold = vault_status.LOOP_RETRY_HOLD_SECONDS if on_loop else vault_status.RETRY_HOLD_SECONDS
+        if use_cache and vault_status.failed_within(hold):
             known = self._last_known(list_path)
             if known is not None:
                 return RegistryRead(cluster_ids=known, source="last_known", readable=False)

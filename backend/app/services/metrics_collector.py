@@ -469,8 +469,11 @@ class MetricsCollector:
                 clusters_path=settings.vault_clusters_path
             )
             
-            # Get all registered cluster IDs
-            cluster_ids = cert_manager.list_clusters()
+            # Get all registered cluster IDs. A fresh read on purpose: this sweep runs in a
+            # thread every 30 s and is the one caller that should pay the Vault LIST budget,
+            # refreshing the list cache and the last-known memo for every request on the
+            # loop, and recording an outage before a request can meet it.
+            cluster_ids = cert_manager.list_clusters(use_cache=False)
 
             # important: the whitelist behind get_node_names() was synced at boot and in the
             # one worker that served a registration. Every other worker went on omitting a

@@ -74,13 +74,15 @@ def test_the_list_gets_its_own_budget_and_point_reads_keep_theirs(client):
         assert methods["GET"] == (2, 3), "a point read keeps the request-path budget"
 
 
-def test_a_successful_list_writes_the_last_good_memo_even_uncached(client):
+def test_a_successful_fresh_list_writes_the_memo_and_refreshes_the_cache(client):
     c, cache = client
     c.vault_list("secret/metadata/clusters", use_cache=False)
 
     memo = [s for s in cache.sets if s[0] == vc.LAST_GOOD_LIST_NAMESPACE]
     assert memo == [(vc.LAST_GOOD_LIST_NAMESPACE, "secret/metadata/clusters", ["i48/", "ebi-01/"], vc.LAST_GOOD_LIST_TTL)]
-    assert not any(s[0] == "vault_list" for s in cache.sets), "use_cache=False still skips the cache proper"
+    # use_cache only decides whether the cache is read; a fresh read refreshes it, so the
+    # request path finds a warm entry after the sweep's probe rather than paying a round trip
+    assert any(s[0] == "vault_list" for s in cache.sets), "a fresh read still refreshes the list cache"
     assert vc.LAST_GOOD_LIST_TTL >= 24 * 3600
 
 

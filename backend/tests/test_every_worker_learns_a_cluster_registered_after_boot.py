@@ -54,7 +54,7 @@ def test_the_healer_tick_resyncs_the_whitelist_from_vault(manager, monkeypatch):
         def __init__(self, vault_client, clusters_path):
             pass
 
-        def list_clusters(self):
+        def list_clusters(self, use_cache=True):
             return ["blitz01", CLUSTER]
 
     monkeypatch.setattr("app.services.lxd_cert_manager.LXDCertificateManager", _CertManager)
@@ -78,7 +78,7 @@ def _sweep_with_registry(manager, monkeypatch, answer, *, readable: bool):
         def __init__(self, *a, **k):
             pass
 
-        def list_clusters(self):
+        def list_clusters(self, use_cache=True):
             # The real list_clusters records the outcome of every read in vault_status; a fake
             # that returns a list without saying whether Vault answered is not the real shape.
             if readable:

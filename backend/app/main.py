@@ -577,11 +577,19 @@ Ensure your client certificates are properly configured.
         # process. `error` carries a class name and a short reason, never a Vault address.
         vault = vault_status.snapshot()
         if vault.get("registry_readable") is False:
-            logger.error(
-                "Vault cluster registry is unreadable (%s). Every cluster will appear absent "
-                "until this clears; check whether Vault is sealed.",
-                vault.get("error"),
-            )
+            if vault.get("registry_source") == "last_known":
+                logger.error(
+                    "Vault cluster registry is unreadable (%s); the last known registry is being "
+                    "served until Vault answers again. Check whether Vault is sealed or the "
+                    "token's policy denies LIST on the clusters path.",
+                    vault.get("error"),
+                )
+            else:
+                logger.error(
+                    "Vault cluster registry is unreadable (%s) and nothing is known. Every cluster "
+                    "will appear absent until this clears; check whether Vault is sealed.",
+                    vault.get("error"),
+                )
         return {
             "status": "healthy",
             "service": "orcastra-dashboard-api",

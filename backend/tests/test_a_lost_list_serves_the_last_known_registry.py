@@ -116,21 +116,47 @@ def test_nothing_known_still_returns_an_empty_list(unfiltered):
     assert vault_status.snapshot()["registry_source"] is None
 
 
+def _thread_read(storage):
+    """What a worker thread (the metrics sweep, run_blocking, to_thread) sees."""
+    from app.core.org_scope import apply_cluster_filter
+
+    return apply_cluster_filter(storage.read_registry(True, on_loop=False).cluster_ids)
+
+
 def test_an_unreadable_registry_is_not_re_probed_for_a_while(unfiltered, monkeypatch):
     now = [1000.0]
     monkeypatch.setattr(vault_status.time, "time", lambda: now[0])
     vault = _Vault(error=VaultClientError("lost"), memo={LIST_PATH: ["i48/"]})
     storage = _Storage(vault)
 
-    assert storage.list_clusters() == ["i48"]
+    assert _thread_read(storage) == ["i48"]
     assert vault.calls == 1
     for _ in range(5):
-        assert storage.list_clusters() == ["i48"]
-    assert vault.calls == 1, "five requests inside the hold cost no Vault round trips"
+        assert _thread_read(storage) == ["i48"]
+    assert vault.calls == 1, "five reads inside the hold cost no Vault round trips"
 
     now[0] += vault_status.RETRY_HOLD_SECONDS + 0.1
+    _thread_read(storage)
+    assert vault.calls == 2, "after the hold the next thread read probes Vault again"
+
+
+def test_a_caller_on_the_event_loop_waits_longer_and_never_pays_the_budget_mid_outage(unfiltered, monkeypatch):
+    """The sweep probes from a thread every 30 s and refreshes the failure time, so a request
+    on the loop is served the memo for the whole outage; if the sweep were not running, the
+    loop would probe at most once every LOOP_RETRY_HOLD_SECONDS."""
+    now = [1000.0]
+    monkeypatch.setattr(vault_status.time, "time", lambda: now[0])
+    vault = _Vault(error=VaultClientError("lost"), memo={LIST_PATH: ["i48/"]})
+    storage = _Storage(vault)
+
+    assert _thread_read(storage) == ["i48"]          # the sweep records the outage
+    assert vault.calls == 1
+    now[0] += vault_status.RETRY_HOLD_SECONDS + 5     # past the thread hold
+    assert storage.list_clusters() == ["i48"]        # a request in the main thread
+    assert vault.calls == 1, "the loop caller did not probe"
+    now[0] += vault_status.LOOP_RETRY_HOLD_SECONDS
     storage.list_clusters()
-    assert vault.calls == 2, "after the hold the next request probes Vault again"
+    assert vault.calls == 2, "with no sweep refreshing the failure, the loop probes after its own hold"
 
 
 def test_a_recovered_vault_lifts_the_hold_and_refreshes_the_copy(unfiltered, monkeypatch):
@@ -138,12 +164,12 @@ def test_a_recovered_vault_lifts_the_hold_and_refreshes_the_copy(unfiltered, mon
     monkeypatch.setattr(vault_status.time, "time", lambda: now[0])
     vault = _Vault(error=VaultClientError("lost"), memo={LIST_PATH: ["i48/"]})
     storage = _Storage(vault)
-    storage.list_clusters()
+    _thread_read(storage)
 
     now[0] += vault_status.RETRY_HOLD_SECONDS + 0.1
     vault._error = None
     vault._result = ["i48/", "new/"]
-    assert storage.list_clusters() == ["i48", "new"]
+    assert _thread_read(storage) == ["i48", "new"]
     assert vault_status.registry_readable() is True
     assert vault_status.last_known_registry() == ["i48", "new"]
     assert vault_status.snapshot()["registry_source"] == "vault"
