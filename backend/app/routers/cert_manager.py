@@ -3,6 +3,7 @@ Certificate Manager Router
 Handles certificate lifecycle management, renewal, and monitoring.
 """
 
+import asyncio
 import logging
 import hashlib
 from typing import Optional
@@ -164,7 +165,7 @@ async def list_certificates(
     """List all certificates with their status."""
     try:
         settings = get_settings()
-        cluster_ids = cert_manager.list_clusters(use_cache=False)
+        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
         
         certificates = []
         expiring_count = 0
@@ -677,7 +678,7 @@ async def get_system_warnings(
     """Get all certificate and node warnings."""
     try:
         settings = get_settings()
-        cluster_ids = cert_manager.list_clusters(use_cache=False)
+        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
         
         certificate_warnings = []
         node_warnings = []
@@ -792,7 +793,7 @@ async def cleanup_pending_certificates(
     """Cleanup stale pending certificates."""
     try:
         settings = get_settings()
-        cluster_ids = cert_manager.list_clusters(use_cache=False)
+        cluster_ids = await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
         cleaned = 0
         
         for cluster_id in cluster_ids:

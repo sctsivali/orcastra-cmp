@@ -320,7 +320,9 @@ async def get_all_system_warnings(
                     clusters_path=settings.vault_clusters_path
                 )
                 
-                cluster_ids = apply_cluster_filter(cert_manager.list_clusters(use_cache=False))
+                cluster_ids = apply_cluster_filter(
+                    await asyncio.to_thread(cert_manager.list_clusters, use_cache=False)
+                )
                 
                 # important: per-cluster check extracted into a helper so the
                 # sweep runs in parallel - this was a serial loop that summed

@@ -26,6 +26,7 @@ worker records what it saw, which is correct, since a worker that never reached 
 one whose whitelist is wrong.
 """
 
+import re
 import threading
 import time
 from typing import Any, Dict, List, Optional
@@ -59,15 +60,27 @@ def mark_readable() -> None:
         _hold_until = 0.0
 
 
+# What a requests exception string carries that an unauthenticated /health must not: the Vault
+# URL ("for url: http://vault:8200/v1/...") and the connection pool's host and port.
+_URL_FRAGMENT = re.compile(r"\s*for url:\s*\S+|\(host='[^']*',\s*port=\d+\)|https?://\S+", re.IGNORECASE)
+
+
+def public_error(error: str) -> str:
+    """A class name and a short reason, with any address stripped, for the health body."""
+    text = _URL_FRAGMENT.sub("", error or "unknown").strip()
+    text = re.sub(r"\s{2,}", " ", text).rstrip(":").strip()
+    return (text or "unknown")[:200]
+
+
 def mark_unreadable(error: str, *, served_last_known: bool = False) -> None:
     """The registry could not be read. The list that came back means nothing, unless it was
     the last known copy, which `served_last_known` records."""
     global _last_ok, _last_error, _last_at, _last_source, _hold_until
     with _lock:
         _last_ok = False
-        # Truncated: this reaches an unauthenticated endpoint, so it carries a class name and a
-        # short reason, never a Vault address or token.
-        _last_error = (error or "unknown")[:200]
+        # Scrubbed and truncated: this reaches an unauthenticated endpoint, so it carries a
+        # class name and a short reason, never a Vault address or token.
+        _last_error = public_error(error)
         _last_at = time.time()
         _last_source = "last_known" if served_last_known else None
         _hold_until = _last_at + RETRY_HOLD_SECONDS

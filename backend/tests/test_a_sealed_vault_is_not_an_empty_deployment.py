@@ -141,3 +141,20 @@ def test_startup_refuses_to_sync_a_whitelist_it_never_received():
         "an unreadable registry emptied the whitelist, so get_node_names() intersected against "
         "the empty set and every cluster vanished from the API"
     )
+
+
+def test_the_health_body_never_carries_the_vault_address():
+    """/health is unauthenticated. A requests exception string names the URL it failed on and
+    the pool's host and port; neither belongs in a body anyone can read."""
+    for raw in (
+        "VaultClientError: Vault list failed: 503 Server Error: Service Unavailable for url: http://vault.prod.internal:8200/v1/secret/metadata/clusters",
+        "VaultClientError: Vault list failed: HTTPConnectionPool(host='10.0.1.4', port=8200): Read timed out. (read timeout=10)",
+        "VaultClientError: Vault list failed: 403 Client Error: Forbidden for url: https://vault:8200/v1/secret/metadata/clusters",
+    ):
+        vault_status.mark_unreadable(raw)
+        shown = vault_status.snapshot()["error"]
+        assert "8200" not in shown and "http" not in shown and "10.0.1.4" not in shown, shown
+        assert shown.startswith("VaultClientError"), shown
+        assert "Vault list failed" in shown
+    vault_status.mark_unreadable("")
+    assert vault_status.snapshot()["error"] == "unknown"
