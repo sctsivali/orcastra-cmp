@@ -524,6 +524,30 @@ export interface ProjectInfo {
   tags: string[];
 }
 
+// Project usage against its limits (GET /projects/{host}/{project}/usage)
+export interface ProjectUsageResponse {
+  host: string;
+  project: string;
+  limits: {
+    cpu: number | null;
+    memory_bytes: number | null;
+    instances: number | null;
+    containers: number | null;
+    virtual_machines: number | null;
+    disk_bytes: number | null;
+  };
+  used: {
+    cpu: number;
+    memory_bytes: number;
+    instances: number;
+    containers: number;
+    virtual_machines: number;
+  };
+  /** False when the instance read failed: the limits are real, the usage is a floor of zero. */
+  complete: boolean;
+  collected_at: string;
+}
+
 // Project List Response
 export interface ProjectListResponse {
   host: string;

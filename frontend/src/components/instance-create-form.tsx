@@ -29,6 +29,19 @@ import { NicRow } from "@/components/instance-create/nic-row";
 import type { DiskDevice, NicDevice } from "@/components/instance-create/devices";
 import { PickerNotice } from "@/components/ui/picker-notice";
 import { derivePickerState } from "@/lib/picker-state";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { SubmitBlockers, submitBlockers } from "@/components/instance-create/submit-blockers";
+import { ProjectQuotaLine, quotaCheck } from "@/components/instance-create/quota-line";
+import {
+  fieldRefusalText,
+  mapCreateError,
+  type CreateError,
+} from "@/components/instance-create/daemon-error";
+import {
+  ProjectChangeNotice,
+  projectChangeNotice,
+} from "@/components/instance-create/project-change-notice";
+import { formatLimitBytes, parseLxdSize, projectSetsLimits, readProjectLimits } from "@/lib/lxd-limits";
 import {
   gpuCardLabel,
   gpuClassOf,
@@ -77,6 +90,7 @@ import {
   useImagesByHost,
   useStoragePoolList,
   useProjects,
+  useProjectUsage,
   useRemoteImages,
   useStorageVolumes,
   useNetworks,
@@ -206,6 +220,9 @@ export function InstanceCreateForm() {
   const submitInFlightRef = useRef(false);
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
   const [error, setError] = useState<string | null>(null);
+  // A refusal the cluster tied to a field (a project limit), cleared when that field changes.
+  const [fieldError, setFieldError] = useState<CreateError | null>(null);
+  const [changeNotice, setChangeNotice] = useState<string | null>(null);
   const [tagInput, setTagInput] = useState("");
 
   // Inline tag editor helpers (write straight to form.tags).
@@ -267,6 +284,23 @@ export function InstanceCreateForm() {
     nodeLabel,
     selectText: "Select project",
   });
+  const selectedProjectInfo = (
+    ((projectsResp as unknown as ProjectListResponse | undefined)?.projects ?? []) as ProjectInfo[]
+  ).find((p) => p.name === (form.selectedProject || "default"));
+  const projectLimits = readProjectLimits(selectedProjectInfo?.config);
+  const projectLimited = projectSetsLimits(projectLimits);
+  // note: read only when the project sets a limit, so an unlimited project costs no request.
+  const { data: projectUsage } = useProjectUsage(form.selectedNode, form.selectedProject || "default", {
+    enabled: !!form.selectedNode && projectLimited,
+  });
+  const projectUsed =
+    projectUsage && projectUsage.complete
+      ? {
+          cpu: projectUsage.used.cpu,
+          memoryBytes: projectUsage.used.memory_bytes,
+          instances: projectUsage.used.instances,
+        }
+      : null;
 
   const {
     data: poolsResp,
@@ -329,6 +363,16 @@ export function InstanceCreateForm() {
       return true;
     });
   }, [volumesResp, volumeProject]);
+  // The project fallback above, evaluated for a project the form is about to switch to.
+  const isoVisibleIn = (project: string, pool: string, name: string) => {
+    const rows = (
+      ((volumesResp as unknown as StorageVolumeListResponse | undefined)?.volumes ??
+        []) as StorageVolumeInfo[]
+    ).filter((v) => v.type === "custom" && v.content_type === "iso");
+    const scoped = rows.filter((v) => (v.project ?? "default") === project);
+    const visible = scoped.length ? scoped : rows.filter((v) => (v.project ?? "default") === "default");
+    return visible.some((v) => v.pool === pool && v.name === name);
+  };
   const volumesInPool = (pool: string) =>
     customVolumes.filter((v) => v.pool === pool);
   const volumeContentType = (pool: string, name: string) =>
@@ -684,6 +728,7 @@ export function InstanceCreateForm() {
     setImageDialogOpen(true);
   };
   const selectImage = (row: ImageRow) => {
+    setChangeNotice(null);
     setForm((prev) => ({
       ...prev,
       selectedImage: row.value,
@@ -713,16 +758,28 @@ export function InstanceCreateForm() {
   // sourceType "none" now means "boot from ISO": an empty root disk plus a
   // required ISO (no bare blank VM). Kept named `bootFromIso` for clarity.
   const bootFromIso = form.sourceType === "none";
-  const canSubmit =
-    !isSubmitting &&
-    nameValid &&
-    !!form.selectedNode &&
-    // Image mode needs an image; ISO mode needs an ISO. No bare blank.
-    (bootFromIso ? !!form.selectedIso : !!form.selectedImage) &&
-    resourcesValid &&
-    disksValid &&
-    nicsValid &&
-    gpusValid;
+  const requestedCpu = cpuValid ? parseInt(form.cpu.trim(), 10) : null;
+  const requestedMemoryBytes = memoryValid
+    ? parseLxdSize(`${form.memoryValue.trim()}${form.memoryUnit}`)
+    : null;
+  const quota = quotaCheck(projectLimits, requestedCpu, requestedMemoryBytes, projectUsed);
+  // What still stands between the form and a create. The buttons are disabled exactly when
+  // this is non-empty, so the line under them and the disabled state cannot disagree.
+  const blockers = submitBlockers({
+    nameValid,
+    hasNode: !!form.selectedNode,
+    bootFromIso,
+    hasImage: !!form.selectedImage,
+    hasIso: !!form.selectedIso,
+    resourcesValid,
+    hasPool: !!effectivePool || loadingPools,
+    disksValid,
+    nicsValid,
+    gpusValid,
+    cpuWithinLimit: !quota.cpuExceeds,
+    memoryWithinLimit: !quota.memoryExceeds,
+  });
+  const canSubmit = !isSubmitting && blockers.length === 0;
 
   // --- Field updates ----------------------------------------------------------
   const updateField = <K extends keyof FormState>(field: K, value: FormState[K]) =>
@@ -766,19 +823,35 @@ export function InstanceCreateForm() {
     }));
     setDisks([]);
   };
-  // Local images and networks are both project-scoped; clear what the old project chose.
+  // A remote image belongs to no project and is kept. A local image and the NICs are
+  // project-scoped and cleared; an ISO is kept when the new project can still see its volume.
+  // Whatever was cleared is said under the picker rather than silently dropped.
   const selectProject = (project: string) => {
+    const clearedNics = nics.length;
     setNics([]);
-    setForm((prev) => ({
-      ...prev,
-      selectedProject: project,
-      selectedImage: "",
-      imageServer: "",
-      imageLabel: "",
-      selectedIso: "",
-      selectedIsoPool: "",
-      selectedIsoLabel: "",
-    }));
+    setFieldError(null);
+    setForm((prev) => {
+      const keepImage = !!prev.selectedImage && prev.imageServer !== "";
+      const keepIso = !!prev.selectedIso && isoVisibleIn(project, prev.selectedIsoPool, prev.selectedIso);
+      setChangeNotice(
+        projectChangeNotice({
+          project,
+          clearedLocalImage: !!prev.selectedImage && !keepImage,
+          clearedIso: !!prev.selectedIso && !keepIso,
+          clearedNics,
+        }),
+      );
+      return {
+        ...prev,
+        selectedProject: project,
+        selectedImage: keepImage ? prev.selectedImage : "",
+        imageServer: keepImage ? prev.imageServer : "",
+        imageLabel: keepImage ? prev.imageLabel : "",
+        selectedIso: keepIso ? prev.selectedIso : "",
+        selectedIsoPool: keepIso ? prev.selectedIsoPool : "",
+        selectedIsoLabel: keepIso ? prev.selectedIsoLabel : "",
+      };
+    });
   };
 
   // --- Submit -----------------------------------------------------------------
@@ -994,7 +1067,9 @@ export function InstanceCreateForm() {
       });
       navigate("/inventory/instances");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create instance");
+      const mapped = mapCreateError(err);
+      setError(mapped.message);
+      setFieldError(mapped.field ? mapped : null);
     } finally {
       // Released on the failure path so the operator can correct and retry. On success the
       // form has already navigated away, so this only tidies up the unmounting component.
@@ -1242,6 +1317,7 @@ export function InstanceCreateForm() {
                     notice={projectState.notice}
                     onRetry={() => refetchProjects()}
                   />
+                  <ProjectChangeNotice id="create-project-change" text={changeNotice} />
                 </div>
               </div>
 
@@ -1392,19 +1468,34 @@ export function InstanceCreateForm() {
                   CPU Cores
                 </div>
                 <Input
+                  id="create-cpu"
                   type="number"
                   min={1}
                   step={1}
                   value={form.cpu}
-                  onChange={(e) => updateField("cpu", e.target.value)}
+                  onChange={(e) => {
+                    if (fieldError?.field === "cpu") setFieldError(null);
+                    updateField("cpu", e.target.value);
+                  }}
                   placeholder="e.g. 2"
-                  aria-invalid={!cpuValid && form.cpu.trim() !== ""}
+                  aria-invalid={(!cpuValid && form.cpu.trim() !== "") || quota.cpuExceeds || fieldError?.field === "cpu"}
+                  aria-describedby={
+                    quota.cpuExceeds || fieldError?.field === "cpu" ? "create-cpu-error" : undefined
+                  }
                 />
-                {!cpuValid && form.cpu.trim() !== "" && (
+                {!cpuValid && form.cpu.trim() !== "" ? (
                   <p className="text-xs text-destructive">
                     Must be a positive whole number.
                   </p>
-                )}
+                ) : fieldError?.field === "cpu" ? (
+                  <p id="create-cpu-error" className="text-xs text-destructive">
+                    {fieldRefusalText(fieldError)}
+                  </p>
+                ) : quota.cpuExceeds ? (
+                  <p id="create-cpu-error" className="text-xs text-destructive">
+                    Exceeds the project limit of {projectLimits.cpu} vCPU.
+                  </p>
+                ) : null}
               </div>
 
               <div className="space-y-2">
@@ -1414,14 +1505,25 @@ export function InstanceCreateForm() {
                 </div>
                 <div className="flex gap-2">
                   <Input
+                    id="create-memory"
                     type="number"
                     min={1}
                     step={1}
                     value={form.memoryValue}
-                    onChange={(e) => updateField("memoryValue", e.target.value)}
+                    onChange={(e) => {
+                      if (fieldError?.field === "memory") setFieldError(null);
+                      updateField("memoryValue", e.target.value);
+                    }}
                     placeholder="e.g. 2"
                     className="flex-1"
-                    aria-invalid={!memoryValid && form.memoryValue.trim() !== ""}
+                    aria-invalid={
+                      (!memoryValid && form.memoryValue.trim() !== "") ||
+                      quota.memoryExceeds ||
+                      fieldError?.field === "memory"
+                    }
+                    aria-describedby={
+                      quota.memoryExceeds || fieldError?.field === "memory" ? "create-memory-error" : undefined
+                    }
                   />
                   <Select
                     value={form.memoryUnit}
@@ -1439,12 +1541,30 @@ export function InstanceCreateForm() {
                     </SelectContent>
                   </Select>
                 </div>
-                {!memoryValid && form.memoryValue.trim() !== "" && (
+                {!memoryValid && form.memoryValue.trim() !== "" ? (
                   <p className="text-xs text-destructive">
                     Must be a positive whole number.
                   </p>
-                )}
+                ) : fieldError?.field === "memory" ? (
+                  <p id="create-memory-error" className="text-xs text-destructive">
+                    {fieldRefusalText(fieldError)}
+                  </p>
+                ) : quota.memoryExceeds ? (
+                  <p id="create-memory-error" className="text-xs text-destructive">
+                    Exceeds the project limit of {formatLimitBytes(projectLimits.memoryBytes ?? 0)}.
+                  </p>
+                ) : null}
               </div>
+
+              {projectLimited && (
+                <ProjectQuotaLine
+                  id="create-quota"
+                  project={form.selectedProject || "default"}
+                  limits={projectLimits}
+                  used={projectUsed}
+                  check={quota}
+                />
+              )}
 
               {/* Memory swap — containers only */}
               {form.type === "container" && (
@@ -1982,32 +2102,40 @@ export function InstanceCreateForm() {
         </Card>
 
         {error && (
-          <div className="p-3 text-sm bg-destructive/10 border border-destructive/30 text-destructive rounded-lg">
-            {error}
-          </div>
+          <Alert variant="destructive" role="alert">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
 
-        <div className="flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => navigate("/inventory/instances")}
-            disabled={isSubmitting}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => submit(false)}
-            disabled={!canSubmit}
-          >
-            Create
-          </Button>
-          <Button type="submit" disabled={!canSubmit}>
-            {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Create &amp; Start
-          </Button>
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+          <SubmitBlockers id="create-blockers" blockers={blockers} />
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate("/inventory/instances")}
+              disabled={isSubmitting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => submit(false)}
+              disabled={!canSubmit}
+              aria-describedby={blockers.length ? "create-blockers" : undefined}
+            >
+              Create
+            </Button>
+            <Button
+              type="submit"
+              disabled={!canSubmit}
+              aria-describedby={blockers.length ? "create-blockers" : undefined}
+            >
+              {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Create &amp; Start
+            </Button>
+          </div>
         </div>
       </form>
 

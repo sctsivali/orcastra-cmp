@@ -59,6 +59,8 @@ function refreshInstanceQueries(queryClient: QueryClient) {
   void queryClient.invalidateQueries({ queryKey: ["instances"] });
   // a create, delete or start changes the allocation table the IPAM page reads
   void queryClient.invalidateQueries({ queryKey: ["ipam"] });
+  // and what a project has allocated against its limits
+  void queryClient.invalidateQueries({ queryKey: ["projectUsage"] });
 }
 
 function removeInstanceFromList(
@@ -421,6 +423,23 @@ export function useProjects(host: string) {
     queryFn: () => projectAPI.list(host),
     enabled: !!host,
     staleTime: 30000,
+  });
+}
+
+/**
+ * How much of a project's limits is allocated, for the create form's quota line. Read only
+ * once a node and a project are chosen and the project sets a limit; a create or delete
+ * invalidates it server-side and through refreshInstanceQueries.
+ */
+export function useProjectUsage(host: string, project: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: ["projectUsage", host, project],
+    queryFn: () => projectAPI.usage(host, project),
+    enabled: (opts?.enabled ?? true) && !!host && !!project,
+    staleTime: 30000,
+    retry: (failureCount: number, error: unknown) =>
+      !(error instanceof APIError && [401, 403, 404, 429].includes(error.status)) && failureCount < 1,
+    refetchOnWindowFocus: false,
   });
 }
 

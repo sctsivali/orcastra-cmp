@@ -23,6 +23,7 @@ import {
   NodeResources,
   GpuCardListResponse,
   ProjectListResponse,
+  ProjectUsageResponse,
   ProjectCreateRequest,
   ProjectCreateResponse,
   InstanceMetrics,
@@ -614,6 +615,12 @@ export const projectAPI = {
 
   list: async (host: string): Promise<ProjectListResponse> => {
     return fetchAPI<ProjectListResponse>(`/projects/${encodeURIComponent(host)}`);
+  },
+
+  usage: async (host: string, project: string): Promise<ProjectUsageResponse> => {
+    return fetchAPI<ProjectUsageResponse>(
+      `/projects/${encodeURIComponent(host)}/${encodeURIComponent(project)}/usage`
+    );
   },
 
   create: async (data: ProjectCreateRequest): Promise<ProjectCreateResponse> => {
