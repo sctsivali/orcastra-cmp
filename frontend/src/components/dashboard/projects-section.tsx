@@ -108,6 +108,7 @@ export function ProjectsSection(props: ProjectsSectionProps) {
 
 function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, vmsData, refetch, lastUpdatedAt, projectsUpdatedAt }: ProjectsSectionProps) {
   const lastUpdated = useRelativeTime(lastUpdatedAt);
+  const headingId = React.useId();
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
   // important: the page inside each expanded card lives here, beside expandedProjects, rather
   // than inside ProjectCard. The grid pager below slices the card list, so a card off the current
@@ -318,10 +319,13 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
   );
 
   return (
-    <div className="space-y-4">
+    // A landmark named by its heading: the Clusters grid above carries the same toolbar shape
+    // (a "Sort by" control, a status counter, a Clear search button), and the region is what
+    // lets a screen reader and a locator tell the two apart.
+    <section aria-labelledby={headingId} data-slot="projects-section" className="space-y-4">
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1">
-          <h2 className="text-lg font-semibold">Projects</h2>
+          <h2 id={headingId} className="text-lg font-semibold">Projects</h2>
           {!!lastUpdatedAt && (
             <p className="text-xs text-muted-foreground">
               Updated {lastUpdated}
@@ -469,6 +473,6 @@ function ProjectsSectionContent({ projectsData, projectsLoading, projectsError, 
           />
         </div>
       )}
-    </div>
+    </section>
   );
 }

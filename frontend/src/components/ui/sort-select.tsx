@@ -41,6 +41,10 @@ export interface SortSelectProps<F extends string> {
  * for three dimensions stops being scannable, and it would leave "which way is this sorted right
  * now" to be read out of the selected option's text instead of off a control showing its own
  * state.
+ *
+ * note: a single option renders as text plus the same direction toggle, no Select. A Select
+ * with one entry is a control that can choose nothing (the rule use-table-filters.ts already
+ * states for facets), while a one-dimension grid still needs to say its order and reverse it.
  */
 export function SortSelect<F extends string>({
   options,
@@ -53,6 +57,41 @@ export function SortSelect<F extends string>({
   const labelId = React.useId();
   const activeLabel = options.find((option) => option.value === value)?.label ?? value;
   const Icon = direction === "asc" ? ArrowUpNarrowWide : ArrowDownWideNarrow;
+
+  // important: the name states both the order in force and the order a click produces.
+  // check-icon-button-names.mjs counts buttons with no name, never buttons whose name is
+  // ambiguous, so a toggle labelled the same in both states passes the guard and still
+  // leaves a screen reader unable to tell which way the list runs.
+  // note: an arrow rather than a chevron. Chevrons are how this app draws disclosure, and
+  // /inventory already carries two of them above the grid, so a third would make "the
+  // expander" unaddressable for anything selecting on the icon.
+  // Hoisted so both branches below render the identical control with the identical name.
+  const directionButton = (
+    <Button
+      variant="outline"
+      size="sm"
+      className="h-9 w-9 p-0 shrink-0"
+      onClick={() => onSort(value)}
+      aria-label={
+        direction === "asc"
+          ? `Sorted by ${activeLabel}, ascending. Sort descending`
+          : `Sorted by ${activeLabel}, descending. Sort ascending`
+      }
+    >
+      <Icon className="h-4 w-4" aria-hidden="true" />
+    </Button>
+  );
+
+  if (options.length === 1) {
+    return (
+      <div className={cn("flex items-center gap-2", className)}>
+        <span className="whitespace-nowrap text-sm font-medium">
+          {label} {activeLabel}
+        </span>
+        {directionButton}
+      </div>
+    );
+  }
 
   return (
     <div className={cn("flex items-center gap-2", className)}>
@@ -85,26 +124,7 @@ export function SortSelect<F extends string>({
         </SelectContent>
       </Select>
 
-      {/* important: the name states both the order in force and the order a click produces.
-          check-icon-button-names.mjs counts buttons with no name, never buttons whose name is
-          ambiguous, so a toggle labelled the same in both states passes the guard and still
-          leaves a screen reader unable to tell which way the list runs.
-          note: an arrow rather than a chevron. Chevrons are how this app draws disclosure, and
-          /inventory already carries two of them above the grid, so a third would make "the
-          expander" unaddressable for anything selecting on the icon. */}
-      <Button
-        variant="outline"
-        size="sm"
-        className="h-9 w-9 p-0 shrink-0"
-        onClick={() => onSort(value)}
-        aria-label={
-          direction === "asc"
-            ? `Sorted by ${activeLabel}, ascending. Sort descending`
-            : `Sorted by ${activeLabel}, descending. Sort ascending`
-        }
-      >
-        <Icon className="h-4 w-4" aria-hidden="true" />
-      </Button>
+      {directionButton}
     </div>
   );
 }

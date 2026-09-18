@@ -1,58 +1,36 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
-import {
-  GPU_EMPTY_TITLE,
-  GPU_NO_COMPUTE_TITLE,
-  gpuCardsCaption,
-  gpuDenseRatio,
-  summarizeGpus,
-} from "@/lib/gpu";
-
+import { Suspense, useState, useMemo, useCallback, useId } from "react";
+import { AlertTriangle, Server } from "lucide-react";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { Server, Cloud, Cpu, MemoryStick, Sparkles, MoreVertical, Edit, Users } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NodeConnectionSummary } from "./node-connection-summary";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { NodeStatus } from "@/types";
-import { useNodesStatus, useUpdateNodeTags, useUpdateNodeDisplayName } from "@/hooks/use-lxd";
-import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
-import { cn } from "@/lib/utils";
-import { clusterStatusMeta } from "@/lib/cluster-status";
+import { useNodesStatus } from "@/hooks/use-lxd";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useTableFilters } from "@/hooks/use-table-filters";
+import { useTableSort } from "@/hooks/use-table-sort";
 import { GRID_PAGE_SIZE, GRID_PAGE_SIZES } from "@/lib/pagination";
 import { NodeDetailModal } from "./node-detail/node-detail-modal";
 import { useLiveRecord } from "@/hooks/use-live-record";
 import { NodeStatusCard } from "./node-status/node-status-card";
-import { TagManager, TagFilter } from "@/components/tag-manager";
-import { toast } from "@/hooks/use-toast";
+import {
+  CLUSTER_CARDS,
+  ClusterGridToolbar,
+  type ClusterSortField,
+} from "./node-status/cluster-grid-toolbar";
 
 const nodeId = (node: NodeStatus) => node.name;
 
 function LoadingSkeleton() {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {[...Array(2)].map((_, i) => (
+    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+      {[...Array(3)].map((_, i) => (
         <Card key={i} className="overflow-hidden">
           <Skeleton className="h-1 w-full" />
           <CardContent className="p-4">
@@ -80,30 +58,31 @@ interface NodeStatusCardsProps {
   lastUpdatedAt?: number | null;
 }
 
-export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsProps) {
+// The boundary lives here, next to the useTableFilters read that needs it, so the section can
+// be mounted from any page without that page having to know why.
+export function NodeStatusCards(props: NodeStatusCardsProps) {
+  return (
+    <Suspense fallback={<LoadingSkeleton />}>
+      <NodeStatusCardsContent {...props} />
+    </Suspense>
+  );
+}
+
+function NodeStatusCardsContent({ onRefresh, lastUpdatedAt }: NodeStatusCardsProps) {
   const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNodesStatus();
+  const { navigate } = useNavigationProgress();
+  const { isPartner } = usePermissions();
+  const headingId = useId();
   // important: the id, not the row. Storing the clicked NodeStatus object here meant the open
   // dialog rendered a photograph taken at click time: the list kept polling underneath and the
   // numbers behind the dialog moved while the ones inside it did not.
   const [selectedNodeName, setSelectedNodeName] = useState<string | null>(null);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(GRID_PAGE_SIZE);
   const resetPage = useCallback(() => setPage(1), []);
 
-  // important: narrowing the tag filter has to send the operator back to page one. Without this a
-  // filter applied from page three keeps that page number, and the clamp then paints the last page
-  // of the new result instead of its first.
-  const handleTagsChange = useCallback(
-    (tags: string[]) => {
-      setSelectedTags(tags);
-      resetPage();
-    },
-    [resetPage],
-  );
-
-  // note: data.nodes, not filteredNodes. The grid filters to connected && server_version, so a
-  // cluster dropping offline would vanish from the filtered list and blank the open dialog.
+  // note: data.nodes, not the online subset. The grid filters to connected && server_version, so
+  // a cluster dropping offline would vanish from the filtered list and blank the open dialog.
   // Selecting from the raw list keeps it alive and lets it report that the cluster went
   // offline, which is the thing an operator opened it to find out.
   const { record: selectedNode, isOrphaned } = useLiveRecord(
@@ -112,38 +91,63 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
     nodeId,
   );
 
-  // Collect all unique tags from nodes
+  // Only authenticated nodes draw a card (connected AND a server_version); pending and offline
+  // ones are reported by NodeConnectionSummary above the grid instead.
+  const onlineNodes = useMemo(
+    () => (data?.nodes ?? []).filter((node) => node.connected && node.server_version),
+    [data?.nodes],
+  );
+
+  // Built over the online subset so a tag carried only by an offline node cannot be picked
+  // into an empty result.
   const allTags = useMemo(() => {
     const tags = new Set<string>();
-    data?.nodes.forEach((node) => {
+    onlineNodes.forEach((node) => {
       node.tags?.forEach((tag) => tags.add(tag));
     });
     return Array.from(tags).sort();
-  }, [data?.nodes]);
+  }, [onlineNodes]);
 
-  // Filter nodes by tags and status (exclude pending/not_authorized nodes)
-  const filteredNodes = useMemo(() => {
-    if (!data?.nodes) return [];
-    
-    // Filter out nodes with pending/not_authorized status
-    // Only show truly authenticated nodes (connected AND has server_version)
-    const onlineNodes = data.nodes.filter(node => node.connected && node.server_version);
-    
-    if (selectedTags.length === 0) return onlineNodes;
-    
-    return onlineNodes.filter((node) => {
-      const nodeTags = node.tags || [];
-      return selectedTags.some(tag => nodeTags.includes(tag));
-    });
-  }, [data?.nodes, selectedTags]);
+  // important: the endpoint is searchable only for the roles the card shows it to
+  // (node-status-card.tsx gates it on isPartner). Matching text a tenant cannot see would
+  // reveal it through the result count.
+  const searchEndpoint = useCallback(
+    (node: NodeStatus, query: string) => isPartner && node.endpoint.toLowerCase().includes(query),
+    [isPartner],
+  );
 
-  // Filter, then slice for the page. This grid has no sort control, so the filtered set is already
-  // the whole ordered set the page is taken from.
+  const filters = useTableFilters(CLUSTER_CARDS, onlineNodes, {
+    extraSearch: searchEndpoint,
+    // One line covers every way the result set can change: the toolbar search, chip removal,
+    // Clear all, and the TagFilter, which reaches setFacet and therefore the same callback.
+    // Without it a filter applied from page three keeps that page number, and the clamp then
+    // paints the last page of the new result instead of its first.
+    onFilterChange: resetPage,
+    // Tags render through TagFilter rather than the toolbar, so keep the facet out of the
+    // toolbar's own controls. It still applies, and it still shows as a removable chip.
+    availableFields: CLUSTER_CARDS.facetFields.filter((f) => f !== "tags"),
+  });
+  const selectedTags = filters.selectedValues("tags");
+
+  const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
+    CLUSTER_CARDS.sortAccessors,
+    CLUSTER_CARDS.defaultSort.field,
+    CLUSTER_CARDS.defaultSort.direction,
+    resetPage,
+  );
+
+  // Filter, then sort, then slice, the contract use-table-filters.ts states: the sort covers the
+  // whole filtered set rather than the page an operator happens to be looking at.
+  const sortedNodes = useMemo(
+    () => sortItems(filters.filteredRows),
+    [filters.filteredRows, sortItems],
+  );
+
   // note: clamped on read rather than corrected in an effect, which would snap the operator back a
   // page mid-task and still paint one wrong frame first.
-  const totalPages = Math.max(1, Math.ceil(filteredNodes.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(sortedNodes.length / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const pagedNodes = filteredNodes.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const pagedNodes = sortedNodes.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const handleViewDetails = (node: NodeStatus) => setSelectedNodeName(node.name);
 
@@ -153,18 +157,18 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
     return <LoadingSkeleton />;
   }
 
+  const registeredCount = data?.nodes.length ?? 0;
+
   return (
     <>
-      <div className="space-y-4">
+      {/* A landmark named by its heading: the page carries a second toolbar (Projects) with the
+          same "Sort by" control, status counter and Clear search button, and the region is what
+          lets a screen reader and a locator tell the two apart. */}
+      <section aria-labelledby={headingId} data-slot="clusters-section" className="space-y-4">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold">Clusters</h2>
+            <h2 id={headingId} className="text-lg font-semibold">Clusters</h2>
             <NodeConnectionSummary nodes={data?.nodes} allConnected={data?.all_connected} />
-            {selectedTags.length > 0 && (
-              <Badge variant="outline" className="text-xs">
-                {filteredNodes.length} of {data?.nodes.length || 0}
-              </Badge>
-            )}
           </div>
           <RefreshButton
             label="Refresh overview"
@@ -173,30 +177,51 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
           />
         </div>
 
-        {/* Tag Filter */}
-        {allTags.length > 0 && (
-          <TagFilter
-            availableTags={allTags}
-            selectedTags={selectedTags}
-            onTagsChange={handleTagsChange}
-          />
-        )}
+        <ClusterGridToolbar
+          filters={filters}
+          sortField={sortField as ClusterSortField}
+          sortDirection={sortDirection}
+          onSort={handleSort}
+          availableTags={allTags}
+          selectedTags={selectedTags}
+        />
 
-        {filteredNodes.length === 0 && selectedTags.length > 0 ? (
-          // A tag filter that matches nothing is not the same as having no clusters, so it says so
+        {sortedNodes.length === 0 && filters.activeFilterCount > 0 ? (
+          // A filter that matches nothing is not the same as having no clusters, so it says so
           // and offers the way back out.
           <EmptyState
             icon={Server}
-            title="No cluster matches the current tags"
-            description={`${selectedTags.length} tag filter${selectedTags.length === 1 ? "" : "s"} active`}
+            title="No cluster matches the current filters"
+            description="Try a different search, or clear a filter."
             action={
-              <Button size="sm" variant="outline" onClick={() => handleTagsChange([])}>
+              <Button size="sm" variant="outline" onClick={filters.clearAll}>
                 Clear filters
               </Button>
             }
           />
+        ) : registeredCount > 0 && onlineNodes.length === 0 ? (
+          <EmptyState
+            icon={AlertTriangle}
+            title="No cluster is online"
+            description="Every registered cluster is offline or still pending. The summary above says why."
+          />
+        ) : registeredCount === 0 ? (
+          <EmptyState
+            icon={Server}
+            title="No clusters yet"
+            description="Clusters appear here once a node is registered and authenticated."
+            action={
+              isPartner ? (
+                <Button size="sm" variant="outline" onClick={() => navigate("/register-node")}>
+                  Register Node
+                </Button>
+              ) : undefined
+            }
+          />
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          // Same breakpoints as the Projects grid beside it, for the reason recorded there: a
+          // two-up card at md is 224px wide and cannot hold its own header.
+          <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             {/* note: the index is the position on the page, not in the list, so the card stagger
                 restarts each page instead of delaying page four by several seconds. */}
             {pagedNodes.map((node, index) => (
@@ -213,20 +238,22 @@ export function NodeStatusCards({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
 
         {/* Absent rather than disabled when everything fits. The parent is already space-y-4. */}
         {totalPages > 1 && (
-          <DataTablePagination
-            currentPage={currentPage}
-            totalPages={totalPages}
-            pageSize={pageSize}
-            pageSizeOptions={[...GRID_PAGE_SIZES]}
-            totalItems={filteredNodes.length}
-            onPageChange={setPage}
-            onPageSizeChange={(size) => {
-              setPageSize(size);
-              setPage(1);
-            }}
-          />
+          <div data-slot="clusters-pagination">
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              pageSize={pageSize}
+              pageSizeOptions={[...GRID_PAGE_SIZES]}
+              totalItems={sortedNodes.length}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+            />
+          </div>
         )}
-      </div>
+      </section>
 
       <NodeDetailModal
         isOpen={selectedNodeName !== null}

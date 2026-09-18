@@ -144,6 +144,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
 
   return (
     <Card
+      data-slot="cluster-card"
       className="animate-fade-in overflow-hidden transition-all duration-300 hover:shadow-md"
       style={{ animationDelay: `${index * 100}ms` }}
     >
@@ -152,8 +153,13 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
           a form a screen reader can read. */}
       <div className={cn("h-1 w-full", statusMeta.dotClassName)} />
       <CardContent className="p-3 md:p-4">
-        <div className="flex flex-col sm:flex-row items-start justify-between gap-3">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
+        {/* important: flex-wrap with a basis-48 title block, not flex-col sm:flex-row. The grid
+            is three-up at xl, a 309px card at 1280 with the sidebar open (the same measurement
+            projects-section.tsx records), and the badge group (status, Clustered, kebab) is
+            about 190px, so a fixed row left the title around 35px. Wrapping drops the badges
+            under the title on a narrow card instead of crushing the name. */}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0 flex-1 basis-48">
             <div
               className={cn(
                 "flex h-10 w-10 items-center justify-center rounded-lg shrink-0 bg-muted",
@@ -182,7 +188,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0 self-start sm:self-auto">
+          <div className="flex items-center gap-2 shrink-0">
             {/* "Connected" and "Online" were two spellings of one idea across two pages.
                 One vocabulary now, from lib/cluster-status.ts. */}
             <Badge variant={statusMeta.badgeVariant} className="gap-1">
@@ -241,7 +247,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
         {node.connected && node.resources && (
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* CPU Info */}
-            <div className="flex flex-col gap-1">
+            <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Cpu className="h-3.5 w-3.5" />
                 <span className="font-medium">CPU</span>
@@ -255,7 +261,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             </div>
 
             {/* RAM Info */}
-            <div className="flex flex-col gap-1">
+            <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <MemoryStick className="h-3.5 w-3.5" />
                 <span className="font-medium">RAM</span>
@@ -271,7 +277,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
             </div>
 
             {/* GPU Info */}
-            <div className="flex flex-col gap-1">
+            <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <Sparkles className="h-3.5 w-3.5" />
                 <span className="font-medium">GPU</span>
