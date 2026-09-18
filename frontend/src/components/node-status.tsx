@@ -63,13 +63,15 @@ function LoadingSkeleton() {
                   <div className="space-y-2">
                     <Skeleton className="h-4 w-24" />
                     <Skeleton className="h-3 w-32" />
+                    <Skeleton className="h-3 w-40" />
                   </div>
                 </div>
                 <Skeleton className="h-5 w-20 rounded-full" />
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-4">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Skeleton className="h-4 w-28" />
                 <Skeleton className="h-4 w-36" />
+                <Skeleton className="h-4 w-44" />
               </div>
               <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {[...Array(3)].map((_, j) => (
