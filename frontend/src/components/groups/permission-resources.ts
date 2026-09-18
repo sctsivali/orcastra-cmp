@@ -78,3 +78,41 @@ export function resourceQualifier(entityType: string, project?: string): string 
   if (!project || project === "default") return null;
   return entityType === "image" ? `store: ${project}` : project;
 }
+
+export interface PermissionEntry {
+  entity_type: string;
+  url: string;
+  entitlement: string;
+}
+
+const PROJECT_OF = /[?&]project=([^&]+)/;
+
+/**
+ * LXD refuses an entitlement on a resource inside a project the group cannot view
+ * ("references project X, but the project cannot be viewed by the group"), so a grant on a
+ * resource outside `default` needs `can_view` on that project beside it. Returns the project
+ * entries `grants` need that neither `grants` nor `existing` already hold, one per project.
+ */
+export function projectViewPrerequisites(grants: PermissionEntry[], existing: PermissionEntry[]): PermissionEntry[] {
+  const held = new Set(
+    [...existing, ...grants]
+      .filter((p) => p.entity_type === "project" && p.entitlement === "can_view")
+      .map((p) => p.url),
+  );
+  const needed: PermissionEntry[] = [];
+  for (const grant of grants) {
+    if (grant.entity_type === "project" || grant.entity_type === "server") continue;
+    const match = PROJECT_OF.exec(grant.url);
+    if (!match) continue;
+    const url = `/1.0/projects/${decodeURIComponent(match[1])}`;
+    if (held.has(url)) continue;
+    held.add(url);
+    needed.push({ entity_type: "project", url, entitlement: "can_view" });
+  }
+  return needed;
+}
+
+/** The projects named by a list of prerequisite entries, for the notice. */
+export function projectNamesOf(entries: PermissionEntry[]): string[] {
+  return entries.map((p) => p.url.replace(/^\/1\.0\/projects\//, ""));
+}

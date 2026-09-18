@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { permissionResources, resourceQualifier, type PermissionResource } from "@/components/groups/permission-resources";
+import {
+  permissionResources,
+  projectNamesOf,
+  projectViewPrerequisites,
+  resourceQualifier,
+  type PermissionResource,
+} from "@/components/groups/permission-resources";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -402,14 +408,18 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
         return;
       }
       
-      setPermissions([...permissions, ...uniquePerms]);
+      const prerequisites = projectViewPrerequisites(uniquePerms, permissions);
+      setPermissions([...permissions, ...uniquePerms, ...prerequisites]);
       setIsPermissionsDirty(true);
       setSelectedResources([]);
       setAllResources(false);
       
+      const viewNote = prerequisites.length > 0
+        ? ` can_view on project ${projectNamesOf(prerequisites).join(", ")} added beside them, which LXD requires.`
+        : "";
       const message = duplicateCount > 0 
-        ? `Added ${uniquePerms.length} permission(s). ${duplicateCount} duplicate(s) skipped.`
-        : `Added ${uniquePerms.length} permission(s).`;
+        ? `Added ${uniquePerms.length} permission(s). ${duplicateCount} duplicate(s) skipped.${viewNote}`
+        : `Added ${uniquePerms.length} permission(s).${viewNote}`;
       
       toast({
         title: "Permission Added",

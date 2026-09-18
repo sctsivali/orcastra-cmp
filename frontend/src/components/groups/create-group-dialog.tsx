@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { permissionResources, resourceQualifier, type PermissionResource } from "@/components/groups/permission-resources";
+import {
+  permissionResources,
+  projectNamesOf,
+  projectViewPrerequisites,
+  resourceQualifier,
+  type PermissionResource,
+} from "@/components/groups/permission-resources";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -234,9 +240,16 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
       });
     }
 
-    setPermissions([...permissions, ...newPerms]);
+    const prerequisites = projectViewPrerequisites(newPerms, permissions);
+    setPermissions([...permissions, ...newPerms, ...prerequisites]);
     setSelectedResources([]);
     setAllResources(false);
+    if (prerequisites.length > 0) {
+      toast({
+        title: "Project view added",
+        description: `LXD grants a resource inside a project only to a group that can view the project, so can_view was added on ${projectNamesOf(prerequisites).join(", ")}.`,
+      });
+    }
   };
 
   const handleRemovePermission = (index: number) => {

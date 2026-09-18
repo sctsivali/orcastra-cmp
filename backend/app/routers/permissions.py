@@ -9,6 +9,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
+from pylxd.exceptions import LXDAPIException
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.fanout import NodeRead, collect
 from app.models.schemas import FanoutReachability
@@ -422,6 +423,13 @@ async def create_group(
             )
     except HTTPException:
         raise
+    except LXDAPIException as e:
+        # important: pylxd raises on a 4xx, so LXD refusing the request (a permission naming a
+        # resource in a project the group cannot view, a duplicate name) reached the caller as
+        # a 500 and the dialog as "server error". LXD's own status and message are the answer.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        logger.warning(f"LXD refused creating group {name}: {e}")
+        raise HTTPException(status_code=status if status and 400 <= status < 500 else 502, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating group: {e}")
         raise HTTPException(status_code=500, detail=str(e))
