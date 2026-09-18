@@ -14,6 +14,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
 
 from app.core.dependencies import AuthenticatedUser, get_ws_user
 from app.core.org_scope import (
+    project_is_visible,
     set_org_scope_for_ws,
     verify_cluster_access,
     check_tenant_permission,
@@ -25,6 +26,32 @@ from app.services.lxd.events_hub import get_events_hub
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/events", tags=["Events"])
+
+
+def frame_is_visible(host: str, payload: dict) -> bool:
+    """Whether one parsed event frame may reach the subscriber whose scope is in context.
+
+    important: the hub subscribes with all-projects, so the node's stream carries every
+    project's operation and lifecycle frames (instance names, image aliases, progress, error
+    text). Three gates, in the order the REST path applies them:
+
+    1. The Partner project bound. `check_tenant_permission` is no bound for a Partner (it
+       returns open for anyone without a tenant ACL), so without this a Partner on a cluster
+       two organisations share would receive the other organisation's frames the moment the
+       subscription widened. A frame with no project reads as the default project, the same
+       reading the lists give a record with no project.
+    2. The tenant ACL, per instance, mirroring verify_tenant_permission on the REST path.
+    3. A tenant gets nothing this stream cannot attribute to an instance: a neighbour's
+       storage-volume create or image download names nothing of theirs. Admin and Partner
+       carry no ACL and still receive those cluster-wide frames, which are for them.
+    """
+    project = payload.get("project") or "default"
+    if not project_is_visible(host, project):
+        return False
+    instance = payload.get("instance")
+    if instance:
+        return bool(check_tenant_permission(host, project, instance, "view"))
+    return not tenant_acl_active()
 
 
 @router.websocket("/ws")
@@ -59,28 +86,11 @@ async def events_websocket(
     logger.info(f"[events] browser connected host={host} user={user_id}")
 
     async def _sender():
+        # The scope set above lives in this task's copy of the context, so frame_is_visible
+        # reads the same bound and ACL the handler resolved for this subscriber.
         while True:
             payload = await queue.get()
-            # Per-subscriber tenant ACL filter: the node's event stream carries
-            # every instance/project on the host, so drop frames this user has no
-            # view permission for (mirrors verify_tenant_permission on the REST
-            # path). Admins/Partners (no ACL) pass everything.
-            instance = payload.get("instance")
-            if instance:
-                if not check_tenant_permission(
-                    host, payload.get("project") or "default", instance, "view"
-                ):
-                    continue
-            elif tenant_acl_active():
-                # important: a frame this stream cannot attribute to an instance was forwarded to
-                # everyone, because the filter above only ran when there was a name to check. On a
-                # cluster several tenants share, that is a neighbour's storage-volume create, image
-                # download or project operation arriving in this tenant's feed. A tenant has no
-                # claim to an event that names nothing of theirs, so it is dropped.
-                #
-                # Admin and Partner carry no ACL and still receive the full stream: they are the
-                # audience these cluster-wide frames exist for, and tenant_acl_active is False for
-                # them, so this branch never runs.
+            if not frame_is_visible(host, payload):
                 continue
             await websocket.send_json(payload)
 

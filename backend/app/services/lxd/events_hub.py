@@ -1,8 +1,9 @@
 """
 LXD operation-events hub (shared per-node fan-out).
 
-Maintains ONE upstream WebSocket to each node's ``/1.0/events?type=operation``
-stream and fans the parsed events out to many browser subscribers. This is the
+Maintains ONE upstream WebSocket to each node's
+``/1.0/events?type=operation,lifecycle&all-projects=true`` stream and fans the parsed
+events out to many browser subscribers. This is the
 shared-per-node model: the first subscriber for a node starts the upstream
 listener; when the last subscriber leaves, the listener is torn down. The
 upstream connection auto-reconnects (with backoff) as long as subscribers remain.
@@ -113,7 +114,13 @@ class LXDEventsHub:
         # operation: instance create/start/stop progress (+ image-pull progress).
         # lifecycle: instance created/started/stopped/deleted/... so the dashboard
         # can keep its list current from the stream instead of polling.
-        return f"{ws_endpoint}/1.0/events?type=operation,lifecycle"
+        #
+        # important: all-projects. Without it LXD emits the default project's events only, so a
+        # create into any other project produced no frame at all: the "Creating..." placeholder
+        # sat until its ten-minute expiry while the instance had been running for nine of them.
+        # Every frame names its project, and routers/events.py filters per subscriber with the
+        # tenant ACL and the Partner project bound before a frame reaches a browser.
+        return f"{ws_endpoint}/1.0/events?type=operation,lifecycle&all-projects=true"
 
     async def _run_node(self, host: str) -> None:
         """Keep an upstream events connection alive while subscribers exist,

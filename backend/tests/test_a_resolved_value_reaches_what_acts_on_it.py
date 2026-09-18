@@ -121,7 +121,9 @@ def test_the_events_stream_drops_a_frame_it_cannot_attribute_for_a_tenant(monkey
     assert "tenant_acl_active()" in source, (
         "the stream must know whether the subscriber carries an ACL at all"
     )
-    # The unattributable branch has to come after the per-instance check and before the send.
+    # The decision lives in frame_is_visible, which the sender consults before every send. The
+    # unattributable branch is its last line: a tenant gets nothing the stream cannot attribute.
     send = source.index("await websocket.send_json(payload)")
-    guard = source.index("elif tenant_acl_active():")
-    assert guard < send, "the guard must sit before the send, or it guards nothing"
+    consult = source.index("if not frame_is_visible(host, payload):")
+    guard = source.index("return not tenant_acl_active()")
+    assert guard < consult < send, "the guard must sit before the send, or it guards nothing"

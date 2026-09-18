@@ -213,6 +213,8 @@ def test_every_project_spanning_list_applies_the_bound():
         # volumes and warnings span every project since the hotfix1 re-cut
         "storage_volumes.py": "list_storage_volumes",
         "lxd_warnings.py": "list_warnings",
+        # the events hub subscribes with all-projects, so the browser stream is a list too
+        "events.py": "frame_is_visible",
     }
     missing = []
     for filename, func in expected.items():
