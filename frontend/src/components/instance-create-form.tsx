@@ -662,7 +662,7 @@ function InstanceCreateFormContent() {
   // resolves a local fingerprint only inside the target project, so a project with its own
   // store (`features.images`) cannot create from a default-store row. The backend resolves
   // that flag and answers with the store it read (`imagesResp.project`).
-  const { data: imagesResp, isLoading: loadingImages } = useImagesByHost(
+  const { data: imagesResp, isLoading: loadingImages, isError: imagesFailed } = useImagesByHost(
     form.selectedNode,
     form.selectedProject || "default",
   );
@@ -1021,9 +1021,11 @@ function InstanceCreateFormContent() {
   useEffect(() => {
     const pending = projectSwitchRef.current;
     if (!pending || pending.project !== form.selectedProject) return;
-    if (loadingImages || !imagesResp) return;
+    // A store that could not be read (a project outside the caller's bound answers 403)
+    // cannot hold the pick as far as this form can tell, so it is cleared like a miss.
+    if (loadingImages || (!imagesResp && !imagesFailed)) return;
     projectSwitchRef.current = null;
-    if (!form.selectedImage || form.imageServer !== "" || localFingerprints.has(form.selectedImage)) return;
+    if (!form.selectedImage || form.imageServer !== "" || (!imagesFailed && localFingerprints.has(form.selectedImage))) return;
     setForm((prev) => ({ ...prev, selectedImage: "", imageServer: "", imageLabel: "" }));
     setChangeNotice(
       projectChangeNotice({
@@ -1033,7 +1035,7 @@ function InstanceCreateFormContent() {
         clearedNics: pending.clearedNics,
       }),
     );
-  }, [form.selectedProject, form.selectedImage, form.imageServer, loadingImages, imagesResp, localFingerprints]);
+  }, [form.selectedProject, form.selectedImage, form.imageServer, loadingImages, imagesResp, imagesFailed, localFingerprints]);
 
   // --- Submit -----------------------------------------------------------------
   const submit = async (startAfterCreate: boolean) => {
