@@ -51,6 +51,21 @@ def test_the_hub_subscribes_to_every_project(monkeypatch):
                           "resources": {"instances": ["/1.0/instances/web-01"]}}},
             "other-org",
         ),
+        # LXD writes the project into the resource URL outside the default project. The
+        # name must come out clean, or the frame matches no placeholder and a refused create
+        # never shows as failed.
+        (
+            {"type": "operation", "project": "other-org",
+             "metadata": {"id": "op-2", "status": "Failure", "status_code": 400,
+                          "resources": {"instances": ["/1.0/instances/web-01?project=other-org"]}}},
+            "other-org",
+        ),
+        (
+            {"type": "operation",
+             "metadata": {"id": "op-3", "status": "Running", "status_code": 103,
+                          "resources": {"instances": ["/1.0/instances/web-01?project=other-org"]}}},
+            "other-org",
+        ),
     ],
 )
 def test_a_frame_carries_its_project(raw, expected_project):

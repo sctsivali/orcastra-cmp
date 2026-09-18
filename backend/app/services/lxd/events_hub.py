@@ -199,7 +199,19 @@ class LXDEventsHub:
             return None
         resources = md.get("resources", {}) or {}
         instances = resources.get("instances", []) or []
-        names = [u.rstrip("/").rsplit("/", 1)[-1] for u in instances]
+        # important: a resource URL outside the default project is
+        # `/1.0/instances/<name>?project=<p>`. Taking the last path segment with the query
+        # still attached produced `<name>?project=<p>`, which matched no placeholder, so a
+        # create that LXD refused in another project never flipped its row to "Failed".
+        names: list = []
+        url_project: Optional[str] = None
+        for u in instances:
+            path, _, query = str(u).partition("?")
+            names.append(path.rstrip("/").rsplit("/", 1)[-1])
+            for pair in query.split("&"):
+                key, _, value = pair.partition("=")
+                if key == "project" and value:
+                    url_project = url_project or value
         inner = md.get("metadata") or {}
         progress = _extract_progress(inner)
         return {
@@ -208,7 +220,7 @@ class LXDEventsHub:
             "operation_id": md.get("id"),
             "instances": names,
             "instance": names[0] if names else None,
-            "project": evt.get("project") or md.get("project"),
+            "project": evt.get("project") or md.get("project") or url_project,
             "description": md.get("description"),
             "status": md.get("status"),
             "status_code": md.get("status_code"),
