@@ -140,3 +140,68 @@ def test_no_project_walks_the_owners_when_the_daemon_cannot():
     assert sorted(i.project for i in listing.images) == [DEFAULT_PROJECT, "dev01"]
     image_reads = [p.get("project") for c, p in client.calls if c == "images"]
     assert sorted(image_reads) == [DEFAULT_PROJECT, "dev01"], "qa-cap shares default and is read once through it"
+
+
+def _route_client(listing_by_project, monkeypatch):
+    """The images router with the store read stubbed: what `all_projects` returns and refuses."""
+    import contextvars
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.core import org_scope
+    from app.core.org_scope import org_scope_dependency
+    from app.core.rbac import get_current_user
+    from app.routers import images as images_module
+    from app.services.lxd_service import get_lxd_service
+
+    class _Service:
+        def get_node_names(self):
+            return ["nuc2"]
+
+        async def list_images(self, host, project=None):
+            return listing_by_project[project]
+
+    monkeypatch.setattr(images_module, "verify_cluster_access", lambda host: None)
+
+    async def _allowed(_svc):
+        return None
+
+    monkeypatch.setattr(images_module, "_allowed_image_fingerprints_by_host", _allowed)
+    app = FastAPI()
+    app.include_router(images_module.router)
+    app.dependency_overrides[get_lxd_service] = lambda: _Service()
+    app.dependency_overrides[get_current_user] = lambda: None
+    app.dependency_overrides[org_scope_dependency] = lambda: None
+    client = TestClient(app, raise_server_exceptions=False)
+
+    def bounded(call, mapping):
+        def run():
+            org_scope._visible_projects_var.set(mapping)
+            org_scope._allowed_clusters_var.set(None)
+            return call()
+
+        return contextvars.copy_context().run(run)
+
+    return client, bounded
+
+
+def test_all_projects_lists_every_store_the_caller_may_see(monkeypatch):
+    every = ImageStoreListing(
+        images=[_info_from_row(_row(FP_A, project=DEFAULT_PROJECT)), _info_from_row(_row(FP_B, project="dev01"))],
+        project=None,
+        complete=True,
+    )
+    client, bounded = _route_client({None: every}, monkeypatch)
+
+    r = client.get("/images/nuc2", params={"all_projects": "true"})
+    assert r.status_code == 200, r.text
+    assert r.json()["project"] is None and r.json()["complete"] is True
+    assert sorted(i["project"] for i in r.json()["images"]) == [DEFAULT_PROJECT, "dev01"]
+
+    r = bounded(lambda: client.get("/images/nuc2", params={"all_projects": "true"}), {"nuc2": {DEFAULT_PROJECT}})
+    assert r.status_code == 200, r.text
+    assert [i["project"] for i in r.json()["images"]] == [DEFAULT_PROJECT]
+
+    r = client.get("/images/nuc2", params={"all_projects": "true", "project": "dev01"})
+    assert r.status_code == 422

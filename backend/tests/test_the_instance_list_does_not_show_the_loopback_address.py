@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from typing import Any, Dict
 
 from app.services.lxd import utils as lxd_utils
-from app.services.lxd.instance import InstanceManager
+
 
 STATE: Dict[str, Any] = {
     "network": {
@@ -64,16 +64,10 @@ def test_the_pylxd_extractor_agrees() -> None:
 
 
 def test_the_instance_list_collector_agrees() -> None:
-    class _State:
-        def get(self, params=None, timeout=None):
-            return SimpleNamespace(json=lambda: {"metadata": STATE})
+    # The list reads state inline (recursion=2); the row mapper must hide the same addresses.
+    from app.services.lxd.instance import _vm_info_from_row
 
-    class _Instances:
-        def __getitem__(self, name):
-            return SimpleNamespace(state=_State())
-
-    client = SimpleNamespace(api=SimpleNamespace(instances=_Instances()))
-    manager = InstanceManager(connection_manager=None, resource_manager=None)
-    assert manager._fetch_single_instance_state(client, "web1", "default") == (
-        "web1", ["10.0.0.5", "2001:db8::5"],
-    )
+    row = {"name": "web1", "status": "Running", "status_code": 103, "project": "default", "state": STATE}
+    assert _vm_info_from_row(row, "nuc2", "").ip_addresses == ["10.0.0.5", "2001:db8::5"]
+    stopped = {"name": "web2", "status": "Stopped", "status_code": 102, "project": "default", "state": {"network": None}}
+    assert _vm_info_from_row(stopped, "nuc2", "").ip_addresses == []

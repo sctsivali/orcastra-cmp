@@ -6,7 +6,7 @@ Handles create, start, stop, restart, delete, and list operations for instances.
 import logging
 import asyncio
 from typing import List, Tuple, Optional, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from requests import exceptions as requests_exc
 
@@ -34,6 +34,7 @@ from .utils import (
 )
 from .resources import ResourceManager
 from .connection import LXDConnectionManager
+from .project_scope import list_across_projects
 from .audit import audit_operation
 from app.core.lxd_path import safe_segment
 
@@ -125,8 +126,9 @@ def _lxd_snapshot_names(client, name: str, project: str) -> List[str]:
         logger.warning("Could not list snapshots for %s: %s", name, e)
         return []
 
-# Thread pool for parallel instance state fetching
-# Enterprise setting: 50 workers for high concurrency
+# Thread pool for the per-node instance fan-out. Sized when it also carried one /state call
+# per running instance; the state now arrives inline with the list, so the pool only carries
+# one read per node.
 _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="instance_state_")
 
 # Failed-node skip is delegated to the shared circuit breaker
@@ -139,6 +141,39 @@ _instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="inst
 # here so neither consumer has to know.
 # Kept as a local name: the helper is shared with the GPU inventory (see utils).
 _cluster_member = normalize_cluster_member
+
+
+def _vm_info_from_row(row: Dict[str, Any], node_name: str, node_endpoint: str) -> VMInfo:
+    """One record of an all-projects, recursion=2 instance list to VMInfo.
+
+    `project` is what the daemon stamped on the row (list_across_projects refuses rows
+    without it); `state` is inline, so the addresses come from it without a second call, and
+    a stopped instance's empty state yields none. `resources` stays unset on the list path.
+    """
+    config_data = row.get("config") or {}
+    tags_str = config_data.get("user.tags", "")
+    tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else []
+    return VMInfo(
+        name=row.get("name", ""),
+        status=parse_vm_status(row.get("status", "Unknown"), row.get("status_code", 0)),
+        status_code=row.get("status_code", 0),
+        ip_addresses=extract_ip_addresses_from_state(row.get("state") or {}),
+        host=node_name,
+        host_endpoint=node_endpoint,
+        architecture=row.get("architecture", ""),
+        created_at=row.get("created_at"),
+        last_used_at=row.get("last_used_at"),
+        description=row.get("description", ""),
+        type=row.get("type", "container"),
+        resources=None,
+        config=config_data,
+        devices=row.get("devices") or {},
+        expanded_devices=row.get("expanded_devices") or {},
+        profiles=row.get("profiles", []),
+        tags=tags,
+        project=row.get("project") or "default",
+        location=_cluster_member(row.get("location")),
+    )
 
 
 # Config keys some LXD versions refuse outright for a given instance type, mapped to the first
@@ -243,65 +278,6 @@ class InstanceManager:
                 client = None
         
         return client
-    
-    def _fetch_single_instance_state(self, client, instance_name: str, project_name: str) -> Tuple[str, List[str]]:
-        """
-        Fetch state for a single instance. Used by ThreadPoolExecutor.
-        Returns tuple of (instance_name, ip_addresses).
-        """
-        ip_addrs = []
-        try:
-            state_resp = client.api.instances[safe_segment(instance_name)].state.get(
-                params={'project': project_name},
-                timeout=(1, 3)  # Aggressive timeout for parallel calls
-            )
-            state_data = state_resp.json()['metadata']
-            ip_addrs = extract_ip_addresses_from_state(state_data)
-        except Exception as e:
-            logger.debug(f"Could not get state for {instance_name}: {e}")
-        
-        return instance_name, ip_addrs
-    
-    def _fetch_instance_states_parallel(
-        self, 
-        client, 
-        running_instances: List[Tuple[str, str]], 
-        node_name: str
-    ) -> Dict[str, List[str]]:
-        """
-        Fetch states for multiple instances in parallel.
-        
-        Uses ThreadPoolExecutor to fetch all instance states concurrently.
-        This reduces 83 sequential API calls (41 seconds) to parallel (few seconds).
-        """
-        if not running_instances:
-            return {}
-        
-        instance_states = {}
-        
-        # Submit all tasks
-        futures = {}
-        for instance_name, project_name in running_instances:
-            future = _instance_executor.submit(
-                self._fetch_single_instance_state,
-                client,
-                instance_name,
-                project_name
-            )
-            futures[future] = instance_name
-        
-        # Collect results with timeout
-        for future in as_completed(futures, timeout=30):
-            try:
-                name, ips = future.result(timeout=5)
-                instance_states[name] = ips
-            except Exception as e:
-                name = futures[future]
-                logger.debug(f"Failed to get state for {name} on {node_name}: {e}")
-                instance_states[name] = []
-        
-        logger.debug(f"Fetched state for {len(instance_states)}/{len(running_instances)} instances on {node_name}")
-        return instance_states
     
     def _get_node_endpoint(self, node_name: str) -> str:
         """Get node endpoint from Vault metadata with caching."""
@@ -510,75 +486,32 @@ class InstanceManager:
                 )
                 return [], False
             
-            # Get all projects on this node
+            # One request for every project's instances, state included (recursion=2), on a
+            # daemon that advertises instance_all_projects; list_across_projects walks the
+            # projects one by one otherwise. The per-project walk plus one /state call per
+            # running instance took 11 s on a 52-project host; this is well under a second.
             try:
-                projects = client.projects.all()
-                project_names = [p.name for p in projects]
-            except Exception as e:
-                logger.warning(f"Could not list projects on {node_name}: {e}")
-                project_names = ["default"]
-            
-            # Iterate through all projects
-            for project_name in project_names:
+                rows, complete = list_across_projects(client, "instances", recursion=2)
+            except requests_exc.ReadTimeout:
+                # A large partner cloud can outrun the read budget with state attached.
+                # Listing without addresses beats reporting the cluster unreachable.
+                logger.warning(
+                    "Instance list with state on %s exceeded the read budget; re-reading "
+                    "without state, addresses omitted", node_name,
+                )
+                rows, complete = list_across_projects(client, "instances", recursion=1)
+            if not complete:
+                logger.warning(
+                    "Instance list on %s is partial: not every project could be read", node_name
+                )
+            for row in rows:
                 try:
-                    response = client.api.instances.get(params={'project': project_name, 'recursion': 1})
-                    instances_data = response.json()['metadata']
-                    
-                    # Collect running instances for parallel state fetch
-                    running_instances = []
-                    for inst in instances_data:
-                        if inst.get('status') == 'Running':
-                            running_instances.append((inst.get('name', ''), project_name))
-                    
-                    # Parallel fetch states for running instances
-                    instance_states = {}
-                    if running_instances:
-                        instance_states = self._fetch_instance_states_parallel(
-                            client, running_instances, node_name
-                        )
-                    
-                    # Process all instances
-                    for instance_data in instances_data:
-                        try:
-                            config_data = instance_data.get('config', {})
-                            tags_str = config_data.get('user.tags', '')
-                            tags = [t.strip() for t in tags_str.split(',') if t.strip()] if tags_str else []
-                            
-                            instance_name = instance_data.get('name', '')
-                            ip_addrs = instance_states.get(instance_name, [])
-                            
-                            vm_info = VMInfo(
-                                name=instance_name,
-                                status=parse_vm_status(
-                                    instance_data.get('status', 'Unknown'),
-                                    instance_data.get('status_code', 0)
-                                ),
-                                status_code=instance_data.get('status_code', 0),
-                                ip_addresses=ip_addrs,
-                                host=node_name,
-                                host_endpoint=node_endpoint,
-                                architecture=instance_data.get('architecture', ''),
-                                created_at=instance_data.get('created_at'),
-                                last_used_at=instance_data.get('last_used_at'),
-                                description=instance_data.get('description', ''),
-                                type=instance_data.get('type', 'container'),
-                                resources=None,
-                                config=config_data,
-                                devices=instance_data.get('devices') or {},
-                                expanded_devices=instance_data.get('expanded_devices') or {},
-                                profiles=instance_data.get('profiles', []),
-                                tags=tags,
-                                project=project_name,
-                                location=_cluster_member(instance_data.get('location')),
-                            )
-                            
-                            vms.append(vm_info)
-                        except Exception as e:
-                            logger.error(f"Error processing instance on {node_name}: {e}")
-                            
+                    vms.append(_vm_info_from_row(row, node_name, node_endpoint))
                 except Exception as e:
-                    logger.error(f"Error listing instances in project '{project_name}' on {node_name}: {e}")
-            
+                    logger.error(
+                        "Error processing instance %s/%s on %s: %s",
+                        row.get("project"), row.get("name"), node_name, e,
+                    )
             return vms, True
             
         except Exception as e:

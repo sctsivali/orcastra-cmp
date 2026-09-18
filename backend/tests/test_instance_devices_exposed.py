@@ -62,12 +62,13 @@ def test_every_build_path_carries_devices() -> None:
     assert "expanded_devices=jsonable_lxd(" in inst_src, (
         "the pylxd-model builder must populate expanded_devices"
     )
-    assert "devices=instance_data.get('devices')" in inst_src, (
-        "the list builder constructs VMInfo from the raw payload and must pass devices too"
-    )
-    assert "expanded_devices=instance_data.get('expanded_devices')" in inst_src, (
-        "the list builder must pass expanded_devices too"
-    )
+    # The list builder constructs VMInfo from the raw all-projects payload and must carry both.
+    row = {
+        "name": "web", "status": "Running", "status_code": 103, "project": "p",
+        "devices": {"root": {"type": "disk"}}, "expanded_devices": {"root": {"type": "disk"}, "eth0": {"type": "nic"}},
+    }
+    built = instance_module._vm_info_from_row(row, "nuc2", "")
+    assert built.devices == row["devices"] and built.expanded_devices == row["expanded_devices"]
 
     wrapper_src = inspect.getsource(utils_module.InstanceWrapper.__init__)
     assert "self.devices" in wrapper_src, (

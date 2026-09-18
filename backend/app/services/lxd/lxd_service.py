@@ -525,6 +525,10 @@ class LXDService:
         """The store `project` reads on a host, which is what a caller must be allowed to see."""
         return self.image_manager.image_store_of(host, project)
 
+    def image_stores_of(self, host: str, projects) -> Dict[str, str]:
+        """The store each named project reads on a host, from one read of the project configs."""
+        return self.image_manager.image_stores_of(host, projects)
+
     def get_image(
         self, host: str, fingerprint: str, project: Optional[str] = None
     ) -> Optional[ImageInfo]:

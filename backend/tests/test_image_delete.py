@@ -487,7 +487,8 @@ def test_dependents_outside_the_bound_are_counted_but_not_named():
     seen = _VM("mine-01")
     hidden = _VM("theirs-01")
     hidden.project = "cust-other"
-    svc = _service(image, vms=[seen, hidden])
+    # cust-other shares the default store, so its instance is this store's dependent.
+    svc = _service(image, vms=[seen, hidden], projects={"default": {}, "cust-other": {"features.images": "false"}})
     client = _client(svc)
 
     usage = _bounded(lambda: client.get(f"/images/{FP}/usage", params={"host": HOST}))

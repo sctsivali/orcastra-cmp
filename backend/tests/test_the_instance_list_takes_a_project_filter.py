@@ -1,0 +1,91 @@
+"""`GET /instances?project=` narrows the list to one project.
+
+The parameter was silently dropped: FastAPI ignores a query it does not declare, so a caller
+asking for one project's instances got every project's. Profiles, networks and images take
+the same parameter; the instance list now does too, keyed into the cache like theirs, with
+the bound and the tenant ACL still last so a project the caller may not see is an empty list.
+"""
+
+import contextvars
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.core import cache as cache_mod
+from app.core import org_scope
+from app.core.cache import CacheManager
+from app.core.dependencies import require_tenant
+from app.core.org_scope import org_scope_dependency
+from app.core.rbac import get_current_user
+from app.models.schemas import VMInfo, VMStatus
+from app.routers import instances as instances_module
+from app.services.lxd_service import get_lxd_service
+
+
+def _vm(name, project, host="nuc2"):
+    return VMInfo(name=name, status=VMStatus.STOPPED, status_code=102, host=host, host_endpoint="",
+                  project=project, type="container", architecture="x86_64")
+
+
+class _Service:
+    def get_node_names(self):
+        return ["nuc2", "nuc1"]
+
+    async def list_all_vms(self):
+        return [
+            _vm("a", "default"), _vm("b", "qa-a"), _vm("c", "qa-a"), _vm("d", "qa-b"), _vm("e", "qa-a", host="nuc1"),
+        ], ["nuc2", "nuc1"]
+
+
+def _client(monkeypatch):
+    manager = CacheManager(redis_url=None)
+    monkeypatch.setattr(cache_mod, "get_cache_manager", lambda: manager)
+    monkeypatch.setattr(instances_module, "get_cache_manager", lambda: manager)
+    monkeypatch.setattr(instances_module, "verify_cluster_access", lambda host: None)
+    app = FastAPI()
+    app.include_router(instances_module.router)
+    app.dependency_overrides[get_lxd_service] = lambda: _Service()
+    app.dependency_overrides[get_current_user] = lambda: None
+    app.dependency_overrides[org_scope_dependency] = lambda: None
+    app.dependency_overrides[require_tenant()] = lambda: None
+    return TestClient(app, raise_server_exceptions=False), manager
+
+
+def _names(r):
+    return sorted(v["name"] for v in r.json()["vms"])
+
+
+def test_the_project_narrows_the_list_and_composes_with_host(monkeypatch):
+    client, _ = _client(monkeypatch)
+    assert _names(client.get("/instances?project=qa-a")) == ["b", "c", "e"]
+    assert _names(client.get("/instances?host=nuc2&project=qa-a")) == ["b", "c"]
+    assert _names(client.get("/instances?project=zz-absent")) == []
+    assert _names(client.get("/instances")) == ["a", "b", "c", "d", "e"]
+
+
+def test_a_malformed_project_is_refused(monkeypatch):
+    client, _ = _client(monkeypatch)
+    assert client.get("/instances?project=../x").status_code == 422
+
+
+def test_the_project_is_part_of_the_cache_key(monkeypatch):
+    client, manager = _client(monkeypatch)
+    client.get("/instances?project=qa-a")
+    client.get("/instances?project=qa-b")
+    client.get("/instances")
+    keys = [k for k in manager.memory_cache.cache if "instances:list" in k]
+    assert any("project=qa-a" in k for k in keys) and any("project=qa-b" in k for k in keys)
+    assert any("project=*" in k for k in keys)
+    assert len(keys) == 3
+
+
+def test_a_project_outside_the_bound_is_an_empty_list_not_a_refusal(monkeypatch):
+    client, _ = _client(monkeypatch)
+
+    def run():
+        org_scope._visible_projects_var.set({"nuc2": {"default", "qa-a"}})
+        org_scope._allowed_clusters_var.set(None)
+        return client.get("/instances?host=nuc2&project=qa-b")
+
+    r = contextvars.copy_context().run(run)
+    assert r.status_code == 200 and r.json()["vms"] == []

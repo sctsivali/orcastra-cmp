@@ -32,6 +32,7 @@ from app.services.lxd_service import (
 from app.services.lxd.exceptions import LXDProjectLimitError
 from app.core.single_flight import single_flight
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.api_key_capabilities import is_valid_project_name
 from app.core.org_scope import (
     org_scope_dependency,
     verify_cluster_access,
@@ -103,6 +104,7 @@ def _validate_image_server(image_server: Optional[str]) -> None:
 @single_flight("instances:list")
 async def list_instances(
     host: Optional[str] = Query(None, description="Filter by specific host node"),
+    project: Optional[str] = Query(None, description="LXD project to list. Omit for every project the caller may see."),
     status: Optional[VMStatus] = Query(None, description="Filter by instance status"),
     instance_type: Optional[str] = Query(None, description="Filter by type: container or virtual-machine"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
@@ -113,9 +115,14 @@ async def list_instances(
     """List all instances across all nodes with optional filters."""
     if host:
         verify_cluster_access(host)
-    # Try cache first (scope+ACL aware, 30s TTL)
+    if project and not is_valid_project_name(project):
+        raise HTTPException(status_code=422, detail="Invalid project name")
+    # Try cache first (scope+ACL aware, 30s TTL). The project is part of the key, as it is
+    # for profiles: two callers asking for two projects must not share one body.
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key(f"instances:list:host={host}:status={status}:type={instance_type}:o={offset}:l={limit}")
+    cache_key = get_scope_cache_key(
+        f"instances:list:host={host}:project={project or '*'}:status={status}:type={instance_type}:o={offset}:l={limit}"
+    )
     cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug(f"Returning cached instances list for {cache_key}")
@@ -128,6 +135,11 @@ async def list_instances(
         # Filter by host if provided
         if host:
             all_vms = [vm for vm in all_vms if vm.host == host]
+
+        # Filter by project if provided. The bound and the tenant ACL below stay last, so a
+        # project the caller may not see is an empty list, the same silence as no such project.
+        if project:
+            all_vms = [vm for vm in all_vms if (vm.project or "default") == project]
         
         # Filter by status if provided
         if status:

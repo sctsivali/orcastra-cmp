@@ -5,7 +5,7 @@ Handles listing and managing LXD images.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, NamedTuple, Optional
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional
 
 from app.models.schemas import ImageInfo
 from .exceptions import LXDConnectionError, LXDOperationError
@@ -13,8 +13,10 @@ from .connection import LXDConnectionManager
 from .project_scope import (
     DEFAULT_PROJECT,
     _metadata,
+    effective_project,
     list_across_projects,
     list_in_project,
+    list_project_configs,
     project_params,
     resolve_owner,
 )
@@ -139,6 +141,14 @@ class ImageManager:
     def image_store_of(self, host: str, project: Optional[str]) -> str:
         """The store `project` reads on `host`: its own when it isolates images, else default."""
         return resolve_owner(self._client(host), "images", project)
+
+    def image_stores_of(self, host: str, projects: Iterable[str]) -> Dict[str, str]:
+        """The store each of `projects` reads on `host`, from one read of the project configs."""
+        wanted = {p or DEFAULT_PROJECT for p in projects}
+        if wanted <= {DEFAULT_PROJECT}:
+            return {p: DEFAULT_PROJECT for p in wanted}
+        configs = list_project_configs(self._client(host))
+        return {p: effective_project("images", p, configs) for p in wanted}
 
     def get_image(
         self, host: str, fingerprint: str, project: Optional[str] = None
