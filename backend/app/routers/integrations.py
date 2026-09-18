@@ -20,6 +20,7 @@ import requests
 
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.services.lxd import health
+from app.services.lxd import registry as cluster_registry
 from app.services.lxd import status as lxd_status
 from app.models.schemas import AvailableCluster, AvailableClustersResponse
 from app.services.lxd.proxy import (
@@ -4602,9 +4603,26 @@ async def sync_policies_from_external(
 
     synced_count = 0
     errors = []
+    # Read once, before any policy is touched: a registry outage is a 503 for the whole call,
+    # never a half-applied sync.
+    registered = await cluster_registry.registered_cluster_ids()
+    if registered is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Cluster registry is temporarily unavailable; retry the policy sync",
+        )
 
     for sync_policy in body.policies:
         try:
+            # A rule naming a cluster no registration knows would count for nothing; the policy
+            # is skipped whole so the delete-then-replace below never runs on a partial rule set.
+            unregistered = sorted({r.cluster_id for r in sync_policy.rules if r.cluster_id not in registered})
+            if unregistered:
+                errors.append(
+                    f"Policy '{sync_policy.name}': rule names an unregistered cluster '{unregistered[0]}'"
+                )
+                continue
+
             # find org by external_id
             # important: `source` is filtered here as every sibling lookup in this file does.
             # Without it a dashboard-created organisation that happens to carry an external_id
@@ -4812,6 +4830,25 @@ async def get_policies_for_external(
 # Auto-Provision Tenant Access (called by OrcaHub during provisioning)
 # ============================================
 
+async def _refuse_an_unregistered_cluster(cluster_id: str) -> None:
+    """503 while the registry cannot be read, 404 when no cluster is registered under the id.
+
+    The message echoes the caller's own input and never the registered set: an external key
+    must not be able to enumerate the fleet through an error string.
+    """
+    registered = await cluster_registry.registered_cluster_ids()
+    if registered is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Cluster registry is temporarily unavailable; retry the provisioning call",
+        )
+    if cluster_id not in registered:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Cluster '{cluster_id}' is not registered with this control plane",
+        )
+
+
 class ProvisionTenantAccessRequest(BaseModel):
     """Request from OrcaHub to auto-create tenant access for a provisioned project."""
     organization_external_id: str = Field(..., description="OrcaHub organization UUID")
@@ -4867,6 +4904,11 @@ async def provision_tenant_access(
     allowed_projects = cluster_permissions[body.cluster_id].get("projects", ["default"])
     if body.project_name not in allowed_projects and "*" not in allowed_projects:
         raise HTTPException(status_code=403, detail=f"No permission for project {body.project_name}")
+
+    # important: the key's grant is validated when the key is minted and can carry an id no
+    # cluster is registered under; a rule written under such an id counts for nothing, so it is
+    # refused here, before the organization, member and cluster rows below are written.
+    await _refuse_an_unregistered_cluster(body.cluster_id)
 
     api_key_id = api_key.get("id", "")
     org_created = False

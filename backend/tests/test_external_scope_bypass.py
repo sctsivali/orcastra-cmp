@@ -81,12 +81,20 @@ def test_provision_refuses_a_project_outside_the_key_scope() -> None:
     assert "someone-elses-project" in str(exc.value.detail)
 
 
-def test_provision_reaches_its_body_when_the_scope_matches() -> None:
+def test_provision_reaches_its_body_when_the_scope_matches(monkeypatch) -> None:
     """The guard must not be so blunt that the legitimate call is refused too.
 
     A db of None means the handler raises as soon as it touches the session. Anything other
-    than a 403 proves the scope check let it through, which is all this asserts.
+    than a 403 proves the scope check let it through, which is all this asserts. The registry
+    gate that follows the scope check is answered for the granted cluster so the call gets
+    past it too.
     """
+    from app.services.lxd import registry as cluster_registry
+
+    async def _registered():
+        return frozenset({GRANTED})
+
+    monkeypatch.setattr(cluster_registry, "registered_cluster_ids", _registered)
     body = ProvisionTenantAccessRequest(
         organization_external_id="00000000-0000-0000-0000-000000000000",
         cluster_id=GRANTED,

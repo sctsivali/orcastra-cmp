@@ -26,6 +26,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from app.routers.integrations import provision_tenant_access, revoke_tenant_access
+from app.services.lxd import registry as cluster_registry
 
 
 class _NoResult:
@@ -120,7 +121,22 @@ def _api_key() -> Dict[str, Any]:
     }
 
 
-class DuplicateOrgSlugTests(unittest.TestCase):
+class _RegistryKnowsNuc2(unittest.TestCase):
+    """The writer refuses a cluster no registration knows before it touches the session; the
+    cases below are about what happens after that gate."""
+
+    def setUp(self) -> None:
+        async def _registered():
+            return frozenset({"nuc2"})
+
+        self._registry = cluster_registry.registered_cluster_ids
+        cluster_registry.registered_cluster_ids = _registered
+
+    def tearDown(self) -> None:
+        cluster_registry.registered_cluster_ids = self._registry
+
+
+class DuplicateOrgSlugTests(_RegistryKnowsNuc2):
     def test_a_taken_slug_answers_409_and_rolls_back(self):
         db = _SlugTakenSession()
 
@@ -161,7 +177,7 @@ class DuplicateOrgSlugTests(unittest.TestCase):
 
 
 
-class ForeignKeyOwnershipTests(unittest.TestCase):
+class ForeignKeyOwnershipTests(_RegistryKnowsNuc2):
     """The refusal must name the real reason: another integration owns the organisation.
 
     `provision_tenant_access` folds `api_key_id` into its lookup, so a caller whose key does
