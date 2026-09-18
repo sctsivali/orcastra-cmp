@@ -105,28 +105,45 @@ def operation_id_for(method: str, path: str, api_prefix: str) -> str:
     return "_".join([method.lower()] + parts)
 
 
-def _walk_routes(container: Any, _depth: int = 0) -> List[APIRoute]:
-    """Every APIRoute reachable from an app or a router, however it is nested.
+def _walk_route_paths(
+    container: Any, prefix: str = "", _depth: int = 0
+) -> List[Tuple[str, APIRoute]]:
+    """(served path, route) for every APIRoute reachable from an app or a router.
 
     Used by tests and diagnostics rather than by selection. `app.routes` is not a flat list of
     APIRoute across the FastAPI versions this project supports: up to 0.128 `include_router`
-    copied routes onto the parent, and from 0.141 it stores a nested router instead, so a flat
-    loop finds two routes on an application serving nearly three hundred.
+    copied routes onto the parent with the prefix already applied, and from 0.141 it stores a
+    nested router instead, whose routes still carry only their own router's prefix. The
+    include's `include_context.prefix` holds the rest, so the served path is the two joined.
+    Without that join a walk over the deployed image reports `/extensions/self` for a route the
+    daemon serves at `/api/v1/extensions/self`, and a test matching the served path finds
+    nothing. Declaration order is kept, which is what makes a literal route win over a slug.
     """
-    found: List[APIRoute] = []
+    found: List[Tuple[str, APIRoute]] = []
     if _depth > 8:  # a cycle would otherwise hang rather than fail
         return found
     for route in getattr(container, "routes", []):
         if isinstance(route, APIRoute):
-            found.append(route)
+            found.append((prefix + route.path, route))
         elif hasattr(route, "routes"):
-            found.extend(_walk_routes(route, _depth + 1))
+            found.extend(_walk_route_paths(route, prefix, _depth + 1))
         elif hasattr(route, "original_router"):
-            # FastAPI 0.141's nested include. Descending here would give paths without the
-            # parent's prefix and dependants without the parent's dependencies, so it is
-            # deliberately only followed for diagnostics, never for selection.
-            found.extend(_walk_routes(route.original_router, _depth + 1))
+            # FastAPI 0.141's nested include. The dependants below it have not had the
+            # parent's dependencies merged, so this is only followed for diagnostics, never
+            # for selection.
+            context = getattr(route, "include_context", None)
+            nested = prefix + str(getattr(context, "prefix", "") or "")
+            found.extend(_walk_route_paths(route.original_router, nested, _depth + 1))
     return found
+
+
+def _walk_routes(container: Any) -> List[APIRoute]:
+    """Every APIRoute reachable from an app or a router, however it is nested.
+
+    note: on FastAPI 0.141 a route below a nested include reports a `.path` without the
+    parent's prefix. Callers that need the served path use `_walk_route_paths`.
+    """
+    return [route for _path, route in _walk_route_paths(container)]
 
 
 def _api_key_routers() -> List[Tuple[str, Any]]:

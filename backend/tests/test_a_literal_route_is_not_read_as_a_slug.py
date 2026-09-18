@@ -18,7 +18,7 @@ an `include_router` line is easy to move while tidying.
 import os
 
 import pytest
-from starlette.routing import Match
+from starlette.routing import compile_path
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
 os.environ.setdefault("SECRET_KEY", "test-secret-key")
@@ -27,7 +27,7 @@ os.environ.setdefault("DEBUG", "true")
 os.environ.setdefault("CORS_ORIGINS", "http://localhost")
 
 from app.core.extension_manifest import RESERVED_SLUGS  # noqa: E402
-from app.core.public_openapi import _walk_routes  # noqa: E402
+from app.core.public_openapi import _walk_route_paths  # noqa: E402
 from app.main import create_app  # noqa: E402
 
 
@@ -37,15 +37,19 @@ def app():
 
 
 def _resolve(app, method: str, path: str) -> str:
-    scope = {
-        "type": "http", "method": method, "path": path,
-        "headers": [], "path_params": {}, "root_path": "",
-    }
-    # important: _walk_routes, not app.routes. From FastAPI 0.141 include_router stores a
-    # nested router rather than copying routes onto the parent, so a flat loop sees almost
-    # nothing. requirements.txt allows both shapes.
-    for route in _walk_routes(app):
-        if route.matches(scope)[0] == Match.FULL:
+    """The name of the route the application would dispatch `method path` to.
+
+    important: matched on the SERVED path from `_walk_route_paths`, not on `route.matches`.
+    From FastAPI 0.141 `include_router` stores a nested router whose routes carry only their
+    own prefix, so `route.matches` on `/api/v1/extensions/self` found nothing on the deployed
+    image while passing in a venv on 0.128. requirements.txt allows both shapes. Declaration
+    order is kept by the walk, which is what lets the literal route win over the slug.
+    """
+    for served, route in _walk_route_paths(app):
+        if method not in (route.methods or set()):
+            continue
+        regex, _format, _convertors = compile_path(served)
+        if regex.match(path):
             return route.name
     raise AssertionError(f"nothing matched {method} {path}")
 
@@ -75,13 +79,18 @@ def test_every_literal_first_segment_is_a_reserved_slug(app) -> None:
     detail page is a route the platform already answers on.
     """
     literals = set()
-    for route in _walk_routes(app):
-        if not route.path.startswith("/api/v1/extensions/"):
+    for served, _route in _walk_route_paths(app):
+        if not served.startswith("/api/v1/extensions/"):
             continue
-        segment = route.path[len("/api/v1/extensions/"):].split("/")[0]
+        segment = served[len("/api/v1/extensions/"):].split("/")[0]
         if segment and not segment.startswith("{"):
             literals.add(segment)
 
+    # important: the positive twin. On FastAPI 0.141 the old walk reported no path under
+    # `/api/v1/extensions/` at all, and this guard passed on an empty set while guarding nothing.
+    assert {"self", "vocabulary", "installations"} <= literals, (
+        f"the walk found {sorted(literals)}: it is not seeing the served extension routes"
+    )
     unreserved = sorted(literals - RESERVED_SLUGS)
     assert not unreserved, (
         f"these route segments can be claimed as an add-on slug: {unreserved}. "

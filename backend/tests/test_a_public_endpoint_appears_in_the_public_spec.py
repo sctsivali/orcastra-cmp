@@ -31,6 +31,7 @@ from app.core.public_openapi import (  # noqa: E402
     NEVER_PUBLIC_DEPENDENCIES,
     SECURITY_SCHEMES,
     _dependency_names,
+    _walk_route_paths,
     _walk_routes,
     build_public_openapi,
     operation_id_for,
@@ -106,7 +107,9 @@ def test_the_internal_document_stays_off_in_production(monkeypatch) -> None:
         assert production.openapi_url is None
         assert production.docs_url is None
         assert production.redoc_url is None
-        paths = {r.path for r in _walk_routes(production)}
+        # important: served paths. On FastAPI 0.141 a route below a nested include reports
+        # `.path` without the `/api/v1` prefix, and this set then lacked the entry it asserts.
+        paths = {served for served, _route in _walk_route_paths(production)}
         assert "/api/v1/openapi.public.json" in paths
     finally:
         config.get_settings.cache_clear()
@@ -241,7 +244,7 @@ def test_each_flag_gates_only_its_own_surface(monkeypatch, flag, path_fragment) 
     config.get_settings.cache_clear()
     try:
         built = create_app()
-        paths = {r.path for r in _walk_routes(built)} | {
+        paths = {served for served, _route in _walk_route_paths(built)} | {
             getattr(r, "path", "") for r in built.routes
         }
         assert path_fragment not in paths, f"{flag}=false did not remove {path_fragment}"
