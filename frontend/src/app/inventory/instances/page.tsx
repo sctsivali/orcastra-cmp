@@ -247,6 +247,8 @@ function InstancesContent() {
         : denied;
   const { hasRole } = usePermissions();
   const canCreateInstance = hasRole(Role.PARTNER);
+  // Clusters is Partner-tier, so the Node cell links there for a Partner and stays text otherwise.
+  const canOpenClusters = hasRole(Role.PARTNER);
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
   const canDeleteInstance = hasRole(Role.PARTNER);
 
@@ -527,6 +529,7 @@ function InstancesContent() {
                   hasPermission={hasPermission}
                   permissionTitle={permissionTitle}
                   canDeleteInstance={canDeleteInstance}
+                  canOpenClusters={canOpenClusters}
                   deletePending={
                     deleteInstance.isPending &&
                     deleteTarget?.name === instance.name &&

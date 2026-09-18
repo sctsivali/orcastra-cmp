@@ -35,6 +35,11 @@ export interface InstanceTableRowProps {
     denied: string,
   ) => string;
   canDeleteInstance: boolean;
+  /**
+   * Whether the Node cell may link into Clusters. That page is Partner-tier, so for a Tenant
+   * the link was a dead end: the click landed on the welcome page. Plain text instead.
+   */
+  canOpenClusters: boolean;
   /** True only for the row whose delete is in flight, so the other rows stay live. */
   deletePending: boolean;
   onCopy: (instance: VMInfo) => void;
@@ -107,6 +112,7 @@ export function InstanceTableRow({
   hasPermission,
   permissionTitle,
   canDeleteInstance,
+  canOpenClusters,
   deletePending,
   onCopy,
   onRebuild,
@@ -129,9 +135,13 @@ export function InstanceTableRow({
         {/* The row was half-linked: the name cell beside this is already a TableLink
             while the cluster it runs on was plain text. The deep link it needs already
             exists and is documented at the top of this file. */}
-        <TableLink href={inventoryLinks.clusters({ q: instance.host })}>
-          {instance.host}
-        </TableLink>
+        {canOpenClusters ? (
+          <TableLink href={inventoryLinks.clusters({ q: instance.host })}>
+            {instance.host}
+          </TableLink>
+        ) : (
+          instance.host
+        )}
       </TableCell>
       <TableCell className="whitespace-nowrap">{instance.project || "default"}</TableCell>
       <TableCell>
