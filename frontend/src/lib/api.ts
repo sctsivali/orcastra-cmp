@@ -569,8 +569,12 @@ export const imageAPI = {
     return fetchRead<ImageListResponse[]>("/images", opts);
   },
 
-  listByHost: async (host: string): Promise<ImageListResponse> => {
-    return fetchAPI<ImageListResponse>(`/images/${host}`);
+  // `project` names the store to read: a project that keeps its own images answers with
+  // them, a project that shares the host's store answers with the default store and says so
+  // in `project`. Omitted, the backend reads the default store.
+  listByHost: async (host: string, project?: string): Promise<ImageListResponse> => {
+    const query = project ? `?project=${encodeURIComponent(project)}` : "";
+    return fetchAPI<ImageListResponse>(`/images/${host}${query}`);
   },
 
   listRemote: async (opts: ReadOptions = {}): Promise<RemoteImageListResponse> => {
@@ -588,20 +592,23 @@ export const imageAPI = {
   // best part of a minute with nothing to explain it. Eight seconds is long enough for a
   // fleet fan-out that is going to answer, and the caller falls back to what it can already
   // see. The backend refuses on its own either way, so giving up early is safe.
-  usage: async (fingerprint: string, host: string): Promise<ImageUsageResponse> => {
+  usage: async (fingerprint: string, host: string, project?: string): Promise<ImageUsageResponse> => {
+    const params = new URLSearchParams({ host });
+    if (project) params.set("project", project);
     return fetchAPI<ImageUsageResponse>(
-      `/images/${encodeURIComponent(fingerprint)}/usage?host=${encodeURIComponent(host)}`,
+      `/images/${encodeURIComponent(fingerprint)}/usage?${params.toString()}`,
       {},
       IMAGE_USAGE_TIMEOUT_MS,
     );
   },
 
-  // important: (host, fingerprint) is the key, not the fingerprint alone. An image store is
-  // per cluster, so the same fingerprint can exist on several and each row names one.
-  // `force` overrides the backend's refusal when instances were built from the image; the
-  // backend, not this call, decides whether the refusal applies.
-  delete: async (fingerprint: string, host: string, force = false) => {
+  // important: (host, project, fingerprint) is the key, not the fingerprint alone. An image
+  // store is per cluster and a project may keep its own, so the same fingerprint can exist in
+  // several and each row names one. `force` overrides the backend's refusal when instances
+  // were built from the image; the backend, not this call, decides whether the refusal applies.
+  delete: async (fingerprint: string, host: string, force = false, project?: string) => {
     const params = new URLSearchParams({ host });
+    if (project) params.set("project", project);
     if (force) params.set("force", "true");
     return fetchAPI(`/images/${encodeURIComponent(fingerprint)}?${params.toString()}`, {
       method: "DELETE",

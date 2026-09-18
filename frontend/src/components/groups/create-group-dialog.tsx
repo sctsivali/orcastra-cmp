@@ -147,7 +147,7 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
             img.aliases?.find(Boolean) ||
             img.fingerprint ||
             EMPTY_VALUE,
-          path: `/1.0/images/${img.fingerprint}`
+          path: lxdResourcePath("images", img.fingerprint, img.project)
         }));
       case "profile":
         return ((profilesData as any)?.profiles || []).map((p: any) => ({

@@ -37,6 +37,9 @@ export const queryKeys = {
     ["instanceMetrics", host, instanceName, project] as const,
   images: ["images"] as const,
   imagesByHost: (host: string) => ["images", host] as const,
+  // A store read is keyed apart from the host's fleet slice, which useImages(host) owns with a
+  // different shape (an array of one response).
+  imageStore: (host: string, project: string) => ["images", host, "store", project] as const,
   nodes: ["nodes"] as const,
   nodeNames: ["nodeNames"] as const,
   nodeAvailability: ["nodeAvailability"] as const,
@@ -256,10 +259,13 @@ export function useImages(host?: string, opts?: { enabled?: boolean }) {
   });
 }
 
-export function useImagesByHost(host: string) {
+// The image store a project reads on a host. The backend resolves `features.images`, so the
+// response's `project` is the store that actually answered (its own, or `default` when the
+// project shares the host's store).
+export function useImagesByHost(host: string, project = "default") {
   return useQuery({
-    queryKey: queryKeys.imagesByHost(host),
-    queryFn: () => imageAPI.listByHost(host),
+    queryKey: queryKeys.imageStore(host, project),
+    queryFn: () => imageAPI.listByHost(host, project),
     enabled: !!host,
     staleTime: 60000,
   });
@@ -269,11 +275,20 @@ export function useDeleteImage() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ fingerprint, host, force }: { fingerprint: string; host: string; force?: boolean }) =>
-      imageAPI.delete(fingerprint, host, force),
+    mutationFn: ({
+      fingerprint,
+      host,
+      force,
+      project,
+    }: {
+      fingerprint: string;
+      host: string;
+      force?: boolean;
+      project?: string;
+    }) => imageAPI.delete(fingerprint, host, force, project),
     onSuccess: () => {
-      // queryKeys.images is ["images"] and imagesByHost is ["images", host], so one
-      // invalidation covers the fleet list and every per-host list the create form holds.
+      // queryKeys.images is ["images"] and every host and store key starts with it, so one
+      // invalidation covers the fleet list and every store list the create form holds.
       queryClient.invalidateQueries({ queryKey: queryKeys.images });
     },
   });

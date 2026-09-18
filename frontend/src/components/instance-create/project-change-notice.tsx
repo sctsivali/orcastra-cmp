@@ -1,7 +1,8 @@
 /**
  * What a project switch cleared and why, so the form does not silently lose an operator's
- * choices. A remote image is kept (it belongs to no project); a local image and the NICs are
- * project-scoped and cannot be carried across.
+ * choices. A remote image is kept (it belongs to no project). A local image is kept while the
+ * new project's image store still holds it and cleared once that store has loaded without it;
+ * the NICs are project-scoped and cannot be carried across.
  */
 export function projectChangeNotice(input: {
   project: string;
@@ -10,7 +11,7 @@ export function projectChangeNotice(input: {
   clearedNics: number;
 }): string | null {
   const parts: string[] = [];
-  if (input.clearedLocalImage) parts.push("the base image (a local image belongs to the project that holds it)");
+  if (input.clearedLocalImage) parts.push("the base image (it is not in the image store this project reads)");
   if (input.clearedIso) parts.push("the boot ISO (it is not in this project)");
   if (input.clearedNics > 0) {
     parts.push(

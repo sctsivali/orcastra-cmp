@@ -113,7 +113,12 @@ export function RebuildDialog({ open, onOpenChange, instance, onDone }: RebuildD
 
   // --- Image catalog (local + remote), filtered to the instance type ---------
   const wantType = preflight?.type; // "container" | "virtual-machine"
-  const { data: localResp, isLoading: loadingLocal } = useImagesByHost(open ? instance.host : "");
+  // The store the instance's project reads, not the host's default store: a rebuild resolves a
+  // local fingerprint the same way a create does, inside the target project.
+  const { data: localResp, isLoading: loadingLocal } = useImagesByHost(
+    open ? instance.host : "",
+    instance.project || "default",
+  );
   const { data: remoteResp, isLoading: loadingRemote } = useRemoteImages();
 
   const imageRows = useMemo(() => {

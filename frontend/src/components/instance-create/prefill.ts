@@ -11,6 +11,7 @@ export const CREATE_PARAM = {
   type: "type",
   source: "source",
   image: "image",
+  project: "project",
   iso: "iso",
   pool: "pool",
 } as const;
@@ -24,6 +25,11 @@ export interface CreateInstanceSeed {
   source: SeedSource;
   /** Full 64-character fingerprint. Only for source "image". */
   image?: string;
+  /**
+   * The image store that holds the fingerprint. Only for source "image": LXD resolves a
+   * local fingerprint inside the target project's store, so the form must create there.
+   */
+  project?: string;
   /** Custom volume name. Only for source "iso". */
   iso?: string;
   /** The ISO volume's storage pool. Only for source "iso". */
@@ -31,6 +37,8 @@ export interface CreateInstanceSeed {
 }
 
 const FINGERPRINT = /^[0-9a-f]{64}$/;
+// The same shape the backend accepts for a project name, so a link cannot smuggle a path.
+const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 
 /**
  * LXD image type as the API reports it, mapped onto the form's own two-value enum.
@@ -60,7 +68,10 @@ export function buildCreateInstanceHref(seed: CreateInstanceSeed): string {
   params.set(CREATE_PARAM.node, seed.node);
   params.set(CREATE_PARAM.type, seed.type);
   params.set(CREATE_PARAM.source, seed.source);
-  if (seed.source === "image" && seed.image) params.set(CREATE_PARAM.image, seed.image);
+  if (seed.source === "image" && seed.image) {
+    params.set(CREATE_PARAM.image, seed.image);
+    if (seed.project && seed.project !== "default") params.set(CREATE_PARAM.project, seed.project);
+  }
   if (seed.source === "iso" && seed.iso) {
     params.set(CREATE_PARAM.iso, seed.iso);
     if (seed.pool) params.set(CREATE_PARAM.pool, seed.pool);
@@ -73,6 +84,7 @@ export interface SeededFields {
   selectedNode: string;
   type: SeedInstanceType;
   sourceType: "image" | "none";
+  selectedProject: string;
   selectedImage: string;
   imageServer: string;
   imageLabel: string;
@@ -121,9 +133,13 @@ export function readCreateSeed(params: URLSearchParams | null): Partial<SeededFi
 
   const image = (params.get(CREATE_PARAM.image) || "").trim().toLowerCase();
   if (!FINGERPRINT.test(image)) return seeded;
+  // The store the row came from. A malformed name is dropped rather than sent on, and the
+  // form checks the project exists on the node before trusting the pick.
+  const project = (params.get(CREATE_PARAM.project) || "").trim();
   return {
     ...seeded,
     sourceType: "image",
+    ...(PROJECT_NAME.test(project) ? { selectedProject: project } : {}),
     selectedImage: image,
     // Local image, so no remote server. Sending one would make the create pull from a remote
     // instead of using the fingerprint already on the cluster.

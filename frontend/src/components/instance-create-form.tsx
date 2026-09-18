@@ -44,6 +44,7 @@ import {
   ProjectChangeNotice,
   projectChangeNotice,
 } from "@/components/instance-create/project-change-notice";
+import { imageStoreEmptyHint, imageStoreNote } from "@/components/instance-create/image-store-copy";
 import { formatLimitBytes, parseLxdSize, projectSetsLimits, readProjectLimits } from "@/lib/lxd-limits";
 import {
   gpuCardLabel,
@@ -657,11 +658,24 @@ function InstanceCreateFormContent() {
   const normalizeArch = (a: string) =>
     a === "x86_64" ? "amd64" : a === "aarch64" ? "arm64" : a;
 
+  // important: read the store the target project uses, not the host's default store. LXD
+  // resolves a local fingerprint only inside the target project, so a project with its own
+  // store (`features.images`) cannot create from a default-store row. The backend resolves
+  // that flag and answers with the store it read (`imagesResp.project`).
   const { data: imagesResp, isLoading: loadingImages } = useImagesByHost(
     form.selectedNode,
+    form.selectedProject || "default",
   );
   const localImages = (imagesResp?.images ?? []) as ImageInfo[];
   const localFingerprints = new Set(localImages.map((i) => i.fingerprint));
+  const imageStore = imagesResp?.project ?? null;
+  const imageStoreLine = imageStoreNote({
+    node: form.selectedNode,
+    project: form.selectedProject || "default",
+    store: imageStore,
+    localCount: localImages.length,
+    loading: loadingImages,
+  });
 
   const { data: remoteResp, isLoading: loadingRemote } = useRemoteImages();
   const remoteImages = (remoteResp?.images ?? []) as RemoteImageInfo[];
@@ -715,7 +729,7 @@ function InstanceCreateFormContent() {
     if (!seed || seedCheckedRef.current) return;
     // Nothing to check against yet. Every list below is keyed on the seeded node.
     if (loadingNodes || nodeOptions.length === 0) return;
-    if (seed.sourceType === "image" && loadingImages) return;
+    if (seed.sourceType === "image" && (loadingImages || loadingProjects)) return;
     if (seed.sourceType === "none" && loadingVolumes) return;
     seedCheckedRef.current = true;
 
@@ -729,6 +743,27 @@ function InstanceCreateFormContent() {
     }
 
     if (seed.sourceType === "image" && seed.selectedImage) {
+      // The link named the store the image lives in. If that project is not one this node
+      // offers the operator, the fingerprint cannot resolve there either, so both go.
+      const seededProject = seed.selectedProject || "default";
+      if (
+        seededProject !== "default" &&
+        !projectsFailed &&
+        !projectOptions.some((option) => option.value === seededProject)
+      ) {
+        setForm((prev) => ({
+          ...prev,
+          sourceType: "image",
+          selectedProject: "default",
+          selectedImage: "",
+          imageServer: "",
+          imageLabel: "",
+        }));
+        setSeedDropped(
+          `Project ${seededProject} is not available on ${seed.selectedNode}, so pick a project and a base image.`,
+        );
+        return;
+      }
       if (!localFingerprints.has(seed.selectedImage)) {
         setForm((prev) => ({
           ...prev,
@@ -738,7 +773,9 @@ function InstanceCreateFormContent() {
           imageLabel: "",
         }));
         setSeedDropped(
-          `That image is no longer on ${seed.selectedNode}, so pick another base image.`,
+          seededProject === "default"
+            ? `That image is no longer on ${seed.selectedNode}, so pick another base image.`
+            : `That image is no longer in project ${seededProject}'s image store on ${seed.selectedNode}, so pick another base image.`,
         );
         return;
       }
@@ -771,6 +808,9 @@ function InstanceCreateFormContent() {
     loadingNodes,
     nodeOptions,
     loadingImages,
+    loadingProjects,
+    projectsFailed,
+    projectOptions,
     loadingVolumes,
     localFingerprints,
     localRows,
@@ -954,36 +994,49 @@ function InstanceCreateFormContent() {
     }));
     setDisks([]);
   };
-  // A remote image belongs to no project and is kept. A local image and the NICs are
-  // project-scoped and cleared; an ISO is kept when the new project can still see its volume.
-  // Whatever was cleared is said under the picker rather than silently dropped.
+  // A remote image belongs to no project and is kept. The NICs are project-scoped and
+  // cleared; an ISO is kept when the new project can still see its volume. A local image is
+  // kept provisionally: two projects that share the host's store hold the same rows, so the
+  // pick is only cleared once the new project's store has loaded without it (the effect
+  // below). Whatever was cleared is said under the picker rather than silently dropped.
+  const projectSwitchRef = useRef<{ project: string; clearedIso: boolean; clearedNics: number } | null>(null);
   const selectProject = (project: string) => {
     const clearedNics = nics.length;
     setNics([]);
     setFieldError(null);
     setForm((prev) => {
-      const keepImage = !!prev.selectedImage && prev.imageServer !== "";
       const keepIso = !!prev.selectedIso && isoVisibleIn(project, prev.selectedIsoPool, prev.selectedIso);
+      const clearedIso = !!prev.selectedIso && !keepIso;
+      projectSwitchRef.current =
+        prev.selectedImage && prev.imageServer === "" ? { project, clearedIso, clearedNics } : null;
       setChangeNotice(
-        projectChangeNotice({
-          project,
-          clearedLocalImage: !!prev.selectedImage && !keepImage,
-          clearedIso: !!prev.selectedIso && !keepIso,
-          clearedNics,
-        }),
+        projectChangeNotice({ project, clearedLocalImage: false, clearedIso, clearedNics }),
       );
       return {
         ...prev,
         selectedProject: project,
-        selectedImage: keepImage ? prev.selectedImage : "",
-        imageServer: keepImage ? prev.imageServer : "",
-        imageLabel: keepImage ? prev.imageLabel : "",
         selectedIso: keepIso ? prev.selectedIso : "",
         selectedIsoPool: keepIso ? prev.selectedIsoPool : "",
         selectedIsoLabel: keepIso ? prev.selectedIsoLabel : "",
       };
     });
   };
+  useEffect(() => {
+    const pending = projectSwitchRef.current;
+    if (!pending || pending.project !== form.selectedProject) return;
+    if (loadingImages || !imagesResp) return;
+    projectSwitchRef.current = null;
+    if (!form.selectedImage || form.imageServer !== "" || localFingerprints.has(form.selectedImage)) return;
+    setForm((prev) => ({ ...prev, selectedImage: "", imageServer: "", imageLabel: "" }));
+    setChangeNotice(
+      projectChangeNotice({
+        project: pending.project,
+        clearedLocalImage: true,
+        clearedIso: pending.clearedIso,
+        clearedNics: pending.clearedNics,
+      }),
+    );
+  }, [form.selectedProject, form.selectedImage, form.imageServer, loadingImages, imagesResp, localFingerprints]);
 
   // --- Submit -----------------------------------------------------------------
   const submit = async (startAfterCreate: boolean) => {
@@ -1013,6 +1066,15 @@ function InstanceCreateFormContent() {
             ? "Could not load storage pools for this node, so the root disk cannot be sized. Retry in a moment."
             : "No storage pool is available on this node, so the root disk cannot be sized.",
       );
+      submitInFlightRef.current = false;
+      return;
+    }
+
+    // A local pick carried across a project switch is only known to resolve once the new
+    // project's store has answered, so a create is refused until then rather than sent to a
+    // store that may not hold the fingerprint.
+    if (!bootFromIso && form.selectedImage && form.imageServer === "" && loadingImages) {
+      setError("Still loading the image store for this project. Try again in a moment.");
       submitInFlightRef.current = false;
       return;
     }
@@ -2292,6 +2354,11 @@ function InstanceCreateFormContent() {
               Local images, plus the Custom (images.lxd.canonical.com) and Ubuntu
               catalogs. Remote images are pulled on creation.
             </DialogDescription>
+            {imageStoreLine ? (
+              <p id="image-store-note" className="text-sm text-muted-foreground">
+                {imageStoreLine}
+              </p>
+            ) : null}
           </DialogHeader>
 
           <div className="flex gap-6 min-h-0 flex-1">
@@ -2380,7 +2447,10 @@ function InstanceCreateFormContent() {
                       colSpan={7}
                       icon={ImageIcon}
                       title="No images match the filters"
-                      description="Widen the filters, or pick a different node."
+                      description={imageStoreEmptyHint({
+                        project: form.selectedProject || "default",
+                        store: imageStore,
+                      })}
                     />
                   ) : (
                     pagedImageRows.map((row) => (

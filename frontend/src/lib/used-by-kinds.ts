@@ -73,7 +73,13 @@ const KINDS: Record<string, KindDescriptor> = {
   },
   "network-acls": { label: "Network ACL", icon: Shield, href: searchOn(inventoryLinks.networkAcls) },
   "storage-pools": { label: "Storage Pool", icon: Database, href: searchOn(inventoryLinks.storagePools) },
-  images: { label: "Image", icon: ImageIcon, href: searchOn(inventoryLinks.images) },
+  images: {
+    label: "Image",
+    icon: ImageIcon,
+    // A reference names the store that holds the image, and the list facets on it.
+    href: (reference, node) =>
+      inventoryLinks.images({ q: reference.name ?? reference.raw, node, project: reference.project }),
+  },
   custom: { label: "Volume", icon: HardDrive, href: searchOn(inventoryLinks.storageVolumes) },
   block: { label: "Block Volume", icon: HardDrive, href: searchOn(inventoryLinks.storageVolumes) },
   iso: { label: "ISO Image", icon: Disc, href: searchOn(inventoryLinks.isoImages) },

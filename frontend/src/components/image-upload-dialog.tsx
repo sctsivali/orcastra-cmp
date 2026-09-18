@@ -17,8 +17,10 @@ import { Progress } from "@/components/ui/progress";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useToast } from "@/hooks/use-toast";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { useProjects } from "@/hooks/use-lxd";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
-import { api } from "@/lib/api";
+import { api, imageAPI } from "@/lib/api";
+import type { ProjectListResponse } from "@/types/api";
 import { formatBytes } from "@/lib/utils";
 import { Loader2, UploadCloud } from "lucide-react";
 
@@ -38,8 +40,11 @@ const TYPE_OPTIONS = [
 interface ImageUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** The image as the cluster reports it once the import landed. */
-  onUploaded?: (image: { node: string; fingerprint: string | null; alias: string }) => void;
+  /**
+   * The image as the cluster reports it once the import landed. `project` is the store that
+   * holds it: the chosen project's own when it keeps one, otherwise the host's default store.
+   */
+  onUploaded?: (image: { node: string; project: string; fingerprint: string | null; alias: string }) => void;
 }
 
 /** Derive a valid LXD image alias from a filename (strips common image extensions). */
@@ -60,7 +65,22 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
   const { options: nodeOptions, isLoading: loadingNodes } = nodePicker;
 
   const [node, setNode] = useState("");
+  const [project, setProject] = useState("default");
   const [alias, setAlias] = useState("");
+  // The projects this node offers. Built from a successful read only, and the default
+  // project is always offered because every node has one.
+  const { data: projectsResp, isLoading: loadingProjects, isError: projectsFailed } = useProjects(node);
+  const projectOptions = Array.from(
+    new Set([
+      "default",
+      ...(projectsFailed ? [] : ((projectsResp as ProjectListResponse | undefined)?.projects ?? []).map((p) => p.name)),
+    ]),
+  ).map((name) => ({ value: name, label: name }));
+  const selectNode = (next: string) => {
+    setNode(next);
+    // A project belongs to one node, so the pick cannot carry across.
+    setProject("default");
+  };
   const [imageType, setImageType] = useState<ImageType>("virtual-machine");
   const [file, setFile] = useState<File | null>(null);
   const [phase, setPhase] = useState<Phase>("idle");
@@ -99,6 +119,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
   const reset = () => {
     abortActive(); // release any session left behind by an error/cancel
     setNode("");
+    setProject("default");
     setAlias("");
     setImageType("virtual-machine");
     setFile(null);
@@ -121,7 +142,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
     try {
       const { session_id } = await api.imageUploads.create({
         cluster_id: node,
-        project: "default",
+        project,
         alias,
         instance_type: imageType,
         total_bytes: file.size,
@@ -156,12 +177,21 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
       }
 
       sessionIdRef.current = null; // completed: nothing to release
+      // The store that holds it. The upload names a project, but a project without its own
+      // image store lands in the host's default store, and the list read says which.
+      const store = await imageAPI
+        .listByHost(node, project)
+        .then((listing) => listing.project || project)
+        .catch(() => project);
       setPhase("done");
       toast({
         title: "Image uploaded",
-        description: `"${alias}" is ready in the image store on ${node}.`,
+        description:
+          store === "default"
+            ? `"${alias}" is ready in the default image store on ${node}.`
+            : `"${alias}" is ready in project ${store}'s image store on ${node}.`,
       });
-      onUploaded?.({ node, fingerprint, alias });
+      onUploaded?.({ node, project: store, fingerprint, alias });
     } catch (e) {
       setPhase("error");
       setError(e instanceof Error ? e.message : String(e));
@@ -201,7 +231,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
               <Label>Node *</Label>
               <SearchableSelect
                 value={node}
-                onValueChange={setNode}
+                onValueChange={selectNode}
                 options={nodeOptions}
                 placeholder={loadingNodes ? "Loading..." : "Select node"}
                 searchPlaceholder="Search nodes..."
@@ -230,6 +260,24 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
                 disabled={busy}
               />
             </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="image-upload-project">Project</Label>
+            <SearchableSelect
+              id="image-upload-project"
+              value={project}
+              onValueChange={setProject}
+              options={projectOptions}
+              placeholder={loadingProjects ? "Loading..." : "Select project"}
+              searchPlaceholder="Search projects..."
+              emptyText="No projects found."
+              disabled={!node || loadingProjects || busy}
+            />
+            <p className="text-xs text-muted-foreground">
+              A project with its own image store keeps the image there; any other project
+              shares the default store on the node.
+            </p>
           </div>
 
           <div className="grid gap-2">

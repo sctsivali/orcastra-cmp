@@ -88,6 +88,7 @@ export function ImageDetailDialog({
             <DetailField label="Type" value={formatInstanceType(image.type)} />
             <DetailField label="Size" value={formatBytes(image.size)} />
             <DetailField label="Node" value={image.node} />
+            <DetailField label="Project" value={image.project} />
             <DetailField label="Cached" value={image.cached ? "Yes" : "No"} />
             <DetailField label="Auto-update" value={image.auto_update ? "Yes" : "No"} />
           </DetailGrid>

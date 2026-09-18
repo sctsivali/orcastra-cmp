@@ -190,6 +190,11 @@ export interface ImageInfo {
   last_used_at: string | null;
   expires_at: string | null;
   profiles: string[];
+  /**
+   * The image store that holds this record. A project with `features.images` keeps its own
+   * store and is named here; a project that shares the host's store reads `default`.
+   */
+  project: string;
   /** Present on the flattened per-host rows the images page builds, not on the API model. */
   node?: string;
 }
@@ -199,6 +204,10 @@ export interface ImageListResponse {
   host: string;
   images: ImageInfo[];
   total: number;
+  /** The store the rows were read from when one was asked for; null for a fleet-wide read. */
+  project?: string | null;
+  /** False when a project-by-project walk could not read every store, so the list may be short. */
+  complete?: boolean;
   /** False when this host could not be reached, so an empty list is not "it has none". */
   reachable?: boolean;
   /** Why the host could not be reached, when it could not. */
@@ -209,6 +218,8 @@ export interface ImageListResponse {
 export interface ImageUsageResponse {
   host: string;
   fingerprint: string;
+  /** The store that was asked about, as the request named it. */
+  project?: string;
   /** Instances on that cluster created from this image. */
   dependents: string[];
 }

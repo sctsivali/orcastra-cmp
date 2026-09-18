@@ -24,7 +24,7 @@ export const LINK_TARGETS = {
   certificates: { path: "/inventory/clusters/certificates", search: true, facets: ["cluster"] },
   members: { path: "/inventory/clustering/members", search: false, facets: [], reserved: ["node"] },
   warnings: { path: "/inventory/warnings", search: false, facets: ["all.severity", "all.node", "certificates.cluster", "nodes.cluster"], reserved: ["tab"] },
-  images: { path: "/inventory/images", search: true, facets: ["node"] },
+  images: { path: "/inventory/images", search: true, facets: ["node", "project"] },
   profiles: { path: "/inventory/profiles", search: true, facets: ["node", "project"] },
   operations: { path: "/inventory/operations", search: true, facets: ["node"] },
   networkAcls: { path: "/inventory/network-acls", search: true, facets: ["node"] },
@@ -122,7 +122,11 @@ export const inventoryLinks = {
     });
   },
 
-  images: (link: NodeSearchLink) => build("images", { q: link.q, facets: { node: link.node } }),
+  // The project is the image store the row sits in, which a used_by reference names. An
+  // instance's base-image link sends none: the image lives under the instance's effective
+  // image project, which is `default` for a project that shares the host's store.
+  images: (link: NodeSearchLink & { project?: string | null }) =>
+    build("images", { q: link.q, facets: { node: link.node, project: link.project } }),
 
   profiles: (link: NodeSearchLink & { project?: string | null }) =>
     build("profiles", { q: link.q, facets: { node: link.node, project: link.project } }),
