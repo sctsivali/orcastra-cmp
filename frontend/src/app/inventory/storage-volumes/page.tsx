@@ -33,6 +33,7 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { PageReadError } from "@/components/ui/read-error-state";
+import { NodeLink } from "@/components/ui/node-link";
 
 interface VolumeInfo {
   name: string;
@@ -274,9 +275,7 @@ function StorageVolumesContent() {
                       {formatLabel(volume.content_type)}
                     </TableCell>
                     {nodes.length > 0 && (
-                      <TableCell>
-                        {volume.node}
-                      </TableCell>
+                      <TableCell><NodeLink clusterId={volume.node} /></TableCell>
                     )}
                     {locations.length > 0 && (
                       <TableCell>{volume.location || EMPTY_VALUE}</TableCell>
@@ -351,7 +350,7 @@ function volumeSubject(volume: StorageVolumeInfo): UsedBySubject {
       { label: "Pool", value: volume.pool },
       { label: "Type", value: formatLabel(volume.type) },
       { label: "Content Type", value: volume.content_type },
-      { label: "Node", value: volume.node },
+      { label: "Node", value: <NodeLink clusterId={volume.node} /> },
     ],
     panels: Object.keys(config).length
       ? [{ id: "config", label: "Configuration", kind: "config", entries: config }]

@@ -51,15 +51,16 @@ const MAX_RESTING_FACETS = 2;
 const HANDROLLED_SEARCH_BASELINE = 4;
 
 // important: every rule below keys off `defineTable`, so a table that renders TableBody
-// directly is not exempt from the contract, it is invisible to the check. Five files are in
-// that state today, one of which (components/vm-table.tsx) is dead code. Counting them keeps
-// the headline number from reading as "every table in the app".
+// directly is not exempt from the contract, it is invisible to the check. Four files are in
+// that state today. Counting them keeps the headline number from reading as "every table in
+// the app".
 //
 // Fell from six when the Snapshots page moved its table body into a component beside its own
 // defineTable. That was forced rather than chosen: extracting the body and leaving the
-// definition behind would have made it seven and failed the build.
+// definition behind would have made it seven and failed the build. Fell to four when the dead
+// components/vm-table.tsx was deleted.
 // Ratchet: may fall, never rise.
-const UNMANAGED_TABLE_BASELINE = 5;
+const UNMANAGED_TABLE_BASELINE = 4;
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {

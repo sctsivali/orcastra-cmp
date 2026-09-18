@@ -61,6 +61,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { NodeLink } from "@/components/ui/node-link";
 
 // filter-coverage: no project dimension here, and not for lack of a mechanism. A group's
 // permissions[].url values do carry ?project= when LXD scopes them, and projectsFromUsedBy
@@ -312,9 +313,7 @@ function GroupsContent() {
                         <TableEmptyValue label="No description" />
                       )}
                     </TableCell>
-                    <TableCell>
-                      {group.node || <TableEmptyValue label="No node" />}
-                    </TableCell>
+                    <TableCell><NodeLink clusterId={group.node} /></TableCell>
                     <TableCell className="text-center">
                       <TableLink onClick={() => openGroupDetail(group, "members")}>
                         {((group.identities?.tls?.length || 0) + (group.identities?.oidc?.length || 0))} members

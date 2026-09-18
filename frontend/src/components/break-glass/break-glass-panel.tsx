@@ -14,6 +14,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { TableEmptyValue } from "@/components/ui/table-text";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
+import { NodeLink } from "@/components/ui/node-link";
 
 function StatusBadge({ status }: { status: string }) {
   if (status === "active") return <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15">active</Badge>;
@@ -101,7 +102,7 @@ export function BreakGlassPanel() {
             <TableBody>
               {pagedGrants.map((g) => (
                 <TableRow key={g.id}>
-                  <TableCell className="font-medium">{g.cluster_id}</TableCell>
+                  <TableCell className="font-medium"><NodeLink clusterId={g.cluster_id} /></TableCell>
                   <TableCell>{g.target_org_slug || <TableEmptyValue label="No target organization" />}</TableCell>
                   <TableCell className="text-muted-foreground">{g.admin_email}</TableCell>
                   <TableCell className="max-w-xs">

@@ -70,12 +70,10 @@ const SMALL = new Set([
 // app/error.tsx is the root error boundary and "Something went wrong" is the whole message.
 const EMPTY_LEAD = /^(No|Not|Nothing|None|Loading|Could|Cannot|Failed|Unable|Nobody|Something)\b/;
 
-// Rendered by nothing. Both are already carved out of check-icon-button-names.mjs and
-// check-dialog-affordances.mjs for the same reason: counting dead code hides real
-// regressions behind it. vm-create-form.tsx even renders <h1>Create New Project</h1> inside
-// what is meant to be an instance form.
+// Rendered by nothing: counting dead code hides real regressions behind it. vm-create-form.tsx
+// even renders <h1>Create New Project</h1> inside what is meant to be an instance form.
+// (vm-table.tsx, once listed here for the same reason, was deleted.)
 const EXEMPT_FILES = new Map([
-  ['components/vm-table.tsx', 'rendered by nothing, reachable only through the components barrel'],
   ['components/vm-create-form.tsx', 'rendered by nothing, and its h1 names the wrong entity'],
 ]);
 

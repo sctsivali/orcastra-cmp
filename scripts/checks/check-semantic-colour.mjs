@@ -62,10 +62,10 @@ const CLEARED = [
 // That palette has its own guard: scripts/checks/check-terminal-theme.mjs.
 const CHROME = [/^app\/console\//, /^app\/terminal\//, /^components\/console\//, /^components\/terminal\//];
 
-// Rendered by nothing, so nothing in them can reach an operator. Counting them would mean
+// Rendered by nothing, so nothing in it can reach an operator. Counting it would mean
 // either a permanently failing check or a baseline that hides real regressions behind dead
-// code. Same reasoning as check-icon-button-names.mjs.
-const DEAD = new Set(['components/vm-table.tsx', 'components/tag-manager-legacy.tsx']);
+// code. Same reasoning as check-icon-button-names.mjs. (vm-table.tsx was deleted.)
+const DEAD = new Set(['components/tag-manager-legacy.tsx']);
 
 // ---------------------------------------------------------------------------------------
 // Baselines

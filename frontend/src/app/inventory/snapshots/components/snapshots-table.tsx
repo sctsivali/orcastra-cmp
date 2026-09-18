@@ -5,7 +5,7 @@ import type { SizeMeasurement, SnapshotInfo } from "@/types/api";
 import { History, Loader2 } from "lucide-react";
 
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
-import { TableLink } from "@/components/ui/table-link";
+import { NodeLink } from "@/components/ui/node-link";
 import {
   Table,
   TableBody,
@@ -21,7 +21,6 @@ import { formatBytes } from "@/lib/utils";
 import { SnapshotRowActions } from "./snapshot-row-actions";
 import { relativeAge, expiryLabel, snapshotScope } from "./snapshot-format";
 import { ORIGIN_LABEL, ORIGIN_ORDER, ORIGIN_RANK, snapshotOrigin } from "./snapshot-origin";
-import { inventoryLinks } from "@/lib/inventory-links";
 
 /**
  * The table definition lives beside the rows it renders.
@@ -203,13 +202,7 @@ export function SnapshotsTable({
                 </TableCell>
                 <TableCell>{snapshot.source_name}</TableCell>
                 <TableCell className="whitespace-nowrap">
-                  {snapshot.host ? (
-                    <TableLink href={inventoryLinks.clusters({ q: snapshot.host })}>
-                      {snapshot.host}
-                    </TableLink>
-                  ) : (
-                    <TableEmptyValue label="No cluster" />
-                  )}
+                  <NodeLink clusterId={snapshot.host} emptyLabel="No cluster" />
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{snapshot.project || "default"}</TableCell>
                 <TableCell>{ORIGIN_LABEL[snapshotOrigin(snapshot)]}</TableCell>

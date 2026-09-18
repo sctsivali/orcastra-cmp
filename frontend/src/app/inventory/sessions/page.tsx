@@ -67,6 +67,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { NodeLink } from "@/components/ui/node-link";
 
 // ============ Types ============
 
@@ -782,7 +783,7 @@ function ActiveRow({ session, onSelect, scope }: {
               {session.instance_name}
             </TableLink>
           </span>
-          <TableSubText>{session.host} / {session.project}</TableSubText>
+          <TableSubText><NodeLink clusterId={session.host} /> / {session.project}</TableSubText>
           {/* under an organisation scope every row is somebody else's, so the row is
               meaningless without saying whose. Kept out of the personal view, where it
               would just repeat the signed-in user on every line. */}
@@ -881,7 +882,7 @@ function HistoryRow({ log, onSelect, scope }: {
               {log.instance_name}
             </TableLink>
           </span>
-          <TableSubText>{log.host} / {log.project}</TableSubText>
+          <TableSubText><NodeLink clusterId={log.host} /> / {log.project}</TableSubText>
           {/* same reasoning as the active table: an organisation view of other people's
               sessions has to say whose, and a break-glass entry has to be legible as one. */}
           {scope === "org" && (

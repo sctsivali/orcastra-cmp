@@ -6,7 +6,7 @@ import { CalendarClock, Loader2 } from "lucide-react";
 
 import { OverflowText } from "@/components/ui/overflow-text";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
-import { TableLink } from "@/components/ui/table-link";
+import { NodeLink } from "@/components/ui/node-link";
 import {
   Table,
   TableBody,
@@ -27,7 +27,6 @@ import {
   frequencyLabel,
   scheduleState,
 } from "./snapshot-schedule-vocabulary";
-import { inventoryLinks } from "@/lib/inventory-links";
 
 /**
  * The definition lives beside the rows it renders, for the reason snapshots-table.tsx records:
@@ -192,9 +191,7 @@ export function SnapshotSchedulesTable({
                 </TableCell>
                 <TableCell>{schedule.instance_name}</TableCell>
                 <TableCell className="whitespace-nowrap">
-                  <TableLink href={inventoryLinks.clusters({ q: schedule.host })}>
-                    {schedule.host}
-                  </TableLink>
+                  <NodeLink clusterId={schedule.host} emptyLabel="No cluster" />
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{schedule.project || "default"}</TableCell>
                 <TableCell>

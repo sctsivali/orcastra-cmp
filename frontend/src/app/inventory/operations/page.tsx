@@ -50,6 +50,7 @@ import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { PageReadError } from "@/components/ui/read-error-state";
+import { NodeLink } from "@/components/ui/node-link";
 
 // The instance an operation belongs to: its own field, else the name inside a websocket
 // console operation's resources. Hoisted so sorting, searching and the row cannot disagree.
@@ -436,9 +437,7 @@ function OperationsContent() {
                         )}
                       </TableCell>
                       <TableCell>{operation.description || <TableEmptyValue label="No description" />}</TableCell>
-                      <TableCell>
-                        {operation.node_name || <TableEmptyValue label="No node" />}
-                      </TableCell>
+                      <TableCell><NodeLink clusterId={operation.node_name} /></TableCell>
                       <TableCell>
                         <span className="text-sm">{operation.project || "default"}</span>
                       </TableCell>

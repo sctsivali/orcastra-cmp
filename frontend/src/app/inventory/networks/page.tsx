@@ -43,6 +43,7 @@ import { PageReadError } from "@/components/ui/read-error-state";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { NodeLink } from "@/components/ui/node-link";
 
 /** One key for a row and for the create dialog's report of what it made. */
 const networkRowKey = (n: { node?: string | null; project?: string | null; name: string }) =>
@@ -308,9 +309,7 @@ function NetworksContent() {
                         {formatLabel(network.type)}
                       </TableCell>
                       {nodes.length > 0 && (
-                        <TableCell>
-                          {network.node}
-                        </TableCell>
+                        <TableCell><NodeLink clusterId={network.node} /></TableCell>
                       )}
                       <TableCell className="font-mono">
                         {ipv4 ?? <TableEmptyValue label="No IPv4 address" />}
@@ -419,7 +418,7 @@ function networkSubject(network: NetworkInfo): UsedBySubject {
       { label: "Type", value: formatLabel(network.type) },
       { label: "Status", value: network.status },
       { label: "Managed", value: network.managed ? "Yes" : "No" },
-      { label: "Node", value: network.node },
+      { label: "Node", value: <NodeLink clusterId={network.node} /> },
       { label: "IPv4", value: config["ipv4.address"] || EMPTY_VALUE },
       { label: "IPv6", value: config["ipv6.address"] || EMPTY_VALUE },
     ],

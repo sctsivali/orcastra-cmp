@@ -65,9 +65,10 @@ import { PageReadError } from "@/components/ui/read-error-state";
 const CLUSTERS = defineTable<any>()({
   searchPlaceholder: "Search clusters",
   // important: the cluster id is searchable, and it is not part of the Cluster column's own
-  // `search` accessor. Four surfaces link here as `/inventory/clusters?q=<cluster_id>` and every
-  // one of them found nothing, because the row prints the id as sub-text while only the display
-  // name was searchable. `blitzkrieg` renders as "Hetzner", so this is not a near miss.
+  // `search` accessor. Every Node and Cluster cell in the console links here as
+  // `/inventory/clusters?q=<cluster_id>` through components/ui/node-link.tsx, and every one of
+  // them found nothing, because the row prints the id as sub-text while only the display name
+  // was searchable. `blitzkrieg` renders as "Hetzner", so this is not a near miss.
   //
   // Deliberately searchExtra rather than a widened accessor. `search` returns ONE string, so
   // widening means concatenating, and `q=industrial nuc` would then match across the two values
@@ -425,6 +426,7 @@ function ClustersContent() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {/* node-link: exempt this is the Clusters page itself; the name opens the record's own detail and a self-link would land where the reader already is */}
                   <SortableTableHead label="Cluster" field="cluster" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Endpoint" field="endpoint" currentField={sortField} direction={sortDirection} onSort={handleSort} />
                   <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />

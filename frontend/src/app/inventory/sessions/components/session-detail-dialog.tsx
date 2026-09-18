@@ -11,6 +11,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { formatBytes, formatDateTime, formatLabel } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
+import { NodeLink } from "@/components/ui/node-link";
 
 // Neither sessions table had anything clickable, so a session id, the one value that correlates
 // a row with the console audit log, was unreachable from the UI entirely.
@@ -55,7 +56,7 @@ export function SessionDetailDialog({
       title={record.instance_name}
       recordId={record.session_id ?? String(record.id ?? "")}
       recordIdLabel="Session"
-      subtitle={`${record.host} / ${record.project}`}
+      subtitle={<><NodeLink clusterId={record.host} /> / {record.project}</>}
       status={<Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : formatLabel(record.event_type ?? "")}</Badge>}
       size="md"
       footer={

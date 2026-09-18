@@ -28,6 +28,7 @@ import { INSTALL_STATUS } from "@/lib/extension-display";
 import { formatLabel } from "@/lib/utils";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import type { ExtensionInstall } from "@/types/api";
+import { NodeLink } from "@/components/ui/node-link";
 
 const COLUMN_COUNT = 6;
 
@@ -267,7 +268,11 @@ function InstalledTableContent({
                     ownerLabel={row.extension_name}
                     emptyLabel="No clusters"
                     itemLabel="cluster"
-                    renderInline={(cluster) => cluster}
+                    // indicator: the inline ids are links, and a link inside the cell-mode
+                    // trigger button would nest an anchor in a button. The reveal dialog keeps
+                    // its copyable rows.
+                    triggerMode="indicator"
+                    renderInline={(cluster) => <NodeLink clusterId={cluster} />}
                   />
                 </TableCell>
                 <TableCell className="text-right">

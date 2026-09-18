@@ -102,6 +102,8 @@ export const inventoryLinks = {
   instances: (link: InstancesLink) =>
     build("instances", { q: link.q, facets: { host: link.host, project: link.project } }),
 
+  // note: the only cell-level caller is components/ui/node-link.tsx, which owns the Partner
+  // gate (Clusters is Partner-tier). scripts/checks/check-node-link.mjs refuses any other.
   clusters: (link: { q?: string | null }) => build("clusters", { q: link.q }),
 
   certificates: (link: { q?: string | null; cluster?: string | null }) =>

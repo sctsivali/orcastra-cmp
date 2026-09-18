@@ -29,6 +29,7 @@ import { parseLxdReference } from "@/lib/used-by";
 import { referenceKind } from "@/lib/used-by-kinds";
 import { formatLabel } from "@/lib/utils";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { NodeLink } from "@/components/ui/node-link";
 
 export type GroupDetailTab = "overview" | "members" | "permissions";
 
@@ -224,7 +225,7 @@ export function GroupDetailDialog({
             <DetailGrid cols={3}>
               {/* Both dropped by the modal this replaces. */}
               <DetailField label="Description" value={group.description} span="full" />
-              <DetailField label="Node" value={group.node} />
+              <DetailField label="Node" value={<NodeLink clusterId={group.node} />} />
               <DetailField label="Members" value={memberCount} />
               <DetailField label="Permissions" value={group.permissions?.length ?? 0} />
             </DetailGrid>

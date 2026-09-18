@@ -48,9 +48,9 @@ const BADGE_ONCLICK_BASELINE = 5;
 // Lower it when you convert one to DialogBody.
 const DIALOG_SCROLL_BASELINE = 5;
 
-// Deprecated and rendered by nothing, so nothing in it can reach a user. Counting it would
-// hide real regressions behind dead code. Same reasoning as check-icon-button-names.mjs.
-const EXEMPT_FILES = new Set(['components/vm-table.tsx']);
+// Empty since the dead components/vm-table.tsx was deleted. Same reasoning as
+// check-icon-button-names.mjs for anything that lands here later.
+const EXEMPT_FILES = new Set([]);
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {

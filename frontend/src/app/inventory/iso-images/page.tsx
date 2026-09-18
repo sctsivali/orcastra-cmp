@@ -46,6 +46,7 @@ import { PageReadError } from "@/components/ui/read-error-state";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { NodeLink } from "@/components/ui/node-link";
 
 /** One key for a row and for the upload dialog's report of what it wrote. */
 const isoRowKey = (v: { node?: string | null; project?: string | null; pool?: string | null; name: string }) =>
@@ -373,9 +374,7 @@ function IsoImagesContent() {
                       {v.pool}
                     </TableCell>
                     {nodes.length > 0 && (
-                      <TableCell>
-                        {v.node}
-                      </TableCell>
+                      <TableCell><NodeLink clusterId={v.node} /></TableCell>
                     )}
                     <TableCell>
                       <UsedByCell
@@ -477,7 +476,7 @@ function isoSubject(volume: StorageVolumeInfo): UsedBySubject {
     usedBy: volume.used_by ?? [],
     facts: [
       { label: "Pool", value: volume.pool },
-      { label: "Node", value: volume.node },
+      { label: "Node", value: <NodeLink clusterId={volume.node} /> },
       { label: "Content Type", value: volume.content_type },
     ],
     panels: Object.keys(config).length

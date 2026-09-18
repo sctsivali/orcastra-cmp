@@ -154,6 +154,11 @@ jobs:
       # "No X matches the current filters" above a list that had the rows.
       - name: Inventory links
         run: node scripts/checks/check-inventory-links.mjs .
+      # A Node or Cluster cell renders one component that owns the Partner gate. Three tables
+      # linked the node into Clusters (two of them for a Tenant, who landed on the welcome
+      # page) while twenty others printed the same id as dead text.
+      - name: Node and Cluster cells
+        run: node scripts/checks/check-node-link.mjs .
       # A button holding nothing but an icon is announced as a bare "button" unless the
       # element names itself. A Radix Tooltip does not do it: it contributes
       # aria-describedby, which is a description. Measured live before this check existed,

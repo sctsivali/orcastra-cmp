@@ -33,6 +33,7 @@ import { VMInfo, ProjectInfo } from "@/types";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { InstanceRow } from "./instance-row";
 import { ProjectDeleteDialog, ProjectEditDialog } from "./project-card-dialogs";
+import { NodeLink } from "@/components/ui/node-link";
 
 interface ProjectCardProps {
   project: ProjectInfo;
@@ -200,9 +201,9 @@ export function ProjectCard({ project, projectKey, rowProps, instanceCount, isEx
             <CardTitle className="text-base min-w-0 break-words">{project.name}</CardTitle>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge variant="outline" className="text-xs shrink-0">
-              {project.host}
-            </Badge>
+            {/* An identifier, not a status: the node it runs on links into Clusters through the
+                same component every table cell uses, and reads as text for a Tenant. */}
+            <NodeLink clusterId={project.host} className="text-xs shrink-0" />
             {/* Delete/Edit Button - Partner+ only */}
             {!isReadOnly && isPartner && (
               <>

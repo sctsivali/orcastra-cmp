@@ -40,6 +40,7 @@ import { PageReadError } from "@/components/ui/read-error-state";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { NodeLink } from "@/components/ui/node-link";
 
 
 // important: typed, not `any`. The `any` is what let this file read i.properties?.description,
@@ -394,7 +395,7 @@ function ImagesContent() {
                       {formatSize(image.size)}
                     </TableCell>
                     {nodes.length > 0 && (
-                      <TableCell>{image.node}</TableCell>
+                      <TableCell><NodeLink clusterId={image.node} /></TableCell>
                     )}
                     <TableCell>{image.project}</TableCell>
                     <TableCell>

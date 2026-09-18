@@ -9,6 +9,7 @@ import { InstanceResourcesSection } from "./instance-resources-section";
 import { formatDateTime, formatInstanceType } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
+import { NodeLink } from "@/components/ui/node-link";
 
 // Everything the row already knew and the old modal never showed: description, architecture,
 // project, timestamps, profiles, tags, the cluster member, and the image the instance came from.
@@ -33,7 +34,7 @@ export function InstanceOverviewTab({
           <DetailField label="Architecture" value={instance.architecture} mono />
           <DetailField label="Status" value={<Badge variant="outline">{instance.status}</Badge>} />
           <DetailField label="Project" value={instance.project || "default"} />
-          <DetailField label="Node" value={instance.host} />
+          <DetailField label="Node" value={<NodeLink clusterId={instance.host} />} />
           <DetailField label="Cluster Member" value={instance.location} />
           <DetailField label="Description" value={instance.description} span="full" />
         </DetailGrid>

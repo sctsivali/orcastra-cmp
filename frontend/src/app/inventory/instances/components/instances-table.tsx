@@ -92,7 +92,6 @@ interface InstancesTableProps {
   hasPermission: Parameters<typeof InstanceTableRow>[0]["hasPermission"];
   permissionTitle: Parameters<typeof InstanceTableRow>[0]["permissionTitle"];
   canDeleteInstance: boolean;
-  canOpenClusters: boolean;
   deletePending: (instance: VMInfo) => boolean;
   onCopy: (instance: VMInfo) => void;
   onRebuild: (instance: VMInfo) => void;
@@ -172,7 +171,6 @@ export function InstancesTable(props: InstancesTableProps) {
             hasPermission={props.hasPermission}
             permissionTitle={props.permissionTitle}
             canDeleteInstance={props.canDeleteInstance}
-            canOpenClusters={props.canOpenClusters}
             deletePending={props.deletePending(instance)}
             onCopy={props.onCopy}
             onRebuild={props.onRebuild}

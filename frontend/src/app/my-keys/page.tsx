@@ -78,6 +78,7 @@ import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { NodeLink } from "@/components/ui/node-link";
 
 const MY_KEYS = defineTable<KeyInfo>()({
   searchPlaceholder: "Search by name, project, or node",
@@ -423,9 +424,7 @@ function MyKeysContent() {
                 {pagedKeys.map((key: KeyInfo) => (
                   <TableRow key={key.id} {...focus.rowProps(key.id)}>
                     <TableCell className="font-medium">{key.name}</TableCell>
-                    <TableCell>
-                      {key.node}
-                    </TableCell>
+                    <TableCell><NodeLink clusterId={key.node} /></TableCell>
                     <TableCell>
                       {key.project}
                     </TableCell>

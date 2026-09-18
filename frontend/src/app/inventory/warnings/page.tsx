@@ -65,6 +65,7 @@ import {
   warningSeverityValue,
 } from "@/lib/warning-facets";
 import { PageReadError } from "@/components/ui/read-error-state";
+import { NodeLink } from "@/components/ui/node-link";
 
 const toTime = (v: string | null | undefined): number | null => {
   if (!v) return null;
@@ -545,15 +546,11 @@ function WarningsContent() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {warningNodeValue(warning) ? (
-                        <>
-                          <span className="font-medium">{warningNodeValue(warning)}</span>
-                          {warning.location && warning.location !== warning.source_node && (
-                            <TableSubText>{warning.location}</TableSubText>
-                          )}
-                        </>
-                      ) : (
-                        <TableEmptyValue label="No node" />
+                      {/* The registered node (source_node), never the LXD member (location),
+                          which is a different namespace and stays a plain qualifier. */}
+                      <NodeLink clusterId={warningNodeValue(warning)} className="font-medium" />
+                      {warningNodeValue(warning) && warning.location && warning.location !== warning.source_node && (
+                        <TableSubText>{warning.location}</TableSubText>
                       )}
                     </TableCell>
                     <TableCell>
@@ -660,7 +657,7 @@ function WarningsContent() {
                                 {warning.display_name || warning.cluster_id}
                               </TableLink>
                             </p>
-                            <TableSubText>{warning.cluster_id}</TableSubText>
+                            <TableSubText><NodeLink clusterId={warning.cluster_id} /></TableSubText>
                           </div>
                         </TableCell>
                         <TableCell>
@@ -777,7 +774,7 @@ function WarningsContent() {
                                 {warning.display_name || warning.cluster_id}
                               </TableLink>
                             </p>
-                            <TableSubText>{warning.cluster_id}</TableSubText>
+                            <TableSubText><NodeLink clusterId={warning.cluster_id} /></TableSubText>
                           </div>
                         </TableCell>
                         <TableCell>

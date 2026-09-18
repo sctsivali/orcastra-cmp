@@ -69,6 +69,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { PageReadError } from "@/components/ui/read-error-state";
+import { NodeLink } from "@/components/ui/node-link";
 
 function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return "N/A";
@@ -439,7 +440,9 @@ function CertificatesContent() {
                       <TableCell className="max-w-[16rem]">
                         <div>
                           <div className="font-medium">
-                            <OverflowText value={cert.cluster_id} label="cluster id" />
+                            {/* wrap: the whole id stays readable inside the 16rem cell without a
+                                second reveal control, and the link is the way to the cluster. */}
+                            <NodeLink clusterId={cert.cluster_id} wrap />
                           </div>
                           {(cert.endpoint || cert.common_name) && (
                             <TableSubText wrap>

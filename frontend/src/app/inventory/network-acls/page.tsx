@@ -54,6 +54,7 @@ import { PageReadError } from "@/components/ui/read-error-state";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { NodeLink } from "@/components/ui/node-link";
 
 // note: no local ACLInfo. It duplicated NetworkACLInfo and drifted from it, which is how a
 // field the API had started sending stayed invisible to this page.
@@ -288,9 +289,7 @@ function NetworkACLsContent() {
                       )}
                     </TableCell>
                     {nodes.length > 0 && (
-                      <TableCell>
-                        {acl.node}
-                      </TableCell>
+                      <TableCell><NodeLink clusterId={acl.node} /></TableCell>
                     )}
                     <TableCell>
                       <RuleCountCell
@@ -465,7 +464,7 @@ function aclSubject(acl: NetworkACLInfo): UsedBySubject {
     description: acl.description || undefined,
     usedBy: acl.used_by ?? [],
     facts: [
-      { label: "Node", value: acl.node },
+      { label: "Node", value: <NodeLink clusterId={acl.node} /> },
       { label: "Ingress Rules", value: ingress.length },
       { label: "Egress Rules", value: egress.length },
     ],

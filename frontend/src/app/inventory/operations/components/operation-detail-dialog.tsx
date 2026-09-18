@@ -9,6 +9,7 @@ import { KeyValueList } from "@/components/used-by/panels/config-panel";
 import { formatDateTime, formatLabel } from "@/lib/utils";
 import type { OperationInfo } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
+import { NodeLink } from "@/components/ui/node-link";
 
 // The operations table truncates the id to eight characters and appends an ellipsis, so the one
 // value an operator needs when correlating with cluster logs is the one they cannot copy. It
@@ -49,7 +50,7 @@ export function OperationDetailDialog({
       <div className="space-y-4">
         <DetailSection title="Where and When">
           <DetailGrid cols={3}>
-            <DetailField label="Node" value={operation.node_name} />
+            <DetailField label="Node" value={<NodeLink clusterId={operation.node_name} />} />
             <DetailField label="Project" value={operation.project || "default"} />
             <DetailField
               label="Instance"

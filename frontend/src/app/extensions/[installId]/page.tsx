@@ -14,7 +14,7 @@ import { BackLink } from "@/components/ui/back-link";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { TableLink } from "@/components/ui/table-link";
+import { NodeLink } from "@/components/ui/node-link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DestructiveConfirmDialog } from "@/components/ui/destructive-confirm-dialog";
 import { AddonHealthPanel } from "@/components/extensions/addon-health-panel";
@@ -27,7 +27,6 @@ import { useToast } from "@/hooks/use-toast";
 import { extensionsAPI } from "@/lib/extensions-api";
 import { Role } from "@/types/rbac";
 import type { ExtensionInstallResponse, WebhookSecretResponse } from "@/types/api";
-import { inventoryLinks } from "@/lib/inventory-links";
 
 const PANELS = ["overview", "settings", "webhooks"] as const;
 type Panel = (typeof PANELS)[number];
@@ -263,12 +262,7 @@ function InstallDetail() {
                   page and searching for it by hand. */}
               {row.granted_scope.map((grant) => (
                 <li key={String(grant.cluster_id)}>
-                  <TableLink
-                    href={inventoryLinks.clusters({ q: String(grant.cluster_id) })}
-                    className="font-mono text-sm"
-                  >
-                    {String(grant.cluster_id)}
-                  </TableLink>
+                  <NodeLink clusterId={String(grant.cluster_id)} className="font-mono text-sm" />
                 </li>
               ))}
             </ul>

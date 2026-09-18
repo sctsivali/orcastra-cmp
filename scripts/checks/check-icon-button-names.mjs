@@ -58,10 +58,9 @@ const src = join(root, 'frontend', 'src');
 // both prefixes, so an unnamed arrow was the entire way out for anyone who could not see it.
 const BASELINE = 46;
 
-// `vm-table.tsx` is deprecated and rendered by nothing, so its buttons cannot be announced
-// to anybody. Counting them would mean either a permanently failing check or a baseline
-// that hides real regressions behind dead code.
-const EXEMPT_FILES = new Set(['components/vm-table.tsx']);
+// Empty since the dead components/vm-table.tsx was deleted; kept so a future dead file has a
+// documented place to go rather than a baseline bump.
+const EXEMPT_FILES = new Set([]);
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {

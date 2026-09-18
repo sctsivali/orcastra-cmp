@@ -36,6 +36,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { PoolCapacityCell, poolCapacity, type PoolCapacity } from "./components/pool-capacity-cell";
 import { PageReadError } from "@/components/ui/read-error-state";
+import { NodeLink } from "@/components/ui/node-link";
 
 interface PoolInfo {
   name: string;
@@ -277,9 +278,7 @@ function StoragePoolsContent() {
                         {formatLabel(pool.driver)}
                       </TableCell>
                       {nodes.length > 0 && (
-                        <TableCell>
-                          {pool.node}
-                        </TableCell>
+                        <TableCell><NodeLink clusterId={pool.node} /></TableCell>
                       )}
                       <TableCell>
                         <PoolCapacityCell
@@ -365,7 +364,7 @@ function poolSubject(pool: StoragePoolInfo, resources: Record<string, any>): Use
     facts: [
       { label: "Driver", value: formatLabel(pool.driver) },
       { label: "Status", value: pool.status },
-      { label: "Node", value: pool.node },
+      { label: "Node", value: <NodeLink clusterId={pool.node} /> },
     ],
     panels: [
       { id: "capacity", label: "Capacity", kind: "capacity", space: usage.space, inodes: usage.inodes },

@@ -31,6 +31,7 @@ import {
 import type { IPAMAllocation } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { PageReadError } from "@/components/ui/read-error-state";
+import { NodeLink } from "@/components/ui/node-link";
 
 /**
  * The IPAM table: what is sortable, searchable and filterable.
@@ -268,9 +269,7 @@ function IPAMContent() {
                         <TableEmptyValue label="No MAC address" />
                       )}
                     </TableCell>
-                    <TableCell>
-                      {alloc.node}
-                    </TableCell>
+                    <TableCell><NodeLink clusterId={alloc.node} /></TableCell>
                     <TableCell>
                       {alloc.project || 'default'}
                     </TableCell>

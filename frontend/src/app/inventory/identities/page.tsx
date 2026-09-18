@@ -44,6 +44,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { NodeLink } from "@/components/ui/node-link";
 
 const IDENTITIES = defineTable<any>()({
   searchPlaceholder: "Search identities",
@@ -212,9 +213,7 @@ function IdentitiesContent() {
                       <TableCell>
                         {formatLabel(identity.type)}
                       </TableCell>
-                      <TableCell>
-                        {identity.node || <TableEmptyValue label="No node" />}
-                      </TableCell>
+                      <TableCell><NodeLink clusterId={identity.node} /></TableCell>
                       <TableCell>
                         <OverflowCell
                           items={identity.groups}

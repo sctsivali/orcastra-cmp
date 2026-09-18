@@ -31,11 +31,10 @@ import { fileURLToPath } from 'node:url';
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 
-// note: no exempt list, deliberately. check-dialog-affordances.mjs and check-icon-button-names.mjs
-// both exempt components/vm-table.tsx, which is deprecated and rendered by nothing. This rule does
-// not need to: that file's three wrappers carry `overflow-hidden`, which is allowed here, so an
-// exemption would have been an entry that never fires while implying the file would otherwise
-// fail. Verified by running this check with the list emptied; it still reports zero.
+// note: no exempt list, deliberately. A dead file's wrappers carrying `overflow-hidden` are
+// allowed here anyway, so an exemption would be an entry that never fires while implying the
+// file would otherwise fail. Verified by running this check with the list emptied; it still
+// reports zero.
 
 // Only the ones that actually establish a scroll container. `overflow-hidden`, `overflow-clip`
 // and `overflow-visible` do not scroll and are allowed.

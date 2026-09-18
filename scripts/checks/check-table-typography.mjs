@@ -115,7 +115,8 @@ for (const file of walk(ROOT)) {
 // installation's state. That is Status, so it is one of the two exceptions rather than a new
 // pill: the same value was already a Badge while the list was a feed, and converting the markup
 // is not a reason to start spelling it differently.
-const BADGE_BASELINE = 17;
+// 17 to 15: the dead components/vm-table.tsx was deleted with its two status pills.
+const BADGE_BASELINE = 15;
 // A ratchet, not a ban. The remaining occurrences live on chart, console and dialog-form
 // surfaces rather than in table cells: the on-screen keyboard's legends are laid out to a
 // fixed key size, and the monitoring charts pack labels into fixed gutters. Bumping those
@@ -125,7 +126,8 @@ const BADGE_BASELINE = 17;
 // onto the scale when their surrounding markup was rewritten. The rest still live on chart and
 // console surfaces laid out to fixed gutters, which need a layout pass rather than a find and
 // replace. May fall, never rise.
-const ARBITRARY_BASELINE = 68;
+// 68 to 67: the dead components/vm-table.tsx was deleted with its one arbitrary size.
+const ARBITRARY_BASELINE = 67;
 let badgesInBodies = 0;
 for (const file of walk(ROOT)) {
   const src = readFileSync(file, "utf8");

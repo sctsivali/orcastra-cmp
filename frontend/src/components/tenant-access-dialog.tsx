@@ -1068,6 +1068,7 @@ function AssignedPolicyCard({
           <Table density="compact">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
+                {/* node-link: exempt an editable rule scope inside a form dialog; navigating to Clusters would discard unsaved rules */}
                 <SortableTableHead
                   label="Cluster"
                   field="cluster"
@@ -1221,6 +1222,7 @@ function EffectivePermissionsSection({
           <Table density="compact">
             <TableHeader>
               <TableRow className="hover:bg-transparent bg-muted/30">
+                {/* node-link: exempt a read-back of the same rule scope inside the form dialog, same reason as the editable table above */}
                 <SortableTableHead
                   label="Cluster"
                   field="cluster"

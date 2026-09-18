@@ -12,6 +12,7 @@ import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { formatBytes, formatDateTime, formatInstanceType } from "@/lib/utils";
 import type { ImageInfo, VMInfo } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
+import { NodeLink } from "@/components/ui/node-link";
 
 // The images table had zero row interaction: no drill-down, no copy, no way to read a
 // fingerprint in full even though the fingerprint is the only thing that identifies an image.
@@ -87,7 +88,7 @@ export function ImageDetailDialog({
             <DetailField label="Architecture" value={image.architecture} mono />
             <DetailField label="Type" value={formatInstanceType(image.type)} />
             <DetailField label="Size" value={formatBytes(image.size)} />
-            <DetailField label="Node" value={image.node} />
+            <DetailField label="Node" value={<NodeLink clusterId={image.node} />} />
             <DetailField label="Project" value={image.project} />
             <DetailField label="Cached" value={image.cached ? "Yes" : "No"} />
             <DetailField label="Auto-update" value={image.auto_update ? "Yes" : "No"} />
@@ -131,7 +132,7 @@ export function ImageDetailDialog({
                   >
                     {instance.name}
                   </TableLink>
-                  <span className="text-xs text-muted-foreground">{instance.host}</span>
+                  <NodeLink clusterId={instance.host} className="text-xs text-muted-foreground" />
                 </li>
               ))}
             </ul>

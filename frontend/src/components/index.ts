@@ -1,6 +1,5 @@
 export * from "./header";
 export * from "./dashboard";
-export * from "./vm-table";
 export * from "./vm-create-form";
 export * from "./project-create-form";
 export * from "./node-status";

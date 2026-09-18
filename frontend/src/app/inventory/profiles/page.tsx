@@ -46,6 +46,7 @@ import { PageReadError } from "@/components/ui/read-error-state";
 import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { NodeLink } from "@/components/ui/node-link";
 
 /** One key for a row and for the dialog's report of what it wrote. */
 const profileRowKey = (p: { node?: string | null; project?: string | null; name: string }) =>
@@ -327,9 +328,7 @@ function ProfilesContent() {
                       )}
                     </TableCell>
                     {nodes.length > 0 && (
-                      <TableCell>
-                        {profile.node}
-                      </TableCell>
+                      <TableCell><NodeLink clusterId={profile.node} /></TableCell>
                     )}
                     <TableCell>
                       {Object.keys(profile.devices || {}).length > 0 ? (
@@ -449,7 +448,7 @@ function profileSubject(profile: ProfileInfo): UsedBySubject {
     description: profile.description || undefined,
     usedBy: profile.used_by ?? [],
     facts: [
-      { label: "Node", value: profile.node },
+      { label: "Node", value: <NodeLink clusterId={profile.node} /> },
       { label: "Devices", value: Object.keys(devices).length },
       { label: "Config Keys", value: Object.keys(config).length },
     ],
