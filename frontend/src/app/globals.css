@@ -395,6 +395,18 @@
   box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
 }
 
+/* With a pinned end column the cells draw the trailing hint, so the container keeps only its
+   leading edge. Otherwise a row without a pinned cell (the empty row spans every column)
+   shows the container's shadow at the right edge while the header's pinned cell shows its
+   own a column to the left, and the two read as a step. */
+[data-slot="table-container"][data-scroll-x="start"]:has([data-pinned="end"]) {
+  box-shadow: none;
+}
+
+[data-slot="table-container"][data-scroll-x="middle"]:has([data-pinned="end"]) {
+  box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

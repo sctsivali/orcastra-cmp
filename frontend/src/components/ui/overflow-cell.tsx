@@ -72,10 +72,11 @@ export function OverflowCell<T>({
   const list = items ?? [];
   if (list.length === 0) return <TableEmptyValue label={emptyLabel} />;
 
-  const inline = list.slice(0, preview).map((item, index) => (
+  const shown = list.slice(0, preview).map((item) => (renderInline ? renderInline(item) : String(item)));
+  const inline = shown.map((node, index) => (
     <React.Fragment key={index}>
       {index > 0 ? separator : null}
-      {renderInline ? renderInline(item) : String(item)}
+      {node}
     </React.Fragment>
   ));
 
@@ -111,9 +112,15 @@ export function OverflowCell<T>({
         </span>
       ) : (
         <TableLink onClick={openDialog} aria-label={ariaLabel} wrap={wrap}>
-          {inline}
-          {separator}
-          {`+${hidden}`}
+          {inline.slice(0, -1)}
+          {shown.length > 1 ? separator : null}
+          {/* The indicator stays on the last item's line when the preview wraps; the
+              separator before that item is outside the span, so the list may still break there. */}
+          <span className="whitespace-nowrap">
+            {shown[shown.length - 1]}
+            {separator}
+            {`+${hidden}`}
+          </span>
         </TableLink>
       )}
 

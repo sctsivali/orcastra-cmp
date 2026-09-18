@@ -57,17 +57,18 @@ function hasFixedAddress(instance: Pick<VMInfo, "devices" | "expanded_devices">)
 }
 
 // The root disk an instance actually runs on, after profile expansion: the size, or the pool
-// default when none is set, over the pool it lives in. Whether the size came from the instance
-// or a profile is the Devices tab's question (instance-devices-tab.tsx), which shows both
-// groups; the row stays two short tiers so the column does not set the table's width.
+// default when none is set, over the name of the pool it lives in. Whether the size came from
+// the instance or a profile is the Devices tab's question (instance-devices-tab.tsx), which
+// shows both groups. Two short tiers, the pool as a bare identifier: "Pool <name>" wrapped
+// onto two lines in every row once the table sat at its container's width.
 function rootDiskLabel(
   instance: Pick<VMInfo, "devices" | "expanded_devices">,
-): { value: string; detail?: string } | null {
+): { value: string; pool?: string } | null {
   const effective = instance.expanded_devices?.root ?? instance.devices?.root;
   if (!effective) return null;
   const size = String(effective.size ?? "").trim();
   const pool = String(effective.pool ?? "").trim();
-  return { value: size || "Pool default", detail: pool ? `Pool ${pool}` : undefined };
+  return { value: size || "Pool default", pool: pool || undefined };
 }
 
 const IN_FLIGHT: Record<InstanceAction, string> = {
@@ -208,7 +209,7 @@ export function InstanceTableRow({
         {rootDisk ? (
           <>
             <span className="whitespace-nowrap">{rootDisk.value}</span>
-            {rootDisk.detail && <TableSubText wrap>{rootDisk.detail}</TableSubText>}
+            {rootDisk.pool && <TableSubText className="font-mono">{rootDisk.pool}</TableSubText>}
           </>
         ) : (
           <TableEmptyValue label="No root disk reported" />

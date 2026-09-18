@@ -100,9 +100,18 @@ const STICKY_HEADER =
 // note: `bg-card` because every list table lives on a card. A table on the page ground passes
 // `className="before:bg-background"`. The last body row drops its separator the way TableBody
 // does, keyed on tbody so the header row, also a last child, keeps its line.
+//
+// note: the ground reaches one pixel below the cell. With `border-collapse`, the row's 1 px
+// border is painted on the grid line, which Chromium allocates to the top strip of the next
+// cell, outside this cell's box, so a ground that stops at the box edge leaves that line
+// visible under the pseudo's own line and the pinned column shows a doubled separator.
+//
+// note: only the tints TableRow itself applies are mirrored (hover, selected, pending, the
+// post-create focus). A row that carries its own bg-* or hover:bg-* class gets a pinned cell
+// painted on the plain ground; give such a row a TableRow state instead.
 const PINNED_END =
   "sticky end-0 z-[1] " +
-  "before:pointer-events-none before:absolute before:inset-0 before:-z-[2] before:border-b before:border-border before:bg-card " +
+  "before:pointer-events-none before:absolute before:inset-x-0 before:top-0 before:-bottom-px before:-z-[2] before:border-b before:border-border before:bg-card " +
   "[tbody>tr:last-child>&]:before:border-b-0 " +
   "after:pointer-events-none after:absolute after:inset-0 after:-z-[1] after:transition-colors motion-reduce:after:transition-none " +
   "[tr:hover>&]:after:bg-muted/50 [tr[data-state=selected]>&]:after:bg-muted [tr[data-state=pending]>&]:after:bg-muted/30 " +
