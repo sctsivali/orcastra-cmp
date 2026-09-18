@@ -1,0 +1,269 @@
+"""The fleet size phase reads only what the caller may see, stops on time, and never fails the list.
+
+Sizes come from a second read per snapshot-holding instance, run after the visibility filter.
+Every test here pins one of the ways that phase could regress into the listing it follows: a
+failed size read condemning a cluster, a slow storage driver holding the request past its
+budget, a cap applied silently, a cache that outlives a mutation, or a holder measured for a
+tenant who cannot see it. Each docstring names the ablation that turns it red.
+"""
+
+import time
+
+import pytest
+
+from tests._snapshot_fakes import HOST, INSTANCE, OTHER_HOST, PROJECT, service
+from tests.test_the_fleet_read_spans_clusters_safely import (
+    MEASURED_SIZE,
+    OTHER_PROJECT,
+    SNAP,
+    _client,
+    _cluster,
+)
+
+SECOND_INSTANCE = "ct-qa-fixture-0002"
+THIRD_INSTANCE = "ct-qa-fixture-0003"
+
+
+def _reads(client):
+    return [call for call in client.node.recorded if call[0] == "list_snapshots"]
+
+
+def _read(svc, path="/snapshots", **kwargs):
+    """One read on a fresh client. Note that _client sweeps every `snapshots_fleet:*` key,
+    the sizes map included, so a test about the cache holds one client across its reads."""
+    client = _client(svc, **kwargs)
+    try:
+        return _get(client, path)
+    finally:
+        client._cleanup()
+
+
+def _get(client, path="/snapshots"):
+    response = client.get(path)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _drop_list_cache():
+    """Past the 30s list cache without touching the sizes map, which is the thing under test."""
+    from app.core.cache import get_cache_manager
+
+    get_cache_manager().delete_pattern("api_responses", "snapshots_fleet:list:*")
+
+
+def test_a_size_read_that_raises_leaves_the_cluster_answered_and_the_row_unmeasured():
+    """Ablation: let the size phase's exception reach `failed` and a healthy cluster whose
+    storage driver hiccuped is reported unreachable, taking its rows with it."""
+    cluster = _cluster([(PROJECT, INSTANCE)])
+    cluster.node.size_read_error[(PROJECT, INSTANCE)] = RuntimeError("driver said no")
+
+    body = _read(service(cluster))
+
+    assert body["queried_nodes"] == [HOST]
+    assert body["unreachable_nodes"] == []
+    assert body["total"] == 1
+    (row,) = body["items"]
+    assert row["size"] is None
+    assert row["size_measured"] is False
+    assert body["size_measurement"] == "skipped"
+    assert body["measured_instances"] == 0
+    assert body["unmeasured_instances"] == 1
+
+
+def test_a_size_phase_that_times_out_does_not_mark_the_cluster_unreachable(monkeypatch):
+    """Ablation: join the in-flight read instead of abandoning it at the deadline and the
+    request waits for the slowest storage driver on the fleet.
+
+    The budget is shrunk to a fraction of a second and the only holder answers after a full
+    second, so the read is started, abandoned, and counted unmeasured while the cluster stays
+    answered. The request must return well inside the old per-cluster budget.
+    """
+    from app.services.snapshots import fleet_sizes
+
+    monkeypatch.setattr(fleet_sizes, "SIZES_BUDGET", 0.3)
+    monkeypatch.setattr(fleet_sizes, "SIZES_MIN_WINDOW", 0)
+    cluster = _cluster([(PROJECT, INSTANCE)])
+    cluster.node.size_read_delay[(PROJECT, INSTANCE)] = 1.0
+
+    started = time.monotonic()
+    body = _read(service(cluster))
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.9, f"the request waited {elapsed:.2f}s for an abandoned read"
+    assert body["queried_nodes"] == [HOST]
+    assert body["unreachable_nodes"] == []
+    assert body["size_measurement"] == "skipped"
+    assert body["unmeasured_instances"] == 1
+    assert len(_reads(cluster)) == 1, "the read was started, then abandoned at the deadline"
+    assert body["items"][0]["size_measured"] is False
+
+
+def test_the_per_cluster_holder_cap_yields_partial_with_counts(monkeypatch):
+    """Ablation: drop the per-cluster cap and a cluster where everything is snapshotted turns
+    one page load into a read per instance."""
+    from app.services.lxd import snapshot_fleet
+
+    monkeypatch.setattr(snapshot_fleet, "MAX_SIZE_HOLDERS_PER_CLUSTER", 1)
+    cluster = _cluster(
+        [(PROJECT, THIRD_INSTANCE), (PROJECT, INSTANCE), (PROJECT, SECOND_INSTANCE)]
+    )
+
+    body = _read(service(cluster))
+
+    assert body["size_measurement"] == "partial"
+    assert body["measured_instances"] == 1
+    assert body["unmeasured_instances"] == 2
+    reads = _reads(cluster)
+    assert len(reads) == 1
+    assert reads[0][3] == INSTANCE, "the measured holder is the first in sorted order"
+    by_source = {row["source_name"]: row for row in body["items"]}
+    assert by_source[INSTANCE]["size"] == MEASURED_SIZE
+    assert by_source[SECOND_INSTANCE]["size_measured"] is False
+    assert by_source[THIRD_INSTANCE]["size_measured"] is False
+
+
+def test_the_fleet_holder_cap_yields_partial_with_counts(monkeypatch):
+    """Ablation: drop the fleet cap and five full clusters multiply the per-cluster cap."""
+    from app.services.snapshots import fleet_sizes
+
+    monkeypatch.setattr(fleet_sizes, "MAX_SIZE_HOLDERS_FLEET", 1)
+    mine = _cluster([(PROJECT, INSTANCE)])
+    theirs = _cluster([(OTHER_PROJECT, INSTANCE)])
+    svc = service(mine, hosts=(HOST, OTHER_HOST), clients={HOST: mine, OTHER_HOST: theirs})
+
+    body = _read(svc)
+
+    assert body["size_measurement"] == "partial"
+    assert body["measured_instances"] == 1
+    assert body["unmeasured_instances"] == 1
+    # Hosts are visited in sorted order, so the budget goes to HOST ("nuc2") before
+    # OTHER_HOST ("pandora"), on every request alike.
+    assert len(_reads(mine)) == 1
+    assert _reads(theirs) == []
+
+
+def test_sizes_are_read_through_a_cache_and_swept_by_a_mutation():
+    """Ablation: skip the write-back and every fleet read re-measures every holder; drop the
+    `snapshots_fleet:` prefix from the sizes key and a delete leaves the old size on screen
+    for ten minutes."""
+    from app.core.cache import get_cache_manager
+
+    cluster = _cluster([(PROJECT, INSTANCE)])
+    client = _client(service(cluster))
+    try:
+        first = _get(client)
+        assert first["items"][0]["size"] == MEASURED_SIZE
+        assert len(_reads(cluster)) == 1
+
+        _drop_list_cache()
+        second = _get(client)
+        assert second["measured_instances"] == 1
+        assert second["size_measurement"] == "measured"
+        assert second["items"][0]["size"] == MEASURED_SIZE
+        assert len(_reads(cluster)) == 1, "the sizes map answered, no per-instance read"
+
+        get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+        third = _get(client)
+        assert third["items"][0]["size"] == MEASURED_SIZE
+        assert len(_reads(cluster)) == 2, "a mutation sweep drops the sizes map"
+
+        forced = _get(client, "/snapshots?fresh=true")
+        assert forced["size_measurement"] == "measured"
+        assert forced["items"][0]["size"] == MEASURED_SIZE
+        assert len(_reads(cluster)) == 3, "a forced refresh re-measures even with a warm map"
+    finally:
+        client._cleanup()
+
+
+def test_only_visible_holders_are_measured():
+    """The Partner-bound ratchet. Ablation: derive the holders from `rows` instead of
+    `visible` and an instance the tenant cannot see is read for its size, which is a read
+    on their behalf against another organisation's instance."""
+    mine = _cluster([(PROJECT, INSTANCE)])
+    theirs = _cluster([(OTHER_PROJECT, INSTANCE)])
+    svc = service(mine, hosts=(HOST, OTHER_HOST), clients={HOST: mine, OTHER_HOST: theirs})
+    acl = {HOST: {(PROJECT, INSTANCE): {"view", "snapshot"}}}
+
+    body = _read(svc, acl=acl, allowed={HOST, OTHER_HOST}, flag_on=True)
+
+    assert {(row["host"], row["project"]) for row in body["items"]} == {(HOST, PROJECT)}
+    assert body["size_measurement"] == "measured"
+    assert body["measured_instances"] == 1
+    assert len(_reads(mine)) == 1
+    assert _reads(theirs) == [], "a holder outside the tenant's grant is never read"
+
+    # A cluster outside the caller's scope enters neither phase.
+    mine.node.recorded.clear()
+    theirs.node.recorded.clear()
+    body = _read(svc, acl=acl, allowed={HOST}, flag_on=True)
+    assert body["queried_nodes"] == [HOST]
+    assert theirs.node.recorded == []
+
+
+def test_sizes_match_rows_by_cluster_and_project_not_by_name():
+    """Ablation: apply a measured map by source name alone and the first project's size is
+    printed on the other project's row."""
+    cluster = _cluster([(PROJECT, INSTANCE), (OTHER_PROJECT, INSTANCE)])
+    cluster.node.snapshots_by_instance[(OTHER_PROJECT, INSTANCE)] = [dict(SNAP, size=20)]
+
+    body = _read(service(cluster))
+
+    assert body["size_measurement"] == "measured"
+    assert body["measured_instances"] == 2
+    sizes = {row["project"]: row["size"] for row in body["items"]}
+    assert sizes == {PROJECT: MEASURED_SIZE, OTHER_PROJECT: 20}
+    assert {call[1]["project"] for call in _reads(cluster)} == {PROJECT, OTHER_PROJECT}
+
+
+def test_a_cached_entry_missing_a_snapshot_name_is_a_miss():
+    """Ablation: treat any cached entry for the holder as a hit and a snapshot taken since the
+    map was written shows as never measured until the map expires."""
+    cluster = _cluster([(PROJECT, INSTANCE)])
+    client = _client(service(cluster))
+    try:
+        _get(client)
+        assert len(_reads(cluster)) == 1
+
+        newer = dict(SNAP, name="ops-probe-20260909T000000Z")
+        cluster.api.instances.all_projects_listing[0]["snapshots"].append(dict(newer))
+        cluster.node.snapshots_by_instance[(PROJECT, INSTANCE)].append(dict(newer, size=30))
+        # Only the list cache is dropped; the sizes map is deliberately left warm.
+        _drop_list_cache()
+
+        body = _get(client)
+    finally:
+        client._cleanup()
+
+    assert len(_reads(cluster)) == 2, "an incomplete entry is re-read"
+    assert body["size_measurement"] == "measured"
+    assert {row["name"]: row["size"] for row in body["items"]} == {
+        SNAP["name"]: MEASURED_SIZE,
+        newer["name"]: 30,
+    }
+
+
+def test_no_holder_means_measured_with_zero_counts():
+    """A read that returns no rows has nothing to measure and must not claim it skipped."""
+    cluster = _cluster([(PROJECT, INSTANCE)])
+    cluster.api.instances.all_projects_listing = []
+
+    body = _read(service(cluster))
+
+    assert body["total"] == 0
+    assert body["size_measurement"] == "measured"
+    assert body["measured_instances"] == 0
+    assert body["unmeasured_instances"] == 0
+    assert _reads(cluster) == []
+
+
+@pytest.mark.parametrize("path", ["/snapshots", f"/snapshots?host={HOST}&project={PROJECT}"])
+def test_the_narrowed_read_shares_the_size_phase(path):
+    """One idea, one implementation: a read naming a cluster and a project measures through
+    the same phase as the fleet-wide one."""
+    cluster = _cluster([(PROJECT, INSTANCE)])
+
+    body = _read(service(cluster), path)
+
+    assert body["size_measurement"] == "measured"
+    assert body["items"][0]["size"] == MEASURED_SIZE
+    assert len(_reads(cluster)) == 1

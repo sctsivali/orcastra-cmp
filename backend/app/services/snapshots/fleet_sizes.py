@@ -1,0 +1,244 @@
+"""The size phase of the fleet snapshot read: one GET per visible snapshot-holding instance.
+
+The bulk listing the fleet read is built on answers -1 for every snapshot, so the only way to
+put a byte count in the one column that tells an operator which snapshot is worth deleting is a
+second read per instance. This module runs that read AFTER the router's visibility filter, over
+the visible holders only, through a per-host cache, bounded per cluster and per fleet, against a
+deadline inside the request budget.
+
+important: nothing here can mark a cluster unreachable. A failed size read, per holder or per
+cluster, leaves rows unmeasured and the cluster answered. The response counters say how far the
+phase got.
+
+important: every LXD read happens on a worker thread and every tenant decision has already been
+made on the event loop: the holders are derived from the rows that passed project_is_visible and
+check_tenant_permission, so an instance the caller cannot see is never read.
+"""
+
+import asyncio
+import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Tuple
+
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
+from app.core.cache import get_cache_manager
+from app.services.lxd import snapshot_fleet as fleet_service
+from app.services.lxd.exceptions import LXDConnectionError
+from app.services.lxd.lazy_client import connect_or_get_client
+from app.services.lxd.snapshot_fleet import Holder
+from app.services.lxd_service import LXDService
+
+logger = logging.getLogger(__name__)
+
+# 60 percent of the router's cluster budget, so a last in-flight read bounded by
+# SIZE_READ_TIMEOUT has returned by 37s. Clamped further by whatever the listing phase already
+# spent (see _deadline). Below the minimum window the phase does not start at all, because a
+# read that will certainly be abandoned costs a thread and answers nothing.
+SIZES_BUDGET = 24
+SIZES_MIN_WINDOW = 2
+SIZES_TTL = 600
+
+# Live size reads per request across every cluster. Five registered clusters at 30 holders
+# each; today the fleet holds about 20. Cache hits are free and do not count.
+MAX_SIZE_HOLDERS_FLEET = 150
+
+# important: deliberately NOT get_scope_cache_key. A size is a fact about the cluster, not about
+# who asked, and the map is only ever consulted for rows already past the visibility filter.
+# Sharing the `snapshots_fleet:` prefix is what puts it inside the cache.py
+# invalidate_instance_cache sweep and every invalidate_resource_cache("snapshots_fleet") a
+# mutation runs, so a create or delete drops it for free.
+SIZES_KEY_PREFIX = "snapshots_fleet:sizes:host="
+
+# Rows of one request grouped by (host, project, source_name), the identity the ACL decided on.
+RowKey = Tuple[str, str, str]
+# {project: {instance: {"at": epoch seconds, "sizes": {snapshot name: size}}}}
+HostSizesMap = Dict[str, Dict[str, Dict[str, Any]]]
+
+
+def _measure_one_cluster(
+    lxd_service: LXDService,
+    host: str,
+    holders: List[Holder],
+    deadline: float,
+) -> Tuple[Dict[Holder, Dict[str, Optional[int]]], List[Holder]]:
+    """Sizes for one cluster's visible holders, on a worker thread."""
+    client = connect_or_get_client(lxd_service, host)
+    if client is None:
+        raise LXDConnectionError(f"Could not connect to {host}")
+    return fleet_service.measure_holder_sizes(client, host, holders, deadline=deadline)
+
+
+def _deadline(request_started: float, cluster_budget: float) -> Optional[float]:
+    """When the phase must stop, or None when too little of the request budget is left."""
+    now = time.monotonic()
+    deadline = min(
+        now + SIZES_BUDGET,
+        request_started + cluster_budget - fleet_service.SIZE_READ_TIMEOUT[1] - 3,
+    )
+    return deadline if deadline - now >= SIZES_MIN_WINDOW else None
+
+
+def _cached_map(cache: Any, host: str) -> HostSizesMap:
+    stored = cache.get("api_responses", f"{SIZES_KEY_PREFIX}{host}")
+    return stored if isinstance(stored, dict) else {}
+
+
+def _cache_hit(
+    entry: Optional[Dict[str, Any]], names: List[str], now: float
+) -> Optional[Dict[str, Optional[int]]]:
+    """The cached sizes for a holder, or None when the entry is absent, expired or incomplete.
+
+    Every visible snapshot name must be present: a snapshot taken since the entry was written is
+    a miss for its whole holder, so it is re-read rather than reported as never measured.
+    """
+    if not isinstance(entry, dict):
+        return None
+    sizes = entry.get("sizes")
+    if not isinstance(sizes, dict) or now - float(entry.get("at") or 0) > SIZES_TTL:
+        return None
+    if any(name not in sizes for name in names):
+        return None
+    return sizes
+
+
+def _apply(rows: List[Dict[str, Any]], sizes: Dict[str, Optional[int]]) -> None:
+    for row in rows:
+        row["size_measured"] = True
+        if row.get("size") is None:
+            row["size"] = sizes.get(row["name"])
+
+
+def _write_back(
+    cache: Any,
+    host: str,
+    stored: HostSizesMap,
+    measured: Dict[Holder, Dict[str, Optional[int]]],
+) -> None:
+    """Merge fresh entries over the unexpired ones and write the host's map back.
+
+    Merged rather than replaced because one request measures only its own visible holders, and
+    a narrow scope must not drop what a wider one measured a moment ago. Two scopes writing the
+    same host at once is last-writer-wins on entries that are each within TTL, which is benign.
+    """
+    now = time.time()
+    merged: HostSizesMap = {}
+    for project, instances in stored.items():
+        if not isinstance(instances, dict):
+            continue
+        for name, entry in instances.items():
+            if isinstance(entry, dict) and now - float(entry.get("at") or 0) <= SIZES_TTL:
+                merged.setdefault(project, {})[name] = entry
+    for (project, name), sizes in measured.items():
+        merged.setdefault(project, {})[name] = {"at": now, "sizes": sizes}
+    cache.set("api_responses", f"{SIZES_KEY_PREFIX}{host}", merged, ttl=SIZES_TTL)
+
+
+def _plan_live_reads(
+    by_key: Dict[RowKey, List[Dict[str, Any]]],
+    stored: Dict[str, HostSizesMap],
+    *,
+    fresh: bool,
+) -> Tuple[Dict[str, List[Holder]], int]:
+    """Apply cache hits and choose the live reads. Returns (misses by host, holders left out).
+
+    Holders are visited in sorted order and the caps are applied per cluster first, then across
+    the fleet in host order, so the set that gets read is the same on every request that sees
+    the same rows.
+    """
+    now = time.time()
+    misses_by_host: Dict[str, List[Holder]] = {}
+    left_out = 0
+    for host, project, name in sorted(by_key):
+        rows = by_key[(host, project, name)]
+        instances = stored[host].get(project)
+        entry = instances.get(name) if isinstance(instances, dict) else None
+        hit = None if fresh else _cache_hit(entry, [row["name"] for row in rows], now)
+        if hit is not None:
+            _apply(rows, hit)
+            continue
+        misses = misses_by_host.setdefault(host, [])
+        if len(misses) >= fleet_service.MAX_SIZE_HOLDERS_PER_CLUSTER:
+            left_out += 1
+            continue
+        misses.append((project, name))
+
+    budget = MAX_SIZE_HOLDERS_FLEET
+    for host in sorted(misses_by_host):
+        kept = misses_by_host[host][:budget]
+        left_out += len(misses_by_host[host]) - len(kept)
+        misses_by_host[host] = kept
+        budget -= len(kept)
+    return {host: misses for host, misses in misses_by_host.items() if misses}, left_out
+
+
+async def measure_visible_sizes(
+    lxd_service: LXDService,
+    visible: List[Dict[str, Any]],
+    *,
+    fresh: bool,
+    request_started: float,
+    executor: ThreadPoolExecutor,
+    max_in_flight: int,
+    cluster_budget: float,
+) -> Tuple[int, int]:
+    """Stamp sizes onto the visible rows. Returns (measured, unmeasured) holder counts.
+
+    `fresh` bypasses the cache for reads and re-measures; the result is still written back.
+    `request_started` is the time.monotonic() instant the listing phase began, which is what
+    clamps this phase inside `cluster_budget`.
+    """
+    by_key: Dict[RowKey, List[Dict[str, Any]]] = {}
+    for row in visible:
+        key = (row.get("host") or "", row.get("project") or "", row.get("source_name") or "")
+        by_key.setdefault(key, []).append(row)
+    if not by_key:
+        return 0, 0
+
+    cache = get_cache_manager()
+    stored = {host: _cached_map(cache, host) for host in {key[0] for key in by_key}}
+    misses_by_host, unmeasured = _plan_live_reads(by_key, stored, fresh=fresh)
+
+    deadline = _deadline(request_started, cluster_budget)
+    if deadline is None:
+        unmeasured += sum(len(misses) for misses in misses_by_host.values())
+        return len(by_key) - unmeasured, unmeasured
+
+    async def _gather(host: str, misses: List[Holder]):
+        return await run_blocking(
+            _measure_one_cluster,
+            lxd_service,
+            host,
+            misses,
+            deadline,
+            timeout=cluster_budget,
+            label=f"snapshots.sizes[{host}]",
+            executor=executor,
+            max_in_flight=max_in_flight,
+        )
+
+    hosts = sorted(misses_by_host)
+    results = await asyncio.gather(
+        *(_gather(host, misses_by_host[host]) for host in hosts), return_exceptions=True
+    )
+    for host, result in zip(hosts, results):
+        if isinstance(result, BaseException):
+            # Logged with the traceback unless it is plain connectivity, so a defect in the
+            # size path cannot spend its life disguised as a slow cluster. Never re-raised:
+            # the listing already answered and sizes are the one thing this phase may lose.
+            connectivity = isinstance(
+                result, (LXDConnectionError, BlockingTimeout, BlockingPoolFull)
+            )
+            logger.warning(
+                "Snapshot size read failed on %s, its rows stay unmeasured: %s",
+                host, result, exc_info=None if connectivity else result,
+            )
+            unmeasured += len(misses_by_host[host])
+            continue
+        measured, missed = result
+        unmeasured += len(missed)
+        for (project, name), sizes in measured.items():
+            _apply(by_key[(host, project, name)], sizes)
+        if measured:
+            _write_back(cache, host, stored[host], measured)
+    return len(by_key) - unmeasured, unmeasured

@@ -24,9 +24,9 @@ import type { VMInfo } from "@/types/api";
 
 import { SnapshotRowActions } from "@/app/inventory/snapshots/components/snapshot-row-actions";
 import {
-  expiryLabel,
+  createdCell,
+  expiryCell,
   nextRunLabel,
-  relativeAge,
 } from "@/app/inventory/snapshots/components/snapshot-format";
 import {
   ORIGIN_LABEL,
@@ -245,14 +245,12 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                         <TableEmptyValue label="Not reported" />
                       )}
                     </TableCell>
-                    <TableCell>
-                      {snapshot.created_at ? (
-                        relativeAge(snapshot.created_at)
-                      ) : (
-                        <TableEmptyValue label="Unknown" />
-                      )}
+                    <TableCell className="whitespace-nowrap">
+                      {createdCell(snapshot.created_at)}
                     </TableCell>
-                    <TableCell>{expiryLabel(snapshot.expires_at)}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {expiryCell(snapshot.expires_at)}
+                    </TableCell>
                     <TableCell>
                       <SnapshotRowActions
                         // The per-instance listing carries no host or project, because it was

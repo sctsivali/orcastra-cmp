@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { formatDateTime } from "@/lib/utils";
 import type { SnapshotInfo } from "@/types/api";
 
 import { snapshotScope } from "./snapshot-format";
@@ -143,9 +144,7 @@ export function RestoreSnapshotDialog({
             <p className="text-sm">
               Everything written to{" "}
               <span className="font-medium">{snapshot.source_name}</span> since{" "}
-              {snapshot.created_at
-                ? new Date(snapshot.created_at).toLocaleString()
-                : "this snapshot was taken"}{" "}
+              {snapshot.created_at ? formatDateTime(snapshot.created_at) : "this snapshot was taken"}{" "}
               will be discarded. The instance stops and starts as part of the restore.
             </p>
           </div>

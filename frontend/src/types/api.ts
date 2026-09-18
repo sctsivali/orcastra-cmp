@@ -2777,9 +2777,10 @@ export interface SnapshotInfo {
    */
   origin?: "operator" | "manual" | "upstream";
   /**
-   * Whether anyone asked the cluster for this snapshot's size. False and a null `size` mean the
-   * read did not measure; true and a null `size` mean it did and the storage driver reported
-   * nothing. Rendering both as one placeholder presents an absent measurement as a small value.
+   * Whether this read obtained a size for the instance. False and a null `size` mean it did
+   * not (the holder cap, the deadline or a failed read); true and a null `size` mean it did
+   * and the storage driver reported nothing. Rendering both as one placeholder presents an
+   * absent measurement as a small value.
    */
   size_measured?: boolean;
   /** Present only on the fleet listing. */
@@ -2894,11 +2895,15 @@ export interface FleetSnapshotListResponse {
   /** The server-side row cap was reached, so some snapshots are not in `items`. */
   truncated?: boolean;
   /**
-   * Sizes cost a second read per snapshot-holding instance, bounded per project, so they are
-   * measured only for a read naming one cluster and one project. Read this rather than inferring
-   * it from the scope: a narrowed read can hit the bound too.
+   * Sizes are a bounded second read per visible snapshot-holding instance. `measured`: every one
+   * was read, from cache or live. `partial`: some were not, because of the holder caps, the
+   * deadline, a failed read or a cluster whose size phase failed. `skipped`: none could be.
    */
   size_measurement?: SizeMeasurement;
+  /** Distinct (cluster, project, instance) holders whose sizes were read. Absent on an older backend. */
+  measured_instances?: number;
+  /** Distinct holders whose sizes were not read on this request. Absent on an older backend. */
+  unmeasured_instances?: number;
 }
 
 export interface SnapshotCreateRequest {

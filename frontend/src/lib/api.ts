@@ -2099,11 +2099,14 @@ const snapshotAPI = {
     );
   },
   /**
-   * Every snapshot in scope, one upstream call per cluster.
+   * Every snapshot in scope, one upstream call per cluster, then a bounded size read per holder.
    *
    * Both parameters are omitted rather than sent empty when they are not set. The backend reads
    * a present-but-blank host as a caller who named a cluster and got it wrong, and answers 422,
    * which is what stops a narrowed request silently widening into a fleet sweep.
+   *
+   * A heavy read: the fan-out runs on a 40 s backend budget, and the default window leaves a
+   * forced refresh no headroom.
    */
   listFleet: async (
     host?: string,
@@ -2114,7 +2117,7 @@ const snapshotAPI = {
     if (host) qs.set("host", host);
     if (project) qs.set("project", project);
     const query = qs.toString();
-    return fetchRead<FleetSnapshotListResponse>(
+    return fetchHeavyRead<FleetSnapshotListResponse>(
       query ? `/snapshots?${query}` : "/snapshots",
       opts,
     );

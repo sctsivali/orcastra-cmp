@@ -15,11 +15,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { TableEmptyRow, TableSubText } from "@/components/ui/table-text";
 import { defineTable, fromSort } from "@/lib/table-filter";
 
 import { ScheduleRowActions } from "./snapshot-schedule-row-actions";
-import { nextRunLabel, relativeAge } from "./snapshot-format";
+import { lastRunCell, nextRunCell } from "./snapshot-format";
 import {
   STATE_LABEL,
   STATE_ORDER,
@@ -216,14 +216,10 @@ export function SnapshotSchedulesTable({
                 </TableCell>
                 <TableCell>{schedule.keep_last}</TableCell>
                 <TableCell className="whitespace-nowrap">
-                  {nextRunLabel(schedule.next_run_at)}
+                  {nextRunCell(schedule.next_run_at)}
                 </TableCell>
                 <TableCell className="whitespace-nowrap">
-                  {schedule.last_run_at ? (
-                    relativeAge(schedule.last_run_at)
-                  ) : (
-                    <TableEmptyValue label="Never run" />
-                  )}
+                  {lastRunCell(schedule.last_run_at)}
                 </TableCell>
                 <TableCell>
                   <ScheduleRowActions schedule={schedule} />

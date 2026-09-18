@@ -20,7 +20,10 @@ from tests._snapshot_fakes import (
     service,
 )
 
-SNAP = {"name": "ops-probe-20260908T000000Z", "size": 10}
+# What LXD's bulk listing really answers: -1, which _normalize nulls. The per-instance read is
+# the only one that carries a size, and _cluster seeds it with a real one.
+SNAP = {"name": "ops-probe-20260908T000000Z", "size": -1}
+MEASURED_SIZE = 10
 OTHER_PROJECT = "cust-qa-other-02"
 
 
@@ -33,6 +36,8 @@ def _cluster(sources, *, supports_all_projects=True):
     """
     node = FakeInstanceNode()
     node.projects = sorted({project for project, _ in sources})
+    for project, instance in sources:
+        node.snapshots_by_instance[(project, instance)] = [dict(SNAP, size=MEASURED_SIZE)]
     client = FakeClient(node, supports_all_projects=supports_all_projects)
     listing = [
         {
@@ -301,12 +306,15 @@ def test_nothing_is_cached_when_no_cluster_answered():
     assert stored is None, "an answer nobody gave must not be remembered"
 
 
-def test_sizes_are_measured_only_when_the_read_names_one_cluster_and_project(two_clusters):
-    """Ablation: drop the measure_sizes switch and a fleet read fans out per instance.
+def test_sizes_are_measured_fleet_wide_and_the_response_counts_them(two_clusters):
+    """Ablation: drop the size phase from the handler and every size comes back null.
 
-    The fleet-wide read must not pay the per-instance size cost, and must say so rather than
-    letting the console infer it from the scope.
+    The bulk listing answers -1 for every snapshot, so a byte count on a fleet-wide row proves
+    the per-instance read ran, for that row's own project, with the explicit socket timeout that
+    frees the worker when a storage driver is slow.
     """
+    from app.services.lxd.snapshot_fleet import SIZE_READ_TIMEOUT
+
     svc, mine, _theirs = two_clusters
 
     wide = _client(svc)
@@ -314,16 +322,19 @@ def test_sizes_are_measured_only_when_the_read_names_one_cluster_and_project(two
         body = wide.get("/snapshots").json()
     finally:
         wide._cleanup()
-    assert body["size_measurement"] == "skipped"
-    assert all(row["size_measured"] is False for row in body["items"])
 
-    narrow = _client(svc)
-    try:
-        body = narrow.get(f"/snapshots?host={HOST}&project={PROJECT}").json()
-    finally:
-        narrow._cleanup()
     assert body["size_measurement"] == "measured"
+    assert body["measured_instances"] == 2
+    assert body["unmeasured_instances"] == 0
+    assert all(row["size"] == MEASURED_SIZE for row in body["items"])
     assert all(row["size_measured"] is True for row in body["items"])
+
+    reads = [call for call in mine.node.recorded if call[0] == "list_snapshots"]
+    assert len(reads) == 1, "one holder on this cluster, one size read"
+    _kind, params, timeout, instance = reads[0]
+    assert params.get("project") == PROJECT
+    assert instance == INSTANCE
+    assert timeout == SIZE_READ_TIMEOUT == (3, 10)
 
 
 def test_a_narrowed_read_names_only_the_host_it_was_asked_for(two_clusters):

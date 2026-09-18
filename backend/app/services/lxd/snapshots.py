@@ -59,9 +59,6 @@ MAX_OPS_SNAPSHOTS_PER_INSTANCE = 5
 # already end-of-text.
 _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}\Z")
 
-# How many snapshot-holding instances get a second read for accurate sizes on the fleet view.
-_SIZE_ENRICHMENT_LIMIT = 40
-
 # LXD reports "no expiry" as a zero time rather than null.
 _NO_EXPIRY_PREFIX = "0001-01-01"
 
@@ -249,8 +246,9 @@ def _normalize(entry: Any, source_name: str) -> Dict[str, Any]:
         # and several callers ask, and it is not the same question as "may I act on it".
         "origin": classify_snapshot_origin(raw_name.rsplit("/", 1)[-1]).value,
         "operator_managed": is_operator_snapshot(raw_name.rsplit("/", 1)[-1]),
-        # Flipped by measure_snapshot_sizes. False means nobody asked LXD for a size, which is
-        # not the same fact as LXD having been asked and answered nothing.
+        # Flipped by list_instance_snapshots, the one read that obtains a size. False means
+        # nobody asked LXD for one, which is not the same fact as LXD having been asked and
+        # answered nothing.
         "size_measured": False,
     }
 
@@ -258,17 +256,29 @@ def _normalize(entry: Any, source_name: str) -> Dict[str, Any]:
 # ── instance snapshots ─────────────────────────────────────────────────────────────────────
 
 
-def list_instance_snapshots(client, instance_name: str, project: str) -> List[Dict[str, Any]]:
+def list_instance_snapshots(
+    client,
+    instance_name: str,
+    project: str,
+    *,
+    timeout: Optional[Tuple[int, int]] = None,
+) -> List[Dict[str, Any]]:
     """Every snapshot on an instance, with size and expiry where LXD reports them.
 
     `recursion=1` asks LXD for whole records instead of URLs. A cluster that refuses recursion
     still answers the plain form, so the caller gets names rather than an error.
+
+    `timeout` is the (connect, read) socket timeout for this one request. Left None, the pooled
+    client's own default applies, which is what the per-instance route and the schedule runner
+    want. The fleet size phase passes its own, because the socket timeout is what actually frees
+    the worker thread when a storage driver is slow to answer.
     """
-    response = client.api.instances[safe_segment(instance_name)].snapshots.get(
-        params=_project_params(project, recursion=1)
-    )
+    kwargs: Dict[str, Any] = {"params": _project_params(project, recursion=1)}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    response = client.api.instances[safe_segment(instance_name)].snapshots.get(**kwargs)
     rows = [_normalize(entry, instance_name) for entry in (_metadata(response) or [])]
-    # important: stamped HERE, not in `_normalize`. This read is what `measure_snapshot_sizes` calls
+    # important: stamped HERE, not in `_normalize`. This read is what the fleet size phase calls
     # to obtain a size, so a null size on this path means the driver reported nothing, not that
     # nobody asked. `_normalize` defaults it to False because `rows_from_instance_listing` also
     # calls it, and there the bulk recursion=2 listing genuinely answers -1 for every row.
@@ -323,54 +333,7 @@ def rows_from_instance_listing(
     return rows, holders
 
 
-def measure_snapshot_sizes(
-    client,
-    rows: List[Dict[str, Any]],
-    holders: List[str],
-    project: str,
-) -> int:
-    """Fill in real sizes from a second read per snapshot-holding instance. Returns how many.
-
-    The bulk listing answers `size: -1` for every snapshot, so a view built on it alone shows a
-    dash in the one column that tells an operator which snapshot is worth deleting. Bounded so a
-    project where everything is snapshotted cannot turn one page load into a fan-out.
-
-    Every row this touches is stamped `size_measured`, including one LXD then reported no size
-    for. "Nobody asked" and "asked, and the storage driver said nothing" are different facts and
-    the console renders them differently.
-    """
-    measured = 0
-    for source_name in holders[:_SIZE_ENRICHMENT_LIMIT]:
-        try:
-            detailed = {
-                s["name"]: s.get("size")
-                for s in list_instance_snapshots(client, source_name, project)
-            }
-        except Exception as exc:  # noqa: BLE001 - a missing size is not a failed listing
-            logger.debug("Could not read snapshot sizes for %s: %s", source_name, exc)
-            continue
-        measured += 1
-        for row in rows:
-            if row["source_name"] != source_name:
-                continue
-            row["size_measured"] = True
-            if row.get("size") is None:
-                row["size"] = detailed.get(row["name"])
-
-    if len(holders) > _SIZE_ENRICHMENT_LIMIT:
-        logger.info(
-            "Snapshot sizes read for %d of %d instances in %s; the rest report no size",
-            _SIZE_ENRICHMENT_LIMIT, len(holders), project,
-        )
-    return measured
-
-
-def list_project_snapshots(
-    client,
-    project: str,
-    *,
-    measure_sizes: bool = True,
-) -> List[Dict[str, Any]]:
+def list_project_snapshots(client, project: str) -> List[Dict[str, Any]]:
     """Every snapshot in a project, in one request.
 
     `recursion=2` folds each instance's snapshots into the instance listing, so a project of
@@ -378,14 +341,12 @@ def list_project_snapshots(
     for an instance that has none, which is why this reads it defensively rather than expecting
     an empty list.
 
-    `measure_sizes=False` skips the per-instance second read. The fleet-wide view passes it,
-    because that read is bounded per PROJECT and a fleet sweep multiplies the bound by every
-    project on every cluster.
+    Sizes are not read here. The bulk listing answers -1 for every snapshot, and the per-instance
+    read that obtains a real size is a separate bounded phase owned by
+    snapshot_fleet.measure_holder_sizes, run only over the rows the caller is allowed to see.
     """
     response = client.api.instances.get(params=_project_params(project, recursion=2))
-    rows, holders = rows_from_instance_listing(_metadata(response), project)
-    if measure_sizes:
-        measure_snapshot_sizes(client, rows, holders, project)
+    rows, _holders = rows_from_instance_listing(_metadata(response), project)
     return rows
 
 

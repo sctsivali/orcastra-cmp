@@ -1,6 +1,6 @@
 "use client";
 
-import type { SizeMeasurement, SnapshotInfo } from "@/types/api";
+import type { FleetSnapshotListResponse, SnapshotInfo } from "@/types/api";
 
 import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -36,13 +36,25 @@ function onlyValue(values: readonly string[]): string | undefined {
   return values.length === 1 && values[0] !== EMPTY_FACET ? values[0] : undefined;
 }
 
-const SIZE_NOTE: Record<SizeMeasurement, string | null> = {
-  measured: null,
-  partial:
-    "Sizes were measured for the first 40 instances holding snapshots. The rest show no size.",
-  skipped:
-    "Sizes are not measured across the whole fleet. Choose one cluster and one project to measure them.",
-};
+/**
+ * What the size column could not say for itself. Nothing when every holder was measured; the
+ * counters when the backend sent them, and a generic sentence when it did not (an older backend,
+ * or a mocked body) rather than a number invented from the rows.
+ */
+function sizeNoteFor(data: FleetSnapshotListResponse): string | null {
+  const measured = data.measured_instances;
+  const unmeasured = data.unmeasured_instances;
+  switch (data.size_measurement) {
+    case "partial":
+      return typeof measured === "number" && typeof unmeasured === "number"
+        ? `Sizes measured for ${measured} of ${measured + unmeasured} instances holding snapshots. The rest show Not measured.`
+        : "Sizes were measured for some of the instances holding snapshots. The rest show Not measured.";
+    case "skipped":
+      return "Sizes could not be measured on this read. Refresh to try again.";
+    default:
+      return null;
+  }
+}
 
 /** One header for both the ordinary page and the error state, so they cannot drift apart. */
 function SnapshotsHeader({
@@ -83,9 +95,10 @@ function SnapshotsContent() {
   const scopeHost = onlyValue(parseFacet(searchParams.get("host")));
   const scopeProject = onlyValue(parseFacet(searchParams.get("project")));
 
-  // important: the request narrows only when BOTH narrow, because that is the only scope the
-  // backend measures sizes for. Picking a cluster alone costs no request at all: the fleet read
-  // is already in hand and the Cluster facet filters it.
+  // important: the request narrows only when BOTH narrow. That read is the cheaper one and the
+  // only path the backend runs its per-scope snapshot access check on; sizes do not depend on
+  // it, every read measures them. Picking a cluster alone costs no request at all: the fleet
+  // read is already in hand and the Cluster facet filters it.
   const narrowed = Boolean(scopeHost && scopeProject);
   const { data, isLoading, isFetching, isError, error, refreshNow, dataUpdatedAt } =
     useFleetSnapshots(narrowed ? scopeHost : undefined, narrowed ? scopeProject : undefined);
@@ -122,7 +135,6 @@ function SnapshotsContent() {
   // list as a complete one, which is the whole failure this response shape exists to describe.
   const partialNodes: string[] = data?.partial_nodes ?? [];
   const truncated = data?.truncated ?? false;
-  const sizeMeasurement: SizeMeasurement = data?.size_measurement ?? "skipped";
 
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     SNAPSHOTS.sortAccessors,
@@ -162,7 +174,9 @@ function SnapshotsContent() {
                 "Take one from an instance's Snapshots tab before risky maintenance.",
             };
 
-  const sizeNote = SIZE_NOTE[sizeMeasurement];
+  // Never claimed before data exists: a note about sizes while loading states a measurement
+  // decision the backend has not made.
+  const sizeNote = data ? sizeNoteFor(data) : null;
 
   // important: above every piece of chrome, which is what the other eighteen console pages do
   // and what this page stopped doing when the read became fleet-wide. The loader used to sit
@@ -260,7 +274,6 @@ function SnapshotsContent() {
                 onSort={handleSort}
                 empty={empty}
                 refreshing={isFetching && paginated.length === 0}
-                sizeMeasurement={sizeMeasurement}
               />
 
               {sorted.length > 0 && (

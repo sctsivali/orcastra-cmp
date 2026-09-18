@@ -19,6 +19,7 @@ Keeping the two apart means the filter cannot be wrong even if the offload ever 
 """
 import asyncio
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Annotated, Any, Dict, List, Optional, Tuple
 
@@ -39,6 +40,7 @@ from app.core.org_scope import (
 from app.core.single_flight import single_flight
 from app.core.dependencies import require_tenant
 from app.services.lxd import snapshot_fleet as fleet_service
+from app.services.snapshots import fleet_sizes
 from app.services.lxd.exceptions import LXDConnectionError
 from app.services.lxd.lazy_client import connect_or_get_client
 from app.routers.instance_snapshots import (
@@ -92,10 +94,18 @@ class FleetSnapshotListResponse(BaseModel):
     size_measurement: str = Field(
         default="skipped",
         description=(
-            "measured: every snapshot-holding source was read for sizes. "
-            "partial: the per-project cap was reached. "
-            "skipped: sizes were not measured, which is the fleet-wide case."
+            "measured: every visible snapshot-holding instance was read for sizes, from cache or "
+            "live. partial: some were not, because of the holder caps, the deadline, a failed "
+            "read or a cluster whose size phase failed. skipped: none could be."
         ),
+    )
+    measured_instances: int = Field(
+        default=0,
+        description="Distinct visible (cluster, project, instance) holders whose sizes were read",
+    )
+    unmeasured_instances: int = Field(
+        default=0,
+        description="Distinct visible holders whose sizes were not read on this request",
     )
 
 
@@ -110,7 +120,6 @@ def _read_one_cluster(
     lxd_service: LXDService,
     host: str,
     project: Optional[str],
-    measure_sizes: bool,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """One cluster's rows, on a worker thread. Raises rather than returning empty on a failure.
 
@@ -120,9 +129,7 @@ def _read_one_cluster(
     client = connect_or_get_client(lxd_service, host)
     if client is None:
         raise LXDConnectionError(f"Could not connect to {host}")
-    return fleet_service.read_cluster_snapshots(
-        client, host, project=project, measure_sizes=measure_sizes
-    )
+    return fleet_service.read_cluster_snapshots(client, host, project=project)
 
 
 @router.get(
@@ -131,7 +138,8 @@ def _read_one_cluster(
     summary="List snapshots across the fleet",
     description=(
         "Every snapshot in scope. Omit host to read every cluster, omit project to read every "
-        "project. Sizes are measured only when both are named."
+        "project. Sizes are read for every visible snapshot-holding instance in a bounded second "
+        "phase; size_measurement and the instance counters say how far it got."
     ),
 )
 @single_flight("snapshots_fleet:list")
@@ -151,13 +159,13 @@ async def list_fleet_snapshots(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
 ):
-    """Every snapshot in scope, one LXD call per cluster.
+    """Every snapshot in scope, one LXD call per cluster, then one size read per visible holder.
 
-    Sizes are measured only when the read names one cluster AND one project. The measurement is a
-    second read per snapshot-holding instance, bounded per project, so a fleet-wide sweep would
-    multiply that bound by every project on every cluster. The response says which happened rather
-    than leaving the console to infer it from the scope, because a narrowed read can hit the cap
-    too.
+    Sizes are a second phase after the visibility filter (services/snapshots/fleet_sizes.py):
+    read through a per-host cache with a ten minute life, bounded per cluster and per fleet,
+    against a deadline inside the request budget. A forced refresh bypasses that cache and
+    re-measures. The response says how far the phase got rather than leaving the console to
+    infer it from the scope.
     """
     # important: `is not None`, not truthiness. `?host=` is a caller who named a cluster and got
     # it wrong, and must get the 422 verify_cluster_access already raises for a blank id. Reading
@@ -190,8 +198,7 @@ async def list_fleet_snapshots(
     # caller's organisation never enters the fan-out.
     in_scope = sorted(lxd_service.get_node_names())
     nodes_to_query = [host] if host is not None else in_scope
-
-    measure_sizes = host is not None and project is not None
+    request_started = time.monotonic()
 
     async def _gather(node: str):
         return await run_blocking(
@@ -199,7 +206,6 @@ async def list_fleet_snapshots(
             lxd_service,
             node,
             project,
-            measure_sizes,
             timeout=_CLUSTER_BUDGET,
             label=f"snapshots.fleet[{node}]",
             executor=_fleet_executor,
@@ -272,12 +278,21 @@ async def list_fleet_snapshots(
         logger.warning("Fleet snapshot read returned %d rows, capped at %d", len(visible), _MAX_ROWS)
         visible = visible[:_MAX_ROWS]
 
-    if not measure_sizes:
-        size_measurement = "skipped"
-    elif any(row.get("size_measured") is False for row in visible):
-        size_measurement = "partial"
-    else:
+    measured_instances, unmeasured_instances = await fleet_sizes.measure_visible_sizes(
+        lxd_service,
+        visible,
+        fresh=fresh,
+        request_started=request_started,
+        executor=_fleet_executor,
+        max_in_flight=_FLEET_MAX_IN_FLIGHT,
+        cluster_budget=_CLUSTER_BUDGET,
+    )
+    if unmeasured_instances == 0:
         size_measurement = "measured"
+    elif measured_instances == 0:
+        size_measurement = "skipped"
+    else:
+        size_measurement = "partial"
 
     # A cluster registered and in scope that never entered the fan-out is unread, not empty. The
     # seeding literal is what the structural ratchet scans for, and the shape is deliberate:
@@ -295,6 +310,8 @@ async def list_fleet_snapshots(
         partial_nodes=sorted(partial),
         truncated=truncated,
         size_measurement=size_measurement,
+        measured_instances=measured_instances,
+        unmeasured_instances=unmeasured_instances,
     )
 
     # important: do not remember an answer nobody gave. Every cluster failing still returns 200

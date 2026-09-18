@@ -1,6 +1,6 @@
 "use client";
 
-import type { SizeMeasurement, SnapshotInfo } from "@/types/api";
+import type { SnapshotInfo } from "@/types/api";
 
 import { History, Loader2 } from "lucide-react";
 
@@ -19,7 +19,7 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { formatBytes } from "@/lib/utils";
 
 import { SnapshotRowActions } from "./snapshot-row-actions";
-import { relativeAge, expiryLabel, snapshotScope } from "./snapshot-format";
+import { createdCell, expiryCell, snapshotScope } from "./snapshot-format";
 import { ORIGIN_LABEL, ORIGIN_ORDER, ORIGIN_RANK, snapshotOrigin } from "./snapshot-origin";
 
 /**
@@ -146,7 +146,6 @@ interface SnapshotsTableProps {
   empty: { title: string; description: string };
   /** A refetch is in flight over rows already on screen. */
   refreshing: boolean;
-  sizeMeasurement: SizeMeasurement;
 }
 
 export function SnapshotsTable({
@@ -156,7 +155,6 @@ export function SnapshotsTable({
   onSort,
   empty,
   refreshing,
-  sizeMeasurement,
 }: SnapshotsTableProps) {
   return (
     <Table>
@@ -212,24 +210,15 @@ export function SnapshotsTable({
                   ) : (
                     // Two different facts, two different names. "Not reported" means the cluster
                     // was asked and its storage driver answered nothing; "Not measured" means
-                    // nobody asked, which is what a fleet-wide read does on purpose.
+                    // this read did not obtain a size for the instance: the holder cap, the
+                    // deadline or a failed read. The row says which, so the page does not.
                     <TableEmptyValue
-                      label={
-                        sizeMeasurement === "skipped" || snapshot.size_measured === false
-                          ? "Not measured"
-                          : "Not reported"
-                      }
+                      label={snapshot.size_measured === false ? "Not measured" : "Not reported"}
                     />
                   )}
                 </TableCell>
-                <TableCell>
-                  {snapshot.created_at ? (
-                    relativeAge(snapshot.created_at)
-                  ) : (
-                    <TableEmptyValue label="Unknown" />
-                  )}
-                </TableCell>
-                <TableCell>{expiryLabel(snapshot.expires_at)}</TableCell>
+                <TableCell className="whitespace-nowrap">{createdCell(snapshot.created_at)}</TableCell>
+                <TableCell className="whitespace-nowrap">{expiryCell(snapshot.expires_at)}</TableCell>
                 <TableCell>
                   <SnapshotRowActions
                     snapshot={snapshot}

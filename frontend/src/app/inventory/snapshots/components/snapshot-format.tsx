@@ -1,6 +1,7 @@
 "use client";
 
-import { TableEmptyValue } from "@/components/ui/table-text";
+import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { formatDateTime } from "@/lib/utils";
 import type { SnapshotInfo } from "@/types/api";
 
 /**
@@ -33,23 +34,28 @@ export function relativeAge(iso: string): string {
 /**
  * Time remaining, in the same whole units `relativeAge` reads back.
  *
- * One ladder, two callers. A snapshot's expiry and a schedule's next run are the same question
+ * One ladder, every caller. A snapshot's expiry and a schedule's next run are the same question
  * asked forwards, and two implementations of "in 6h" would drift into two spellings on one screen.
- * What differs is only what an absence and a past instant MEAN, so those are the parameters.
+ * What differs is only what a past instant MEANS, so that is the parameter. A string rather than
+ * a node so the prose callers and the table cells share one spelling.
  */
-export function timeUntil(
-  iso: string | null | undefined,
-  { emptyLabel, pastLabel }: { emptyLabel: string; pastLabel: string },
-): React.ReactNode {
-  if (!iso) return <TableEmptyValue label={emptyLabel} />;
-  const at = Date.parse(iso);
-  if (Number.isNaN(at)) return <TableEmptyValue label={emptyLabel} />;
-  const seconds = Math.floor((at - Date.now()) / 1000);
-  if (seconds <= 0) return <span className="text-muted-foreground">{pastLabel}</span>;
+export function timeUntilLabel(iso: string, pastLabel: string): string {
+  const seconds = Math.floor((Date.parse(iso) - Date.now()) / 1000);
+  if (seconds <= 0) return pastLabel;
   const hours = Math.floor(seconds / 3600);
   if (hours < 1) return `in ${Math.max(1, Math.floor(seconds / 60))}m`;
   if (hours < 48) return `in ${hours}h`;
   return `in ${Math.floor(hours / 24)}d`;
+}
+
+/** `timeUntilLabel` for prose, with an absence and a past instant each named by the caller. */
+export function timeUntil(
+  iso: string | null | undefined,
+  { emptyLabel, pastLabel }: { emptyLabel: string; pastLabel: string },
+): React.ReactNode {
+  if (!iso || Number.isNaN(Date.parse(iso))) return <TableEmptyValue label={emptyLabel} />;
+  const label = timeUntilLabel(iso, pastLabel);
+  return label === pastLabel ? <span className="text-muted-foreground">{label}</span> : label;
 }
 
 /** Expiry as time remaining.
@@ -71,4 +77,57 @@ export function expiryLabel(iso?: string | null): React.ReactNode {
  */
 export function nextRunLabel(iso?: string | null): React.ReactNode {
   return timeUntil(iso, { emptyLabel: "Paused", pastLabel: "due now" });
+}
+
+/**
+ * A timestamp cell: the absolute instant as the value, the relative reading beneath it.
+ *
+ * The absolute stamp is what an operator compares against a change window or a log line; the
+ * age or countdown is what they scan for. One tier each, in the house spelling, so the fleet
+ * table, the per-instance tab and the schedules table cannot drift apart.
+ */
+export function AbsoluteWithRelative({
+  iso,
+  emptyLabel,
+  relative,
+}: {
+  iso?: string | null;
+  emptyLabel: string;
+  relative: (iso: string) => string;
+}) {
+  if (!iso || Number.isNaN(Date.parse(iso))) return <TableEmptyValue label={emptyLabel} />;
+  return (
+    <>
+      <time dateTime={iso}>{formatDateTime(iso)}</time>
+      <TableSubText>{relative(iso)}</TableSubText>
+    </>
+  );
+}
+
+export function createdCell(iso?: string | null): React.ReactNode {
+  return <AbsoluteWithRelative iso={iso} emptyLabel="Unknown" relative={relativeAge} />;
+}
+
+export function expiryCell(iso?: string | null): React.ReactNode {
+  return (
+    <AbsoluteWithRelative
+      iso={iso}
+      emptyLabel="No expiry"
+      relative={(at) => timeUntilLabel(at, "due to be pruned")}
+    />
+  );
+}
+
+export function nextRunCell(iso?: string | null): React.ReactNode {
+  return (
+    <AbsoluteWithRelative
+      iso={iso}
+      emptyLabel="Paused"
+      relative={(at) => timeUntilLabel(at, "due now")}
+    />
+  );
+}
+
+export function lastRunCell(iso?: string | null): React.ReactNode {
+  return <AbsoluteWithRelative iso={iso} emptyLabel="Never run" relative={relativeAge} />;
 }

@@ -5,7 +5,8 @@ about a real recorded call, not about a mock's memory of one. The whole point of
 to prove the EFFECT of a control, and a mock that answers anything makes that impossible.
 """
 
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 HOST = "nuc2"
 OTHER_HOST = "pandora"
@@ -32,11 +33,29 @@ class _Response:
 
 
 class FakeSnapshots:
-    def __init__(self, owner: "FakeInstanceNode"):
+    def __init__(self, owner: "FakeInstanceNode", name: Optional[str] = None):
         self._owner = owner
+        self._name = name
 
-    def get(self, params=None):
-        self._owner.recorded.append(("list_snapshots", dict(params or {})))
+    def get(self, params=None, timeout=None):
+        """The per-instance snapshot listing, which is the one read that answers a size.
+
+        Recorded with the socket timeout and the instance it was asked about, so a test can
+        prove the fleet size phase read exactly the holders it may see, and nothing else.
+        A per-instance list, error or delay keyed by (project, instance) lets one holder
+        answer differently from the rest; the fallbacks keep every older test unchanged.
+        """
+        params = dict(params or {})
+        holder = (params.get("project"), self._name)
+        self._owner.recorded.append(("list_snapshots", params, timeout, self._name))
+        delay = self._owner.size_read_delay.get(holder)
+        if delay:
+            time.sleep(delay)
+        error = self._owner.size_read_error.get(holder)
+        if error is not None:
+            raise error
+        if holder in self._owner.snapshots_by_instance:
+            return _Response({"metadata": list(self._owner.snapshots_by_instance[holder])})
         return _Response({"metadata": list(self._owner.snapshots)})
 
     def post(self, json=None, params=None):
@@ -92,6 +111,11 @@ class FakeInstanceNode:
         self.omit_operation = False
         # Projects the fallback path enumerates when a daemon cannot answer about all of them.
         self.projects: List[str] = [PROJECT]
+        # What the per-instance listing answers for one (project, instance), when it should
+        # differ from `snapshots`; and how that read misbehaves, when a test needs it to.
+        self.snapshots_by_instance: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        self.size_read_error: Dict[Tuple[str, str], Exception] = {}
+        self.size_read_delay: Dict[Tuple[str, str], float] = {}
 
     @property
     def snapshots_api(self):
@@ -170,12 +194,13 @@ class _BackupNode:
 class _InstanceProxy:
     """Wraps the node so `.snapshots` resolves to the API sub-resource, as pylxd does."""
 
-    def __init__(self, node: FakeInstanceNode):
+    def __init__(self, node: FakeInstanceNode, name: Optional[str] = None):
         self._node = node
+        self._name = name
 
     @property
     def snapshots(self):
-        return FakeSnapshots(self._node)
+        return FakeSnapshots(self._node, self._name)
 
     def __getattr__(self, item):
         return getattr(self._node, item)
@@ -193,7 +218,7 @@ class _Instances:
         self.all_projects_listing: Optional[List[Dict[str, Any]]] = None
 
     def __getitem__(self, name):
-        return _InstanceProxy(self._node)
+        return _InstanceProxy(self._node, name)
 
     def get(self, params=None, timeout=None):
         """`recursion=2` folds each instance's snapshots into the instance listing.

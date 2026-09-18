@@ -9,19 +9,33 @@ three, at 1.12s, 2.17s and 0.66s per cluster.
 Everything here is synchronous and takes one client. The router owns the fan-out, the ACL and the
 cache; this module owns the reading. That split is what keeps every tenant decision on the event
 loop, where the context variables it reads are actually set.
+
+Sizes are a second phase, not part of the listing. The bulk read answers -1 for every snapshot,
+and the only read that obtains a real size is one GET per snapshot-holding instance. Running that
+inside the listing would measure instances the caller may not see and would let a slow storage
+driver condemn the whole cluster. So `measure_holder_sizes` runs after the router's visibility
+filter, over the visible holders only, against a deadline, and a failure there leaves a row
+unmeasured and the cluster answered. Nothing in the size phase can mark a cluster unreachable.
 """
 
+import contextvars
 import logging
+import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services.lxd.snapshots import (
     SnapshotProjectUnknown,
     _metadata,
+    list_instance_snapshots,
     list_project_snapshots,
     rows_from_instance_listing,
 )
 
 logger = logging.getLogger(__name__)
+
+# A snapshot-holding instance, as (project, instance name). The host is the cluster being read.
+Holder = Tuple[str, str]
 
 # The API extension that makes a one-call read possible. Present on LXD 5.0 and later, and on
 # this fleet advertised by all three reachable clusters (5.21.7, 5.21.6 and 6.9).
@@ -37,6 +51,24 @@ MAX_PROJECTS_PER_CLUSTER = 120
 # timeout is what actually frees the worker thread, so it is passed explicitly at the call site.
 # Same rule, and the same reasoning, as wait_for_operation in snapshots.py.
 FLEET_READ_TIMEOUT = (3, 25)
+
+# (connect, read) for one per-instance size read. A dir pool size is a directory walk and zfs a
+# metadata read; 10s sits above any measured C2 WAN GET and well under the size phase's deadline,
+# so an abandoned read frees its thread long before the request budget is spent.
+SIZE_READ_TIMEOUT = (3, 10)
+
+# How many size reads are in flight on one cluster at a time.
+SIZE_PARALLELISM_PER_CLUSTER = 4
+
+# Live size reads per cluster on one request. nuc1 has 41 instances, so a cluster where every
+# instance holds a snapshot is still read whole; beyond it the rest report unmeasured.
+MAX_SIZE_HOLDERS_PER_CLUSTER = 60
+
+# important: NOT _fleet_executor. The cluster read that calls measure_holder_sizes already runs
+# on a worker of that pool, and a worker of a bounded pool submitting to its own pool and waiting
+# is the classic pool deadlock. 16 is four clusters' worth of windows, so one slow cluster cannot
+# pin the others.
+_SIZES_EXECUTOR = ThreadPoolExecutor(max_workers=16, thread_name_prefix="snapshot_sizes")
 
 
 def supports_all_projects(client) -> bool:
@@ -80,7 +112,7 @@ def list_project_names(client) -> List[str]:
     return names
 
 
-def _walk_projects(client, measure_sizes: bool) -> Tuple[List[Dict[str, Any]], bool]:
+def _walk_projects(client) -> Tuple[List[Dict[str, Any]], bool]:
     """The old shape: enumerate projects, read each one. Returns (rows, complete).
 
     A single project failing is logged and skipped rather than condemning the cluster: a project
@@ -105,7 +137,7 @@ def _walk_projects(client, measure_sizes: bool) -> Tuple[List[Dict[str, Any]], b
     rows: List[Dict[str, Any]] = []
     for name in names:
         try:
-            rows.extend(list_project_snapshots(client, name, measure_sizes=measure_sizes))
+            rows.extend(list_project_snapshots(client, name))
         except Exception as exc:  # noqa: BLE001 - one project is not the cluster
             logger.info("Skipping project %s while reading snapshots: %s", name, exc)
             complete = False
@@ -117,7 +149,6 @@ def read_cluster_snapshots(
     host: str,
     *,
     project: Optional[str] = None,
-    measure_sizes: bool = False,
 ) -> Tuple[List[Dict[str, Any]], bool]:
     """Snapshots on one cluster, stamped with the host. Returns (rows, complete).
 
@@ -130,7 +161,7 @@ def read_cluster_snapshots(
     be decided correctly, and a memo keyed on the instance name alone collides across clusters.
     """
     if project is not None:
-        rows = list_project_snapshots(client, project, measure_sizes=measure_sizes)
+        rows = list_project_snapshots(client, project)
         complete = True
     elif supports_all_projects(client):
         try:
@@ -141,10 +172,74 @@ def read_cluster_snapshots(
             # call per project on this cluster only, and is the one alternative to attributing a
             # snapshot to a project nobody named.
             logger.warning("%s answered all-projects without labels (%s), re-reading", host, exc)
-            rows, complete = _walk_projects(client, measure_sizes)
+            rows, complete = _walk_projects(client)
     else:
-        rows, complete = _walk_projects(client, measure_sizes)
+        rows, complete = _walk_projects(client)
 
     for row in rows:
         row["host"] = host
     return rows, complete
+
+
+def _read_holder_sizes(
+    client, holder: Holder, timeout: Tuple[int, int]
+) -> Dict[str, Optional[int]]:
+    project, name = holder
+    return {
+        snapshot["name"]: snapshot.get("size")
+        for snapshot in list_instance_snapshots(client, name, project, timeout=timeout)
+    }
+
+
+def measure_holder_sizes(
+    client,
+    host: str,
+    holders: List[Holder],
+    *,
+    deadline: float,
+    timeout: Tuple[int, int] = SIZE_READ_TIMEOUT,
+    parallelism: int = SIZE_PARALLELISM_PER_CLUSTER,
+) -> Tuple[Dict[Holder, Dict[str, Optional[int]]], List[Holder]]:
+    """Sizes of every snapshot on the given holders, read `parallelism` at a time until `deadline`.
+
+    Returns (sizes_by_holder, unmeasured_holders). A holder is unmeasured when its read raised,
+    when the deadline passed before it was read, or when it was still in flight at the deadline.
+    `deadline` is a time.monotonic() instant.
+
+    important: an in-flight read is abandoned at the deadline, not joined. The socket timeout
+    passed to each read is what frees its thread afterwards, which is why the caller's deadline
+    must sit well inside the request budget: the last abandoned read can hold a thread for the
+    whole read timeout after this returns.
+    """
+    sizes: Dict[Holder, Dict[str, Optional[int]]] = {}
+    unmeasured: List[Holder] = []
+    pending = list(holders)
+    in_flight: Dict[Future, Holder] = {}
+    ctx = contextvars.copy_context()
+
+    while pending or in_flight:
+        while pending and len(in_flight) < parallelism and time.monotonic() < deadline:
+            holder = pending.pop(0)
+            future = _SIZES_EXECUTOR.submit(ctx.run, _read_holder_sizes, client, holder, timeout)
+            in_flight[future] = holder
+        remaining = deadline - time.monotonic()
+        if not in_flight or remaining <= 0:
+            break
+        done, _ = wait(in_flight, timeout=remaining, return_when=FIRST_COMPLETED)
+        for future in done:
+            holder = in_flight.pop(future)
+            try:
+                sizes[holder] = future.result()
+            except Exception as exc:  # noqa: BLE001 - a missing size is not a failed listing
+                logger.debug("Could not read snapshot sizes for %s/%s on %s: %s", *holder, host, exc)
+                unmeasured.append(holder)
+
+    for future, holder in in_flight.items():
+        future.cancel()
+        unmeasured.append(holder)
+    unmeasured.extend(pending)
+    if unmeasured:
+        logger.info(
+            "Snapshot sizes read for %d of %d instances on %s", len(sizes), len(holders), host
+        )
+    return sizes, unmeasured
