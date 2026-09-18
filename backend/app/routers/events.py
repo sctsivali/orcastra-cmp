@@ -9,6 +9,7 @@ the bearer token is passed as the ``token`` query parameter.
 import asyncio
 import logging
 import time
+from functools import partial
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
@@ -91,20 +92,36 @@ async def events_websocket(
 
     await websocket.accept()
     hub = get_events_hub()
-    queue = await hub.subscribe(host)
+    # The hub judges every frame under a copy of THIS task's context, taken now, so the scope
+    # resolved above is what decides whether a frame is queued for this subscriber at all.
+    queue = await hub.subscribe(host, accept=partial(frame_is_visible, host))
     user_id = user.user_id if user else "anonymous"
     logger.info(f"[events] browser connected host={host} user={user_id}")
 
     async def _sender():
         # The scope set above lives in this task's copy of the context, so frame_is_visible
         # reads the same bound and ACL the handler resolved for this subscriber. A `.set()`
-        # inside this task updates that same copy, which is how the refresh below lands.
+        # inside this task updates that same copy, and `rescope` hands the hub a fresh copy
+        # for the pre-enqueue check. The wait is bounded by the time the scope is due, because
+        # a subscriber whose frames are all filtered before enqueue is never woken by one, and
+        # a widened scope (a new project grant) has to land regardless.
         scope_read_at = time.monotonic()
         while True:
-            payload = await queue.get()
+            due_in = SCOPE_REFRESH_S - (time.monotonic() - scope_read_at)
+            try:
+                payload: Optional[dict] = await asyncio.wait_for(
+                    queue.get(), timeout=max(due_in, 0.0)
+                )
+            except asyncio.TimeoutError:
+                payload = None
             if time.monotonic() - scope_read_at >= SCOPE_REFRESH_S:
                 await set_org_scope_for_ws(user)
+                hub.rescope(host, queue)
                 scope_read_at = time.monotonic()
+            if payload is None:
+                continue
+            # Judged again under the refreshed scope: a frame queued just before a narrowing
+            # must not go out, and this is the site the partner-bound ratchet owns.
             if not frame_is_visible(host, payload):
                 continue
             await websocket.send_json(payload)

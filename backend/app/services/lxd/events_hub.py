@@ -17,9 +17,11 @@ Reuses the terminal service's certificate/SSL plumbing (same Vault-issued client
 cert) to connect to LXD over wss.
 """
 import asyncio
+import contextvars
 import json
 import logging
-from typing import Any, Dict, Optional, Set
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, Optional
 
 import websockets
 
@@ -32,12 +34,29 @@ logger = logging.getLogger(__name__)
 _QUEUE_MAXSIZE = 100
 
 
+@dataclass(eq=False)
+class _Subscriber:
+    """One browser socket's place in a node's fan-out.
+
+    important: `ctx` is the scope the frame is judged under, captured in the subscriber's own
+    task when it subscribed (after its org scope was resolved) and replaced by `rescope` after
+    each refresh. `_fanout` runs in the node's reader task, which was created under the FIRST
+    subscriber's context, so reading the scope contextvars there directly would judge every
+    subscriber's frames by one subscriber's rights.
+    """
+
+    queue: asyncio.Queue
+    accept: Optional[Callable[[dict], bool]]
+    ctx: contextvars.Context
+    accept_failed: bool = False
+
+
 class _NodeStream:
-    """Per-node upstream connection + its set of subscriber queues."""
+    """Per-node upstream connection + its subscribers, keyed by their queue."""
 
     def __init__(self, host: str):
         self.host = host
-        self.subscribers: Set[asyncio.Queue] = set()
+        self.subscribers: Dict[asyncio.Queue, _Subscriber] = {}
         self.task: Optional[asyncio.Task] = None
 
 
@@ -46,16 +65,26 @@ class LXDEventsHub:
         self._nodes: Dict[str, _NodeStream] = {}
         self._lock = asyncio.Lock()
 
-    async def subscribe(self, host: str) -> asyncio.Queue:
+    async def subscribe(
+        self, host: str, accept: Optional[Callable[[dict], bool]] = None
+    ) -> asyncio.Queue:
         """Register a subscriber for ``host`` and ensure its upstream listener
-        is running. Returns the queue the caller should drain."""
+        is running. Returns the queue the caller should drain.
+
+        `accept` is judged for every frame BEFORE it is queued, under a copy of the calling
+        task's context taken now, so call this after the subscriber's scope is set. A frame
+        the subscriber may not see never costs it a queue slot: on a busy shared host a
+        tenant's queue used to fill with neighbours' frames and drop-oldest evicted its own.
+        """
         async with self._lock:
             node = self._nodes.get(host)
             if node is None:
                 node = _NodeStream(host)
                 self._nodes[host] = node
             queue: asyncio.Queue = asyncio.Queue(maxsize=_QUEUE_MAXSIZE)
-            node.subscribers.add(queue)
+            node.subscribers[queue] = _Subscriber(
+                queue=queue, accept=accept, ctx=contextvars.copy_context()
+            )
             if node.task is None or node.task.done():
                 node.task = asyncio.create_task(self._run_node(host))
             logger.info(
@@ -69,13 +98,24 @@ class LXDEventsHub:
             node = self._nodes.get(host)
             if not node:
                 return
-            node.subscribers.discard(queue)
+            node.subscribers.pop(queue, None)
             remaining = len(node.subscribers)
             logger.info(f"[events] subscriber removed for {host} (remaining={remaining})")
             if not node.subscribers:
                 if node.task and not node.task.done():
                     node.task.cancel()
                 self._nodes.pop(host, None)
+
+    def rescope(self, host: str, queue: asyncio.Queue) -> None:
+        """Replace the context a subscriber's frames are judged under.
+
+        Called from the subscriber's own task right after it re-resolved its scope, so the
+        copy carries the refreshed contextvars. One attribute write on the loop thread.
+        """
+        node = self._nodes.get(host)
+        sub = node.subscribers.get(queue) if node else None
+        if sub is not None:
+            sub.ctx = contextvars.copy_context()
 
     async def shutdown(self) -> None:
         """Cancel every node's upstream listener (called on app shutdown)."""
@@ -90,7 +130,23 @@ class LXDEventsHub:
         node = self._nodes.get(host)
         if not node:
             return
-        for q in list(node.subscribers):
+        for sub in list(node.subscribers.values()):
+            if sub.accept is not None:
+                try:
+                    allowed = sub.ctx.run(sub.accept, payload)
+                except Exception:
+                    # Fail closed, and keep the reader loop alive for everyone else: the
+                    # caller of _fanout catches Exception around the whole upstream
+                    # connection and would reconnect the node for one bad predicate.
+                    if not sub.accept_failed:
+                        sub.accept_failed = True
+                        logger.exception(
+                            f"[events] subscriber predicate raised for {host}; its frames are dropped"
+                        )
+                    continue
+                if not allowed:
+                    continue
+            q = sub.queue
             try:
                 q.put_nowait(payload)
             except asyncio.QueueFull:
@@ -118,8 +174,9 @@ class LXDEventsHub:
         # important: all-projects. Without it LXD emits the default project's events only, so a
         # create into any other project produced no frame at all: the "Creating..." placeholder
         # sat until its ten-minute expiry while the instance had been running for nine of them.
-        # Every frame names its project, and routers/events.py filters per subscriber with the
-        # tenant ACL and the Partner project bound before a frame reaches a browser.
+        # Every frame names its project. The hub judges each frame under the subscriber's
+        # captured scope (tenant ACL, Partner project bound) before it is queued, and
+        # routers/events.py judges it again under the refreshed scope before sending.
         return f"{ws_endpoint}/1.0/events?type=operation,lifecycle&all-projects=true"
 
     async def _run_node(self, host: str) -> None:
