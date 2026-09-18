@@ -124,7 +124,7 @@ export function InstancesTable(props: InstancesTableProps) {
           <TableHead>Tags</TableHead>
           {/* Not sortable and not a value, so it carries its name for a screen reader
               rather than a visible label that would read as a tenth column of data. */}
-          <TableHead className="w-12 text-right">
+          <TableHead pinned="end" className="w-12 text-right">
             <span className="sr-only">Actions</span>
           </TableHead>
         </TableRow>

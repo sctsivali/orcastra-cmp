@@ -46,6 +46,11 @@ export interface OverflowCellProps<T> {
    * preview that renders non-phrasing content such as a Badge. See the note above.
    */
   triggerMode?: "cell" | "indicator";
+  /**
+   * Let the preview wrap instead of setting the column width. Reaches the trigger in "cell"
+   * mode only; "indicator" mode already lays its preview out in a wrapping flex row.
+   */
+  wrap?: "words";
 }
 
 export function OverflowCell<T>({
@@ -59,6 +64,7 @@ export function OverflowCell<T>({
   separator = ", ",
   itemLabel,
   triggerMode = "cell",
+  wrap,
 }: OverflowCellProps<T>) {
   const [open, setOpen] = React.useState(false);
   const [mounted, setMounted] = React.useState(false);
@@ -104,7 +110,7 @@ export function OverflowCell<T>({
           </TableLink>
         </span>
       ) : (
-        <TableLink onClick={openDialog} aria-label={ariaLabel}>
+        <TableLink onClick={openDialog} aria-label={ariaLabel} wrap={wrap}>
           {inline}
           {separator}
           {`+${hidden}`}

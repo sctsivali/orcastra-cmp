@@ -56,20 +56,18 @@ function hasFixedAddress(instance: Pick<VMInfo, "devices" | "expanded_devices">)
   return false;
 }
 
-// The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
-// instance's own device; an instance that overrode nothing still has one through its profile,
-// and in that case LXD reports no size because the pool default applies.
+// The root disk an instance actually runs on, after profile expansion: the size, or the pool
+// default when none is set, over the pool it lives in. Whether the size came from the instance
+// or a profile is the Devices tab's question (instance-devices-tab.tsx), which shows both
+// groups; the row stays two short tiers so the column does not set the table's width.
 function rootDiskLabel(
   instance: Pick<VMInfo, "devices" | "expanded_devices">,
 ): { value: string; detail?: string } | null {
-  const own = instance.devices?.root;
-  const effective = instance.expanded_devices?.root ?? own;
+  const effective = instance.expanded_devices?.root ?? instance.devices?.root;
   if (!effective) return null;
   const size = String(effective.size ?? "").trim();
   const pool = String(effective.pool ?? "").trim();
-  if (!size) return { value: "Pool default", detail: pool ? `Pool ${pool}` : undefined };
-  const origin = own?.size ? "Set on instance" : "From profile";
-  return { value: size, detail: pool ? `${origin}, pool ${pool}` : origin };
+  return { value: size || "Pool default", detail: pool ? `Pool ${pool}` : undefined };
 }
 
 const IN_FLIGHT: Record<InstanceAction, string> = {
@@ -173,6 +171,8 @@ export function InstanceTableRow({
       </TableCell>
       <TableCell className="whitespace-nowrap">{project}</TableCell>
       <TableCell>
+        {/* Wraps at the separators: two addresses on two lines rather than one address
+            setting a 240 px column, which is what pushed the actions off the visible edge. */}
         <OverflowCell
           items={instance.ip_addresses}
           preview={2}
@@ -180,6 +180,7 @@ export function InstanceTableRow({
           ownerLabel={instance.name}
           emptyLabel="No IP addresses"
           itemLabel="IP address"
+          wrap="words"
         />
         {/* The allocation label operators asked for. It must not be
             gated on a live address: ip_addresses is populated only for a running
@@ -203,11 +204,11 @@ export function InstanceTableRow({
           itemLabel="profile"
         />
       </TableCell>
-      <TableCell className="whitespace-nowrap">
+      <TableCell>
         {rootDisk ? (
           <>
-            {rootDisk.value}
-            {rootDisk.detail && <TableSubText>{rootDisk.detail}</TableSubText>}
+            <span className="whitespace-nowrap">{rootDisk.value}</span>
+            {rootDisk.detail && <TableSubText wrap>{rootDisk.detail}</TableSubText>}
           </>
         ) : (
           <TableEmptyValue label="No root disk reported" />
@@ -226,7 +227,9 @@ export function InstanceTableRow({
           renderItem={(tag) => <TagBadge tag={tag as string} size="sm" />}
         />
       </TableCell>
-      <TableCell className="text-right">
+      {/* Pinned: ten columns overflow every container this table gets, and the actions are
+          what an operator scrolled for. */}
+      <TableCell pinned="end" className="text-right">
         <RowActions triggerLabel={`Actions for instance ${rowLabel}`} actions={actions} />
       </TableCell>
     </TableRow>

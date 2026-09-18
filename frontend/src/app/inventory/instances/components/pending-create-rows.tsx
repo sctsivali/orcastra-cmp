@@ -14,7 +14,7 @@ export function PendingCreateRows({ pending }: { pending: readonly PendingCreate
   return (
     <>
       {pending.map((p) => (
-        <TableRow key={`pending-${p.id}`} className="bg-muted/30">
+        <TableRow key={`pending-${p.id}`} data-state="pending">
           <TableCell className="font-medium">{p.name}</TableCell>
           <TableCell>
             <Badge
@@ -53,7 +53,9 @@ export function PendingCreateRows({ pending }: { pending: readonly PendingCreate
           <TableCell><TableEmptyValue /></TableCell>
           <TableCell><TableEmptyValue /></TableCell>
           <TableCell><TableEmptyValue /></TableCell>
-          <TableCell className="text-right">
+          <TableCell><TableEmptyValue /></TableCell>
+          {/* Pinned like the live rows' actions cell; the row state carries the tint. */}
+          <TableCell pinned="end" className="text-right">
             {/* A failed create no longer disappears on a timer, because an operator who
                 looked away used to lose the only account of why it never arrived. It
                 needs a way out, so it gets an explicit one. A row still creating has

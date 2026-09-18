@@ -386,6 +386,15 @@
   box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
 }
 
+/* A column pinned to the trailing edge (TableHead and TableCell `pinned="end"`) covers the
+   container's own trailing shadow, so it marks the rows sliding under it itself, on its tint
+   layer: above the ground and the hover tint, below the control. Same colour and geometry as
+   the container edge. */
+[data-slot="table-container"][data-scroll-x="start"] [data-pinned="end"]::after,
+[data-slot="table-container"][data-scroll-x="middle"] [data-pinned="end"]::after {
+  box-shadow: inset 12px 0 10px -10px hsl(var(--foreground) / 0.28);
+}
+
 /* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 10px;

@@ -44,8 +44,11 @@ type CommonProps = {
    * link is a second, invisible clip inside anything that reveals a long value, and a reveal
    * whose own content is still truncated is the defect this codebase has shipped more than once.
    * A caller that owns a reveal control passes the revealed state straight through here.
+   *
+   * `true` breaks anywhere, for one long token such as a fingerprint. `"words"` breaks only at
+   * spaces, for a short list whose items must stay whole, such as addresses.
    */
-  wrap?: boolean;
+  wrap?: boolean | "words";
 };
 
 type ActionProps = CommonProps & {
@@ -70,7 +73,10 @@ export function TableLink(props: TableLinkProps) {
   const { children, className, title, wrap } = props;
   const ariaLabel = props["aria-label"];
   const classes = cn(tableLinkClass, className);
-  const textClass = cn("min-w-0", wrap ? "whitespace-normal break-all text-left" : "truncate");
+  const textClass = cn(
+    "min-w-0",
+    wrap === "words" ? "whitespace-normal text-left" : wrap ? "whitespace-normal break-all text-left" : "truncate",
+  );
 
   if ("href" in props && props.href !== undefined) {
     if (props.external) {

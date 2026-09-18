@@ -86,6 +86,30 @@ const STICKY_HEADER =
   "[&_thead_tr]:border-b-0 [&_thead_th]:sticky [&_thead_th]:top-0 [&_thead_th]:z-10 " +
   "[&_thead_th]:bg-background [&_thead_th]:shadow-[inset_0_-1px_0_hsl(var(--border))]";
 
+// A column pinned to the trailing edge while the rest of the table scrolls under it, for the
+// row-actions column of a table wider than its container: the control an operator reaches for
+// most is never the one behind a horizontal scroll.
+//
+// A sticky cell paints above the row, so everything the row draws (its background tints, its
+// collapsed bottom border) vanishes under the cell unless the cell draws it again. Two pseudo
+// layers do that inside the cell's own stacking context: `before` is the opaque ground and the
+// row separator, `after` carries the row tints the tr applies (hover, selected, post-create
+// focus) and, from globals.css, the edge shadow that says rows are sliding underneath. Tints on
+// `after` so they sit over the ground; the shadow on the same layer so it sits over the tint.
+//
+// note: `bg-card` because every list table lives on a card. A table on the page ground passes
+// `className="before:bg-background"`. The last body row drops its separator the way TableBody
+// does, keyed on tbody so the header row, also a last child, keeps its line.
+const PINNED_END =
+  "sticky end-0 z-[1] " +
+  "before:pointer-events-none before:absolute before:inset-0 before:-z-[2] before:border-b before:border-border before:bg-card " +
+  "[tbody>tr:last-child>&]:before:border-b-0 " +
+  "after:pointer-events-none after:absolute after:inset-0 after:-z-[1] after:transition-colors motion-reduce:after:transition-none " +
+  "[tr:hover>&]:after:bg-muted/50 [tr[data-state=selected]>&]:after:bg-muted [tr[data-state=pending]>&]:after:bg-muted/30 " +
+  "[tr[data-row-focus=true]>&]:after:bg-primary/10 [tr[data-row-focus]>&]:after:duration-700";
+
+type PinnedEdge = "end";
+
 // Two densities, and only two. `compact` exists because nested tables inside a dialog
 // genuinely need shorter rows to fit a max-height, and the alternative that grew here
 // organically was ~23 per-cell `text-xs px-3 py-1.5` overrides that opted individual cells
@@ -228,7 +252,9 @@ const TableRow = React.forwardRef<
   <tr
     ref={ref}
     className={cn(
-      "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+      // `pending` is a placeholder row for a create still in flight; stated here, beside
+      // selected, so a pinned cell can mirror it (PINNED_END) without the row naming a colour.
+      "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted data-[state=pending]:bg-muted/30",
       // The post-create mark (hooks/use-row-focus.ts). Attribute present, either value, keeps
       // the long duration so the fade-out runs at 700 ms instead of snapping to 150. No
       // keyframe and no ring: a box-shadow on a tr is unreliable across engines.
@@ -249,15 +275,17 @@ export function useTableDensity(): TableDensity {
 
 const TableHead = React.forwardRef<
   HTMLTableCellElement,
-  React.ThHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => {
+  React.ThHTMLAttributes<HTMLTableCellElement> & { pinned?: PinnedEdge }
+>(({ className, pinned, ...props }, ref) => {
   const density = React.useContext(TableDensityContext);
   return (
     <th
       ref={ref}
+      data-pinned={pinned}
       className={cn(
         HEAD_DENSITY[density],
         "text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0",
+        pinned && PINNED_END,
         className
       )}
       {...props}
@@ -268,8 +296,8 @@ TableHead.displayName = "TableHead";
 
 const TableCell = React.forwardRef<
   HTMLTableCellElement,
-  React.TdHTMLAttributes<HTMLTableCellElement>
->(({ className, ...props }, ref) => {
+  React.TdHTMLAttributes<HTMLTableCellElement> & { pinned?: PinnedEdge }
+>(({ className, pinned, ...props }, ref) => {
   const density = React.useContext(TableDensityContext);
   // One typography baseline for every data cell. Stated here rather than repeated at
   // ~190 call sites, which is how the sizes, weights and colours drifted apart in the
@@ -278,9 +306,11 @@ const TableCell = React.forwardRef<
   return (
     <td
       ref={ref}
+      data-pinned={pinned}
       className={cn(
         CELL_DENSITY[density],
         "align-middle font-normal text-foreground [&:has([role=checkbox])]:pr-0",
+        pinned && PINNED_END,
         className
       )}
       {...props}
