@@ -488,6 +488,26 @@ async def resolve_cluster_org(
     return (row[0], row[1])
 
 
+async def org_to_hold_project_grant(
+    user_email: str,
+    host: str,
+    db: AsyncSession,
+) -> Optional[int]:
+    """The organization a project this user creates on `host` is recorded under.
+
+    The first of the user's organizations in the documented primary order
+    (`_ordered_org_ids_for_email`: owner orgs first) that is bound to the cluster. None when
+    none of them is: a rule for a cluster under an organization not bound to it is exactly the
+    stale shape the policy repair removes, so there is no fallback to an unbound org.
+    """
+    ordered = await _ordered_org_ids_for_email(user_email, db)
+    bound = {org_id for org_id, _slug in await resolve_cluster_orgs(host, db)}
+    for org_id in ordered:
+        if org_id in bound:
+            return org_id
+    return None
+
+
 async def resolve_cluster_orgs(
     host: str,
     db: AsyncSession,

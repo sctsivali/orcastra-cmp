@@ -1,0 +1,156 @@
+"""Fakes for the project grant tests: a session that answers by table and records writes."""
+
+from typing import Any, List, Optional
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.core.auth import AuthenticatedUser
+
+
+class _Rows:
+    def __init__(self, rows: List[Any]):
+        self._rows = rows
+
+    def scalar_one_or_none(self) -> Any:
+        return self._rows[0] if self._rows else None
+
+    def scalars(self):
+        return self
+
+    def all(self) -> List[Any]:
+        return list(self._rows)
+
+
+class Policy:
+    _ids = 100
+
+    def __init__(self, organization_id: int, name: str, source: str = "local", id: Optional[int] = None):
+        self.id = id
+        self.organization_id = organization_id
+        self.name = name
+        self.source = source
+
+
+class Rule:
+    def __init__(self, policy_id: int, cluster_id: str, project_name: str, instance_name: str = "*"):
+        self.id = None
+        self.policy_id = policy_id
+        self.cluster_id = cluster_id
+        self.project_name = project_name
+        self.instance_name = instance_name
+        self.permissions = ["view"]
+
+
+class GrantSession:
+    """Answers `execute` by the table the statement reads and remembers every write.
+
+    The grant asks for one policy by (org, name) and one rule by (policy, cluster, project,
+    instance); the revoke asks for every rule by (cluster, project), then each touched policy
+    by id, its rules and its assignments. Bound values are read from the compiled statement.
+    """
+
+    def __init__(self, policies=(), rules=(), assignments=()):
+        self.policies = list(policies)
+        self.rules = list(rules)
+        self.assignments = list(assignments)
+        self.added: List[Any] = []
+        self.deleted: List[Any] = []
+        self.commits = 0
+        self.flushes = 0
+
+    @staticmethod
+    def _params(stmt) -> dict:
+        try:
+            return dict(stmt.compile().params)
+        except Exception:  # noqa: BLE001 - a statement with nothing bound
+            return {}
+
+    async def execute(self, stmt):
+        sql = str(stmt)
+        params = self._params(stmt)
+        values = list(params.values())
+        if "tenant_policy_assignments" in sql:
+            policy_id = next((v for v in values if isinstance(v, int)), None)
+            return _Rows([a for a in self.assignments if a.policy_id == policy_id])
+        if "tenant_policy_rules" in sql:
+            strings = [v for v in values if isinstance(v, str)]
+            ints = [v for v in values if isinstance(v, int)]
+            rows = [
+                r for r in self.rules
+                if (not ints or r.policy_id in ints)
+                and all(s in (r.cluster_id, r.project_name, r.instance_name) for s in strings)
+            ]
+            return _Rows(rows)
+        if "tenant_access_policies" in sql:
+            strings = [v for v in values if isinstance(v, str)]
+            ints = [v for v in values if isinstance(v, int)]
+            rows = [
+                p for p in self.policies
+                if (not strings or p.name in strings) and (not ints or p.id in ints or p.organization_id in ints)
+            ]
+            return _Rows(rows)
+        raise AssertionError(f"unexpected query: {sql[:100]}")
+
+    def add(self, obj: Any) -> None:
+        self.added.append(obj)
+        if isinstance(obj, __import__("app.models.db_models", fromlist=["TenantAccessPolicy"]).TenantAccessPolicy):
+            self.policies.append(obj)
+        else:
+            self.rules.append(obj)
+
+    async def flush(self) -> None:
+        self.flushes += 1
+        for obj in self.added:
+            if getattr(obj, "id", None) is None and hasattr(obj, "organization_id"):
+                Policy._ids += 1
+                obj.id = Policy._ids
+
+    async def delete(self, obj: Any) -> None:
+        self.deleted.append(obj)
+        if obj in self.rules:
+            self.rules.remove(obj)
+        if obj in self.policies:
+            self.policies.remove(obj)
+
+    async def commit(self) -> None:
+        self.commits += 1
+
+
+def partner(email: str = "p@example.test") -> AuthenticatedUser:
+    return AuthenticatedUser(user_id="qa-partner", email=email, groups=["role_partner"], roles=["role_partner"])
+
+
+def admin() -> AuthenticatedUser:
+    return AuthenticatedUser(user_id="qa-admin", email="a@example.test", groups=["role_admin"], roles=["role_admin"])
+
+
+class NoCache:
+    def __getattr__(self, name):
+        return lambda *a, **k: None
+
+
+def projects_client(service, monkeypatch, session, user=None) -> TestClient:
+    """The projects router with LXD, auth, scope and cache stubbed; `session` is the db."""
+    from app.core.database import get_db
+    from app.core.dependencies import check_read_only_mode
+    from app.core.org_scope import org_scope_dependency
+    from app.core.rbac import get_current_user
+    from app.routers import projects as projects_module
+    from app.services.lxd_service import get_lxd_service
+
+    monkeypatch.setattr(projects_module, "verify_cluster_access", lambda host: None)
+    monkeypatch.setattr(projects_module, "get_cache_manager", lambda: NoCache())
+    monkeypatch.setattr(projects_module.activity_logger, "log_activity", lambda **k: None, raising=False)
+
+    async def _db():
+        yield session
+
+    app = FastAPI()
+    app.include_router(projects_module.router)
+    app.dependency_overrides[get_lxd_service] = lambda: service
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[org_scope_dependency] = lambda: None
+    app.dependency_overrides[check_read_only_mode] = lambda: None
+    app.dependency_overrides[get_db] = _db
+    return TestClient(app, raise_server_exceptions=False)

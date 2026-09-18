@@ -30,11 +30,24 @@ from app.services.lxd_service import (
 )
 from app.services.lxd.exceptions import LXDProjectNotFoundError
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
+from app.core.api_key_capabilities import is_valid_project_name
+from app.core.database import get_db
+from app.core.rbac import Role, get_highest_role, resolve_roles
 from app.services.orcahub_webhook import schedule_orcahub_event
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, filter_projects_by_acl, project_is_visible
+from app.core.org_scope import (
+    filter_projects_by_acl,
+    get_scope_cache_key,
+    org_scope_dependency,
+    org_to_hold_project_grant,
+    project_is_visible,
+    verify_cluster_access,
+    visible_projects_for,
+)
+from app.services import project_grants
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
 from app.services.activity_logger import get_activity_logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -181,9 +194,13 @@ async def list_all_projects(
             if isinstance(result, ProjectListResponse):
                 if result.reachable:
                     answered += 1
-                # apply tenant ACL filtering per host
+                # apply tenant ACL filtering per host, then the Partner project bound. The
+                # cached body is already keyed per bound through get_scope_cache_key.
                 allowed_names = filter_projects_by_acl(result.host, [p.name for p in result.projects])
-                filtered = [p for p in result.projects if p.name in allowed_names]
+                filtered = [
+                    p for p in result.projects
+                    if p.name in allowed_names and project_is_visible(result.host, p.name)
+                ]
                 all_projects.append(ProjectListResponse(
                     host=result.host,
                     projects=filtered,
@@ -238,9 +255,9 @@ async def list_projects(
         
         projects = [ProjectInfo(**proj) for proj in projects_data]
         
-        # apply tenant ACL filtering
+        # apply tenant ACL filtering, then the Partner project bound
         allowed_names = filter_projects_by_acl(host, [p.name for p in projects])
-        projects = [p for p in projects if p.name in allowed_names]
+        projects = [p for p in projects if p.name in allowed_names and project_is_visible(host, p.name)]
         
         return ProjectListResponse(
             host=host,
@@ -314,6 +331,13 @@ async def get_project_usage(
     return response
 
 
+def _refuse_a_project_outside_the_bound(host: str, project_name: str) -> None:
+    """404, the usage route's choice: a 403 on a guessed name would confirm that another
+    organization has a project by that name on the shared cluster."""
+    if not project_is_visible(host, project_name) or not filter_projects_by_acl(host, [project_name]):
+        raise HTTPException(status_code=404, detail=f"Project '{project_name}' not found on {host}")
+
+
 @router.post(
     "",
     response_model=ProjectCreateResponse,
@@ -331,10 +355,32 @@ async def create_project(
     request: ProjectCreateRequest,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
-    _rbac: AuthenticatedUser = Depends(require_partner()),
+    user: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Create a new project on a specific LXD host."""
+    """Create a new project on a specific LXD host.
+
+    A Partner's project is recorded in their organization's managed policy right after LXD
+    creates it, so on a cluster shared with another organization the project is inside their
+    bound from the next request on. The rule can only ever name a project this request brought
+    into existence: LXD refuses a duplicate name before the grant runs.
+    """
     verify_cluster_access(request.host)
+    if not is_valid_project_name(request.name):
+        raise HTTPException(status_code=422, detail="Invalid project name")
+    grant_org: Optional[int] = None
+    if get_highest_role(resolve_roles(user)) == Role.PARTNER:
+        grant_org = await org_to_hold_project_grant(user.email, request.host, db)
+        if grant_org is None and visible_projects_for(request.host) is not None:
+            # Refused before LXD is touched: created first, the project would be one its
+            # creator can neither see nor delete.
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Your account is not a member of an organization bound to cluster "
+                    f"'{request.host}', so a project created there could not be shown to you"
+                ),
+            )
     try:
         # important: a project limit is a cap, not a reservation. LXD allows any limit and any
         # over-commit, so the only figure that makes a cap nonsensical is the hardware total.
@@ -364,7 +410,13 @@ async def create_project(
         )
         
         project = ProjectInfo(**project_data)
-        
+        message = f"Project '{request.name}' created successfully on {request.host}"
+
+        if grant_org is not None:
+            message += await project_grants.record_created_project(
+                db, organization_id=grant_org, cluster_id=request.host, project_name=request.name, created_by=user.email,
+            )
+
         # Invalidate project list caches so subsequent API calls return fresh data
         cache = get_cache_manager()
         cache.delete("api_responses", get_scope_cache_key("projects:list:all"))
@@ -404,7 +456,7 @@ async def create_project(
         get_cache_manager().invalidate_resource_cache("projects")
         return ProjectCreateResponse(
             success=True,
-            message=f"Project '{request.name}' created successfully on {request.host}",
+            message=message,
             project=project,
         )
         
@@ -465,6 +517,7 @@ async def update_project(
 ):
     """Update a project's description and resource limits."""
     verify_cluster_access(host)
+    _refuse_a_project_outside_the_bound(host, project_name)
     try:
         # Get current project to ensure it exists
         projects = await lxd_service.list_projects(host)
@@ -573,11 +626,14 @@ async def delete_project(
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
+    db: AsyncSession = Depends(get_db),
 ):
     """Delete a project from a specific LXD host."""
     verify_cluster_access(host)
+    _refuse_a_project_outside_the_bound(host, project_name)
     try:
         await lxd_service.delete_project(host, project_name)
+        revoke_note = await project_grants.forget_deleted_project(db, cluster_id=host, project_name=project_name)
 
         # Announce the lifecycle change to any subscribed add-on. Nothing emitted these events
         # until now, so the catalogue was a promise with no sender behind it.
@@ -615,7 +671,7 @@ async def delete_project(
         get_cache_manager().invalidate_resource_cache("projects")
         return {
             "success": True,
-            "message": f"Project '{project_name}' deleted successfully from {host}"
+            "message": f"Project '{project_name}' deleted successfully from {host}" + revoke_note
         }
         
     except LXDConnectionError as e:
