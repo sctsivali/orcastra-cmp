@@ -10,6 +10,7 @@ import { DetailField, DetailGrid, DetailSection } from "@/components/detail/deta
 import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { formatBytes, formatDateTime, formatLabel } from "@/lib/utils";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 // Neither sessions table had anything clickable, so a session id, the one value that correlates
 // a row with the console audit log, was unreachable from the UI entirely.
@@ -60,7 +61,7 @@ export function SessionDetailDialog({
       footer={
         isPartner ? (
           <Button asChild size="sm" variant="outline">
-            <IntentLink href={`/inventory/operations?q=${encodeURIComponent(record.instance_name ?? "")}`}>
+            <IntentLink href={inventoryLinks.operations({ q: record.instance_name, node: record.host })}>
               Manage in Operations
             </IntentLink>
           </Button>
@@ -75,7 +76,7 @@ export function SessionDetailDialog({
               label="Instance"
               value={
                 <TableLink
-                  href={`/inventory/instances?q=${encodeURIComponent(record.instance_name ?? "")}&project=${encodeURIComponent(record.project ?? "default")}&host=${encodeURIComponent(record.host ?? "")}`}
+                  href={inventoryLinks.instances({ q: record.instance_name, project: record.project ?? "default", host: record.host })}
                   title={`Open ${record.instance_name} in Instances`}
                 >
                   {record.instance_name}

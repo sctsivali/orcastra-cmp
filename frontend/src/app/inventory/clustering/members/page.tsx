@@ -44,6 +44,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 const MEMBERS = defineTable<any>()({
   searchPlaceholder: "Search members",
@@ -173,7 +174,7 @@ function ClusterMembersContent() {
         clusters.find((c: any) => clusterStatusMeta(c.status).reachable) ?? clusters[0];
       const firstNode = first.cluster_id;
       setNode(firstNode);
-      router.replace(`/inventory/clustering/members?node=${firstNode}`);
+      router.replace(inventoryLinks.members(firstNode));
     }
   }, [nodeParam, clusters, router]);
 
@@ -183,7 +184,7 @@ function ClusterMembersContent() {
     // previous one addresses nothing. Clamping alone would land page 3 of a long cluster on
     // the last page of a short one instead of at the top of it.
     resetPage();
-    router.replace(`/inventory/clustering/members?node=${value}`);
+    router.replace(inventoryLinks.members(value));
   };
 
   // Sorting

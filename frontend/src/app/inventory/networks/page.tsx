@@ -38,6 +38,15 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { PageReadError } from "@/components/ui/read-error-state";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+
+/** One key for a row and for the create dialog's report of what it made. */
+const networkRowKey = (n: { node?: string | null; project?: string | null; name: string }) =>
+  `${n.node ?? ""}/${n.project || "default"}/${n.name}`;
 
 const NETWORKS = defineTable<NetworkInfo>()({
   searchPlaceholder: "Search networks",
@@ -120,7 +129,7 @@ const NETWORKS = defineTable<NetworkInfo>()({
 });
 
 function NetworksContent() {
-  const { data, isLoading, refreshNow, dataUpdatedAt } = useNetworks();
+  const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useNetworks();
   const networks: NetworkInfo[] = useMemo(() => (data as any)?.networks || [], [data]);
 
   const { hasRole } = usePermissions();
@@ -168,6 +177,16 @@ function NetworksContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  const focus = useRowFocus({
+    list: "networks",
+    rows: networks,
+    orderedRows: sortedNetworks,
+    keyOf: networkRowKey,
+    pageSize,
+    setPage: setCurrentPage,
+    dataUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
 
   const totalPages = Math.ceil(sortedNetworks.length / pageSize);
   const paginatedNetworks = sortedNetworks.slice(
@@ -181,6 +200,20 @@ function NetworksContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Networks"
+        description="Manage hypervisor network configurations"
+        noun="networks"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (
@@ -223,6 +256,9 @@ function NetworksContent() {
           <TableToolbar filters={filters} noun="networks" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -253,23 +289,17 @@ function NetworksContent() {
                   }
                 />
               ) : (
-                paginatedNetworks.map((network: any, idx: number) => {
+                paginatedNetworks.map((network: any) => {
                   const rawIpv4 = network.config?.["ipv4.address"];
                   const ipv4 = !rawIpv4 || rawIpv4 === "none" ? null : rawIpv4;
                   const rawIpv6 = network.config?.["ipv6.address"];
                   const ipv6 = !rawIpv6 || rawIpv6 === "none" ? null : rawIpv6;
 
                   return (
-                    <TableRow
-                      key={`${network.node}-${network.project ?? ""}-${network.name}-${idx}`}
-                    >
+                    <TableRow key={networkRowKey(network)} {...focus.rowProps(networkRowKey(network))}>
                       <TableCell className="font-medium">
                         <TableLink
-                          href={`/inventory/networks/${encodeURIComponent(network.name)}?host=${encodeURIComponent(network.node)}${
-                            network.project && network.project !== "default"
-                              ? `&project=${encodeURIComponent(network.project)}`
-                              : ""
-                          }`}
+                          href={inventoryLinks.networkDetail(network.name, network.node, network.project)}
                         >
                           {network.name}
                         </TableLink>
@@ -351,8 +381,10 @@ function NetworksContent() {
         <NetworkCreateDialog
           open={createOpen}
           onOpenChange={setCreateOpen}
-          // the create already succeeded; a refresh that fails is the list's own error state
-          onSaved={() => {
+          // the create already succeeded; a refresh that fails is the list's own error state.
+          // The focus intent is raised BEFORE the refresh so the list that arrives is newer.
+          onSaved={(created) => {
+            requestRowFocus("networks", networkRowKey(created), created.name);
             void Promise.resolve(refreshNow()).catch(() => undefined);
           }}
         />
@@ -380,6 +412,7 @@ function networkSubject(network: NetworkInfo): UsedBySubject {
     kind: "networks",
     name: network.name,
     node: network.node,
+    project: network.project ?? undefined,
     description: network.description || undefined,
     usedBy: network.used_by ?? [],
     facts: [

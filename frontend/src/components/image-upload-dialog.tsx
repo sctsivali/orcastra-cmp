@@ -38,7 +38,8 @@ const TYPE_OPTIONS = [
 interface ImageUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onUploaded?: () => void;
+  /** The image as the cluster reports it once the import landed. */
+  onUploaded?: (image: { node: string; fingerprint: string | null; alias: string }) => void;
 }
 
 /** Derive a valid LXD image alias from a filename (strips common image extensions). */
@@ -141,9 +142,13 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
       // Trigger the import and poll until the image lands (or fails).
       setPhase("importing");
       await api.imageUploads.finalize(session_id);
+      let fingerprint: string | null = null;
       for (;;) {
         const s = await api.imageUploads.status(session_id);
-        if (s.status === "ready") break;
+        if (s.status === "ready") {
+          fingerprint = s.fingerprint;
+          break;
+        }
         if (s.status === "failed") {
           throw new Error(s.error || "Import failed on the cluster");
         }
@@ -156,7 +161,7 @@ export function ImageUploadDialog({ open, onOpenChange, onUploaded }: ImageUploa
         title: "Image uploaded",
         description: `"${alias}" is ready in the image store on ${node}.`,
       });
-      onUploaded?.();
+      onUploaded?.({ node, fingerprint, alias });
     } catch (e) {
       setPhase("error");
       setError(e instanceof Error ? e.message : String(e));

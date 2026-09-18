@@ -45,7 +45,14 @@ interface NetworkCreateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Called after a successful create, once the dialog has closed. */
-  onSaved?: () => void;
+  /** The network as it landed: the backend can resolve a create to another project. */
+  onSaved?: (created: CreatedNetwork) => void;
+}
+
+export interface CreatedNetwork {
+  node: string;
+  project: string;
+  name: string;
 }
 
 /**
@@ -74,9 +81,9 @@ export function NetworkCreateDialog({ open, onOpenChange, onSaved }: NetworkCrea
         </DialogHeader>
         <NetworkCreateBody
           onBusyChange={setBusy}
-          onDone={() => {
+          onDone={(created) => {
             onOpenChange(false);
-            onSaved?.();
+            onSaved?.(created);
           }}
           onCancel={() => handleOpenChange(false)}
         />
@@ -87,7 +94,7 @@ export function NetworkCreateDialog({ open, onOpenChange, onSaved }: NetworkCrea
 
 interface NetworkCreateBodyProps {
   onBusyChange: (busy: boolean) => void;
-  onDone: () => void;
+  onDone: (created: CreatedNetwork) => void;
   onCancel: () => void;
 }
 
@@ -195,7 +202,7 @@ function NetworkCreateBody({ onBusyChange, onDone, onCancel }: NetworkCreateBody
             ? `"${name}" created on ${node}.`
             : `"${name}" created on ${node} in project ${landed}.`,
       });
-      onDone();
+      onDone({ node, project: landed, name });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create network");
     } finally {

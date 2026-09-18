@@ -2,7 +2,7 @@
 
 import type { StorageVolumeInfo } from "@/types/api";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,14 @@ import {
   useUsedByDialog,
   type UsedBySubject,
 } from "@/components/used-by";
+import { PageReadError } from "@/components/ui/read-error-state";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+
+/** One key for a row and for the upload dialog's report of what it wrote. */
+const isoRowKey = (v: { node?: string | null; project?: string | null; pool?: string | null; name: string }) =>
+  `${v.node ?? ""}/${v.project || "default"}/${v.pool ?? ""}/${v.name}`;
 
 const ISOS = defineTable<any>()({
   searchPlaceholder: "Search ISO images",
@@ -92,7 +100,7 @@ const ISOS = defineTable<any>()({
   ] });
 
 function IsoImagesContent() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useStorageVolumes();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useStorageVolumes();
   const allVolumes = (data as any)?.volumes || [];
   // The ISO list is the volume list filtered, so a cluster the volume read lost is a
   // cluster whose ISOs are missing here too. Without this banner the page said "No ISO
@@ -118,6 +126,18 @@ function IsoImagesContent() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [uploadOpen, setUploadOpen] = useState(false);
+  // The upload dialog stays open on "Done." so the operator can read the outcome. The focus is
+  // raised when it closes, or the mark would play behind the dialog and be gone by the time
+  // the list is visible.
+  const uploaded = useRef<{ node: string; project: string; pool: string; name: string } | null>(null);
+  const closeUpload = (open: boolean) => {
+    setUploadOpen(open);
+    if (open || !uploaded.current) return;
+    const volume = uploaded.current;
+    uploaded.current = null;
+    requestRowFocus("iso-images", isoRowKey(volume), volume.name);
+    void refetch();
+  };
   const [deleteTarget, setDeleteTarget] = useState<StorageVolumeInfo | null>(null);
   // Held one render longer than deleteTarget so the dialog keeps its heading through Radix's
   // exit fade instead of blanking mid-sentence.
@@ -161,6 +181,16 @@ function IsoImagesContent() {
   );
 
   const sorted = useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
+  const focus = useRowFocus({
+    list: "iso-images",
+    rows: isos,
+    orderedRows: sorted,
+    keyOf: isoRowKey,
+    pageSize,
+    setPage: setCurrentPage,
+    dataUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
   const totalPages = Math.ceil(sorted.length / pageSize);
   const paginated = sorted.slice(
     (currentPage - 1) * pageSize,
@@ -252,6 +282,20 @@ function IsoImagesContent() {
 
   if (isLoading) return <LoadingLottiePage />;
 
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="ISO Images"
+        description="Custom ISO storage volumes that can be attached to VMs as boot media"
+        noun="ISO images"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
+
   return (
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
@@ -290,6 +334,9 @@ function IsoImagesContent() {
           <TableToolbar filters={filters} noun="ISO images" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -319,8 +366,8 @@ function IsoImagesContent() {
                   description={canUpload ? 'Use "Upload ISO" to add one.' : undefined}
                 />
               ) : (
-                paginated.map((v: any, idx: number) => (
-                  <TableRow key={`${v.node}-${v.pool}-${v.name}-${idx}`}>
+                paginated.map((v: any) => (
+                  <TableRow key={isoRowKey(v)} {...focus.rowProps(isoRowKey(v))}>
                     <TableCell className="font-medium">{v.name}</TableCell>
                     <TableCell>
                       {v.pool}
@@ -378,8 +425,11 @@ function IsoImagesContent() {
 
       <IsoUploadDialog
         open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        onUploaded={() => refetch()}
+        onOpenChange={closeUpload}
+        onUploaded={(volume) => {
+          uploaded.current = volume;
+          void refetch();
+        }}
       />
 
       <DestructiveConfirmDialog

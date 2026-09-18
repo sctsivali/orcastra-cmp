@@ -17,6 +17,7 @@ import { PanelSwitch } from "./panels/panel-switch";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { USAGE_PANEL_ID, type UsedBySubject } from "./types";
 import type { UsedByDialogState } from "./use-used-by-dialog";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 // One dialog for the whole used_by family, opened from either the "Used By" or the "Projects"
 // cell of six inventory tables.
@@ -121,7 +122,7 @@ function titleFor(subject: UsedBySubject): React.ReactNode {
   if (subject.kind === "networks" && subject.node) {
     return (
       <TableLink
-        href={`/inventory/networks/${encodeURIComponent(subject.name)}?host=${encodeURIComponent(subject.node)}`}
+        href={inventoryLinks.networkDetail(subject.name, subject.node, subject.project)}
         title={`Open the full detail page for ${subject.name}`}
       >
         {subject.name}

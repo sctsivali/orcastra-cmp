@@ -8,6 +8,7 @@ import { DetailField, DetailGrid, DetailSection } from "@/components/detail/deta
 import { KeyValueList } from "@/components/used-by/panels/config-panel";
 import { formatDateTime, formatLabel } from "@/lib/utils";
 import type { OperationInfo } from "@/types/api";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 // The operations table truncates the id to eight characters and appends an ellipsis, so the one
 // value an operator needs when correlating with cluster logs is the one they cannot copy. It
@@ -55,7 +56,7 @@ export function OperationDetailDialog({
               value={
                 instanceName && operation.node_name ? (
                   <TableLink
-                    href={`/inventory/instances?q=${encodeURIComponent(instanceName)}&project=${encodeURIComponent(operation.project || "default")}&host=${encodeURIComponent(operation.node_name)}`}
+                    href={inventoryLinks.instances({ q: instanceName, project: operation.project || "default", host: operation.node_name })}
                     title={`Open ${instanceName} in Instances`}
                   >
                     {instanceName}

@@ -8,6 +8,7 @@ import { TagBadge } from "@/components/tag-manager";
 import { InstanceResourcesSection } from "./instance-resources-section";
 import { formatDateTime, formatInstanceType } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 // Everything the row already knew and the old modal never showed: description, architecture,
 // project, timestamps, profiles, tags, the cluster member, and the image the instance came from.
@@ -52,7 +53,7 @@ export function InstanceOverviewTab({
               baseImage ? (
                 <TableLink
                   wrap
-                  href={`/inventory/images?q=${encodeURIComponent(baseImage)}`}
+                  href={inventoryLinks.images({ q: baseImage, node: instance.host })}
                   title="Open this image in Images"
                 >
                   {baseImage}
@@ -73,7 +74,7 @@ export function InstanceOverviewTab({
                   {instance.profiles.map((profile) => (
                     <TableLink
                       key={profile}
-                      href={`/inventory/profiles?q=${encodeURIComponent(profile)}`}
+                      href={inventoryLinks.profiles({ q: profile, node: instance.host })}
                       title={`Open ${profile} in Profiles`}
                     >
                       {profile}

@@ -11,6 +11,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { formatBytes, formatDateTime, formatInstanceType } from "@/lib/utils";
 import type { ImageInfo, VMInfo } from "@/types/api";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 // The images table had zero row interaction: no drill-down, no copy, no way to read a
 // fingerprint in full even though the fingerprint is the only thing that identifies an image.
@@ -124,7 +125,7 @@ export function ImageDetailDialog({
               {pagedInstances.map((instance) => (
                 <li key={`${instance.host}-${instance.name}`} className="flex items-center justify-between px-3 py-2">
                   <TableLink
-                    href={`/inventory/instances?q=${encodeURIComponent(instance.name)}&project=${encodeURIComponent(instance.project || "default")}&host=${encodeURIComponent(instance.host)}`}
+                    href={inventoryLinks.instances({ q: instance.name, project: instance.project || "default", host: instance.host })}
                     title={`Open ${instance.name} in Instances`}
                   >
                     {instance.name}

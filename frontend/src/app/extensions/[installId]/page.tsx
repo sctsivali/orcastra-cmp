@@ -26,6 +26,7 @@ import { useToast } from "@/hooks/use-toast";
 import { extensionsAPI } from "@/lib/extensions-api";
 import { Role } from "@/types/rbac";
 import type { ExtensionInstallResponse, WebhookSecretResponse } from "@/types/api";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 const PANELS = ["overview", "settings", "webhooks"] as const;
 type Panel = (typeof PANELS)[number];
@@ -262,7 +263,7 @@ function InstallDetail() {
               {row.granted_scope.map((grant) => (
                 <li key={String(grant.cluster_id)}>
                   <TableLink
-                    href={`/inventory/clusters?q=${encodeURIComponent(String(grant.cluster_id))}`}
+                    href={inventoryLinks.clusters({ q: String(grant.cluster_id) })}
                     className="font-mono text-sm"
                   >
                     {String(grant.cluster_id)}

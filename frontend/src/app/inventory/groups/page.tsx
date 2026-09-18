@@ -58,6 +58,9 @@ import { ReadOnlyBanner } from "@/components/read-only-banner";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 
 // filter-coverage: no project dimension here, and not for lack of a mechanism. A group's
 // permissions[].url values do carry ?project= when LXD scopes them, and projectsFromUsedBy
@@ -66,6 +69,9 @@ import { OverflowText } from "@/components/ui/overflow-text";
 // "default" for every row: a single-option control that the pinned-role rule would then render
 // unconditionally. That turns an invisible gap into a visible dead control. Revisit if
 // per-project group permissions ever appear in the wild.
+/** One key for a row and for the dialog's report of what it made. */
+const groupRowKey = (g: { node?: string | null; name: string }) => `${g.node ?? ""}/${g.name}`;
+
 const GROUPS = defineTable<any>()({
   searchPlaceholder: "Search groups",
   defaultSort: { field: "name", direction: "asc" },
@@ -145,6 +151,16 @@ function GroupsContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  const focus = useRowFocus({
+    list: "groups",
+    rows: groups,
+    orderedRows: sortedGroups,
+    keyOf: groupRowKey,
+    pageSize,
+    setPage: setCurrentPage,
+    dataUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
 
   // Pagination
   const totalPages = Math.ceil(sortedGroups.length / pageSize);
@@ -241,6 +257,9 @@ function GroupsContent() {
           <TableToolbar filters={filters} noun="groups" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           {groups.length === 0 ? (
             <div className="text-center py-12">
               <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -280,7 +299,7 @@ function GroupsContent() {
                   />
                 ) : (
                   paginatedGroups.map((group: any) => (
-                  <TableRow key={`${group.node}-${group.name}`}>
+                  <TableRow key={groupRowKey(group)} {...focus.rowProps(groupRowKey(group))}>
                     <TableCell className="font-medium">{group.name}</TableCell>
                     <TableCell className="max-w-xs">
                       {group.description ? (
@@ -363,6 +382,11 @@ function GroupsContent() {
       <CreateGroupDialog
         open={createDialogOpen}
         onOpenChange={setCreateDialogOpen}
+        onSaved={(created) => {
+          requestRowFocus("groups", groupRowKey(created), created.name);
+          // the create already succeeded; a refresh that fails is the list's own error state
+          void Promise.resolve(refreshNow()).catch(() => undefined);
+        }}
       />
 
       {/* Edit Group Dialog */}

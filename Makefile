@@ -288,6 +288,8 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-table-filters.mjs
 	@echo "$(COLOR_GREEN)Checking filter URL round trip...$(COLOR_RESET)"
 	@node scripts/checks/check-filter-url-roundtrip.mjs
+	@echo "$(COLOR_GREEN)Checking inventory links...$(COLOR_RESET)"
+	@node scripts/checks/check-inventory-links.mjs
 	@echo "$(COLOR_GREEN)Checking icon button names...$(COLOR_RESET)"
 	@node scripts/checks/check-icon-button-names.mjs
 	@echo "$(COLOR_GREEN)Checking stray JSX attributes...$(COLOR_RESET)"

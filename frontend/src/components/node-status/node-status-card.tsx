@@ -41,6 +41,7 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { clusterStatusMeta } from "@/lib/cluster-status";
 import { TagManager } from "@/components/tag-manager";
 import { toast } from "@/hooks/use-toast";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 interface NodeStatusCardProps {
   node: NodeStatus;
@@ -331,7 +332,7 @@ export function NodeStatusCard({ node, index, onViewDetails, onTagsUpdate }: Nod
               className="w-full gap-2"
               onClick={(e) => {
                 e.stopPropagation();
-                navigate(`/inventory/clustering/members?node=${node.name}`);
+                navigate(inventoryLinks.members(node.name));
               }}
             >
               <Users className="h-4 w-4" />

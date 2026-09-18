@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect, useCallback, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -55,6 +55,15 @@ import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import type { CertificateWarning, WarningInfo } from "@/types/api";
 import { SEVERITY_RANK } from "@/lib/sort";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { serialiseFacet } from "@/lib/filter-url";
+import {
+  WARNING_SEVERITY_ORDER,
+  warningClusterValue,
+  warningNodeValue,
+  warningSeverityValue,
+} from "@/lib/warning-facets";
+import { PageReadError } from "@/components/ui/read-error-state";
 
 const toTime = (v: string | null | undefined): number | null => {
   if (!v) return null;
@@ -69,6 +78,9 @@ const toTime = (v: string | null | undefined): number | null => {
 const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
   id: "all",
   searchPlaceholder: "Search warnings",
+  // The cluster member that raised the warning stays searchable; the Node facet below keys on
+  // the registered node instead, which is what every link into this page carries.
+  searchExtra: (w) => [w.location],
   defaultSort: { field: "severity", direction: "asc" },
   columns: [
     {
@@ -82,15 +94,18 @@ const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
     {
       field: "severity",
       label: "Severity",
-      sort: (w) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
-      facet: (w) => String(w.severity || "").toLowerCase(),
-      facetSpec: { primary: true, format: formatLabel, order: ["critical", "error", "high", "warning", "medium", "low", "info"] } },
+      sort: (w) => SEVERITY_RANK[warningSeverityValue(w.severity)] ?? 99,
+      facet: (w) => warningSeverityValue(w.severity),
+      facetSpec: { primary: true, format: formatLabel, order: [...WARNING_SEVERITY_ORDER] } },
     {
       field: "node",
       label: "Node",
-      sort: (w) => w.location || w.source_node || "",
-      // The node filter used to be settable only from ?node=, with no control on the page.
-      facet: (w) => w.location || w.source_node || "",
+      // important: the registered node, not `location`. On a clustered host `location` is the
+      // LXD member name (microcloud20), which nothing else in the console links by, so a link
+      // carrying the cluster id landed on "No warning matches the current filters." while
+      // the tile it came from counted five. The member is rendered as sub-text and searched.
+      sort: (w) => warningNodeValue(w),
+      facet: (w) => warningNodeValue(w),
       facetSpec: { role: "node", primary: true, emptyLabel: "(no node)" } },
     // note: real and populated, and until now rendered only inside the detail dialog.
     { field: "project", label: "Project", facet: (w) => w.project, facetSpec: { role: "project", emptyLabel: "(no project)" } },
@@ -112,9 +127,9 @@ const CERT_WARNINGS = defineTable<CertificateWarning>()({
     {
       field: "cluster",
       label: "Cluster",
-      sort: (w) => w.display_name || w.cluster_id || "",
-      search: (w) => w.display_name || w.cluster_id || "",
-      facet: (w) => w.display_name || w.cluster_id || "",
+      sort: (w) => warningClusterValue(w),
+      search: (w) => warningClusterValue(w),
+      facet: (w) => warningClusterValue(w),
       facetSpec: { role: "node",} },
     {
       field: "status",
@@ -125,8 +140,8 @@ const CERT_WARNINGS = defineTable<CertificateWarning>()({
     {
       field: "severity",
       label: "Severity",
-      sort: (w) => SEVERITY_RANK[String(w.severity || "").toLowerCase()] ?? 99,
-      facet: (w) => String(w.severity || "").toLowerCase(),
+      sort: (w) => SEVERITY_RANK[warningSeverityValue(w.severity)] ?? 99,
+      facet: (w) => warningSeverityValue(w.severity),
       facetSpec: { primary: true, format: formatLabel } },
     { field: "days", label: "Days Until Expiry", sort: (w) => w.days_until_expiry, filter: fromSort("number", { unit: "days" }) },
     { field: "expires", label: "Expires At", sort: (w) => toTime(w.expires_at), filter: fromSort("date", { horizon: "future" }) },
@@ -146,16 +161,16 @@ const NODE_WARNINGS = defineTable<CertificateWarning>()({
     {
       field: "cluster",
       label: "Cluster",
-      sort: (w) => w.display_name || w.cluster_id || "",
-      search: (w) => w.display_name || w.cluster_id || "",
-      facet: (w) => w.display_name || w.cluster_id || "",
+      sort: (w) => warningClusterValue(w),
+      search: (w) => warningClusterValue(w),
+      facet: (w) => warningClusterValue(w),
       facetSpec: { role: "node",} },
     { field: "endpoint", label: "Endpoint", sort: (w) => w.endpoint || "", search: (w) => w.endpoint || "", filter: fromSort("text") },
     {
       field: "severity",
       label: "Severity",
-      sort: (w) => SEVERITY_RANK[String(w.severity || "critical").toLowerCase()] ?? 99,
-      facet: (w) => String(w.severity || "critical").toLowerCase(),
+      sort: (w) => SEVERITY_RANK[warningSeverityValue(w.severity || "critical")] ?? 99,
+      facet: (w) => warningSeverityValue(w.severity || "critical"),
       facetSpec: { primary: true, format: formatLabel } },
     // note: `message` is what CertificateWarning actually carries. The columns here used to
     // read `error` and `checked_at`, which the model has never had, so every row rendered the
@@ -166,9 +181,17 @@ const NODE_WARNINGS = defineTable<CertificateWarning>()({
 
 function WarningsContent() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { data, isLoading, refreshNow, dataUpdatedAt } = useWarnings();
-  const { data: systemWarnings, isLoading: isLoadingSystem, refreshNow: refreshSystemWarnings } = useSystemWarnings();
+  const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useWarnings();
+  const {
+    data: systemWarnings,
+    isLoading: isLoadingSystem,
+    isError: isSystemError,
+    error: systemError,
+    refetch: refetchSystem,
+    refreshNow: refreshSystemWarnings,
+  } = useSystemWarnings();
   const allWarnings = useMemo(() => (data as any)?.warnings || [], [data]);
   // Clusters that never answered: their warnings are absent from the list, so warn rather
   // than showing a shorter list with nothing to explain it.
@@ -178,21 +201,26 @@ function WarningsContent() {
   const certWarnings = useMemo(() => systemWarnings?.certificate_warnings || [], [systemWarnings]);
   const nodeWarnings = useMemo(() => systemWarnings?.node_warnings || [], [systemWarnings]);
   
-  // Active tab - read from URL params
-  const initialTab = searchParams.get("tab") || "all";
-  const [activeTab, setActiveTab] = useState(initialTab);
-  
-  // Get severity and node filter from URL
-  
-  // Only the tab is mirrored here now. Severity and node moved into the per-tab filter
-  // instances, where the URL is the single store rather than a copy of one.
-  useEffect(() => {
-    setActiveTab(searchParams.get("tab") || "all");
-  }, [searchParams]);
+  // important: the tab is URL state, read on every render and written on change. It used to be
+  // a useState re-seeded from ?tab= on every URL change while nothing ever wrote ?tab=, so a
+  // facet toggle on the certificates tab (a router.replace) bounced the operator back to the
+  // platform tab. Severity and node live in the per-tab filter instances, same store.
+  const activeTab = searchParams.get("tab") || "all";
+  const setActiveTab = useCallback(
+    (value: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (value === "all") params.delete("tab");
+      else params.set("tab", value);
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [searchParams, router, pathname],
+  );
 
   // Bare ?severity= and ?node= predate the tabs being namespaced and are an external
   // contract, so they are read forever and translated once into the platform tab's keys,
   // then removed so the seed cannot reassert itself when the operator clears the control.
+  // Internal links come through lib/inventory-links.ts and never carry these.
   useEffect(() => {
     const legacySeverity = searchParams.get("severity");
     const legacyNode = searchParams.get("node");
@@ -201,12 +229,12 @@ function WarningsContent() {
     params.delete("severity");
     params.delete("node");
     if (legacySeverity && legacySeverity !== "all") {
-      params.set("all.severity", legacySeverity.toLowerCase());
+      params.set("all.severity", serialiseFacet([legacySeverity.toLowerCase()]));
     }
-    if (legacyNode) params.set("all.node", legacyNode);
+    if (legacyNode) params.set("all.node", serialiseFacet([legacyNode]));
     const query = params.toString();
-    router.replace(query ? `/inventory/warnings?${query}` : "/inventory/warnings", { scroll: false });
-  }, [searchParams, router]);
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [searchParams, router, pathname]);
 
 
   // A pinned role is exempt from the two-value threshold, so only availableFields can drop it.
@@ -238,7 +266,7 @@ function WarningsContent() {
     availableFields: gate(
       PLATFORM_WARNINGS.facetFields,
       "node",
-      (allWarnings as any[]).some((w) => w.location || w.source_node),
+      (allWarnings as any[]).some((w) => warningNodeValue(w)),
     ),
   });
   const certFilters = useTableFilters(CERT_WARNINGS, certWarnings as any[], {
@@ -326,6 +354,23 @@ function WarningsContent() {
 
   if (isLoading || isLoadingSystem) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Either feed failing with nothing cached is the whole
+  // page failing: the three tabs cannot honestly say "no warnings" about a read that did not
+  // return.
+  if ((isError && !data) || (isSystemError && !systemWarnings)) {
+    return (
+      <PageReadError
+        title="Warnings"
+        noun="warnings"
+        error={isError && !data ? error : systemError}
+        onRetry={() => {
+          void refetch();
+          void refetchSystem();
+        }}
+      />
+    );
   }
   
   // important: awaited, not fire-and-forget. The previous `void Promise.all(...)`
@@ -499,10 +544,15 @@ function WarningsContent() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {warning.location || warning.source_node ? (
-                        <span className="font-medium">{warning.location || warning.source_node}</span>
+                      {warningNodeValue(warning) ? (
+                        <>
+                          <span className="font-medium">{warningNodeValue(warning)}</span>
+                          {warning.location && warning.location !== warning.source_node && (
+                            <TableSubText>{warning.location}</TableSubText>
+                          )}
+                        </>
                       ) : (
-                        <TableEmptyValue label="No location" />
+                        <TableEmptyValue label="No node" />
                       )}
                     </TableCell>
                     <TableCell>
@@ -634,7 +684,7 @@ function WarningsContent() {
                         <TableCell className="whitespace-nowrap">{formatDateTime(warning.expires_at)}</TableCell>
                         <TableCell>
                           <Button asChild size="sm">
-                            <IntentLink href={`/inventory/clusters/certificates?q=${encodeURIComponent(warning.cluster_id)}`}>
+                            <IntentLink href={inventoryLinks.certificates({ q: warning.cluster_id })}>
                               Renew
                             </IntentLink>
                           </Button>

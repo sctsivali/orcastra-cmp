@@ -4,6 +4,8 @@
 
 import {
   IPAMListResponse,
+  KeyCreateRequest,
+  KeyInfo,
   NetworkACLDetail,
   ProfileCreateRequest,
   ProfileDetail,
@@ -1752,8 +1754,10 @@ export const myKeysAPI = {
     return fetchRead(url, opts);
   },
 
-  create: async (request: any) => {
-    return fetchAPI("/my-keys", {
+  // The backend answers with the KeyInfo it will list (routers/my_keys.py `response_model`),
+  // which is what the list uses to bring the new row into view.
+  create: async (request: KeyCreateRequest): Promise<KeyInfo> => {
+    return fetchAPI<KeyInfo>("/my-keys", {
       method: "POST",
       body: JSON.stringify(request),
     });

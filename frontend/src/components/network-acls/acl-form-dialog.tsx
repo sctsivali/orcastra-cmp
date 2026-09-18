@@ -58,12 +58,20 @@ import {
 
 export type { AclRule } from "./acl-rules";
 
+export interface SavedAcl {
+  node: string;
+  project: string;
+  name: string;
+  created: boolean;
+}
+
 interface AclFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Editing an existing ACL, or undefined to create one. */
   existing?: NetworkACLInfo;
-  onSaved?: () => void;
+  /** What was written, and whether it is new: only a create asks the list to focus it. */
+  onSaved?: (saved: SavedAcl) => void;
 }
 
 export function AclFormDialog({
@@ -222,7 +230,12 @@ export function AclFormDialog({
         description: `"${payload.name}" on ${host}.`,
       });
       onOpenChange(false);
-      onSaved?.();
+      onSaved?.({
+        node: host,
+        project: isEdit ? existing!.project || "default" : project,
+        name: payload.name,
+        created: !isEdit,
+      });
     } catch (e) {
       if (e instanceof APIError && e.status === 412) {
         // Someone saved this ACL after it was read. The form keeps the operator's edits on

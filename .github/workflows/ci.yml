@@ -143,6 +143,12 @@ jobs:
       # is literally the empty sentinel.
       - name: Filter URL round trip
         run: node scripts/checks/check-filter-url-roundtrip.mjs .
+      # A link into a filtered list is built by one registry, whose keys are proven against
+      # the target page's table definition. A hand-written href spelled the key for the wrong
+      # table or carried the display name where the facet compares the id, and landed on
+      # "No X matches the current filters" above a list that had the rows.
+      - name: Inventory links
+        run: node scripts/checks/check-inventory-links.mjs .
       # A button holding nothing but an icon is announced as a bare "button" unless the
       # element names itself. A Radix Tooltip does not do it: it contributes
       # aria-describedby, which is a description. Measured live before this check existed,

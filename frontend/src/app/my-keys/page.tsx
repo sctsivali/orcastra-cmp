@@ -75,6 +75,9 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 
 const MY_KEYS = defineTable<KeyInfo>()({
   searchPlaceholder: "Search by name, project, or node",
@@ -176,6 +179,22 @@ function MyKeysContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  // note: the tabs are a filter too. A key created while the Expired tab is showing is hidden
+  // by the tab, so "Show it" leaves the tab as well as clearing the toolbar.
+  const showAllKeys = useCallback(() => {
+    filters.clearAll();
+    if (activeTab !== "active") handleTabChange("active");
+  }, [filters, activeTab, handleTabChange]);
+  const focus = useRowFocus({
+    list: "my-keys",
+    rows: keys,
+    orderedRows: sortedKeys,
+    keyOf: (k: KeyInfo) => k.id,
+    pageSize,
+    setPage,
+    dataUpdatedAt,
+    clearFilters: showAllKeys,
+  });
 
   // Clamped on read rather than corrected in an effect. Deleting the last key on the final page
   // shrinks the list under the operator, and an effect would fire after a wrong frame painted.
@@ -200,11 +219,12 @@ function MyKeysContent() {
   // Generate key mutation
   const createMutation = useMutation({
     mutationFn: (request: KeyCreateRequest) => api.myKeys.create(request),
-    onSuccess: () => {
+    onSuccess: (created) => {
       toast({
         title: "Success",
         description: "Key generated successfully" });
       setCreateDialogOpen(false);
+      requestRowFocus("my-keys", created.id, created.name);
       queryClient.invalidateQueries({ queryKey: ["my-keys"] });
       refetch();
     },
@@ -365,6 +385,9 @@ function MyKeysContent() {
           <TableToolbar filters={filters} noun="keys" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           {/* note: gate on the rendered rows, not on the whole key set. Filtering, searching or
               the Expired tab can empty the table while `keys` is still populated, and gating on
               `keys.length` rendered a headers-only table with no message at all. The copy keys
@@ -398,7 +421,7 @@ function MyKeysContent() {
               </TableHeader>
               <TableBody>
                 {pagedKeys.map((key: KeyInfo) => (
-                  <TableRow key={key.id}>
+                  <TableRow key={key.id} {...focus.rowProps(key.id)}>
                     <TableCell className="font-medium">{key.name}</TableCell>
                     <TableCell>
                       {key.node}

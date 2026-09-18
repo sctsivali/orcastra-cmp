@@ -32,6 +32,7 @@ import {
   PendingCreate,
   getPendingSnapshot,
   removePendingCreate,
+  resolvePendingCreate,
   subscribePending,
   updatePendingCreate,
 } from "@/lib/pending-creates";
@@ -98,13 +99,16 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     // before its DHCP lease lands, so its IPs are briefly empty; in that case we
     // re-fetch a few times (bounded and event-triggered, not a return to polling)
     // until the address appears or we give up.
+    // important: with the project. Two projects can each hold an instance called "test", and a
+    // GET without one answers whichever the backend finds first.
     const fetchAndUpsert = async (
       host: string,
       name: string,
+      project?: string,
       ipRetries = 6,
-    ) => {
+    ): Promise<boolean> => {
       try {
-        const vm: any = await api.instances.get(name, host);
+        const vm: any = await api.instances.get(name, host, project);
         upsertInstance(vm);
         const needsIp =
           vm.status === "Running" &&
@@ -112,19 +116,40 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
         if (needsIp && ipRetries > 0) {
           setTimeout(() => {
             // Only keep retrying while the row is still present.
-            void fetchAndUpsert(host, name, ipRetries - 1);
+            void fetchAndUpsert(host, name, project, ipRetries - 1);
           }, 4000);
         }
+        return true;
       } catch {
-        // Instance gone or a transient race, so ignore.
+        // Instance gone, or a transient race. The list never polls in realtime mode, so a
+        // refetch is the one thing that can still carry the row in.
+        void queryClient.invalidateQueries({ queryKey: ["instances"] });
+        return false;
       }
     };
 
-    const dropPending = (host: string, name: string) => {
-      const p = getPendingSnapshot().find(
-        (x) => x.host === host && x.name === name,
+    // The placeholder a frame is about. A frame that names its project matches on it too; a
+    // frame without one (older daemons) matches on host and name as before.
+    const findPending = (host: string, name: string, project?: string | null) =>
+      getPendingSnapshot().find(
+        (x) =>
+          x.host === host &&
+          x.name === name &&
+          (!project || (x.project || "default") === project),
       );
+
+    const dropPending = (host: string, name: string, project?: string | null) => {
+      const p = findPending(host, name, project);
       if (p) removePendingCreate(p.id);
+    };
+
+    // A placeholder retires only once the real row is in the cache. It used to be dropped in a
+    // `finally`, so a GET that failed removed the row and upserted nothing, on a page that does
+    // not poll: the create had succeeded and the list showed neither.
+    const settle = (host: string, name: string, project: string | null | undefined, ok: boolean) => {
+      if (!ok) return;
+      const p = findPending(host, name, project);
+      if (p) resolvePendingCreate(p.id);
     };
 
     const handleOperation = (host: string, msg: any) => {
@@ -134,15 +159,17 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
           ? [msg.instance]
           : [];
       if (names.length === 0) return;
+      const project: string | undefined = msg.project || undefined;
       for (const p of getPendingSnapshot()) {
         if (p.host !== host || !names.includes(p.name)) continue;
+        if (project && (p.project || "default") !== project) continue;
         const code: number | undefined =
           typeof msg.status_code === "number" ? msg.status_code : undefined;
         if (code !== undefined && code >= STATUS_SUCCESS) {
           if (code === STATUS_SUCCESS) {
-            // Created: pull the real row in, then drop the placeholder.
-            void fetchAndUpsert(host, p.name).finally(() =>
-              dropPending(host, p.name),
+            // Created: pull the real row in, then retire the placeholder into a focused row.
+            void fetchAndUpsert(host, p.name, p.project).then((ok) =>
+              settle(host, p.name, p.project, ok),
             );
           } else {
             const reason = msg.err || "Creation failed";
@@ -191,7 +218,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       const action: string = msg.action || "";
       if (action === "instance-deleted") {
         removeInstance(host, name, msg.project);
-        dropPending(host, name);
+        dropPending(host, name, msg.project);
         return;
       }
       if (action === "instance-renamed") {
@@ -200,7 +227,8 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
         return;
       }
       // created / started / stopped / restarted / updated / paused / resumed …
-      void fetchAndUpsert(host, name).finally(() => dropPending(host, name));
+      const project: string | undefined = msg.project || undefined;
+      void fetchAndUpsert(host, name, project).then((ok) => settle(host, name, project, ok));
     };
 
     const handleMessage = (host: string, raw: string) => {

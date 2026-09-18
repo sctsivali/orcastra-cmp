@@ -29,6 +29,8 @@ import {
   subnetText,
 } from "@/components/ipam/allocation-labels";
 import type { IPAMAllocation } from "@/types/api";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { PageReadError } from "@/components/ui/read-error-state";
 
 /**
  * The IPAM table: what is sortable, searchable and filterable.
@@ -104,7 +106,7 @@ const IPAM = defineTable<IPAMAllocation>()({
 });
 
 function IPAMContent() {
-  const { data, isLoading, refreshNow, dataUpdatedAt } = useIPAM();
+  const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useIPAM();
   const allocations: IPAMAllocation[] = data?.allocations ?? [];
 
   // Nodes the fan-out could not reach, and nodes that answered but whose instances or
@@ -136,6 +138,20 @@ function IPAMContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="IPAM"
+        description="Every address LXD has handed out or reserved, with whether it was pinned on the device, for reconciling against your IPAM catalogue."
+        noun="IP allocations"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (
@@ -204,7 +220,7 @@ function IPAMContent() {
                       {alloc.network ? (
                         <>
                           <TableLink
-                            href={`/inventory/networks/${encodeURIComponent(alloc.network)}?host=${encodeURIComponent(alloc.node)}&project=${encodeURIComponent(alloc.network_project || alloc.project || "default")}`}
+                            href={inventoryLinks.networkDetail(alloc.network, alloc.node, alloc.network_project || alloc.project)}
                             title={`Open the detail page for ${alloc.network}`}
                           >
                             {alloc.network}
@@ -235,7 +251,7 @@ function IPAMContent() {
                     <TableCell className="font-medium">
                       {alloc.type === "instance" && alloc.used_by ? (
                         <TableLink
-                          href={`/inventory/instances?q=${encodeURIComponent(alloc.used_by)}&project=${encodeURIComponent(alloc.project || "default")}&host=${encodeURIComponent(alloc.node)}`}
+                          href={inventoryLinks.instances({ q: alloc.used_by, project: alloc.project || "default", host: alloc.node })}
                           title={`Open ${alloc.used_by} in Instances`}
                         >
                           {alloc.used_by}

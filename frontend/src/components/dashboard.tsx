@@ -70,6 +70,11 @@ import { useConsoleStore } from "@/lib/console-store";
 import { VMInfo, ProjectListResponse, ProjectInfo } from "@/types";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
 import { OverflowText } from "@/components/ui/overflow-text";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { severityBucket } from "@/lib/warning-facets";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { projectRowKey } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 
 interface ProjectsSectionProps {
   projectsData: ProjectListResponse[] | undefined;
@@ -79,11 +84,15 @@ interface ProjectsSectionProps {
   vmsData: VMInfo[];
   refetch: () => void;
   lastUpdatedAt: number | null;
+  /** The projects query's dataUpdatedAt, what the post-create focus trusts. */
+  projectsUpdatedAt: number;
 }
 
 interface ProjectCardProps {
   project: ProjectInfo;
   projectKey: string;
+  /** From useRowFocus: the row key and, briefly after a create, the mark. */
+  rowProps: { "data-row-key": string; "data-row-focus"?: "true" | "false" };
   instanceCount: number;
   isExpanded: boolean;
   instances: VMInfo[];
@@ -523,7 +532,7 @@ function formatQuota(usedBytes: number, limitBytes: number): { value: string; un
 // in-card pager uses, so the two compact pagers do not disagree about what a page is.
 const INSTANCE_PAGE_SIZE = 5;
 
-function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances, stats, toggleProject, instancePage, onInstancePageChange, refetch, isReadOnly = false }: ProjectCardProps) {
+function ProjectCard({ project, projectKey, rowProps, instanceCount, isExpanded, instances, stats, toggleProject, instancePage, onInstancePageChange, refetch, isReadOnly = false }: ProjectCardProps) {
   const deleteProject = useDeleteProject();
   const updateProject = useUpdateProject();
   const updateProjectTags = useUpdateProjectTags();
@@ -779,7 +788,11 @@ function ProjectCard({ project, projectKey, instanceCount, isExpanded, instances
   );
 
   return (
-    <Card data-slot="project-card" className="hover:border-primary/50 transition-colors">
+    <Card
+      data-slot="project-card"
+      className="hover:border-primary/50 transition-colors data-[row-focus=true]:border-primary data-[row-focus=true]:bg-primary/10 data-[row-focus]:duration-700 motion-reduce:data-[row-focus]:transition-none"
+      {...rowProps}
+    >
       <CardHeader className="pb-3 px-3 md:px-6">
         <div className="flex flex-col sm:flex-row items-start sm:justify-between gap-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -1202,7 +1215,7 @@ const PROJECT_SORT_OPTIONS: readonly { value: ProjectSortField; label: string }[
   { value: "instances", label: PROJECTS.byField.instances.label },
 ];
 
-function ProjectsSection({ projectsData, projectsLoading, projectsError, vmsData, refetch, lastUpdatedAt }: ProjectsSectionProps) {
+function ProjectsSection({ projectsData, projectsLoading, projectsError, vmsData, refetch, lastUpdatedAt, projectsUpdatedAt }: ProjectsSectionProps) {
   const lastUpdated = useRelativeTime(lastUpdatedAt);
   const [expandedProjects, setExpandedProjects] = React.useState<Set<string>>(new Set());
   // important: the page inside each expanded card lives here, beside expandedProjects, rather
@@ -1389,6 +1402,17 @@ function ProjectsSection({ projectsData, projectsLoading, projectsError, vmsData
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  const projectKeyOf = React.useCallback((p: ProjectInfo) => projectRowKey(p.host, p.name), []);
+  const focus = useRowFocus({
+    list: "projects",
+    rows: allProjects,
+    orderedRows: sortedProjects,
+    keyOf: projectKeyOf,
+    pageSize,
+    setPage,
+    dataUpdatedAt: projectsUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
 
   // important: clamped on read, never corrected in an effect. useAllProjects polls, and an effect
   // keyed on the row count would snap an operator back a page mid-task on any refresh that shrank
@@ -1458,6 +1482,9 @@ function ProjectsSection({ projectsData, projectsLoading, projectsError, vmsData
           name as short as "Ryo-Labs" broke mid-word. The card needs roughly 340px to hold its own
           header. At 1280 a three-up card is 309px, which clears it, so the widest band is
           unchanged. */}
+      {focus.hidden && (
+        <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
         {projectsLoading ? (
           <div className="col-span-full flex justify-center py-8">
@@ -1466,7 +1493,7 @@ function ProjectsSection({ projectsData, projectsLoading, projectsError, vmsData
         ) : (
           <>
             {visibleProjects.map((project) => {
-                  const projectKey = `${project.host}:${project.name}`;
+                  const projectKey = projectRowKey(project.host, project.name);
                   const instanceCount = projectIndex.get(projectKey)?.count ?? 0;
                   const isExpanded = expandedProjects.has(projectKey);
                   const instances = getProjectInstances(project.host, project.name);
@@ -1477,6 +1504,7 @@ function ProjectsSection({ projectsData, projectsLoading, projectsError, vmsData
                       key={projectKey}
                       project={project}
                       projectKey={projectKey}
+                      rowProps={focus.rowProps(projectKey)}
                       instanceCount={instanceCount}
                       isExpanded={isExpanded}
                       instances={instances}
@@ -1574,11 +1602,9 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
     
     actualWarnings.forEach((w: any) => {
       result.total++;
-      const severity = (w.severity || '').toLowerCase();
-      if (severity === 'critical' || severity === 'error') result.critical++;
-      else if (severity === 'high') result.high++;
-      else if (severity === 'warning' || severity === 'medium') result.warning++;
-      else result.info++;
+      // The same buckets the tile links open, so a tile's number is the count the list shows.
+      const bucket = severityBucket(w.severity);
+      if (bucket) result[bucket]++;
     });
     
     certWarnings.forEach((w: any) => {
@@ -1625,7 +1651,7 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {/* Critical */}
           <Link 
-            href="/inventory/warnings?severity=critical" 
+            href={inventoryLinks.warnings({ severity: "critical" })}
             className="flex items-center gap-3 p-3 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
@@ -1639,7 +1665,7 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
 
           {/* Major/High */}
           <Link 
-            href="/inventory/warnings?severity=high" 
+            href={inventoryLinks.warnings({ severity: "high" })}
             className="flex items-center gap-3 p-3 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
@@ -1653,7 +1679,7 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
 
           {/* Warning */}
           <Link 
-            href="/inventory/warnings?severity=warning" 
+            href={inventoryLinks.warnings({ severity: "warning" })}
             className="flex items-center gap-3 p-3 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
@@ -1667,7 +1693,7 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
 
           {/* Info */}
           <Link 
-            href="/inventory/warnings?severity=low" 
+            href={inventoryLinks.warnings({ severity: "info" })}
             className="flex items-center gap-3 p-3 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
           >
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
@@ -1698,7 +1724,7 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
           {/* Inactive Nodes */}
           {counts.inactiveNodes > 0 && (
             <Link 
-              href="/inventory/warnings?tab=nodes"
+              href={inventoryLinks.warnings({ tab: "nodes" })}
               className="flex items-center gap-3 p-3 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
             >
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">
@@ -1718,7 +1744,7 @@ function AlarmStatistics({ prefetchedWarnings, prefetchedSystemWarnings }: { pre
 
 export function Dashboard() {
   const { data: vmsData, isLoading: vmsLoading, refetch, dataUpdatedAt } = useInstances();
-  const { data: projectsData, isLoading: projectsLoading, error: projectsError } = useAllProjects();
+  const { data: projectsData, isLoading: projectsLoading, error: projectsError, dataUpdatedAt: projectsUpdatedAt } = useAllProjects();
   const { data: clustersData, isLoading: clustersLoading } = useClusters();
   const queryClient = useQueryClient();
 
@@ -1801,6 +1827,7 @@ export function Dashboard() {
         vmsData={vmsData?.vms || []}
         refetch={refetch}
         lastUpdatedAt={dataUpdatedAt}
+        projectsUpdatedAt={projectsUpdatedAt}
       />
         </React.Suspense>
     </div>

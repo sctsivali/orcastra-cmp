@@ -25,6 +25,7 @@ import { useCreateProject } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { toast } from "@/hooks/use-toast";
+import { projectRowKey, requestRowFocus } from "@/lib/row-focus";
 
 const projectCreateSchema = z.object({
   name: z
@@ -230,6 +231,8 @@ export function ProjectCreateForm() {
         variant: "success",
       });
 
+      // The overview grid brings the new card into view once its next fetch holds it.
+      requestRowFocus("projects", projectRowKey(data.host, data.name), data.name);
       navigate("/inventory");
     } catch (error) {
       // Check if error is due to read-only mode

@@ -32,6 +32,7 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { PageReadError } from "@/components/ui/read-error-state";
 
 interface VolumeInfo {
   name: string;
@@ -124,7 +125,7 @@ const VOLUMES = defineTable<VolumeInfo>()({
 });
 
 function StorageVolumesContent() {
-  const { data, isLoading, refreshNow, dataUpdatedAt } = useStorageVolumes();
+  const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useStorageVolumes();
   const volumes: VolumeInfo[] = useMemo(() => (data as any)?.volumes || [], [data]);
 
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
@@ -186,6 +187,20 @@ function StorageVolumesContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Storage Volumes"
+        description="Manage hypervisor storage volumes"
+        noun="storage volumes"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (

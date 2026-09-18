@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { formatLabel } from "@/lib/utils";
 import type { LxdReference } from "@/lib/used-by";
+import { inventoryLinks, type NodeSearchLink } from "@/lib/inventory-links";
 
 // Display vocabulary for the resource kinds an LXD used_by reference can name.
 //
@@ -31,20 +32,25 @@ export interface KindDescriptor {
   href: ((reference: LxdReference, node?: string) => string) | null;
 }
 
-const q = (value: string) => encodeURIComponent(value);
-
-/** A filtered list view. Honest about being a search preset rather than a record link. */
-function searchOn(path: string) {
-  return (reference: LxdReference) => `${path}?q=${q(reference.name ?? reference.raw)}`;
+/**
+ * A filtered list view. Honest about being a search preset rather than a record link.
+ *
+ * note: the node travels too. A profile named `default` exists on every cluster, and the
+ * dialog knows which cluster the used_by list came from, so the list opens narrowed to it.
+ */
+function searchOn(target: (link: NodeSearchLink) => string) {
+  return (reference: LxdReference, node?: string) =>
+    target({ q: reference.name ?? reference.raw, node });
 }
 
 // The instances table facets on project and host, so send all three coordinates rather than a
 // bare search that can land on an empty list.
 function instanceHref(reference: LxdReference, node?: string): string {
-  const params = new URLSearchParams({ q: reference.instance ?? reference.name ?? reference.raw });
-  if (reference.project) params.set("project", reference.project);
-  if (node) params.set("host", node);
-  return `/inventory/instances?${params.toString()}`;
+  return inventoryLinks.instances({
+    q: reference.instance ?? reference.name ?? reference.raw,
+    project: reference.project,
+    host: node,
+  });
 }
 
 // important: every href below points at a route that exists today. Do not add an entry for a
@@ -52,23 +58,25 @@ function instanceHref(reference: LxdReference, node?: string): string {
 // and `projects` is deliberately absent because there is no /inventory/projects route.
 const KINDS: Record<string, KindDescriptor> = {
   instances: { label: "Instance", icon: Box, href: instanceHref },
-  profiles: { label: "Profile", icon: SlidersHorizontal, href: searchOn("/inventory/profiles") },
+  profiles: { label: "Profile", icon: SlidersHorizontal, href: searchOn(inventoryLinks.profiles) },
   networks: {
     label: "Network",
     icon: Network,
     // The one true detail route in the app. It renders "Missing host parameter" without a
     // host, and a reference carries none, so it takes the node the used_by list came from.
+    // The project travels with it: without one the page reads the default project and a
+    // network held by another project fails to load.
     href: (reference, node) =>
       node
-        ? `/inventory/networks/${q(reference.name ?? "")}?host=${q(node)}`
-        : `/inventory/networks`,
+        ? inventoryLinks.networkDetail(reference.name ?? "", node, reference.project)
+        : "/inventory/networks",
   },
-  "network-acls": { label: "Network ACL", icon: Shield, href: searchOn("/inventory/network-acls") },
-  "storage-pools": { label: "Storage Pool", icon: Database, href: searchOn("/inventory/storage-pools") },
-  images: { label: "Image", icon: ImageIcon, href: searchOn("/inventory/images") },
-  custom: { label: "Volume", icon: HardDrive, href: searchOn("/inventory/storage-volumes") },
-  block: { label: "Block Volume", icon: HardDrive, href: searchOn("/inventory/storage-volumes") },
-  iso: { label: "ISO Image", icon: Disc, href: searchOn("/inventory/iso-images") },
+  "network-acls": { label: "Network ACL", icon: Shield, href: searchOn(inventoryLinks.networkAcls) },
+  "storage-pools": { label: "Storage Pool", icon: Database, href: searchOn(inventoryLinks.storagePools) },
+  images: { label: "Image", icon: ImageIcon, href: searchOn(inventoryLinks.images) },
+  custom: { label: "Volume", icon: HardDrive, href: searchOn(inventoryLinks.storageVolumes) },
+  block: { label: "Block Volume", icon: HardDrive, href: searchOn(inventoryLinks.storageVolumes) },
+  iso: { label: "ISO Image", icon: Disc, href: searchOn(inventoryLinks.isoImages) },
   // An instance-backed volume IS an instance's own disk, so the useful destination is the
   // instance, not the volume list.
   container: { label: "Instance", icon: Box, href: instanceHref },

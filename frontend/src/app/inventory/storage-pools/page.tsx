@@ -35,6 +35,7 @@ import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { PoolCapacityCell, poolCapacity, type PoolCapacity } from "./components/pool-capacity-cell";
+import { PageReadError } from "@/components/ui/read-error-state";
 
 interface PoolInfo {
   name: string;
@@ -122,7 +123,7 @@ const POOLS = defineTable<PoolRow>()({
 });
 
 function StoragePoolsContent() {
-  const { data, isLoading, refreshNow, dataUpdatedAt } = useStoragePools();
+  const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useStoragePools();
   const pools = (data as any)?.pools || [];
   const poolResources = (data as any)?.resources || {};
   
@@ -189,6 +190,20 @@ function StoragePoolsContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Storage Pools"
+        description="Manage hypervisor storage pools"
+        noun="storage pools"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (

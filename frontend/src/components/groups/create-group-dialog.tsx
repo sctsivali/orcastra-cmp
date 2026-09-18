@@ -53,6 +53,8 @@ import {
 interface CreateGroupDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Reported after the dialog closes, so the list can bring the new row into view. */
+  onSaved?: (created: { node: string; name: string }) => void;
 }
 
 interface Permission {
@@ -71,7 +73,7 @@ interface Resource {
 /** A checkbox list inside a 64-unit scroller. Ten rows fills it without hiding the pager. */
 const RESOURCE_PAGE_SIZE = PANEL_PAGE_SIZE;
 
-export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps) {
+export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDialogProps) {
   const { toast } = useToast();
   const createGroupMutation = useCreateGroup();
   const nodePicker = useNodePickerOptions();
@@ -327,6 +329,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
         description: `Group "${formData.name}" created successfully`,
       });
 
+      const created = { node: formData.node, name: formData.name };
       // Reset form
       setFormData({ name: "", description: "", node: defaultNode });
       setPermissions([]);
@@ -334,6 +337,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
       setSelectedResources([]);
       setAllResources(false);
       onOpenChange(false);
+      onSaved?.(created);
     } catch (error: any) {
       toast({
         title: "Error",

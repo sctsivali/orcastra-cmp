@@ -50,9 +50,17 @@ import { Role } from "@/types/rbac";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { PageReadError } from "@/components/ui/read-error-state";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 
 // note: no local ACLInfo. It duplicated NetworkACLInfo and drifted from it, which is how a
 // field the API had started sending stayed invisible to this page.
+/** One key for a row and for the dialog's report of what it wrote. */
+const aclRowKey = (a: { node?: string | null; project?: string | null; name: string }) =>
+  `${a.node ?? ""}/${a.project || "default"}/${a.name}`;
+
 const ACLS = defineTable<NetworkACLInfo>()({
   searchPlaceholder: "Search network ACLs",
   defaultSort: { field: "name", direction: "asc" },
@@ -100,7 +108,7 @@ const ACLS = defineTable<NetworkACLInfo>()({
   ] });
 
 function NetworkACLsContent() {
-  const { data, isLoading, refreshNow, dataUpdatedAt } = useNetworkACLs();
+  const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useNetworkACLs();
   const acls = (data as any)?.acls || [];
   
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
@@ -153,6 +161,16 @@ function NetworkACLsContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  const focus = useRowFocus({
+    list: "network-acls",
+    rows: acls,
+    orderedRows: sortedACLs,
+    keyOf: aclRowKey,
+    pageSize,
+    setPage: setCurrentPage,
+    dataUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
 
   const totalPages = Math.ceil(sortedACLs.length / pageSize);
   const paginatedACLs = sortedACLs.slice(
@@ -162,6 +180,20 @@ function NetworkACLsContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Network ACLs"
+        description="Manage hypervisor network access control lists"
+        noun="network ACLs"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (
@@ -211,6 +243,9 @@ function NetworkACLsContent() {
           <TableToolbar filters={filters} noun="network ACLs" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -238,8 +273,8 @@ function NetworkACLsContent() {
                   }
                 />
               ) : (
-                paginatedACLs.map((acl: any, idx: number) => (
-                  <TableRow key={`${acl.node}-${acl.name}-${idx}`}>
+                paginatedACLs.map((acl: any) => (
+                  <TableRow key={aclRowKey(acl)} {...focus.rowProps(aclRowKey(acl))}>
                     <TableCell className="font-medium">{acl.name}</TableCell>
                     <TableCell className="max-w-md">
                       {acl.description ? (
@@ -346,7 +381,11 @@ function NetworkACLsContent() {
           open={dialogOpen}
           onOpenChange={setDialogOpen}
           existing={editing}
-          onSaved={refreshNow}
+          onSaved={(saved) => {
+            if (saved.created) requestRowFocus("network-acls", aclRowKey(saved), saved.name);
+            // the write already succeeded; a refresh that fails is the list's own error state
+            void Promise.resolve(refreshNow()).catch(() => undefined);
+          }}
         />
       )}
 

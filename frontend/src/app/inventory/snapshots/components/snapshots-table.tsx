@@ -21,6 +21,7 @@ import { formatBytes } from "@/lib/utils";
 import { SnapshotRowActions } from "./snapshot-row-actions";
 import { relativeAge, expiryLabel, snapshotScope } from "./snapshot-format";
 import { ORIGIN_LABEL, ORIGIN_ORDER, ORIGIN_RANK, snapshotOrigin } from "./snapshot-origin";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 /**
  * The table definition lives beside the rows it renders.
@@ -203,7 +204,7 @@ export function SnapshotsTable({
                 <TableCell>{snapshot.source_name}</TableCell>
                 <TableCell className="whitespace-nowrap">
                   {snapshot.host ? (
-                    <TableLink href={`/inventory/clusters?q=${encodeURIComponent(snapshot.host)}`}>
+                    <TableLink href={inventoryLinks.clusters({ q: snapshot.host })}>
                       {snapshot.host}
                     </TableLink>
                   ) : (

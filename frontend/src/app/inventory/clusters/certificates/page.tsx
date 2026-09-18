@@ -68,6 +68,7 @@ import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
+import { PageReadError } from "@/components/ui/read-error-state";
 
 function getDaysDisplay(days: number | null | undefined): string {
   if (days === null || days === undefined) return "N/A";
@@ -123,7 +124,7 @@ function certToTime(value: string | null | undefined): number | null {
 }
 
 function CertificatesContent() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useCertificates();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useCertificates();
   const certificates = React.useMemo(() => data?.certificates || [], [data]);
   const { isReadOnly } = useReadOnlyMode();
 
@@ -274,6 +275,19 @@ function CertificatesContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Certificate Manager"
+        noun="certificates"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (

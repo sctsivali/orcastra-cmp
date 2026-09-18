@@ -42,6 +42,14 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { projectsFromUsedBy } from "@/lib/used-by";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { PageReadError } from "@/components/ui/read-error-state";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+
+/** One key for a row and for the dialog's report of what it wrote. */
+const profileRowKey = (p: { node?: string | null; project?: string | null; name: string }) =>
+  `${p.node ?? ""}/${p.project || "default"}/${p.name}`;
 
 const PROFILES = defineTable<ProfileInfo>()({
   searchPlaceholder: "Search profiles",
@@ -93,7 +101,7 @@ const PROFILES = defineTable<ProfileInfo>()({
 });
 
 function ProfilesContent() {
-  const { data, isLoading, refreshNow, dataUpdatedAt } = useProfiles();
+  const { data, isLoading, refreshNow, dataUpdatedAt, isError, error, refetch } = useProfiles();
   const profiles: ProfileInfo[] = useMemo(() => (data as any)?.profiles || [], [data]);
   const { toast } = useToast();
   const { hasRole } = usePermissions();
@@ -194,6 +202,16 @@ function ProfilesContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  const focus = useRowFocus({
+    list: "profiles",
+    rows: profiles,
+    orderedRows: sortedProfiles,
+    keyOf: profileRowKey,
+    pageSize,
+    setPage: setCurrentPage,
+    dataUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
 
   const totalPages = Math.ceil(sortedProfiles.length / pageSize);
   const paginatedProfiles = sortedProfiles.slice(
@@ -203,6 +221,20 @@ function ProfilesContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Profiles"
+        description="Manage hypervisor configuration profiles"
+        noun="profiles"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (
@@ -244,6 +276,9 @@ function ProfilesContent() {
           <TableToolbar filters={filters} noun="profiles" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -278,7 +313,7 @@ function ProfilesContent() {
                 // reuses the wrong row: sorting appended rows instead of reordering them,
                 // 25 -> 47 -> 61 -> 83 over three presses of the Name header.
                 paginatedProfiles.map((profile: any) => (
-                  <TableRow key={`${profile.node}-${profile.project ?? ""}-${profile.name}`}>
+                  <TableRow key={profileRowKey(profile)} {...focus.rowProps(profileRowKey(profile))}>
                     <TableCell className="font-medium">{profile.name}</TableCell>
                     <TableCell className="max-w-xs">
                       {profile.description ? (
@@ -369,7 +404,11 @@ function ProfilesContent() {
             open={dialogOpen}
             onOpenChange={setDialogOpen}
             existing={editing}
-            onSaved={refreshNow}
+            onSaved={(saved) => {
+              if (saved.created) requestRowFocus("profiles", profileRowKey(saved), saved.name);
+              // the write already succeeded; a refresh that fails is the list's own error state
+              void Promise.resolve(refreshNow()).catch(() => undefined);
+            }}
           />
           <ProfileDeleteDialog
             open={deleteTarget !== null}

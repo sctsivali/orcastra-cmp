@@ -11,6 +11,7 @@
  * Kept outside React (and outside React Query) so it survives the navigation
  * from the create page to the list page.
  */
+import { requestRowFocus } from "@/lib/row-focus";
 
 export interface PendingCreate {
   /** Stable key: `${host}/${project}/${name}`. */
@@ -108,4 +109,20 @@ export function removePendingCreate(id: string): void {
     pending = next;
     emit();
   }
+}
+
+/**
+ * The placeholder's instance exists in the list now: retire the row and ask the list to bring
+ * the real row into view.
+ *
+ * note: a dedicated function rather than a flag on removePendingCreate, so Dismiss on a
+ * failed row and the delete path keep calling removePendingCreate and cannot request focus by
+ * accident. The freshness the focus trusts is the placeholder's own createdAt: the list that
+ * resolved it is by definition newer.
+ */
+export function resolvePendingCreate(id: string): void {
+  const entry = pending.find((p) => p.id === id);
+  if (!entry) return;
+  removePendingCreate(id);
+  requestRowFocus("instances", entry.id, entry.name, { at: entry.createdAt });
 }

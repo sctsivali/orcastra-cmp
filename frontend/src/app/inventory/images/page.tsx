@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useMemo } from "react";
+import { Suspense, useState, useMemo, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
@@ -38,6 +38,10 @@ import { ImageUploadDialog } from "@/components/image-upload-dialog";
 import { usePermissions } from "@/hooks/use-permissions";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { Role } from "@/types/rbac";
+import { PageReadError } from "@/components/ui/read-error-state";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { requestRowFocus } from "@/lib/row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 
 
 // important: typed, not `any`. The `any` is what let this file read i.properties?.description,
@@ -54,6 +58,10 @@ function imageLabel(image: { aliases?: string[]; description?: string; fingerpri
 
 /** A row of the table: an image plus the cluster it was read from. See allImages below. */
 type ImageRow = ImageInfo & { node: string };
+
+/** One key for a row and for the upload dialog's report of what landed. */
+const imageRowKey = (i: { node?: string | null; fingerprint?: string | null }) =>
+  `${i.node ?? ""}/${i.fingerprint ?? ""}`;
 
 const IMAGES = defineTable<ImageInfo>()({
   searchPlaceholder: "Search images",
@@ -98,7 +106,7 @@ const IMAGES = defineTable<ImageInfo>()({
   ] });
 
 function ImagesContent() {
-  const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt } = useImages();
+  const { data: imagesByHost = [], isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useImages();
   const [detailImage, setDetailImage] = useState<any>(null);
   // One request for the page, not one per row. The instances list is tenant-filtered server
   // side, which is why the dialog's heading says "your instances" rather than implying a total.
@@ -129,6 +137,18 @@ function ImagesContent() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [uploadOpen, setUploadOpen] = useState(false);
+  // The upload dialog stays open on "Done." so the operator can read the outcome. The focus is
+  // raised when it closes, or the mark would play behind the dialog and be gone by the time
+  // the list is visible.
+  const uploaded = useRef<{ node: string; fingerprint: string | null; alias: string } | null>(null);
+  const closeUpload = (open: boolean) => {
+    setUploadOpen(open);
+    if (open || !uploaded.current) return;
+    const image = uploaded.current;
+    uploaded.current = null;
+    if (image.fingerprint) requestRowFocus("images", imageRowKey(image), image.alias || image.fingerprint);
+    void refetch();
+  };
   const { hasRole } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
   const canUpload = hasRole(Role.PARTNER);
@@ -192,6 +212,16 @@ function ImagesContent() {
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  const focus = useRowFocus({
+    list: "images",
+    rows: allImages,
+    orderedRows: sortedImages,
+    keyOf: imageRowKey,
+    pageSize,
+    setPage: setCurrentPage,
+    dataUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
 
   const totalPages = Math.ceil(sortedImages.length / pageSize);
   // note: the cast restores what allImages already guarantees. Every row is built there with
@@ -305,6 +335,20 @@ function ImagesContent() {
     return <LoadingLottiePage />;
   }
 
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && imagesByHost.length === 0) {
+    return (
+      <PageReadError
+        title="Images"
+        description="Manage hypervisor container and VM images"
+        noun="images"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
+  }
+
   return (
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
@@ -344,6 +388,9 @@ function ImagesContent() {
           <TableToolbar filters={filters} noun="images" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -376,10 +423,22 @@ function ImagesContent() {
                   colSpan={columnCount}
                   icon={ImageIcon}
                   title="No images found"
+                  description={
+                    filters.activeFilterCount > 0
+                      ? `No image matches the current filters. ${filters.activeFilterCount} filter${filters.activeFilterCount === 1 ? "" : "s"} active.`
+                      : undefined
+                  }
+                  action={
+                    filters.activeFilterCount > 0 ? (
+                      <Button variant="outline" size="sm" onClick={() => filters.clearAll()}>
+                        Clear filters
+                      </Button>
+                    ) : undefined
+                  }
                 />
               ) : (
-                paginatedImages.map((image: ImageRow, idx: number) => (
-                  <TableRow key={`${image.node}-${image.fingerprint}-${idx}`}>
+                paginatedImages.map((image: ImageRow) => (
+                  <TableRow key={imageRowKey(image)} {...focus.rowProps(imageRowKey(image))}>
                     {/* important: the row names itself by whatever a human or a registry wrote,
                         and only falls back to the fingerprint when an image carries neither. It
                         used to name itself with a 12 character slice of the fingerprint, so the
@@ -474,8 +533,11 @@ function ImagesContent() {
 
       <ImageUploadDialog
         open={uploadOpen}
-        onOpenChange={setUploadOpen}
-        onUploaded={() => refetch()}
+        onOpenChange={closeUpload}
+        onUploaded={(image) => {
+          uploaded.current = image;
+          void refetch();
+        }}
       />
 
       <DestructiveConfirmDialog

@@ -63,12 +63,20 @@ import {
   type DeviceDraft,
 } from "./profile-rules";
 
+export interface SavedProfile {
+  node: string;
+  project: string;
+  name: string;
+  created: boolean;
+}
+
 interface ProfileFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Editing an existing profile (its identity: name, node, project), or undefined to create one. */
   existing?: ProfileInfo;
-  onSaved?: () => void;
+  /** What was written, and whether it is new: only a create asks the list to focus it. */
+  onSaved?: (saved: SavedProfile) => void;
 }
 
 export function ProfileFormDialog({ open, onOpenChange, existing, onSaved }: ProfileFormDialogProps) {
@@ -93,9 +101,9 @@ export function ProfileFormDialog({ open, onOpenChange, existing, onSaved }: Pro
         <ProfileFormBody
           existing={existing}
           onBusyChange={setBusy}
-          onDone={() => {
+          onDone={(saved) => {
             onOpenChange(false);
-            onSaved?.();
+            onSaved?.(saved);
           }}
           onCancel={() => handleOpenChange(false)}
         />
@@ -107,7 +115,7 @@ export function ProfileFormDialog({ open, onOpenChange, existing, onSaved }: Pro
 interface ProfileFormBodyProps {
   existing?: ProfileInfo;
   onBusyChange: (busy: boolean) => void;
-  onDone: () => void;
+  onDone: (saved: SavedProfile) => void;
   onCancel: () => void;
 }
 
@@ -222,6 +230,8 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
           etag,
         });
         toast({ title: "Profile updated", description: `"${existing!.name}" on ${existing!.node}.` });
+        onDone({ node: existing!.node, project: existing!.project || "default", name: existing!.name, created: false });
+        return;
       } else {
         const created = await createProfile.mutateAsync({
           data: { name, description: description.trim(), config: rowsToMap(config), devices: draftsToDevices(devices) },
@@ -236,8 +246,8 @@ function ProfileFormBody({ existing, onBusyChange, onDone, onCancel }: ProfileFo
           description:
             landed === "default" ? `"${name}" created on ${node}.` : `"${name}" created on ${node} in project ${landed}.`,
         });
+        onDone({ node, project: landed, name, created: true });
       }
-      onDone();
     } catch (e) {
       if (e instanceof APIError && e.status === 412) {
         // Someone saved this profile after it was read. The edits stay on screen until the

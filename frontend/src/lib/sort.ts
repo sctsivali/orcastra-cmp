@@ -11,6 +11,7 @@ export const SEVERITY_RANK: Record<string, number> = {
   high: 1,
   warning: 2,
   medium: 2,
+  moderate: 2,
   low: 3,
   info: 3,
 };

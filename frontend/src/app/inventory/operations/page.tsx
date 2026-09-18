@@ -49,6 +49,7 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
+import { PageReadError } from "@/components/ui/read-error-state";
 
 // The instance an operation belongs to: its own field, else the name inside a websocket
 // console operation's resources. Hoisted so sorting, searching and the row cannot disagree.
@@ -110,7 +111,7 @@ const OPERATIONS = defineTable<any>()({
   ] });
 
 function OperationsContent() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useOperations();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useOperations();
   // Nodes the fan-out could not reach. Their rows are absent, so say so rather
   // than let an outage read as an empty list.
   const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
@@ -286,6 +287,20 @@ function OperationsContent() {
 
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Operations"
+        description="Monitor hypervisor operations and background tasks"
+        noun="operations"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (

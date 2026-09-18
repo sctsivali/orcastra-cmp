@@ -58,6 +58,8 @@ import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { Role } from "@/types/rbac";
 import { clusterStatusMeta } from "@/lib/cluster-status";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { PageReadError } from "@/components/ui/read-error-state";
 
 
 const CLUSTERS = defineTable<any>()({
@@ -111,7 +113,7 @@ const CLUSTERS = defineTable<any>()({
 
 function ClustersContent() {
   const { navigate } = useNavigationProgress();
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useClusters();
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useClusters();
   const clusters = React.useMemo(() => (data as any)?.clusters || [], [data]);
   const [detailCluster, setDetailCluster] = React.useState<ClusterInfo | null>(null);
   const [checkingAuth, setCheckingAuth] = React.useState<string | null>(null);
@@ -234,6 +236,20 @@ function ClustersContent() {
   // Full-page loading state
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Registered Clusters"
+        description="Manage hypervisor clusters"
+        noun="clusters"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (
@@ -507,14 +523,14 @@ function ClustersContent() {
                             title="View Instances"
                           >
                             <IntentLink
-                              href={`/inventory/instances?host=${encodeURIComponent(cluster.cluster_id)}`}
+                              href={inventoryLinks.instances({ host: cluster.cluster_id })}
                             >
                               <Box className="h-4 w-4" aria-hidden="true" />
                             </IntentLink>
                           </Button>
                           {cluster.clustered && cluster.status === "online" && (
                             <Button asChild variant="outline" size="sm" title="View Cluster Members">
-                              <IntentLink href={`/inventory/clustering/members?node=${cluster.cluster_id}`}>
+                              <IntentLink href={inventoryLinks.members(cluster.cluster_id)}>
                                 <Users className="h-4 w-4" />
                               </IntentLink>
                             </Button>

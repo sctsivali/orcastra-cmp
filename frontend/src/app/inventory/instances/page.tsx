@@ -1,11 +1,10 @@
 "use client";
 
-import { Suspense, useState, useMemo, useEffect, useRef } from "react";
+import { Suspense, useCallback, useState, useMemo, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -14,14 +13,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { TableLink } from "@/components/ui/table-link";
-import { OverflowCell } from "@/components/ui/overflow-cell";
-import { EMPTY_VALUE, TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { TableEmptyRow } from "@/components/ui/table-text";
 import { formatInstanceType } from "@/lib/utils";
-import { Play, Square, RotateCw, RefreshCw, Trash2, Terminal, Monitor, Loader2, Box, Copy } from "lucide-react";
+import { Loader2, Box } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
-import { TagBadge } from "@/components/tag-manager";
-import { isStalePending, removePendingCreate } from "@/lib/pending-creates";
+import { isStalePending, keyFor, resolvePendingCreate } from "@/lib/pending-creates";
 import { VMInfo } from "@/types/api";
 import { useToast } from "@/hooks/use-toast";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -35,10 +31,8 @@ import {
 import { InstanceActionDialogs } from "./components/instance-action-dialogs";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { useTerminalStore } from "@/lib/terminal-store";
-import { useConsoleStore } from "@/lib/console-store";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -51,52 +45,16 @@ import { defineTable, fromSort } from "@/lib/table-filter";
 import { Plus } from "lucide-react";
 import { RebuildDialog } from "@/components/rebuild-dialog";
 import { MoveInstanceDialog } from "@/components/instance-detail/move-instance-dialog";
+import { PageReadError } from "@/components/ui/read-error-state";
+import { useRowFocus } from "@/hooks/use-row-focus";
+import { RowFocusNotice } from "@/components/ui/row-focus-notice";
+import { PendingCreateRows } from "./components/pending-create-rows";
+import { InstanceTableRow } from "./components/instance-table-row";
 
 // The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
 // instance's own device; an instance that overrode nothing still has one through its profile,
 // and in that case LXD reports no size because the pool default applies.
 
-/**
- * Whether any NIC on this instance pins its own IPv4 rather than taking one from DHCP.
- *
- * Reads the instance's own devices and its expanded set, because the NIC usually comes from a
- * profile and only appears in the expanded view. The case that matters: an operator
- * reconciling against a corporate IPAM catalogue needs to see which addresses are planned and
- * which are merely current.
- */
-function hasFixedAddress(instance: {
-  devices?: Record<string, Record<string, string>> | null;
-  expanded_devices?: Record<string, Record<string, string>> | null;
-}): boolean {
-  const sets = [instance.expanded_devices, instance.devices];
-  for (const devices of sets) {
-    for (const device of Object.values(devices ?? {})) {
-      if (device?.type === "nic" && device["ipv4.address"]) return true;
-    }
-  }
-  return false;
-}
-
-function rootDiskLabel(instance: any): { text: string; title: string } {
-  const own = instance?.devices?.root;
-  const effective = instance?.expanded_devices?.root ?? own;
-  if (!effective) return { text: EMPTY_VALUE, title: "No root disk device reported by LXD" };
-  const size = String(effective.size ?? "").trim();
-  const pool = String(effective.pool ?? "").trim();
-  if (!size) {
-    return {
-      text: pool ? `pool default (${pool})` : "pool default",
-      title: "No explicit size on the root disk, so the storage pool default applies",
-    };
-  }
-  const overridden = Boolean(own?.size);
-  return {
-    text: size,
-    title: overridden
-      ? `Set on this instance${pool ? `, pool ${pool}` : ""}`
-      : `Inherited from a profile${pool ? `, pool ${pool}` : ""}`,
-  };
-}
 
 // note: the facet fields are named `host` and `project` deliberately, matching both the
 // existing sort fields and the OrcaHub deep-link keys. That contract keeps working with no
@@ -152,7 +110,7 @@ const INSTANCES = defineTable<any>()({
 function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
   // LXD events stream (no polling). useInstanceStream patches this query's cache.
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useInstances(
+  const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useInstances(
     undefined,
     { realtime: true },
   );
@@ -195,7 +153,7 @@ function InstancesContent() {
     );
   useEffect(() => {
     for (const p of pendingCreates) {
-      if (isResolved(p)) removePendingCreate(p.id);
+      if (isResolved(p)) resolvePendingCreate(p.id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instances, pendingCreates, dataUpdatedAt]);
@@ -216,7 +174,13 @@ function InstancesContent() {
   );
   useEffect(() => {
     if (!hasLivePlaceholder) return;
-    const id = setInterval(() => forceStaleCheck((n) => n + 1), 30_000);
+    // The tick also refetches, so the list-freshness fallback above can actually fire: a create
+    // whose frames never arrive (a stream drop, a daemon that names no project) used to wait for
+    // an unrelated render, on a page that never polls.
+    const id = setInterval(() => {
+      forceStaleCheck((n) => n + 1);
+      void refetch();
+    }, 30_000);
     return () => clearInterval(id);
   }, [hasLivePlaceholder]);
 
@@ -229,6 +193,7 @@ function InstancesContent() {
   // Deep link from OrcaHub: /inventory/instances?instance=<name>&project=<lxd-project>&host=<cluster>
   // seeds the initial filters. They are only the initial state; the user stays free to change them.
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   // Instance pending delete confirmation (controls the shared AlertDialog).
   const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
@@ -306,8 +271,8 @@ function InstancesContent() {
     params.delete("instance");
     if (legacy) params.set("q", legacy);
     const query = params.toString();
-    router.replace(query ? `/inventory/instances?${query}` : "/inventory/instances", { scroll: false });
-  }, [searchParams, router]);
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+  }, [searchParams, router, pathname]);
 
   const handleInstanceClick = (instance: VMInfo) => {
     setSelectedInstance(instance);
@@ -412,23 +377,26 @@ function InstancesContent() {
     setConfirmAction((prev) => ({ ...prev, open: false }));
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status.toLowerCase()) {
-      case "running":
-        return "default";
-      case "stopped":
-        return "secondary";
-      case "frozen":
-        return "outline";
-      default:
-        return "destructive";
-    }
-  };
 
   const sortedInstances = useMemo(
     () => sortItems(filters.filteredRows),
     [filters.filteredRows, sortItems],
   );
+  // The row key is the placeholder's id, so a resolved placeholder names the row it became.
+  const instanceKeyOf = useCallback(
+    (i: VMInfo) => keyFor(i.host, i.project || "default", i.name),
+    [],
+  );
+  const focus = useRowFocus({
+    list: "instances",
+    rows: instances,
+    orderedRows: sortedInstances,
+    keyOf: instanceKeyOf,
+    pageSize,
+    setPage: setCurrentPage,
+    dataUpdatedAt,
+    clearFilters: filters.clearAll,
+  });
 
   // Pagination
   const totalPages = Math.ceil(sortedInstances.length / pageSize);
@@ -440,6 +408,20 @@ function InstancesContent() {
   // Full-page loading state
   if (isLoading) {
     return <LoadingLottiePage />;
+  }
+
+  // A failed read is not an empty list. Rendered before the table so the filtered-empty row
+  // cannot blame a filter for a request that did not return.
+  if (isError && !data) {
+    return (
+      <PageReadError
+        title="Instances"
+        description="Manage hypervisor instances (containers and virtual machines)"
+        noun="instances"
+        error={error}
+        onRetry={() => void refetch()}
+      />
+    );
   }
 
   return (
@@ -482,6 +464,9 @@ function InstancesContent() {
           <TableToolbar filters={filters} noun="instances" />
         </CardHeader>
         <CardContent>
+          {focus.hidden && (
+            <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
+          )}
           <Table>
             <TableHeader>
               <TableRow>
@@ -498,64 +483,7 @@ function InstancesContent() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visiblePendingCreates.map((p) => (
-                <TableRow key={`pending-${p.id}`} className="bg-muted/30">
-                  <TableCell className="font-medium">{p.name}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={
-                        p.status === "Error"
-                          ? "destructive"
-                          : isStalePending(p)
-                            ? "warning"
-                            : "outline"
-                      }
-                      className="gap-1"
-                    >
-                      {p.status !== "Error" && !isStalePending(p) && (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      )}
-                      {p.status === "Error"
-                        ? "Failed"
-                        : isStalePending(p)
-                          ? "No longer reporting"
-                          : p.progress
-                            ? `Creating… ${p.progress}`
-                            : "Creating…"}
-                    </Badge>
-                    {p.error ? (
-                      <TableSubText className="text-destructive">{p.error}</TableSubText>
-                    ) : isStalePending(p) ? (
-                      <TableSubText>
-                        The cluster stopped reporting on this create. Refresh to see whether
-                        the instance exists.
-                      </TableSubText>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>{formatInstanceType(p.type)}</TableCell>
-                  <TableCell className="whitespace-nowrap">{p.host}</TableCell>
-                  <TableCell className="whitespace-nowrap">{p.project || "default"}</TableCell>
-                  <TableCell><TableEmptyValue /></TableCell>
-                  <TableCell><TableEmptyValue /></TableCell>
-                  <TableCell><TableEmptyValue /></TableCell>
-                  <TableCell className="text-right">
-                    {/* A failed create no longer disappears on a timer, because an operator who
-                        looked away used to lose the only account of why it never arrived. It
-                        needs a way out, so it gets an explicit one. A row still creating has
-                        nothing to dismiss. */}
-                    {p.status === "Error" && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        aria-label={`Dismiss the failed create for ${p.name}`}
-                        onClick={() => removePendingCreate(p.id)}
-                      >
-                        Dismiss
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+              <PendingCreateRows pending={visiblePendingCreates} />
               {paginatedInstances.length === 0 ? (
                 visiblePendingCreates.length === 0 ? (
                   <TableEmptyRow
@@ -588,204 +516,26 @@ function InstancesContent() {
                 ) : null
               ) : (
                 paginatedInstances.map((instance: any) => (
-                <TableRow key={`${instance.host}-${instance.name}`}>
-                  <TableCell className="font-medium">
-                    <TableLink onClick={() => handleInstanceClick(instance)}>
-                      {instance.name}
-                    </TableLink>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={getStatusColor(instance.status)}>
-                      {instance.status}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{formatInstanceType(instance.type)}</TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {/* The row was half-linked: the name cell beside this is already a TableLink
-                        while the cluster it runs on was plain text. The deep link it needs already
-                        exists and is documented at the top of this file. */}
-                    <TableLink href={`/inventory/clusters?q=${encodeURIComponent(instance.host)}`}>
-                      {instance.host}
-                    </TableLink>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">{instance.project || "default"}</TableCell>
-                  <TableCell>
-                    <OverflowCell
-                      items={instance.ip_addresses}
-                      preview={2}
-                      noun="IP addresses"
-                      ownerLabel={instance.name}
-                      emptyLabel="No IP addresses"
-                      itemLabel="IP address"
-                    />
-                    {/* The allocation label operators asked for. It must not be
-                        gated on a live address: ip_addresses is populated only for a running
-                        instance, so gating on it hid the label in exactly the case the label
-                        exists for, a stopped instance whose address is pinned and which an
-                        operator is reconciling against an IPAM catalogue. A pinned address is
-                        a property of the device, not of the instance being up. */}
-                    {hasFixedAddress(instance) ? (
-                      <TableSubText>Static</TableSubText>
-                    ) : instance.ip_addresses?.length ? (
-                      <TableSubText>DHCP</TableSubText>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>
-                    <OverflowCell
-                      items={instance.profiles}
-                      preview={3}
-                      noun="profiles"
-                      ownerLabel={instance.name}
-                      emptyLabel="No profiles"
-                      itemLabel="profile"
-                    />
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap" title={rootDiskLabel(instance).title}>
-                    {rootDiskLabel(instance).text}
-                  </TableCell>
-                  <TableCell>
-                    <OverflowCell
-                      items={instance.tags}
-                      preview={3}
-                      noun="tags"
-                      ownerLabel={instance.name}
-                      emptyLabel="No tags"
-                      triggerMode="indicator"
-                      separator={null}
-                      renderInline={(tag) => <TagBadge tag={tag as string} size="sm" />}
-                      renderItem={(tag) => <TagBadge tag={tag as string} size="sm" />}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-2">
-                      {instance.status !== "Running" && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            handleAction(instance.name, instance.host, instance.project || "default", "start")
-                          }
-                          disabled={actionLoading === `${instance.name}-start` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                          aria-label={`Start instance ${instance.name}`}
-                          title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Start instance", "No operate permission")}
-                        >
-                          <Play className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {instance.status === "Running" && (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              handleAction(instance.name, instance.host, instance.project || "default", "stop")
-                            }
-                            disabled={actionLoading === `${instance.name}-stop` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                            aria-label={`Stop instance ${instance.name}`}
-                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Stop instance", "No operate permission")}
-                          >
-                            <Square className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              handleAction(instance.name, instance.host, instance.project || "default", "restart")
-                            }
-                            disabled={actionLoading === `${instance.name}-restart` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                            aria-label={`Restart instance ${instance.name}`}
-                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Restart instance", "No operate permission")}
-                          >
-                            <RotateCw className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              useTerminalStore.getState().openTerminal({
-                                instanceName: instance.name,
-                                host: instance.host,
-                                project: instance.project || "default",
-                              });
-                            }}
-                            disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
-                            aria-label={`Open terminal for instance ${instance.name}`}
-                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Terminal", "No console permission")}
-                          >
-                            <Terminal className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              useConsoleStore.getState().openConsole({
-                                instanceName: instance.name,
-                                instanceType: instance.type || "container",
-                                host: instance.host,
-                                project: instance.project || "default",
-                              });
-                            }}
-                            disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
-                            aria-label={`Open console for instance ${instance.name}`}
-                            title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Console", "No console permission")}
-                          >
-                            <Monitor className="h-4 w-4" />
-                          </Button>
-                        </>
-                      )}
-                      {canDeleteInstance && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setCopyTarget(instance)}
-                          disabled={
-                            isReadOnly ||
-                            !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
-                          }
-                          aria-label={`Copy instance ${instance.name} elsewhere`}
-                          title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Copy this instance to another project or cluster", "No operate permission")}
-                        >
-                          <Copy className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {canDeleteInstance && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setRebuildTarget(instance)}
-                          disabled={
-                            isReadOnly ||
-                            !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
-                          }
-                          aria-label={`Rebuild instance ${instance.name}`}
-                          title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Rebuild instance (reinstall root disk)", "No operate permission")}
-                        >
-                          <RefreshCw className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {canDeleteInstance && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-destructive hover:text-destructive"
-                          onClick={() => setDeleteTarget(instance)}
-                          // Only the row actually being deleted greys out; a
-                          // page-wide isPending would disable every row's button.
-                          disabled={
-                            isReadOnly ||
-                            (deleteInstance.isPending &&
-                              deleteTarget?.name === instance.name &&
-                              deleteTarget?.host === instance.host)
-                          }
-                          aria-label={`Delete instance ${instance.name}`}
-                          title={isReadOnly ? "Action disabled in read-only mode" : "Delete instance"}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
+                <InstanceTableRow
+                  key={keyFor(instance.host, instance.project || "default", instance.name)}
+                  instance={instance}
+                  rowProps={focus.rowProps(keyFor(instance.host, instance.project || "default", instance.name))}
+                  onOpen={handleInstanceClick}
+                  onAction={handleAction}
+                  actionLoading={actionLoading}
+                  isReadOnly={isReadOnly}
+                  hasPermission={hasPermission}
+                  permissionTitle={permissionTitle}
+                  canDeleteInstance={canDeleteInstance}
+                  deletePending={
+                    deleteInstance.isPending &&
+                    deleteTarget?.name === instance.name &&
+                    deleteTarget?.host === instance.host
+                  }
+                  onCopy={setCopyTarget}
+                  onRebuild={setRebuildTarget}
+                  onDelete={setDeleteTarget}
+                />
               ))
             )}
             </TableBody>

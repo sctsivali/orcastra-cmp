@@ -33,7 +33,8 @@ type Phase = "idle" | "uploading" | "importing" | "done" | "error";
 interface IsoUploadDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onUploaded?: () => void;
+  /** The volume as it was written, so the list can bring the new row into view. */
+  onUploaded?: (volume: { node: string; project: string; pool: string; name: string }) => void;
 }
 
 /** Derive a valid LXD custom-volume name from a filename. */
@@ -151,7 +152,7 @@ export function IsoUploadDialog({ open, onOpenChange, onUploaded }: IsoUploadDia
         title: "ISO uploaded",
         description: `"${volumeName}" is ready in pool "${pool}" on ${node}.`,
       });
-      onUploaded?.();
+      onUploaded?.({ node, project: "default", pool, name: volumeName });
     } catch (e) {
       setPhase("error");
       setError(e instanceof Error ? e.message : String(e));

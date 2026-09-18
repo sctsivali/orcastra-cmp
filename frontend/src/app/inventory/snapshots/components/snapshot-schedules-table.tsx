@@ -27,6 +27,7 @@ import {
   frequencyLabel,
   scheduleState,
 } from "./snapshot-schedule-vocabulary";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 /**
  * The definition lives beside the rows it renders, for the reason snapshots-table.tsx records:
@@ -191,7 +192,7 @@ export function SnapshotSchedulesTable({
                 </TableCell>
                 <TableCell>{schedule.instance_name}</TableCell>
                 <TableCell className="whitespace-nowrap">
-                  <TableLink href={`/inventory/clusters?q=${encodeURIComponent(schedule.host)}`}>
+                  <TableLink href={inventoryLinks.clusters({ q: schedule.host })}>
                     {schedule.host}
                   </TableLink>
                 </TableCell>

@@ -8,6 +8,7 @@ import { IntentLink } from "@/components/navigation/route-intent";
 import { RecordDetailDialog } from "@/components/detail/detail-dialog";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { formatDateTime, formatLabel } from "@/lib/utils";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 // One dialog for all three warning tabs.
 //
@@ -84,7 +85,7 @@ export function WarningDetailDialog({
         size="md"
         footer={
           <Button asChild size="sm">
-            <IntentLink href={`/inventory/clusters/certificates?q=${encodeURIComponent(record.cluster_id)}`}>
+            <IntentLink href={inventoryLinks.certificates({ q: record.cluster_id })}>
               Renew certificate
             </IntentLink>
           </Button>
@@ -117,7 +118,7 @@ export function WarningDetailDialog({
       size="md"
       footer={
         <Button asChild size="sm" variant="outline">
-          <IntentLink href={`/inventory/clusters?q=${encodeURIComponent(record.cluster_id)}`}>
+          <IntentLink href={inventoryLinks.clusters({ q: record.cluster_id })}>
             Open in Clusters
           </IntentLink>
         </Button>

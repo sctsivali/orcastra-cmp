@@ -287,6 +287,8 @@ function LoadingSkeleton() {
 import { GaugeChart } from "@/components/monitoring/gauge-chart";
 import { GpuAllocationGauge } from "@/components/monitoring/gpu-allocation-gauge";
 import { NodeCard } from "@/components/monitoring/node-card";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { severityBucket, warningClusterValue, warningNodeValue } from "@/lib/warning-facets";
 
 const CHART_COLORS = {
   cpu: "#3b82f6",    // blue
@@ -794,34 +796,27 @@ export default function MonitoringContent() {
   // Count warnings by severity (including cert and node warnings)
   // Filter by selectedNode if a specific node is selected
   const warningsCounts = useMemo(() => {
-    const counts = { critical: 0, high: 0, warning: 0, low: 0, info: 0, total: 0, certIssues: 0, inactiveNodes: 0 };
-    
-    // Filter LXD warnings by selected node
-    const filteredWarnings = selectedNode === "all" 
-      ? actualWarnings 
-      : actualWarnings.filter((w: any) => {
-          const warningNode = w.location || w.source_node || w.host || "";
-          return warningNode === selectedNode || warningNode.includes(selectedNode);
-        });
-    
+    const counts = { critical: 0, high: 0, warning: 0, info: 0, total: 0, certIssues: 0, inactiveNodes: 0 };
+
+    // important: the same node accessor and the same severity buckets the warnings page
+    // filters by, so a tile's number is the count the list it opens will show. The substring
+    // match this used to do counted a member's warnings under a cluster the page could not
+    // filter to, and the tile said 5 above a list that said "No warning matches".
+    const filteredWarnings = selectedNode === "all"
+      ? actualWarnings
+      : actualWarnings.filter((w: any) => warningNodeValue(w) === selectedNode);
+
     // LXD warnings
     filteredWarnings.forEach((w: any) => {
       counts.total++;
-      const severity = (w.severity || '').toLowerCase();
-      if (severity === 'critical' || severity === 'error') counts.critical++;
-      else if (severity === 'high') counts.high++;
-      else if (severity === 'warning' || severity === 'medium') counts.warning++;
-      else if (severity === 'low') counts.low++;
-      else counts.info++;
+      const bucket = severityBucket(w.severity);
+      if (bucket) counts[bucket]++;
     });
-    
+
     // Certificate warnings - filter by cluster_id matching selected node
     const filteredCertWarnings = selectedNode === "all"
       ? certWarnings
-      : certWarnings.filter((w: any) => {
-          const clusterId = w.cluster_id || "";
-          return clusterId === selectedNode || clusterId.includes(selectedNode);
-        });
+      : certWarnings.filter((w: any) => (w.cluster_id || "") === selectedNode);
     
     filteredCertWarnings.forEach((w: any) => {
       counts.total++;
@@ -843,6 +838,13 @@ export default function MonitoringContent() {
     
     return counts;
   }, [actualWarnings, certWarnings, nodeWarnings, selectedNode]);
+
+  // The offline-nodes tab facets on the row's own value (display name, else id), so the tile
+  // link carries that row's value rather than the picker's id.
+  const selectedNodeWarning = useMemo(
+    () => (selectedNode === "all" ? undefined : nodeWarnings.find((w: any) => (w.node_id || w.cluster_id || "") === selectedNode)),
+    [nodeWarnings, selectedNode],
+  );
 
   // React Query client for leveraging cached data
   const queryClient = useQueryClient();
@@ -2513,7 +2515,7 @@ export default function MonitoringContent() {
             </div>
             {warningsCounts.total > 0 && (
               <Link 
-                href={selectedNode === "all" ? "/inventory/warnings" : `/inventory/warnings?node=${encodeURIComponent(selectedNode)}`}
+                href={inventoryLinks.warnings({ node: selectedNode === "all" ? undefined : selectedNode })}
                 className="text-sm text-primary hover:underline flex items-center gap-1"
               >
                 View All ({warningsCounts.total})
@@ -2524,7 +2526,7 @@ export default function MonitoringContent() {
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <Link 
-                href={`/inventory/warnings?severity=critical${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                href={inventoryLinks.warnings({ severity: "critical", node: selectedNode === "all" ? undefined : selectedNode })}
                 className="flex items-center gap-3 p-4 rounded-lg border bg-red-500/5 border-red-500/20 hover:bg-red-500/10 hover:border-red-500/40 transition-all cursor-pointer group"
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-500/10 group-hover:bg-red-500/20 transition-colors">
@@ -2536,7 +2538,7 @@ export default function MonitoringContent() {
                 </div>
               </Link>
               <Link 
-                href={`/inventory/warnings?severity=high${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                href={inventoryLinks.warnings({ severity: "high", node: selectedNode === "all" ? undefined : selectedNode })}
                 className="flex items-center gap-3 p-4 rounded-lg border bg-orange-500/5 border-orange-500/20 hover:bg-orange-500/10 hover:border-orange-500/40 transition-all cursor-pointer group"
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-500/10 group-hover:bg-orange-500/20 transition-colors">
@@ -2548,7 +2550,7 @@ export default function MonitoringContent() {
                 </div>
               </Link>
               <Link 
-                href={`/inventory/warnings?severity=warning${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                href={inventoryLinks.warnings({ severity: "warning", node: selectedNode === "all" ? undefined : selectedNode })}
                 className="flex items-center gap-3 p-4 rounded-lg border bg-yellow-500/5 border-yellow-500/20 hover:bg-yellow-500/10 hover:border-yellow-500/40 transition-all cursor-pointer group"
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-yellow-500/10 group-hover:bg-yellow-500/20 transition-colors">
@@ -2560,14 +2562,14 @@ export default function MonitoringContent() {
                 </div>
               </Link>
               <Link 
-                href={`/inventory/warnings?severity=low${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                href={inventoryLinks.warnings({ severity: "info", node: selectedNode === "all" ? undefined : selectedNode })}
                 className="flex items-center gap-3 p-4 rounded-lg border bg-blue-500/5 border-blue-500/20 hover:bg-blue-500/10 hover:border-blue-500/40 transition-all cursor-pointer group"
               >
                 <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10 group-hover:bg-blue-500/20 transition-colors">
                   <Info className="h-5 w-5 text-blue-500" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold text-blue-600">{warningsCounts.low + warningsCounts.info}</p>
+                  <p className="text-2xl font-bold text-blue-600">{warningsCounts.info}</p>
                   <p className="text-xs text-muted-foreground">Info</p>
                 </div>
               </Link>
@@ -2592,7 +2594,7 @@ export default function MonitoringContent() {
                 )}
                 {warningsCounts.inactiveNodes > 0 && (
                   <Link 
-                    href={`/inventory/warnings?tab=nodes${selectedNode !== "all" ? `&node=${encodeURIComponent(selectedNode)}` : ""}`}
+                    href={inventoryLinks.warnings({ tab: "nodes", cluster: selectedNodeWarning ? warningClusterValue(selectedNodeWarning) : undefined })}
                     className="flex items-center gap-3 p-4 rounded-lg border bg-rose-500/5 border-rose-500/20 hover:bg-rose-500/10 hover:border-rose-500/40 transition-all cursor-pointer group"
                   >
                     <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-rose-500/10 group-hover:bg-rose-500/20 transition-colors">

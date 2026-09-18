@@ -11,6 +11,8 @@ export interface UsedBySubject {
   name: string;
   /** The node the used_by list came from, and the `host` for any link out of this dialog. */
   node?: string;
+  /** The project that holds the row. A network detail link without it reads the default project. */
+  project?: string;
   description?: string;
   usedBy: readonly string[];
   /** Dense header facts, pre-formatted by the page. The dialog lays them out, it does not format. */

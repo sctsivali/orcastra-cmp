@@ -11,6 +11,7 @@ import { KeyValueList } from "@/components/used-by/panels/config-panel";
 import { formatContinent, formatDateTime } from "@/lib/utils";
 import { MapPin } from "lucide-react";
 import type { ClusterInfo } from "@/types/api";
+import { inventoryLinks } from "@/lib/inventory-links";
 
 // Everything the clusters table already receives and shows none of.
 //
@@ -138,7 +139,7 @@ export function ClusterDetailDialog({
                   span="full"
                   value={
                     <TableLink
-                      href={`/inventory/clusters/certificates?q=${encodeURIComponent(cluster.cluster_id)}`}
+                      href={inventoryLinks.certificates({ q: cluster.cluster_id })}
                       title="Open this cluster in Certificates"
                     >
                       Open in Certificates

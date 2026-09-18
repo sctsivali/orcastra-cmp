@@ -229,6 +229,10 @@ const TableRow = React.forwardRef<
     ref={ref}
     className={cn(
       "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+      // The post-create mark (hooks/use-row-focus.ts). Attribute present, either value, keeps
+      // the long duration so the fade-out runs at 700 ms instead of snapping to 150. No
+      // keyframe and no ring: a box-shadow on a tr is unreliable across engines.
+      "data-[row-focus=true]:bg-primary/10 data-[row-focus]:duration-700 motion-reduce:data-[row-focus]:transition-none",
       className
     )}
     {...props}
