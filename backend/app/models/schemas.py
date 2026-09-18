@@ -345,6 +345,10 @@ class ImageInfo(BaseModel):
     last_used_at: Optional[datetime] = Field(None, description="Last time an instance used this image")
     expires_at: Optional[datetime] = Field(None, description="Expiry timestamp for a cached image")
     profiles: List[str] = Field(default_factory=list, description="Profiles applied to instances from this image")
+    # The store that holds the image: a project's own when it isolates images
+    # (features.images), else default. LXD resolves an instance's image inside the target
+    # project alone, so a create needs an image from the store that project reads.
+    project: str = Field(default="default", description="LXD project whose image store holds this image")
 
 
 class ImageListResponse(BaseModel):
@@ -352,6 +356,17 @@ class ImageListResponse(BaseModel):
     host: str
     images: List[ImageInfo]
     total: int
+    project: Optional[str] = Field(
+        default=None,
+        description=(
+            "The store that was read when one project was asked for: the project itself when "
+            "it isolates images, else default. None for an all-projects read."
+        ),
+    )
+    complete: bool = Field(
+        default=True,
+        description="False when not every project's store could be read, so the list is partial.",
+    )
     reachable: bool = Field(
         default=True,
         description=(

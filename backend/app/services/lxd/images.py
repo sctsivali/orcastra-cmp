@@ -3,15 +3,80 @@ Image management operations.
 Handles listing and managing LXD images.
 """
 
+import asyncio
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from app.models.schemas import ImageInfo
 from .exceptions import LXDConnectionError, LXDOperationError
 from .connection import LXDConnectionManager
+from .project_scope import (
+    DEFAULT_PROJECT,
+    _metadata,
+    list_across_projects,
+    list_in_project,
+    project_params,
+    resolve_owner,
+)
+from .utils import wait_for_lxd_operation
 from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
+
+# Same shape as the project-scope reads: a daemon that does not answer a single-image read in
+# this long is treated as unreachable rather than waited on.
+IMAGE_READ_TIMEOUT = (3, 25)
+# Under the router's own deadline for a delete, so the daemon's answer is what the caller sees.
+IMAGE_DELETE_WAIT_SECONDS = 50
+
+# LXD's zero time on an image field that was never set.
+_ZERO_TIME = "0001-01-01T00:00:00Z"
+
+
+class ImageStoreListing(NamedTuple):
+    images: List[ImageInfo]
+    """The store that was read when one project was asked for; None for an all-projects read."""
+    project: Optional[str]
+    complete: bool
+
+
+def _status_of(exc: Exception) -> Optional[int]:
+    return getattr(getattr(exc, "response", None), "status_code", None)
+
+
+def _timestamp(value: Any) -> Optional[str]:
+    if not value or value == _ZERO_TIME:
+        return None
+    return str(value)
+
+
+def _info_from_row(row: Dict[str, Any], owner: Optional[str] = None) -> ImageInfo:
+    """One LXD image record (the JSON the daemon answers) to ImageInfo.
+
+    Shared by the list and single-image reads. `owner` is the store the record was read
+    from; an all-projects listing stamps `project` on every row itself.
+    """
+    aliases = [
+        a.get("name", "") for a in (row.get("aliases") or []) if isinstance(a, dict)
+    ]
+    properties = row.get("properties") or {}
+    return ImageInfo(
+        fingerprint=str(row.get("fingerprint") or ""),
+        aliases=aliases,
+        description=str(properties.get("description") or ""),
+        architecture=str(row.get("architecture") or ""),
+        size=int(row.get("size") or 0),
+        upload_date=_timestamp(row.get("uploaded_at")),
+        public=bool(row.get("public", False)),
+        type=str(row.get("type") or ImageInfo.model_fields["type"].default),
+        cached=bool(row.get("cached", False)),
+        auto_update=bool(row.get("auto_update", False)),
+        created_at=_timestamp(row.get("created_at")),
+        last_used_at=_timestamp(row.get("last_used_at")),
+        expires_at=_timestamp(row.get("expires_at")),
+        profiles=list(row.get("profiles") or []),
+        project=str(row.get("project") or owner or DEFAULT_PROJECT),
+    )
 
 
 class ImageManager:
@@ -40,88 +105,95 @@ class ImageManager:
                 client = None
         return client
     
-    def _image_or_none(self, host: str, fingerprint: str):
-        """Fetch one pylxd image, or None when the host has no such fingerprint.
+    @staticmethod
+    def _image_or_none(client: Any, fingerprint: str, owner: str) -> Optional[Dict[str, Any]]:
+        """One image's record from the store `owner` holds, or None when it has no such
+        fingerprint.
 
         important: blocking. Callers on the event loop must reach this through run_blocking.
         """
-        client = self._get_client_with_reconnect(host)
-        if client is None:
-            raise LXDConnectionError(f"Could not connect to {host}")
         try:
-            return client.images.get(safe_segment(fingerprint))
+            response = client.api.images[safe_segment(fingerprint)].get(
+                params=project_params(owner), timeout=IMAGE_READ_TIMEOUT
+            )
         except Exception as e:
-            # pylxd raises NotFound for a missing fingerprint and the same class hierarchy for
-            # a daemon fault, so the message is the only thing that separates them. A miss must
-            # not read as an outage, and an outage must not read as "already gone".
-            if "not found" in str(e).lower():
+            # A miss and a daemon fault arrive as the same exception class, so the status
+            # and the message are what separate them. A miss must not read as an outage,
+            # and an outage must not read as "already gone".
+            if _status_of(e) == 404 or "not found" in str(e).lower():
                 return None
             raise
+        metadata = _metadata(response)
+        return metadata if isinstance(metadata, dict) else None
 
-    def get_image(self, host: str, fingerprint: str) -> Optional[ImageInfo]:
-        """Read a single image's metadata. None when it does not exist on that host."""
+    def _client(self, host: str) -> Any:
+        client = self._get_client_with_reconnect(host)
+        if client is None:
+            # important: returning nothing here is what made a dead cluster look like a
+            # cluster with no images. The router cannot label what it cannot see, and the
+            # single-host endpoint already turns this into a 503.
+            logger.warning(f"Could not connect to {host} for images")
+            raise LXDConnectionError(f"Could not connect to {host}")
+        return client
+
+    def get_image(
+        self, host: str, fingerprint: str, project: Optional[str] = None
+    ) -> Optional[ImageInfo]:
+        """Read a single image's metadata from the store `project` reads. None when it does
+        not exist there."""
         try:
-            image = self._image_or_none(host, fingerprint)
-            if image is None:
+            client = self._client(host)
+            owner = resolve_owner(client, "images", project)
+            row = self._image_or_none(client, fingerprint, owner)
+            if row is None:
                 return None
-            return self._to_info(image)
+            return _info_from_row(row, owner)
         except LXDConnectionError:
             raise
         except Exception as e:
             logger.error(f"Error reading image {fingerprint} from {host}: {e}")
             raise LXDOperationError(f"Failed to read image: {str(e)}")
 
-    def delete_image(self, host: str, fingerprint: str) -> bool:
-        """Delete an image from a host's image store. False when it was already gone.
+    def delete_image(self, host: str, fingerprint: str, project: Optional[str] = None) -> bool:
+        """Delete an image from the store `project` reads. False when it was already gone.
 
-        important: blocking, and `wait=True` so a failure surfaces here rather than as a
+        important: blocking, and waited on so a failure surfaces here rather than as a
         silently rejected background operation. The caller maps the daemon's error text onto
         a status; this layer does not decide policy.
         """
-        image = self._image_or_none(host, fingerprint)
-        if image is None:
+        client = self._client(host)
+        owner = resolve_owner(client, "images", project)
+        if self._image_or_none(client, fingerprint, owner) is None:
             return False
-        image.delete(wait=True)
+        response = client.api.images[safe_segment(fingerprint)].delete(
+            params=project_params(owner), timeout=(3, IMAGE_DELETE_WAIT_SECONDS + 10)
+        )
+        wait_for_lxd_operation(
+            client, response, timeout=IMAGE_DELETE_WAIT_SECONDS, project=owner
+        )
         return True
 
-    @staticmethod
-    def _to_info(image) -> ImageInfo:
-        """One pylxd image to ImageInfo. Shared by the list and single-image reads."""
-        aliases = [a.get("name", "") for a in image.aliases] if image.aliases else []
-        # note: pylxd declares auto_update optional, so the attribute is absent rather
-        # than falsy when LXD omits it and a direct read raises AttributeError. Every
-        # other field below is a readonly attribute that is always present. None of
-        # these cost an extra request: pylxd syncs the whole object on first attribute
-        # access, which the aliases and properties reads have already done.
-        return ImageInfo(
-            fingerprint=image.fingerprint,
-            aliases=aliases,
-            description=image.properties.get("description", "") if image.properties else "",
-            architecture=image.architecture,
-            size=image.size,
-            upload_date=image.uploaded_at,
-            public=image.public,
-            type=image.type,
-            cached=bool(getattr(image, "cached", False)),
-            auto_update=bool(getattr(image, "auto_update", False)),
-            created_at=getattr(image, "created_at", None),
-            last_used_at=getattr(image, "last_used_at", None),
-            expires_at=getattr(image, "expires_at", None),
-            profiles=list(getattr(image, "profiles", None) or []),
+    def _list_images_sync(self, host: str, project: Optional[str]) -> ImageStoreListing:
+        client = self._client(host)
+        if project:
+            # The store the project really reads: its own when it isolates images, else
+            # default. Resolved here so the browser never has to know the feature flag.
+            owner: Optional[str] = resolve_owner(client, "images", project)
+            rows, complete = list_in_project(client, "images", owner), True
+        else:
+            owner = None
+            rows, complete = list_across_projects(client, "images")
+        return ImageStoreListing(
+            images=[_info_from_row(row, owner) for row in rows],
+            project=owner,
+            complete=complete,
         )
 
-    async def list_images(self, host: str) -> List[ImageInfo]:
-        """List available images on a host."""
+    async def list_images(self, host: str, project: Optional[str] = None) -> ImageStoreListing:
+        """The images a project can use on a host, or every store on the host when no project
+        is named. Each row names the store that holds it."""
         try:
-            client = self._get_client_with_reconnect(host)
-            if client is None:
-                # important: returning [] here is what made a dead cluster look like a
-                # cluster with no images. The router above cannot label what it cannot
-                # see, and the single-host endpoint already turns this into a 503.
-                logger.warning(f"Could not connect to {host} for images")
-                raise LXDConnectionError(f"Could not connect to {host}")
-            return [self._to_info(image) for image in client.images.all()]
-
+            return await asyncio.to_thread(self._list_images_sync, host, project)
         except LXDConnectionError:
             raise
         except Exception as e:

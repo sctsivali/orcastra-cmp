@@ -251,7 +251,7 @@ async def lifespan(app: FastAPI):
     # Pre-warm the remote image catalog (Custom + Ubuntu, ~17 MB) in the
     # background so the first "Select base image" dialog open is instant.
     try:
-        from app.routers.images import prewarm_remote_images_cache
+        from app.services.remote_image_catalog import prewarm_remote_images_cache
         asyncio.create_task(asyncio.to_thread(prewarm_remote_images_cache))
         logger.info("Remote image catalog pre-warm scheduled")
     except Exception as prewarm_err:

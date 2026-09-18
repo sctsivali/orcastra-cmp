@@ -25,7 +25,7 @@ from .freshness import read_resources
 from .resources import ResourceManager
 from .instance import InstanceManager
 from .projects import ProjectManager
-from .images import ImageManager
+from .images import ImageManager, ImageStoreListing
 from app.core.type_utils import normalize_node_type, resolve_clustered
 from .exceptions import LXDConnectionError, LXDLocalStorageError
 from app.services.lxd_cert_manager import LXDCertificateManager
@@ -513,20 +513,23 @@ class LXDService:
         )
 
     # Image operations
-    async def list_images(self, host: str) -> List[ImageInfo]:
-        """List available images on a host."""
-        return await self.image_manager.list_images(host)
+    async def list_images(self, host: str, project: Optional[str] = None) -> ImageStoreListing:
+        """The images `project` can use on a host (its own store or the shared default one),
+        or every store on the host when no project is named."""
+        return await self.image_manager.list_images(host, project)
 
     # note: the two below are deliberately sync. pylxd blocks, and a delete waits on a real
     # LXD operation, so the router hands them to run_blocking with an explicit timeout rather
     # than this layer hiding the block behind an async signature.
-    def get_image(self, host: str, fingerprint: str) -> Optional[ImageInfo]:
-        """Read one image's metadata. None when that host has no such fingerprint."""
-        return self.image_manager.get_image(host, fingerprint)
+    def get_image(
+        self, host: str, fingerprint: str, project: Optional[str] = None
+    ) -> Optional[ImageInfo]:
+        """Read one image's metadata from the store `project` reads. None when it is not there."""
+        return self.image_manager.get_image(host, fingerprint, project)
 
-    def delete_image(self, host: str, fingerprint: str) -> bool:
-        """Delete an image from a host's image store. False when it was already gone."""
-        return self.image_manager.delete_image(host, fingerprint)
+    def delete_image(self, host: str, fingerprint: str, project: Optional[str] = None) -> bool:
+        """Delete an image from the store `project` reads. False when it was already gone."""
+        return self.image_manager.delete_image(host, fingerprint, project)
     
     # Project operations
     async def list_projects(self, host: str) -> List[Dict[str, Any]]:

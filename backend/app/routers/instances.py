@@ -78,7 +78,7 @@ def _validate_image_server(image_server: Optional[str]) -> None:
     """
     if not image_server:
         return
-    from app.routers.images import REMOTE_IMAGE_SERVERS
+    from app.services.remote_image_catalog import REMOTE_IMAGE_SERVERS
 
     allowed_hosts = {
         urlparse(s["server"]).hostname for s in REMOTE_IMAGE_SERVERS

@@ -7,8 +7,6 @@ from fastapi import APIRouter, HTTPException, Depends, Path, Query
 from typing import Dict, List, Optional, Set
 import logging
 import asyncio
-import json
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
@@ -34,9 +32,16 @@ from app.core.dependencies import (
     require_partner,
     require_tenant,
 )
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key, check_tenant_permission
-from app.core.tenant_visibility import tenant_acl_active
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    get_scope_cache_key,
+    check_tenant_permission,
+    project_is_visible,
+)
+from app.core.tenant_visibility import tenant_acl_active, tenant_may_see_project
 from app.services.activity_logger import get_activity_logger
+from app.services.remote_image_catalog import _fetch_remote_catalog, _REMOTE_FETCH_TIMEOUT
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -60,119 +65,44 @@ IMAGE_DELETE_MAX_IN_FLIGHT = 5
 DEPENDENTS_NAMED_IN_ERROR = 5
 
 
-# Remote simplestreams catalogs to aggregate (LXD's `images:` and `ubuntu:`).
-REMOTE_IMAGE_SERVERS = [
-    {"server": "https://images.lxd.canonical.com", "source": "Custom"},
-    {"server": "https://cloud-images.ubuntu.com/releases", "source": "Ubuntu"},
-]
-# Upper bound for a cold remote-catalog fetch (per-remote urllib timeouts can sum
-# past a minute). On timeout we return an empty, uncached result.
-_REMOTE_FETCH_TIMEOUT = 60
-# Fallback ftypes (older streams without combined_* fingerprints).
-_CONTAINER_FTYPES = {"squashfs", "root.squashfs", "rootfs.squashfs", "root.tar.xz"}
-_VM_FTYPES = {"disk.qcow2", "disk-kvm.img", "disk1.img"}
+# The project whose image store a caller asks about. A create in that project can only use
+# what its store holds, so the create form reads with it; the Images page reads every store.
+# note: the same shape as PROJECT_NAME_RE, spelled with anchors pydantic's regex engine accepts.
+_PROJECT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$"
+PROJECT_QUERY = Query(
+    "default",
+    pattern=_PROJECT_PATTERN,
+    description="The project whose image store to read: its own when it isolates images, else default",
+)
+PROJECT_QUERY_OPTIONAL = Query(
+    None,
+    pattern=_PROJECT_PATTERN,
+    description="Restrict to the store one project reads; omitted, every store on the host is listed",
+)
 
 
-def _parse_simplestreams(server: str, source: str) -> List[dict]:
-    """
-    Fetch + parse one simplestreams catalog into rows, one per
-    (distribution, release, variant, architecture, type). Includes the LXD
-    image fingerprint per type (combined_*_sha256) so the UI can flag images
-    already cached on a node. Blocking (run in a thread).
-    """
-    base = server.rstrip("/") + "/"
-    index = json.load(urllib.request.urlopen(base + "streams/v1/index.json", timeout=15))
-    # Prefer the image-downloads product file (LXD-usable images).
-    path = None
-    for key, entry in (index.get("index") or {}).items():
-        if entry.get("datatype") == "image-downloads" or key == "images":
-            path = entry.get("path")
-            break
-    if not path:
-        entries = list((index.get("index") or {}).values())
-        path = entries[0].get("path") if entries else None
-    if not path:
-        return []
-
-    data = json.load(urllib.request.urlopen(base + path, timeout=90))
-    rows: List[dict] = []
-    for _key, product in (data.get("products") or {}).items():
-        versions = product.get("versions") or {}
-        if not versions:
-            continue
-        items = versions[sorted(versions.keys())[-1]].get("items") or {}
-        lxd_meta = items.get("lxd.tar.xz") or {}
-        fp_container = lxd_meta.get("combined_squashfs_sha256")
-        fp_vm = lxd_meta.get("combined_disk-kvm-img_sha256")
-        ftypes = set(items.keys())
-        has_container = bool(fp_container) or bool(ftypes & _CONTAINER_FTYPES)
-        has_vm = bool(fp_vm) or bool(ftypes & _VM_FTYPES)
-        if not (has_container or has_vm):
-            continue
-        aliases = [a.strip() for a in (product.get("aliases") or "").split(",") if a.strip()]
-        if not aliases:
-            continue
-        alias = aliases[0]
-        os_ = (product.get("os") or "").strip()
-        distribution = (os_[:1].upper() + os_[1:]) if os_ else source
-        release = (product.get("version") or product.get("release") or "").strip()
-        variant = (product.get("variant") or product.get("release") or "default").strip()
-        arch = product.get("arch") or ""
-        base_row = {
-            "distribution": distribution,
-            "release": release,
-            "variant": variant,
-            "architecture": arch,
-            "alias": alias,
-            "source": source,
-            "server": server,
-        }
-        if has_container:
-            rows.append({**base_row, "type": "container", "fingerprint": fp_container or ""})
-        if has_vm:
-            rows.append({**base_row, "type": "virtual-machine", "fingerprint": fp_vm or ""})
-    return rows
-
-
-def _fetch_remote_catalog() -> List[dict]:
-    """Aggregate all configured remote catalogs (best-effort per remote).
-
-    The remotes are fetched concurrently (the Ubuntu catalog is ~17 MB / tens of
-    seconds, so we overlap it with the smaller community fetch).
-    """
-    rows: List[dict] = []
-    with ThreadPoolExecutor(max_workers=len(REMOTE_IMAGE_SERVERS)) as pool:
-        futures = {
-            pool.submit(_parse_simplestreams, r["server"], r["source"]): r
-            for r in REMOTE_IMAGE_SERVERS
-        }
-        for fut, remote in futures.items():
-            try:
-                rows.extend(fut.result())
-            except Exception as e:
-                logger.error(f"Remote catalog {remote['server']} failed: {e}")
-    return rows
-
-
-def prewarm_remote_images_cache() -> None:
-    """Populate the remote-image catalog cache (called at startup so the first
-    'Select base image' dialog open is instant). Best-effort."""
+async def _fetch_images_for_node(
+    lxd_service: LXDService, node_name: str, project: Optional[str] = None
+) -> ImageListResponse:
+    """Fetch images for a single node, from every store or from the one `project` reads."""
     try:
-        rows = _fetch_remote_catalog()
-        get_cache_manager().set("api_responses", "images:remote:all", rows, ttl=3600)
-        logger.info(f"Pre-warmed remote image catalog: {len(rows)} rows")
-    except Exception as e:
-        logger.error(f"Failed to pre-warm remote image catalog: {e}")
-
-
-async def _fetch_images_for_node(lxd_service: LXDService, node_name: str) -> ImageListResponse:
-    """Fetch images for a single node."""
-    try:
-        images = await lxd_service.list_images(node_name)
+        listing = await lxd_service.list_images(node_name, project)
+        # important: the Partner project bound, per row. An all-projects read on a cluster two
+        # organisations share carries the other organisation's stores.
+        images = [i for i in listing.images if project_is_visible(node_name, i.project)]
         return ImageListResponse(
             host=node_name,
             images=images,
             total=len(images),
+            project=listing.project,
+            complete=listing.complete,
+        )
+    except LXDOperationError as e:
+        # The cluster answered and refused: an unknown project, a store it cannot read. That is
+        # not an outage and must not be labelled as one.
+        logger.warning(f"Image read on {node_name} refused: {e}")
+        return ImageListResponse(
+            host=node_name, images=[], total=0, reachable=True, error=str(e), project=project
         )
     except Exception as e:
         # important: this except, not the gather below, is the path a dead cluster takes.
@@ -220,7 +150,9 @@ def _filter_images_for_tenant(
     host_fingerprints = allowed.get(response.host, set())
     images = [
         image for image in response.images
-        if any(
+        # Ownership as well as usage: a tenant sees an image only from a store it may see.
+        if tenant_may_see_project(response.host, image.project)
+        and any(
             image.fingerprint.startswith(fingerprint) or fingerprint.startswith(image.fingerprint)
             for fingerprint in host_fingerprints
         )
@@ -234,6 +166,8 @@ def _filter_images_for_tenant(
         total=len(images),
         reachable=response.reachable,
         error=response.error,
+        project=response.project,
+        complete=response.complete,
     )
 
 
@@ -251,11 +185,12 @@ def _filter_images_for_tenant(
 async def list_all_images(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
+    project: Optional[str] = PROJECT_QUERY_OPTIONAL,
 ):
-    """List all images from all LXD nodes."""
+    """List images from every LXD node: every store, or the store `project` reads."""
     # Try cache first (60 second cache)
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key("images:list:all")
+    cache_key = get_scope_cache_key(f"images:list:all:project={project or '*'}")
     cached_data = None if fresh else cache.get("api_responses", cache_key)
     if cached_data is not None:
         logger.debug("Returning cached images list")
@@ -265,7 +200,7 @@ async def list_all_images(
     # Fetch images from all nodes in parallel
     node_names = lxd_service.get_node_names()
     allowed_images = await _allowed_image_fingerprints_by_host(lxd_service)
-    tasks = [_fetch_images_for_node(lxd_service, node_name) for node_name in node_names]
+    tasks = [_fetch_images_for_node(lxd_service, node_name, project) for node_name in node_names]
     results = await asyncio.gather(*tasks, return_exceptions=True)
     
     # Filter out exceptions
@@ -361,9 +296,13 @@ async def list_remote_images(fresh: bool = False):
 async def list_node_images(
     host: str,
     lxd_service: LXDService = Depends(get_lxd_service),
+    project: str = PROJECT_QUERY,
 ):
-    """List all images from a specific LXD node."""
+    """The images `project` can use on one LXD node: what its own store holds when it
+    isolates images, else the shared default store. `project` on the response names which."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()
@@ -372,11 +311,17 @@ async def list_node_images(
                 status_code=400,
                 detail=f"Invalid host. Valid hosts: {valid_nodes}"
             )
-        
-        images = await lxd_service.list_images(host)
-        result = ImageListResponse(host=host, images=images, total=len(images))
+
+        listing = await lxd_service.list_images(host, project)
+        result = ImageListResponse(
+            host=host,
+            images=listing.images,
+            total=len(listing.images),
+            project=listing.project,
+            complete=listing.complete,
+        )
         allowed_images = await _allowed_image_fingerprints_by_host(lxd_service)
-        
+
         return _filter_images_for_tenant(result, allowed_images)
         
     except HTTPException:
@@ -442,6 +387,7 @@ def _dependents_detail(fingerprint: str, names: List[str]) -> str:
 class ImageUsageResponse(BaseModel):
     """What is standing between an image and its deletion."""
     host: str = Field(..., description="Cluster the image lives on")
+    project: str = Field("default", description="The project whose store the image is read from")
     fingerprint: str = Field(..., description="Full image fingerprint")
     dependents: List[str] = Field(
         ..., description="Instances on that cluster created from this image"
@@ -465,17 +411,27 @@ class ImageUsageResponse(BaseModel):
 async def image_usage(
     fingerprint: str = Path(..., pattern="^[0-9a-f]{64}$", description="Full image fingerprint"),
     host: str = Query(..., description="Target cluster"),
+    project: str = PROJECT_QUERY,
     lxd_service: LXDService = Depends(get_lxd_service),
     # important: partner, not tenant. This names instances across the whole org scope without
     # the tenant ACL narrowing, which is correct for the operator who may delete the image and
     # would be a disclosure surface for anyone who may not.
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """List the instances on `host` that were created from `fingerprint`."""
+    """List the instances on `host` that were created from `fingerprint`.
+
+    note: dependents are counted across every project on the host. The same fingerprint can
+    sit in two stores, so this can over-count for one of them; a refusal the operator can
+    override with `force` is the safe direction.
+    """
     verify_cluster_access(host)
+    if not project_is_visible(host, project):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         dependents = await _instances_using_image(lxd_service, host, fingerprint)
-        return ImageUsageResponse(host=host, fingerprint=fingerprint, dependents=dependents)
+        return ImageUsageResponse(
+            host=host, project=project, fingerprint=fingerprint, dependents=dependents
+        )
     except HTTPException:
         raise
     except LXDConnectionError as e:
@@ -509,12 +465,15 @@ async def delete_image(
     fingerprint: str = Path(..., pattern="^[0-9a-f]{64}$", description="Full image fingerprint"),
     host: str = Query(..., description="Target cluster"),
     force: bool = Query(False, description="Delete even when instances depend on this image"),
+    project: str = PROJECT_QUERY,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    """Delete an image from a cluster's image store."""
+    """Delete an image from the store `project` reads on a cluster."""
     verify_cluster_access(host)
+    if not project_is_visible(host, project):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
 
     dependents: List[str] = []
     image: Optional[ImageInfo] = None
@@ -524,6 +483,7 @@ async def delete_image(
                 lxd_service.get_image,
                 host,
                 fingerprint,
+                project,
                 timeout=IMAGE_DELETE_TIMEOUT,
                 label=f"get_image[{host}/{fingerprint[:12]}]",
                 executor=_executor,
@@ -540,7 +500,8 @@ async def delete_image(
 
         if image is None:
             raise HTTPException(
-                status_code=404, detail=f"Image '{fingerprint[:12]}' not found on {host}"
+                status_code=404,
+                detail=f"Image '{fingerprint[:12]}' not found in the {project} image store on {host}",
             )
 
         # important: the refusal is here, not only in the UI. The dashboard's own dependent
@@ -554,6 +515,7 @@ async def delete_image(
                 lxd_service.delete_image,
                 host,
                 fingerprint,
+                project,
                 timeout=IMAGE_DELETE_TIMEOUT,
                 label=f"delete_image[{host}/{fingerprint[:12]}]",
                 executor=_executor,
@@ -585,6 +547,7 @@ async def delete_image(
             result="success",
             details={
                 "force": force,
+                "project": image.project,
                 "dependents": len(dependents),
                 "aliases": image.aliases or [],
                 "cached": image.cached,
@@ -599,7 +562,7 @@ async def delete_image(
         get_cache_manager().invalidate_resource_cache("images")
         return {
             "success": True,
-            "message": f"Image {fingerprint[:12]} deleted from {host}",
+            "message": f"Image {fingerprint[:12]} deleted from the {image.project} image store on {host}",
             "forced": bool(force and dependents),
         }
     except HTTPException:

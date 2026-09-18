@@ -170,6 +170,7 @@ def wait_for_lxd_operation(
     client: pylxd.Client,
     response: object,
     timeout: Optional[int] = None,
+    project: Optional[str] = None,
 ) -> None:
     """Wait for an async LXD operation response to complete.
 
@@ -177,6 +178,10 @@ def wait_for_lxd_operation(
     wrapped unconditionally: LXD 6.9 with the storage_and_network_operations extension
     answers 202 with an operation for network, ACL and storage pool writes that older
     daemons complete before answering.
+
+    `project` names the project the operation was created in when the client is the pooled
+    one (no project of its own): an operation on a non-default project's image is not
+    visible to a read that does not name that project.
     """
     try:
         response_data = response.json()
@@ -200,21 +205,22 @@ def wait_for_lxd_operation(
 
     operation = client.api.operations[safe_segment(operation_id)]
     wait_endpoint = operation.wait
+    scope: Dict[str, Any] = {"project": project} if project else {}
     if timeout is None:
-        wait_response = wait_endpoint.get()
+        wait_response = wait_endpoint.get(params=scope) if scope else wait_endpoint.get()
     else:
         remaining = float(timeout)
         while True:
             slice_seconds = max(1, int(min(OPERATION_WAIT_SLICE_SECONDS, remaining)))
             try:
-                wait_response = wait_endpoint.get(params={"timeout": slice_seconds})
+                wait_response = wait_endpoint.get(params={"timeout": slice_seconds, **scope})
             except pylxd_exceptions.LXDAPIException as exc:
                 # important: LXD answers an elapsed wait timeout with an error body, "context
                 # deadline exceeded", in the same shape as a failed request, while the operation
                 # keeps running. Read the operation itself before believing the error: a device
                 # write on a clustered OVN instance takes longer than one slice and was reported
                 # as refused while the cluster applied it.
-                wait_response = _operation_record(operation, exc)
+                wait_response = _operation_record(operation, exc, scope)
             remaining -= slice_seconds
             status = _operation_status(wait_response)
             if status in _TERMINAL_OPERATION_STATUSES:
@@ -235,10 +241,12 @@ def wait_for_lxd_operation(
         raise pylxd_exceptions.LXDAPIException(wait_response)
 
 
-def _operation_record(operation: object, wait_error: Exception) -> object:
+def _operation_record(
+    operation: object, wait_error: Exception, scope: Optional[Dict[str, Any]] = None
+) -> object:
     """The operation as LXD holds it now, or the wait's own error if it cannot be read."""
     try:
-        return operation.get()
+        return operation.get(params=scope) if scope else operation.get()
     except pylxd_exceptions.LXDAPIException:
         raise wait_error
 

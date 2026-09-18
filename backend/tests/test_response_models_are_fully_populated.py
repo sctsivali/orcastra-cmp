@@ -45,13 +45,13 @@ def test_image_list_populates_every_declared_field() -> None:
 
 
 def test_auto_update_is_read_defensively() -> None:
-    # pylxd declares auto_update optional, so the attribute is absent rather than falsy when
-    # LXD omits it, and a direct read raises AttributeError mid-listing.
-    source = inspect.getsource(images_service)
-    assert 'getattr(image, "auto_update"' in source, (
-        "read auto_update with getattr and a default: pylxd marks it optional, so a direct "
-        "attribute access raises when LXD does not send it"
-    )
+    # LXD omits auto_update (and the other optional fields) on some records, so a row that
+    # lacks them must still become an ImageInfo instead of failing the whole listing.
+    info = images_service._info_from_row({"fingerprint": "ab" * 32}, "default")
+    assert info.auto_update is False
+    assert info.cached is False
+    assert info.profiles == []
+    assert info.project == "default"
 
 
 def test_get_identity_sets_the_fields_it_declares() -> None:

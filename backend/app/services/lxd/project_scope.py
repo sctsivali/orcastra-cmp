@@ -35,6 +35,7 @@ ALL_PROJECTS_EXTENSION: Dict[str, str] = {
     "profiles": "profiles_all_projects",
     "instances": "instance_all_projects",
     "storage-volumes": "storage_volumes_all_projects",
+    "images": "images_all_projects",
 }
 
 # Which project feature flag decides whether a collection is isolated per project.
@@ -44,6 +45,10 @@ FEATURE_FOR_COLLECTION: Dict[str, str] = {
     "network-acls": "features.networks",
     "profiles": "features.profiles",
     "storage-volumes": "features.storage.volumes",
+    # An image store is per project only when the project isolates it; LXD resolves an
+    # instance's image inside the target project alone, so a create from a default-store
+    # fingerprint into an isolating project is refused. The catalogue reads the owner.
+    "images": "features.images",
 }
 
 # How many projects the fallback path will walk on one cluster before it stops and says so.

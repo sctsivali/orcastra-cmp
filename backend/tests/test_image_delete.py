@@ -29,6 +29,8 @@ OTHER_FP = "b" * 64
 
 
 class _FakeImage:
+    """One image record as the daemon answers it, plus the delete the test observes."""
+
     def __init__(self, fingerprint=FP, cached=True, public=False):
         self.fingerprint = fingerprint
         self.aliases = [{"name": "qa/base"}]
@@ -41,24 +43,83 @@ class _FakeImage:
         self.cached = cached
         self.auto_update = False
         self.deleted = False
+        self.seen_params = []
 
     def delete(self, wait=False):
         self.deleted = True
 
+    def row(self):
+        return {
+            "fingerprint": self.fingerprint, "aliases": self.aliases,
+            "properties": self.properties, "architecture": self.architecture,
+            "size": self.size, "uploaded_at": self.uploaded_at, "public": self.public,
+            "type": self.type, "cached": self.cached, "auto_update": self.auto_update,
+        }
 
-class _FakeImages:
+
+class _FakeResponse:
+    def __init__(self, metadata):
+        self._metadata = metadata
+
+    def json(self):
+        return {"metadata": self._metadata}
+
+
+class _FakeImageNode:
+    """`client.api.images[<fp>]`: the raw API node the service reads and deletes through."""
+
+    def __init__(self, image, fingerprint):
+        self._image = image
+        self._fingerprint = fingerprint
+
+    def _match(self):
+        return self._image is not None and self._fingerprint == self._image.fingerprint
+
+    def get(self, params=None, timeout=None):
+        if not self._match():
+            raise Exception(f"Image not found: {self._fingerprint}")
+        self._image.seen_params.append(dict(params or {}))
+        return _FakeResponse(self._image.row())
+
+    def delete(self, params=None, timeout=None):
+        if not self._match():
+            raise Exception(f"Image not found: {self._fingerprint}")
+        self._image.seen_params.append(dict(params or {}))
+        self._image.delete(wait=True)
+        # A synchronous answer: no operation to wait on.
+        return _FakeResponse(None)
+
+
+class _FakeImagesApi:
     def __init__(self, image):
         self._image = image
 
-    def get(self, fingerprint):
-        if self._image is None or fingerprint != self._image.fingerprint:
-            raise Exception(f"Image not found: {fingerprint}")
-        return self._image
+    def __getitem__(self, fingerprint):
+        return _FakeImageNode(self._image, fingerprint)
+
+
+class _FakeProjectsApi:
+    """`client.api.projects.get(recursion=1)`: the project configs the owner rule reads."""
+
+    def __init__(self, projects):
+        self._projects = projects
+
+    def get(self, params=None, timeout=None):
+        return _FakeResponse(
+            [{"name": name, "config": config} for name, config in self._projects.items()]
+        )
+
+
+class _FakeApi:
+    def __init__(self, image, projects):
+        self.images = _FakeImagesApi(image)
+        self.projects = _FakeProjectsApi(projects)
 
 
 class _FakeClient:
-    def __init__(self, image):
-        self.images = _FakeImages(image)
+    def __init__(self, image, projects=None):
+        self.api = _FakeApi(image, projects or {"default": {}})
+        self.host_info = {"api_extensions": ["images_all_projects"]}
 
 
 class _ConnectionManager:
@@ -80,9 +141,9 @@ class _VM:
         self.config = {key: fingerprint} if fingerprint else {}
 
 
-def _service(image=None, vms=None) -> LXDService:
+def _service(image=None, vms=None, projects=None) -> LXDService:
     svc = LXDService.__new__(LXDService)
-    conn = _ConnectionManager(_FakeClient(image) if image is not None else None)
+    conn = _ConnectionManager(_FakeClient(image, projects) if image is not None else None)
     svc.connection_manager = conn
     svc.cert_manager = None
     svc.image_manager = ImageManager(conn, None)
@@ -311,3 +372,34 @@ def test_usage_does_not_collide_with_the_per_host_list_route():
 def test_usage_refuses_a_short_fingerprint():
     r = _client(_service(_FakeImage())).get("/images/abc123/usage", params={"host": HOST})
     assert r.status_code == 422, r.text
+
+
+def test_a_delete_names_the_store_the_project_reads():
+    """dev01 keeps its own images, so the daemon is asked about dev01; qa-cap shares default."""
+    own = _FakeImage()
+    svc = _service(own, projects={"default": {}, "dev01": {"features.images": "true"}})
+    r = _client(svc).delete(f"/images/{FP}", params={"host": HOST, "project": "dev01"})
+    assert r.status_code == 200, r.text
+    assert own.deleted is True
+    assert all(p.get("project") == "dev01" for p in own.seen_params), own.seen_params
+    assert "dev01" in r.json()["message"]
+
+    shared = _FakeImage()
+    svc = _service(shared, projects={"default": {}, "qa-cap": {"features.images": "false"}})
+    r = _client(svc).delete(f"/images/{FP}", params={"host": HOST, "project": "qa-cap"})
+    assert r.status_code == 200, r.text
+    assert all(p.get("project") == "default" for p in shared.seen_params), shared.seen_params
+
+
+def test_an_invalid_project_name_is_refused_before_the_daemon_is_asked():
+    image = _FakeImage()
+    r = _client(_service(image)).delete(f"/images/{FP}", params={"host": HOST, "project": "../x"})
+    assert r.status_code == 422
+    assert image.deleted is False
+
+
+def test_a_missing_image_names_the_store_it_was_looked_for_in():
+    svc = _service(_FakeImage(fingerprint=OTHER_FP), projects={"default": {}, "dev01": {"features.images": "true"}})
+    r = _client(svc).delete(f"/images/{FP}", params={"host": HOST, "project": "dev01"})
+    assert r.status_code == 404
+    assert "dev01" in r.json()["detail"]

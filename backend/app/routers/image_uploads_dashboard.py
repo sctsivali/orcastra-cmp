@@ -34,7 +34,8 @@ from app.core.cache import get_cache_manager
 from app.core.database import get_db
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import org_scope_dependency, verify_cluster_access, project_is_visible
+from app.core.api_key_capabilities import is_valid_project_name
 from app.routers.image_uploads import (
     CreateUploadRequest,
     ImageUploadSession,
@@ -148,6 +149,13 @@ async def create_upload(
     _ro: None = Depends(check_read_only_mode),
 ):
     verify_cluster_access(body.cluster_id)
+    # The import lands in this project's store (LXD maps a project that does not isolate images
+    # onto default itself), so the project must be a real name the caller may reach.
+    project = body.project or "default"
+    if not is_valid_project_name(project):
+        raise HTTPException(status_code=422, detail="Invalid project name")
+    if not project_is_visible(body.cluster_id, project):
+        raise HTTPException(status_code=403, detail="Access denied to this project")
     if not _ALIAS_RE.match(body.alias):
         raise HTTPException(status_code=422, detail="Invalid image alias")
     if body.instance_type not in _INSTANCE_TYPES:
