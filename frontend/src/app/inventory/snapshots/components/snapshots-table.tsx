@@ -204,7 +204,8 @@ export function SnapshotsTable({
                 </TableCell>
                 <TableCell className="whitespace-nowrap">{snapshot.project || "default"}</TableCell>
                 <TableCell>{ORIGIN_LABEL[snapshotOrigin(snapshot)]}</TableCell>
-                <TableCell>
+                {/* nowrap: a squeezed table broke "15.89 MB" across two lines. */}
+                <TableCell className="whitespace-nowrap">
                   {typeof snapshot.size === "number" ? (
                     formatBytes(snapshot.size)
                   ) : (

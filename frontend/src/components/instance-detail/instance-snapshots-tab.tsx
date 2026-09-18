@@ -238,7 +238,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                       assert it is gone read the fleet grid, so it survived here.
                     */}
                     <TableCell>{ORIGIN_LABEL[snapshotOrigin(snapshot)]}</TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       {typeof snapshot.size === "number" ? (
                         formatBytes(snapshot.size)
                       ) : (

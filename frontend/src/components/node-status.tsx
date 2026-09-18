@@ -28,27 +28,65 @@ import {
 
 const nodeId = (node: NodeStatus) => node.name;
 
+// Shaped like the section it stands in for: heading, toolbar, then cards with a real card's
+// blocks. The fleet read takes seconds on a fleet with a WAN member, and a placeholder a third
+// of the height pushed the Projects grid down by a few hundred pixels when the cards landed,
+// under an operator who had already started reading it. The chrome here is the fixed-height
+// part; the card blocks are the ones a NodeStatusCard renders, in order.
 function LoadingSkeleton() {
+  const headingId = useId();
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-      {[...Array(3)].map((_, i) => (
-        <Card key={i} className="overflow-hidden">
-          <Skeleton className="h-1 w-full" />
-          <CardContent className="p-4">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <Skeleton className="h-10 w-10 rounded-lg" />
-                <div className="space-y-2">
-                  <Skeleton className="h-4 w-20" />
-                  <Skeleton className="h-3 w-32" />
+    <section aria-labelledby={headingId} aria-busy="true" data-slot="clusters-section" className="space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-2">
+          <h2 id={headingId} className="text-lg font-semibold">Clusters</h2>
+          <Skeleton className="h-4 w-40" />
+        </div>
+        <Skeleton className="h-9 w-36" />
+      </div>
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Skeleton className="h-10 w-72" />
+          <Skeleton className="h-10 w-24" />
+          <Skeleton className="ml-auto h-10 w-44" />
+        </div>
+        <Skeleton className="h-4 w-28" />
+        <Skeleton className="h-10 w-36" />
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+        {[...Array(3)].map((_, i) => (
+          <Card key={i} className="overflow-hidden">
+            <Skeleton className="h-1 w-full" />
+            <CardContent className="p-3 md:p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Skeleton className="h-10 w-10 rounded-lg" />
+                  <div className="space-y-2">
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-3 w-32" />
+                  </div>
                 </div>
+                <Skeleton className="h-5 w-20 rounded-full" />
               </div>
-              <Skeleton className="h-5 w-20 rounded-full" />
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
+              <Skeleton className="mt-3 h-3 w-48" />
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[...Array(3)].map((_, j) => (
+                  <div key={j} className="flex flex-col gap-1">
+                    <Skeleton className="h-3 w-12" />
+                    <Skeleton className="h-5 w-16" />
+                    <Skeleton className="h-1.5 w-full" />
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 pt-3 border-t">
+                <Skeleton className="h-8 w-24" />
+              </div>
+              <Skeleton className="mt-3 h-9 w-full" />
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </section>
   );
 }
 
