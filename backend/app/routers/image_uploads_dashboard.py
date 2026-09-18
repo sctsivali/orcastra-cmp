@@ -35,6 +35,8 @@ from app.core.database import get_db
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access, project_is_visible
+from app.services.lxd import LXDService, get_lxd_service
+from app.services.lxd.exceptions import LXDConnectionError
 from app.core.api_key_capabilities import is_valid_project_name
 from app.routers.image_uploads import (
     CreateUploadRequest,
@@ -147,15 +149,21 @@ async def create_upload(
     db: AsyncSession = Depends(get_db),
     _rbac: AuthenticatedUser = Depends(require_partner()),
     _ro: None = Depends(check_read_only_mode),
+    lxd_service: LXDService = Depends(get_lxd_service),
 ):
     verify_cluster_access(body.cluster_id)
-    # The import lands in this project's store (LXD maps a project that does not isolate images
-    # onto default itself), so the project must be a real name the caller may reach.
+    # The import lands in the store this project reads (LXD maps a project that does not
+    # isolate images onto default itself), so the name must be valid and the caller must be
+    # allowed to see that store, which is what the images routes check as well.
     project = body.project or "default"
     if not is_valid_project_name(project):
         raise HTTPException(status_code=422, detail="Invalid project name")
-    if not project_is_visible(body.cluster_id, project):
-        raise HTTPException(status_code=403, detail="Access denied to this project")
+    try:
+        store = await asyncio.to_thread(lxd_service.image_store_of, body.cluster_id, project)
+    except LXDConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    if not project_is_visible(body.cluster_id, store):
+        raise HTTPException(status_code=403, detail="Access denied to this image store")
     if not _ALIAS_RE.match(body.alias):
         raise HTTPException(status_code=422, detail="Invalid image alias")
     if body.instance_type not in _INSTANCE_TYPES:

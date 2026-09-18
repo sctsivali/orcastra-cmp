@@ -4,7 +4,7 @@ Provides endpoints for listing available images on each node.
 """
 
 from fastapi import APIRouter, HTTPException, Depends, Path, Query
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, NamedTuple, Optional, Set
 import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -305,8 +305,6 @@ async def list_node_images(
     """The images `project` can use on one LXD node: what its own store holds when it
     isolates images, else the shared default store. `project` on the response names which."""
     verify_cluster_access(host)
-    if not project_is_visible(host, project):
-        raise HTTPException(status_code=403, detail="Access denied to this project")
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()
@@ -317,6 +315,7 @@ async def list_node_images(
             )
 
         listing = await lxd_service.list_images(host, project)
+        _store_must_be_visible(host, listing.project or "default")
         result = ImageListResponse(
             host=host,
             images=listing.images,
@@ -350,10 +349,54 @@ def _image_fingerprint_of(vm) -> Optional[str]:
     return config.get("volatile.base_image") or config.get("image.fingerprint")
 
 
+def _store_must_be_visible(host: str, store: str) -> None:
+    """Refuse unless the caller may see the image store that actually answers.
+
+    important: the store, not the project the caller named. A project that shares the host's
+    default store answers with default-store rows, which a bounded Partner may see even when
+    the project itself is outside their bound; refusing on the name would take away the
+    catalogue a create in that project can still use. A project that keeps its own store is
+    its own store's name, and that is what the bound is checked against.
+    """
+    if not project_is_visible(host, store):
+        raise HTTPException(status_code=403, detail="Access denied to this image store")
+
+
+async def _resolved_store(lxd_service: LXDService, host: str, project: str) -> str:
+    try:
+        return await run_blocking(
+            lxd_service.image_store_of,
+            host,
+            project,
+            timeout=IMAGE_USAGE_TIMEOUT,
+            label=f"image_store_of[{host}/{project}]",
+            executor=_executor,
+            max_in_flight=IMAGE_DELETE_MAX_IN_FLIGHT,
+        )
+    except (BlockingTimeout, BlockingPoolFull):
+        raise HTTPException(status_code=503, detail=f"Could not resolve the image store on {host}") from None
+    except LXDConnectionError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from None
+
+
+class _Dependents(NamedTuple):
+    """Instances built from an image: the names the caller may see, and how many they may not."""
+    names: List[str]
+    hidden: int
+
+    def __bool__(self) -> bool:
+        return bool(self.names) or self.hidden > 0
+
+
 async def _instances_using_image(
     lxd_service: LXDService, host: str, fingerprint: str
-) -> List[str]:
-    """Names of instances on `host`, in any of its projects, created from `fingerprint`.
+) -> _Dependents:
+    """Instances on `host`, in any of its projects, created from `fingerprint`.
+
+    The names are held to the caller's project bound: a bounded Partner on a shared cluster
+    learns that instances in projects outside the bound exist and how many, never what they
+    are called. The refusal still counts them, because the image is their base image
+    whoever owns them.
 
     note: one node, not the fleet. This used to go through ``list_all_vms``, which fans out to
     every cluster the caller may see; on a fleet with a dead member or a large partner cloud
@@ -381,6 +424,7 @@ async def _instances_using_image(
     if not connected:
         raise LXDConnectionError(f"Could not read the instances on {host}")
     names = []
+    hidden = 0
     for vm in vms:
         used = _image_fingerprint_of(vm)
         if not used:
@@ -388,17 +432,25 @@ async def _instances_using_image(
         # LXD stores volatile.base_image as the full digest, but an instance created from a
         # short fingerprint can carry the prefix. Compare both ways, as the tenant filter does.
         if used == fingerprint or used.startswith(fingerprint) or fingerprint.startswith(used):
-            names.append(getattr(vm, "name", "") or "")
-    return sorted(n for n in names if n)
+            name = getattr(vm, "name", "") or ""
+            if not name:
+                continue
+            if project_is_visible(host, getattr(vm, "project", None)):
+                names.append(name)
+            else:
+                hidden += 1
+    return _Dependents(sorted(names), hidden)
 
 
-def _dependents_detail(fingerprint: str, names: List[str]) -> str:
+def _dependents_detail(fingerprint: str, dependents: _Dependents) -> str:
+    names = dependents.names
+    total = len(names) + dependents.hidden
     shown = ", ".join(names[:DEPENDENTS_NAMED_IN_ERROR])
-    rest = len(names) - DEPENDENTS_NAMED_IN_ERROR
+    rest = total - min(len(names), DEPENDENTS_NAMED_IN_ERROR)
     if rest > 0:
-        shown = f"{shown} and {rest} more"
+        shown = f"{shown} and {rest} more" if shown else f"{rest} in projects you cannot see"
     return (
-        f"Image {fingerprint[:12]} is the base image for {len(names)} instance(s): {shown}. "
+        f"Image {fingerprint[:12]} is the base image for {total} instance(s): {shown}. "
         "Those instances keep running if it is deleted, but the image can no longer be used "
         "to launch or refresh. Repeat with force=true to delete it anyway."
     )
@@ -410,7 +462,10 @@ class ImageUsageResponse(BaseModel):
     project: str = Field("default", description="The project whose store the image is read from")
     fingerprint: str = Field(..., description="Full image fingerprint")
     dependents: List[str] = Field(
-        ..., description="Instances on that cluster created from this image"
+        ..., description="Instances on that cluster created from this image, as far as the caller may see"
+    )
+    hidden_dependents: int = Field(
+        0, description="Instances created from it in projects the caller may not see"
     )
 
 
@@ -445,12 +500,15 @@ async def image_usage(
     override with `force` is the safe direction.
     """
     verify_cluster_access(host)
-    if not project_is_visible(host, project):
-        raise HTTPException(status_code=403, detail="Access denied to this project")
+    _store_must_be_visible(host, await _resolved_store(lxd_service, host, project))
     try:
         dependents = await _instances_using_image(lxd_service, host, fingerprint)
         return ImageUsageResponse(
-            host=host, project=project, fingerprint=fingerprint, dependents=dependents
+            host=host,
+            project=project,
+            fingerprint=fingerprint,
+            dependents=dependents.names,
+            hidden_dependents=dependents.hidden,
         )
     except HTTPException:
         raise
@@ -492,10 +550,8 @@ async def delete_image(
 ):
     """Delete an image from the store `project` reads on a cluster."""
     verify_cluster_access(host)
-    if not project_is_visible(host, project):
-        raise HTTPException(status_code=403, detail="Access denied to this project")
 
-    dependents: List[str] = []
+    dependents = _Dependents([], 0)
     image: Optional[ImageInfo] = None
     try:
         try:
@@ -519,10 +575,12 @@ async def delete_image(
             ) from None
 
         if image is None:
+            _store_must_be_visible(host, await _resolved_store(lxd_service, host, project))
             raise HTTPException(
                 status_code=404,
                 detail=f"Image '{fingerprint[:12]}' not found in the {project} image store on {host}",
             )
+        _store_must_be_visible(host, image.project)
 
         # important: the refusal is here, not only in the UI. The dashboard's own dependent
         # count is tenant-filtered, and an API key reaching this route has no UI at all.
@@ -568,7 +626,7 @@ async def delete_image(
             details={
                 "force": force,
                 "project": image.project,
-                "dependents": len(dependents),
+                "dependents": len(dependents.names) + dependents.hidden,
                 "aliases": image.aliases or [],
                 "cached": image.cached,
                 "public": image.public,
@@ -604,6 +662,6 @@ async def delete_image(
             target_host=host,
             result="failure",
             error_message=str(e),
-            details={"force": force, "dependents": len(dependents)},
+            details={"force": force, "dependents": len(dependents.names) + dependents.hidden},
         )
         raise lxd_http_error(e, "Image", fingerprint[:12])

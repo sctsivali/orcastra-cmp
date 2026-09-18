@@ -220,8 +220,10 @@ export interface ImageUsageResponse {
   fingerprint: string;
   /** The store that was asked about, as the request named it. */
   project?: string;
-  /** Instances on that cluster created from this image. */
+  /** Instances on that cluster created from this image, as far as the caller may see. */
   dependents: string[];
+  /** Instances created from it in projects the caller may not see. */
+  hidden_dependents?: number;
 }
 
 // GPU DRM (Direct Rendering Manager) Info

@@ -136,6 +136,10 @@ class ImageManager:
             raise LXDConnectionError(f"Could not connect to {host}")
         return client
 
+    def image_store_of(self, host: str, project: Optional[str]) -> str:
+        """The store `project` reads on `host`: its own when it isolates images, else default."""
+        return resolve_owner(self._client(host), "images", project)
+
     def get_image(
         self, host: str, fingerprint: str, project: Optional[str] = None
     ) -> Optional[ImageInfo]:

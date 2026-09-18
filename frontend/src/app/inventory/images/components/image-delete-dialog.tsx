@@ -44,8 +44,9 @@ export function ImageDeleteDialog({ target, onClose, onDeleted, localDependents 
   const [display, setDisplay] = useState<ImageRow | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Dependents the backend knew about and this page could not see. The instances list is
-  // tenant-filtered server side, so a local count of zero is not proof of zero.
-  const [serverDependents, setServerDependents] = useState<string[] | null>(null);
+  // tenant-filtered server side, so a local count of zero is not proof of zero. `hidden` is
+  // how many sit in projects outside the caller's bound: counted, never named.
+  const [serverDependents, setServerDependents] = useState<{ names: string[]; hidden: number } | null>(null);
   // null while the preflight is in flight, so the confirm can block until it answers.
   const preflightPending = target !== null && serverDependents === null;
 
@@ -61,12 +62,12 @@ export function ImageDeleteDialog({ target, onClose, onDeleted, localDependents 
     imageAPI
       .usage(target.fingerprint, target.node, target.project)
       .then((usage) => {
-        if (!cancelled) setServerDependents(usage.dependents);
+        if (!cancelled) setServerDependents({ names: usage.dependents, hidden: usage.hidden_dependents ?? 0 });
       })
       .catch(() => {
         // A failed preflight must not block the delete: the backend refuses on its own if
         // anything depends on the image. Fall back to what this page can see.
-        if (!cancelled) setServerDependents(localDependents(target.fingerprint));
+        if (!cancelled) setServerDependents({ names: localDependents(target.fingerprint), hidden: 0 });
       });
     return () => {
       cancelled = true;
@@ -82,6 +83,10 @@ export function ImageDeleteDialog({ target, onClose, onDeleted, localDependents 
     onClose();
   };
 
+  const dependents = serverDependents?.names ?? [];
+  const hidden = serverDependents?.hidden ?? 0;
+  const dependentCount = dependents.length + hidden;
+
   const confirm = async () => {
     if (!target) return;
     setError(null);
@@ -91,7 +96,7 @@ export function ImageDeleteDialog({ target, onClose, onDeleted, localDependents 
         host: target.node,
         project: target.project,
         // Only ever forced when the operator was shown the dependents and ticked through.
-        force: (serverDependents?.length ?? 0) > 0,
+        force: dependentCount > 0,
       });
       toast({
         title: "Image deleted",
@@ -105,8 +110,6 @@ export function ImageDeleteDialog({ target, onClose, onDeleted, localDependents 
       setError(err instanceof Error ? err.message : "Could not delete the image");
     }
   };
-
-  const dependents = serverDependents ?? [];
 
   return (
     <DestructiveConfirmDialog
@@ -128,15 +131,17 @@ export function ImageDeleteDialog({ target, onClose, onDeleted, localDependents 
         </>
       }
       dependents={
-        dependents.length > 0
+        dependentCount > 0
           ? {
-              summary: `${dependents.length} instance(s) on ${display?.node} were created from this image`,
+              summary:
+                `${dependentCount} instance(s) on ${display?.node} were created from this image` +
+                (hidden > 0 ? ` (${hidden} in projects you cannot see)` : ""),
               names: dependents,
             }
           : undefined
       }
       acknowledgeLabel={
-        dependents.length > 0
+        dependentCount > 0
           ? "I understand these instances were built from this image and will keep running without it."
           : undefined
       }

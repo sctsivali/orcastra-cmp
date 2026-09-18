@@ -439,3 +439,63 @@ def test_an_unreadable_host_never_lets_a_delete_through():
 
     assert r.status_code == 503, r.text
     assert image.deleted is False
+
+
+def _bounded(client_call):
+    """Run one request as a Partner whose bound on HOST is the default project only."""
+    import contextvars
+
+    from app.core import org_scope
+
+    def run():
+        org_scope._visible_projects_var.set({HOST: {"default"}})
+        org_scope._allowed_clusters_var.set(None)
+        return client_call()
+
+    return contextvars.copy_context().run(run)
+
+
+def test_a_bounded_partner_may_delete_from_the_default_store_a_shared_project_reads():
+    # `qa-shared` is outside the bound but keeps no store: the image sits in the default
+    # store, which the bound allows, so the delete is judged on that store and goes through.
+    image = _FakeImage()
+    svc = _service(image, projects={"default": {}, "qa-shared": {"features.images": "false"}})
+    client = _client(svc)
+
+    r = _bounded(lambda: client.delete(f"/images/{FP}", params={"host": HOST, "project": "qa-shared"}))
+
+    assert r.status_code == 200, r.text
+    assert image.deleted is True
+
+
+def test_a_bounded_partner_is_refused_an_own_store_outside_the_bound():
+    image = _FakeImage()
+    image.project = "cust-other"
+    svc = _service(image, projects={"default": {}, "cust-other": {"features.images": "true"}})
+    client = _client(svc)
+
+    r = _bounded(lambda: client.delete(f"/images/{FP}", params={"host": HOST, "project": "cust-other"}))
+
+    assert r.status_code == 403, r.text
+    assert image.deleted is False
+
+
+def test_dependents_outside_the_bound_are_counted_but_not_named():
+    # The refusal still stands on a dependent the caller cannot see; the detail counts it
+    # and names only what the bound allows.
+    image = _FakeImage()
+    seen = _VM("mine-01")
+    hidden = _VM("theirs-01")
+    hidden.project = "cust-other"
+    svc = _service(image, vms=[seen, hidden])
+    client = _client(svc)
+
+    usage = _bounded(lambda: client.get(f"/images/{FP}/usage", params={"host": HOST}))
+    assert usage.status_code == 200, usage.text
+    assert usage.json()["dependents"] == ["mine-01"]
+    assert usage.json()["hidden_dependents"] == 1
+
+    r = _bounded(lambda: client.delete(f"/images/{FP}", params={"host": HOST}))
+    assert r.status_code == 409, r.text
+    detail = r.json()["detail"]
+    assert "2 instance(s)" in detail and "mine-01" in detail and "theirs-01" not in detail

@@ -521,6 +521,10 @@ class LXDService:
     # note: the two below are deliberately sync. pylxd blocks, and a delete waits on a real
     # LXD operation, so the router hands them to run_blocking with an explicit timeout rather
     # than this layer hiding the block behind an async signature.
+    def image_store_of(self, host: str, project: Optional[str] = None) -> str:
+        """The store `project` reads on a host, which is what a caller must be allowed to see."""
+        return self.image_manager.image_store_of(host, project)
+
     def get_image(
         self, host: str, fingerprint: str, project: Optional[str] = None
     ) -> Optional[ImageInfo]:
