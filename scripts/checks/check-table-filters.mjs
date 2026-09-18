@@ -35,7 +35,7 @@ const PROJECT_FIELDS = new Set(['project', 'projects']);
 const ROLE_EXEMPT = new Map([
   ['app/inventory/clusters/page.tsx', 'a cluster row IS the node'],
   ['app/inventory/clustering/members/page.tsx', 'server_name is a host inside the selected cluster; node is the reserved selector'],
-  ['components/dashboard.tsx', 'a project card row IS the project'],
+  ['components/dashboard/projects-section.tsx', 'a project card row IS the project'],
 ]);
 
 /** Non-pinned facets rendered at rest. Node and project are structural and unbudgeted. */

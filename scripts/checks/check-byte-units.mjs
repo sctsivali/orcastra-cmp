@@ -26,7 +26,7 @@ const SCALE_1000 = /Math\.pow\(\s*1000|1000\s*\*\*|\/\s*1000(?:\s*\/\s*1000)+|k\
 // Blocks that legitimately pair binary maths with a binary label, or that are constants rather
 // than display. Keyed by file, valued by the count of allowed windows.
 const BASELINE = {
-  "frontend/src/components/dashboard.tsx": 1, // formatQuota: GiB in, GiB out
+  "frontend/src/components/dashboard/project-card.tsx": 1, // formatQuota: GiB in, GiB out
   "frontend/src/components/project-create-form.tsx": 2, // the form's own GiB/MiB inputs
 };
 

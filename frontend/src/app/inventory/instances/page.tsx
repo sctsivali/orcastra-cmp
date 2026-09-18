@@ -1,111 +1,73 @@
 "use client";
 
-import { Suspense, useCallback, useState, useMemo, useEffect, useRef } from "react";
+import {
+  Suspense,
+  useCallback,
+  useState,
+  useMemo,
+  useEffect,
+} from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Button } from "@/components/ui/button";
+
 import { RefreshButton } from "@/components/ui/refresh-button";
+
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { TableEmptyRow } from "@/components/ui/table-text";
-import { formatInstanceType } from "@/lib/utils";
-import { Loader2, Box } from "lucide-react";
+
+import { Loader2 } from "lucide-react";
 import { useInstanceStream } from "@/hooks/use-instance-stream";
+
 import { isStalePending, keyFor, resolvePendingCreate } from "@/lib/pending-creates";
+
 import { VMInfo } from "@/types/api";
-import { useToast } from "@/hooks/use-toast";
+
 import { LoadingLottiePage } from "@/components/loading-lottie";
-import {
-  useInstances,
-  useStartInstance,
-  useStopInstance,
-  useRestartInstance,
-  useDeleteInstance,
-} from "@/hooks/use-lxd";
+
+import { useInstances } from "@/hooks/use-lxd";
 import { InstanceActionDialogs } from "./components/instance-action-dialogs";
+
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
+
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+
 import { useNavigationProgress } from "@/components/navigation/navigation-progress";
-import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+
 import { useTenantAccess } from "@/hooks/use-tenant-access";
+
 import { usePermissions } from "@/hooks/use-permissions";
+
 import { Role } from "@/types/rbac";
+
 import { useTableSort } from "@/hooks/use-table-sort";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
 import { TableToolbar } from "@/components/ui/table-toolbar";
+
 import { useTableFilters } from "@/hooks/use-table-filters";
-import { defineTable, fromSort } from "@/lib/table-filter";
+
 import { Plus } from "lucide-react";
+
 import { RebuildDialog } from "@/components/rebuild-dialog";
+
 import { MoveInstanceDialog } from "@/components/instance-detail/move-instance-dialog";
+
 import { PageReadError } from "@/components/ui/read-error-state";
+
 import { useRowFocus } from "@/hooks/use-row-focus";
+
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
-import { PendingCreateRows } from "./components/pending-create-rows";
-import { InstanceTableRow } from "./components/instance-table-row";
+
+import { INSTANCES, InstancesTable } from "./components/instances-table";
+
+import { useInstanceActions } from "./components/use-instance-actions";
+
 
 // The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
 // instance's own device; an instance that overrode nothing still has one through its profile,
 // and in that case LXD reports no size because the pool default applies.
 
-
-// note: the facet fields are named `host` and `project` deliberately, matching both the
-// existing sort fields and the OrcaHub deep-link keys. That contract keeps working with no
-// translation layer. Only `?instance=` needs mapping, and it is handled in the component.
-const INSTANCES = defineTable<any>()({
-  searchPlaceholder: "Search instances",
-  defaultSort: { field: "name", direction: "asc" },
-  columns: [
-    { field: "name", label: "Name", sort: (i) => i.name, search: (i) => i.name, filter: fromSort("text") },
-    {
-      field: "status",
-      label: "Status",
-      sort: (i) => i.status,
-      facet: (i) => i.status,
-      facetSpec: { primary: true },
-    },
-    {
-      field: "type",
-      label: "Type",
-      sort: (i) => i.type,
-      facet: (i) => i.type,
-      // formatInstanceType, not formatLabel: formatLabel("vm") returns "VM" through the
-      // acronym map, which would be a fifth vocabulary for this one enum.
-      facetSpec: { format: formatInstanceType },
-    },
-    {
-      field: "host",
-      label: "Node",
-      sort: (i) => i.host,
-      search: (i) => i.host,
-      facet: (i) => i.host,
-      facetSpec: { role: "node", primary: true },
-    },
-    {
-      field: "project",
-      label: "Project",
-      sort: (i) => i.project || "default",
-      search: (i) => i.project,
-      facet: (i) => i.project || "default",
-      facetSpec: { role: "project", primary: true },
-    },
-    { field: "ip_addresses", label: "IP Addresses", sort: (i) => i.ip_addresses?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
-    { field: "profiles", label: "Profiles", sort: (i) => i.profiles?.length ?? 0, filter: fromSort("number", { unit: "count" }) },
-    {
-      field: "tags",
-      label: "Tags",
-      facet: (i) => (i.tags ?? []).map((t: any) => (typeof t === "string" ? t : t?.name)).filter(Boolean),
-      facetSpec: { emptyLabel: "(untagged)" },
-    },
-  ],
-});
 
 function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
@@ -184,48 +146,27 @@ function InstancesContent() {
     return () => clearInterval(id);
   }, [hasLivePlaceholder]);
 
-
-  const startInstance = useStartInstance();
-  const stopInstance = useStopInstance();
-  const restartInstance = useRestartInstance();
-  const deleteInstance = useDeleteInstance();
+  const actions = useInstanceActions({ refetch });
+  const {
+    isReadOnly,
+    deleteTarget,
+    setDeleteTarget,
+    rebuildTarget,
+    setRebuildTarget,
+    copyTarget,
+    setCopyTarget,
+  } = actions;
 
   // Deep link from OrcaHub: /inventory/instances?instance=<name>&project=<lxd-project>&host=<cluster>
   // seeds the initial filters. They are only the initial state; the user stays free to change them.
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
-  // Instance pending delete confirmation (controls the shared AlertDialog).
-  const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
-  // Instance pending rebuild (controls the shared RebuildDialog).
-  const [rebuildTarget, setRebuildTarget] = useState<VMInfo | null>(null);
-  // Instance pending a copy to another project, member or cluster.
-  const [copyTarget, setCopyTarget] = useState<VMInfo | null>(null);
-  // Radix keeps AlertDialogContent mounted through its ~200ms exit fade, so
-  // reading a just-nulled deleteTarget flashes blank name/host. Keep the last
-  // target around and render the dialog body from it so it stays populated
-  // during that fade (on both the Delete and Cancel paths).
-  const deleteDisplayRef = useRef<VMInfo | null>(null);
-  if (deleteTarget) deleteDisplayRef.current = deleteTarget;
-  const deleteDisplay = deleteTarget ?? deleteDisplayRef.current;
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [selectedInstance, setSelectedInstance] = useState<VMInfo | null>(null);
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
-  // Confirmation for stop/restart, with a Force option (power-cycle) for guests
-  // that can't answer a graceful ACPI shutdown, e.g. a VM with no OS installed.
-  const [confirmAction, setConfirmAction] = useState<{
-    open: boolean;
-    action: "stop" | "restart" | null;
-    name: string;
-    host: string;
-    project: string;
-    force: boolean;
-  }>({ open: false, action: null, name: "", host: "", project: "", force: false });
   const router = useRouter();
   const { navigate } = useNavigationProgress();
-  const { toast } = useToast();
-  const { isReadOnly } = useReadOnlyMode();
   // permsLoading matters for the labels below: until the access rules arrive, hasPermission
   // answers false for everyone, so an operator briefly sees every action disabled and tooltipped
   // "No permission" when the real answer is "not known yet". The buttons stay disabled, which is
@@ -280,105 +221,6 @@ function InstancesContent() {
     setSelectedInstance(instance);
     setIsMonitoringModalOpen(true);
   };
-
-  // Entry point for the row action buttons. Start fires immediately; stop and
-  // restart open a confirm dialog so the user can choose a graceful or forced
-  // (power-cycle) operation.
-  const handleAction = (
-    instanceName: string,
-    host: string,
-    project: string,
-    action: "start" | "stop" | "restart"
-  ) => {
-    if (isReadOnly) {
-      toast({
-        title: "Read-Only Mode Active",
-        description: "Instance actions are disabled in read-only mode",
-        variant: "destructive",
-      });
-      return;
-    }
-    if (action === "start") {
-      runAction(instanceName, host, project, action);
-      return;
-    }
-    setConfirmAction({ open: true, action, name: instanceName, host, project, force: false });
-  };
-
-  const runAction = async (
-    instanceName: string,
-    host: string,
-    project: string,
-    action: "start" | "stop" | "restart",
-    force = false
-  ) => {
-    try {
-      setActionLoading(`${instanceName}-${action}`);
-
-      if (action === "start") {
-        await startInstance.mutateAsync({ name: instanceName, host, project });
-      } else if (action === "stop") {
-        await stopInstance.mutateAsync({ name: instanceName, host, project, force });
-      } else {
-        await restartInstance.mutateAsync({ name: instanceName, host, project, force });
-      }
-
-      toast({
-        title: "Success",
-        description: `Instance ${instanceName} ${action} initiated`,
-      });
-
-      // Refresh instances after action
-      setTimeout(() => refetch(), 2000);
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : `Failed to ${action} instance`,
-        variant: "destructive",
-      });
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const handleDeleteConfirm = async () => {
-    if (!deleteTarget) return;
-    const target = deleteTarget;
-    try {
-      await deleteInstance.mutateAsync({
-        name: target.name,
-        host: target.host,
-        force: true, // stops a running instance before deleting
-        project: target.project || "default",
-      });
-      toast({
-        title: "Instance deleted",
-        description: `"${target.name}" has been deleted.`,
-      });
-    } catch (err) {
-      toast({
-        title: "Failed to delete instance",
-        description: err instanceof Error ? err.message : String(err),
-        variant: "destructive",
-      });
-    } finally {
-      setDeleteTarget(null);
-    }
-  };
-
-  const confirmActionRun = () => {
-    if (confirmAction.action) {
-      runAction(
-        confirmAction.name,
-        confirmAction.host,
-        confirmAction.project,
-        confirmAction.action,
-        confirmAction.force,
-      );
-    }
-    setConfirmAction((prev) => ({ ...prev, open: false }));
-  };
-
 
   const sortedInstances = useMemo(
     () => sortItems(filters.filteredRows),
@@ -469,80 +311,29 @@ function InstancesContent() {
           {focus.hidden && (
             <RowFocusNotice label={focus.hidden.label} onShow={focus.showHidden} className="mb-4" />
           )}
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <SortableTableHead label="Name" field="name" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Type" field="type" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Node" field="host" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="IP Addresses" field="ip_addresses" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                <TableHead>Root Disk</TableHead>
-                <TableHead>Tags</TableHead>
-                <TableHead>Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <PendingCreateRows pending={visiblePendingCreates} />
-              {paginatedInstances.length === 0 ? (
-                visiblePendingCreates.length === 0 ? (
-                  <TableEmptyRow
-                    colSpan={10}
-                    icon={Box}
-                    title={
-                      filters.activeFilterCount > 0
-                        ? "No instances found"
-                        : "No instances yet"
-                    }
-                    // The description was unconditional, so a deployment with no clusters at all
-                    // was told its filters were wrong. Eight sibling tables already guard this;
-                    // this is the most-visited one and was the outlier.
-                    description={
-                      filters.activeFilterCount > 0
-                        ? "No instance matches the current filters."
-                        : "Instances appear here once a cluster reports one."
-                    }
-                    action={
-                      filters.activeFilterCount === 0 && canCreateInstance ? (
-                        <Button
-                          size="sm"
-                          onClick={() => navigate("/inventory/instances/create")}
-                        >
-                          Create Instance
-                        </Button>
-                      ) : undefined
-                    }
-                  />
-                ) : null
-              ) : (
-                paginatedInstances.map((instance: any) => (
-                <InstanceTableRow
-                  key={keyFor(instance.host, instance.project || "default", instance.name)}
-                  instance={instance}
-                  rowProps={focus.rowProps(keyFor(instance.host, instance.project || "default", instance.name))}
-                  onOpen={handleInstanceClick}
-                  onAction={handleAction}
-                  actionLoading={actionLoading}
-                  isReadOnly={isReadOnly}
-                  hasPermission={hasPermission}
-                  permissionTitle={permissionTitle}
-                  canDeleteInstance={canDeleteInstance}
-                  canOpenClusters={canOpenClusters}
-                  deletePending={
-                    deleteInstance.isPending &&
-                    deleteTarget?.name === instance.name &&
-                    deleteTarget?.host === instance.host
-                  }
-                  onCopy={setCopyTarget}
-                  onRebuild={setRebuildTarget}
-                  onDelete={setDeleteTarget}
-                />
-              ))
-            )}
-            </TableBody>
-          </Table>
+          <InstancesTable
+            rows={paginatedInstances}
+            pending={visiblePendingCreates}
+            sortField={sortField}
+            sortDirection={sortDirection}
+            onSort={handleSort}
+            activeFilterCount={filters.activeFilterCount}
+            canCreateInstance={canCreateInstance}
+            onCreate={() => navigate("/inventory/instances/create")}
+            rowProps={focus.rowProps}
+            onOpen={handleInstanceClick}
+            onAction={actions.handleAction}
+            actionLoading={actions.actionLoading}
+            isReadOnly={isReadOnly}
+            hasPermission={hasPermission}
+            permissionTitle={permissionTitle}
+            canDeleteInstance={canDeleteInstance}
+            canOpenClusters={canOpenClusters}
+            deletePending={actions.deletePending}
+            onCopy={setCopyTarget}
+            onRebuild={setRebuildTarget}
+            onDelete={setDeleteTarget}
+          />
           <DataTablePagination
             currentPage={currentPage}
             totalPages={totalPages}
@@ -594,17 +385,17 @@ function InstancesContent() {
       {/* Confirm-and-mutate dialogs, shared across rows */}
       <InstanceActionDialogs
         deleteTarget={deleteTarget}
-        deleteDisplay={deleteDisplay}
-        deletePending={deleteInstance.isPending}
+        deleteDisplay={actions.deleteDisplay}
+        deletePending={actions.deleteInFlight}
         onDeleteOpenChange={(open) => {
           // Don't let Esc / outside-click dismiss it mid-delete; the delete keeps running
           // server-side and closing would strand the UI.
-          if (!open && !deleteInstance.isPending) setDeleteTarget(null);
+          if (!open && !actions.deleteInFlight) setDeleteTarget(null);
         }}
-        onDeleteConfirm={handleDeleteConfirm}
-        confirmAction={confirmAction}
-        onConfirmActionChange={setConfirmAction}
-        onConfirmActionRun={confirmActionRun}
+        onDeleteConfirm={actions.handleDeleteConfirm}
+        confirmAction={actions.confirmAction}
+        onConfirmActionChange={actions.setConfirmAction}
+        onConfirmActionRun={actions.confirmActionRun}
       />
     </div>
   );
