@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { lxdResourcePath } from "@/lib/lxd-resource-path";
+import { permissionResources, resourceQualifier, type PermissionResource } from "@/components/groups/permission-resources";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,7 +19,6 @@ import { PANEL_PAGE_SIZE } from "@/lib/pagination";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
 import { Label } from "@/components/ui/label";
-import { EMPTY_VALUE } from "@/components/ui/table-text";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -44,7 +43,7 @@ import {
   useCreateGroup, 
   useProjects, 
   useInstances, 
-  useImages, 
+  useImageStores, 
   useProfiles, 
   useNetworks, 
   useStoragePools 
@@ -63,12 +62,7 @@ interface Permission {
   entitlement: string;
 }
 
-interface Resource {
-  name: string;
-  path: string;
-  // the project that holds it, so two rows both called "default" can be told apart
-  project?: string;
-}
+type Resource = PermissionResource;
 
 /** A checkbox list inside a 64-unit scroller. Ten rows fills it without hiding the pager. */
 const RESOURCE_PAGE_SIZE = PANEL_PAGE_SIZE;
@@ -117,59 +111,23 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
   const hasNode = !!formData.node;
   const { data: projectsData, isLoading: loadingProjects } = useProjects(formData.node);
   const { data: instancesData, isLoading: loadingInstances } = useInstances(formData.node, { enabled: hasNode });
-  const { data: imagesData, isLoading: loadingImages } = useImages(formData.node, { enabled: hasNode });
+  // Every image store on the node, each row naming its store; a group permission names an
+  // image in the store that holds it.
+  const { data: imagesData, isLoading: loadingImages } = useImageStores(formData.node, { enabled: hasNode });
   const { data: profilesData, isLoading: loadingProfiles } = useProfiles(formData.node, undefined, { enabled: hasNode });
   const { data: networksData, isLoading: loadingNetworks } = useNetworks(formData.node, undefined, { enabled: hasNode });
   const { data: poolsData, isLoading: loadingPools } = useStoragePools(formData.node, { enabled: hasNode });
 
   // Get available resources based on entity type
-  const getAvailableResources = (): Resource[] => {
-    switch (newPermission.entity_type) {
-      case "project":
-        return ((projectsData as any)?.projects || []).map((p: any) => ({ 
-          name: p.name, 
-          path: `/1.0/projects/${p.name}` 
-        }));
-      case "instance":
-        return ((instancesData as any)?.vms || []).map((i: any) => ({ 
-          name: i.name, 
-          path: `/1.0/instances/${i.name}` 
-        }));
-      case "image":
-        // Handle both array of hosts and direct images array
-        const images = Array.isArray(imagesData) 
-          ? imagesData.flatMap((host: any) => host?.images || [])
-          : (imagesData as any)?.images || [];
-        return images.map((img: any) => ({
-          name:
-            img.description ||
-            img.properties?.description ||
-            img.aliases?.find(Boolean) ||
-            img.fingerprint ||
-            EMPTY_VALUE,
-          path: lxdResourcePath("images", img.fingerprint, img.project)
-        }));
-      case "profile":
-        return ((profilesData as any)?.profiles || []).map((p: any) => ({
-          name: p.name,
-          path: lxdResourcePath("profiles", p.name, p.project),
-          project: p.project,
-        }));
-      case "network":
-        return ((networksData as any)?.networks || []).map((n: any) => ({
-          name: n.name,
-          path: lxdResourcePath("networks", n.name, n.project),
-          project: n.project,
-        }));
-      case "storage_pool":
-        return ((poolsData as any)?.pools || []).map((s: any) => ({ 
-          name: s.name, 
-          path: `/1.0/storage-pools/${s.name}` 
-        }));
-      default:
-        return [];
-    }
-  };
+  const getAvailableResources = (): Resource[] =>
+    permissionResources(newPermission.entity_type, {
+      projects: projectsData,
+      instances: instancesData,
+      images: imagesData,
+      profiles: profilesData,
+      networks: networksData,
+      pools: poolsData,
+    });
 
   const isLoadingResources = (): boolean => {
     switch (newPermission.entity_type) {
@@ -582,9 +540,9 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                                 className="text-xs cursor-pointer font-medium flex-1 break-words"
                               >
                                 {resource.name}
-                                {resource.project && resource.project !== "default" && (
+                                {resourceQualifier(newPermission.entity_type, resource.project) && (
                                   <span className="ml-1 text-xs text-muted-foreground">
-                                    ({resource.project})
+                                    ({resourceQualifier(newPermission.entity_type, resource.project)})
                                   </span>
                                 )}
                               </Label>
@@ -594,6 +552,12 @@ export function CreateGroupDialog({ open, onOpenChange, onSaved }: CreateGroupDi
                       )}
                     </div>
                     </>
+                  )}
+
+                  {newPermission.entity_type === "image" && imagesData?.complete === false && (
+                    <p className="text-xs text-muted-foreground">
+                      Some image stores on {formData.node} could not be read, so this list may be short.
+                    </p>
                   )}
 
                   {/* Absent rather than disabled when every resource fits on one page. */}

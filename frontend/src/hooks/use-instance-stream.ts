@@ -70,8 +70,18 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
   useEffect(() => {
     const conns = connsRef.current;
 
+    // A list is keyed ["instances", host, project] with "*" for "every" (queryKeys.instances);
+    // a row only belongs in the lists whose scope contains it, or a project-scoped list would
+    // gain every other project's creates.
+    const scopeHolds = (key: readonly unknown[], vm: any) => {
+      const [, host, project] = key as [string, string | undefined, string | undefined];
+      const hostOk = host === undefined || host === "*" || host === vm.host;
+      const projectOk = project === undefined || project === "*" || project === (vm.project || "default");
+      return hostOk && projectOk;
+    };
+
     const upsertInstance = (vm: any) => {
-      queryClient.setQueriesData({ queryKey: ["instances"] }, (old: any) => {
+      queryClient.setQueriesData({ queryKey: ["instances"], predicate: (q) => scopeHolds(q.queryKey, vm) }, (old: any) => {
         if (!old || !Array.isArray(old.vms)) return old;
         const idx = old.vms.findIndex((i: any) =>
           sameInstance(i, vm.host, vm.name, vm.project),

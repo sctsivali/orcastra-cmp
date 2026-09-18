@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { lxdResourcePath } from "@/lib/lxd-resource-path";
+import { permissionResources, resourceQualifier, type PermissionResource } from "@/components/groups/permission-resources";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -47,7 +47,7 @@ import {
   useRemoveIdentityFromGroup,
   useProjects,
   useInstances,
-  useImages,
+  useImageStores,
   useProfiles,
   useNetworks,
   useStoragePools,
@@ -75,11 +75,7 @@ interface Permission {
   entitlement: string;
 }
 
-interface Resource {
-  name: string;
-  path: string;
-  project?: string;
-}
+type Resource = PermissionResource;
 
 interface GroupedIdentities {
   tls: string[];
@@ -167,14 +163,14 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   const { data: projectsData, isLoading: loadingProjects } = useProjects(
     shouldFetchResources && entityType === "project" ? workingNode : ""
   );
-  const { data: instancesData, isLoading: loadingInstances } = useInstances(
-    shouldFetchResources && entityType === "instance" ? workingNode : undefined
-  );
-  const { data: imagesData, isLoading: loadingImages } = useImages(
-    shouldFetchResources && entityType === "image" ? workingNode : undefined
-  );
   // An undefined host used to mean "read the whole fleet"; the dialog only ever needs the
   // working node's rows of one entity type, so anything else is gated off.
+  const instanceHost = shouldFetchResources && entityType === "instance" ? workingNode : undefined;
+  const imageHost = shouldFetchResources && entityType === "image" ? workingNode : undefined;
+  const { data: instancesData, isLoading: loadingInstances } = useInstances(instanceHost, {
+    enabled: !!instanceHost,
+  });
+  const { data: imagesData, isLoading: loadingImages } = useImageStores(imageHost, { enabled: !!imageHost });
   const profileHost = shouldFetchResources && entityType === "profile" ? workingNode : undefined;
   const networkHost = shouldFetchResources && entityType === "network" ? workingNode : undefined;
   const poolHost = shouldFetchResources && entityType === "storage_pool" ? workingNode : undefined;
@@ -219,53 +215,15 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
   }, [dialogJustOpened, currentGroup]);
   
   // Get available resources based on entity type
-  const getAvailableResources = (): Resource[] => {
-    switch (newPermission.entity_type) {
-      case "project":
-        return ((projectsData as any)?.projects || []).map((p: any) => ({ 
-          name: p.name, 
-          path: `/1.0/projects/${p.name}` 
-        }));
-      case "instance":
-        return ((instancesData as any)?.vms || []).map((i: any) => ({ 
-          name: i.name, 
-          path: i.project && i.project !== 'default' 
-            ? `/1.0/instances/${i.name}?project=${i.project}`
-            : `/1.0/instances/${i.name}`,
-          project: i.project
-        }));
-      case "image":
-        const images = Array.isArray(imagesData) 
-          ? imagesData.flatMap((host: any) => host?.images || [])
-          : (imagesData as any)?.images || [];
-        return images.map((img: any) => ({
-          name:
-            img.description ||
-            img.properties?.description ||
-            img.aliases?.find(Boolean) ||
-            img.fingerprint ||
-            EMPTY_VALUE,
-          path: lxdResourcePath("images", img.fingerprint, img.project)
-        }));
-      case "profile":
-        return ((profilesData as any)?.profiles || []).map((p: any) => ({
-          name: p.name,
-          path: lxdResourcePath("profiles", p.name, p.project),
-        }));
-      case "network":
-        return ((networksData as any)?.networks || []).map((n: any) => ({ 
-          name: n.name, 
-          path: lxdResourcePath("networks", n.name, n.project),
-        }));
-      case "storage_pool":
-        return ((poolsData as any)?.pools || []).map((s: any) => ({ 
-          name: s.name, 
-          path: `/1.0/storage-pools/${s.name}` 
-        }));
-      default:
-        return [];
-    }
-  };
+  const getAvailableResources = (): Resource[] =>
+    permissionResources(newPermission.entity_type, {
+      projects: projectsData,
+      instances: instancesData,
+      images: imagesData,
+      profiles: profilesData,
+      networks: networksData,
+      pools: poolsData,
+    });
 
   const isLoadingResources = (): boolean => {
     // If workingNode is not available yet, show loading
@@ -854,8 +812,8 @@ export function EditGroupDialog({ open, onOpenChange, group, onRefresh }: EditGr
                                     className="text-xs cursor-pointer font-medium flex-1 break-words"
                                   >
                                     {resource.name}
-                                    {resource.project && resource.project !== 'default' && (
-                                      <span className="text-[10px] sm:text-xs text-muted-foreground ml-1">({resource.project})</span>
+                                    {resourceQualifier(newPermission.entity_type, resource.project) && (
+                                      <span className="text-xs text-muted-foreground ml-1">({resourceQualifier(newPermission.entity_type, resource.project)})</span>
                                     )}
                                   </Label>
                                 </div>

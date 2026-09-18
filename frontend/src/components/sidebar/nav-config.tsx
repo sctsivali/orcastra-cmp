@@ -147,12 +147,12 @@ export function filterGroups(groups: NavGroup[], perms: PermissionFlags): NavGro
 export function buildPrefetchMap(queryClient: QueryClient): Record<string, () => void> {
   return {
     "/inventory": () => {
-      queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instances(), queryFn: () => api.instances.list(), staleTime: 30_000 });
       queryClient.prefetchQuery({ queryKey: queryKeys.allProjects, queryFn: () => api.projects.listAll(), staleTime: 180_000 });
       queryClient.prefetchQuery({ queryKey: ["clusters", { fresh: false }], queryFn: () => api.clusters.list(false), staleTime: 120_000 });
     },
     "/inventory/instances": () => {
-      queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instances(), queryFn: () => api.instances.list(), staleTime: 30_000 });
     },
     "/inventory/monitoring": () => {
       queryClient.prefetchQuery({ queryKey: ["monitoring", "dashboard"], queryFn: () => api.monitoring.getDashboard(), staleTime: 0 });
@@ -186,7 +186,7 @@ export function buildPrefetchMap(queryClient: QueryClient): Record<string, () =>
     },
     "/": () => {
       queryClient.prefetchQuery({ queryKey: queryKeys.nodes, queryFn: () => api.nodes.status(), staleTime: 10_000 });
-      queryClient.prefetchQuery({ queryKey: ["instances", undefined], queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instances(), queryFn: () => api.instances.list(), staleTime: 30_000 });
     },
   };
 }

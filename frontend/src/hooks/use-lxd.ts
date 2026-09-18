@@ -40,6 +40,11 @@ export const queryKeys = {
   // A store read is keyed apart from the host's fleet slice, which useImages(host) owns with a
   // different shape (an array of one response).
   imageStore: (host: string, project: string) => ["images", host, "store", project] as const,
+  // Every store on a host, distinct from useImages(host)'s one-element array under ["images", host].
+  imageStores: (host: string) => ["images", host, "stores"] as const,
+  // The instance list, by host and project; "*" stands for "every". Every reader and every
+  // prefetch keys through here so a stream upsert can tell which lists a row belongs in.
+  instances: (host?: string, project?: string) => ["instances", host ?? "*", project ?? "*"] as const,
   nodes: ["nodes"] as const,
   nodeNames: ["nodeNames"] as const,
   nodeAvailability: ["nodeAvailability"] as const,
@@ -267,6 +272,17 @@ export function useImagesByHost(host: string, project = "default") {
     queryKey: queryKeys.imageStore(host, project),
     queryFn: () => imageAPI.listByHost(host, project),
     enabled: !!host,
+    staleTime: 60000,
+  });
+}
+
+// Every image store on a host the caller may see; rows carry their store. Keyed under
+// ["images", host] so the invalidations that reach the fleet list reach this too.
+export function useImageStores(host?: string, opts?: { enabled?: boolean }) {
+  return useQuery({
+    queryKey: queryKeys.imageStores(host ?? ""),
+    queryFn: () => imageAPI.listStores(host ?? ""),
+    enabled: !!host && (opts?.enabled ?? true),
     staleTime: 60000,
   });
 }
@@ -1389,11 +1405,14 @@ export function useDeleteProfile() {
 }
 
 // Instances Hooks (alternative to VMs for LXD terminology)
-export function useInstances(host?: string, opts?: { realtime?: boolean; enabled?: boolean }) {
+export function useInstances(
+  host?: string,
+  opts?: { realtime?: boolean; enabled?: boolean; project?: string },
+) {
   return useRefreshableQuery({
-    queryKey: ["instances", host],
+    queryKey: queryKeys.instances(host, opts?.project),
     queryFn: ({ fresh }) =>
-      api.instances.list(host, undefined, undefined, undefined, undefined, { fresh }),
+      api.instances.list(host, undefined, undefined, undefined, undefined, { fresh, project: opts?.project }),
     enabled: opts?.enabled ?? true,
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,

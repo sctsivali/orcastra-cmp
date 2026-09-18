@@ -30,7 +30,7 @@ import {
   ChevronRight, Edit, X, Check,
 } from "lucide-react";
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
-import { useClusters } from "@/hooks/use-lxd";
+import { queryKeys, useClusters } from "@/hooks/use-lxd";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -152,7 +152,7 @@ function RuleEditor({
 
   // fetch instances for this cluster
   const { data: instancesData, isLoading: instancesLoading } = useQuery({
-    queryKey: ["instances", hostId],
+    queryKey: queryKeys.instances(hostId),
     queryFn: () => instanceAPI.list(hostId),
     enabled: !!hostId,
     staleTime: 60_000,

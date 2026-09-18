@@ -319,6 +319,11 @@ export interface ReadOptions {
   fresh?: boolean;
 }
 
+export interface InstanceListOptions extends ReadOptions {
+  /** One LXD project; omitted, every project the caller may see. */
+  project?: string;
+}
+
 // Endpoints that fan out across every cluster. Cached they are fast; forced
 // fresh they are genuinely slow (/regions is 15-45s cold), and the default 45s
 // budget turns that into a coin flip between an answer and a false timeout.
@@ -575,6 +580,12 @@ export const imageAPI = {
   listByHost: async (host: string, project?: string): Promise<ImageListResponse> => {
     const query = project ? `?project=${encodeURIComponent(project)}` : "";
     return fetchAPI<ImageListResponse>(`/images/${host}${query}`);
+  },
+
+  // Every store on the node the caller may see, each row naming its store. A separate call
+  // rather than a flag on listByHost, whose `project` means "one store".
+  listStores: async (host: string): Promise<ImageListResponse> => {
+    return fetchAPI<ImageListResponse>(`/images/${encodeURIComponent(host)}?all_projects=true`);
   },
 
   listRemote: async (opts: ReadOptions = {}): Promise<RemoteImageListResponse> => {
@@ -1089,9 +1100,14 @@ export const instanceAPI = {
     );
   },
 
-  list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number, opts: ReadOptions = {}): Promise<VMListResponse> => {
+  // `project` narrows the list to one project (the backend keys its cache on it); omitted,
+  // every project the caller may see. Passed through the trailing options so the five
+  // positional callers stay as they are.
+  list: async (host?: string, status?: string, type?: string, offset?: number, limit?: number, opts: InstanceListOptions = {}): Promise<VMListResponse> => {
+    const { project, ...read } = opts;
     const params = new URLSearchParams();
     if (host) params.append("host", host);
+    if (project) params.append("project", project);
     if (status) params.append("status", status);
     if (type) params.append("instance_type", type);
     if (offset && offset > 0) params.append("offset", String(offset));
@@ -1100,7 +1116,7 @@ export const instanceAPI = {
     const queryString = params.toString();
     const endpoint = queryString ? `/instances?${queryString}` : "/instances";
 
-    return fetchRead<VMListResponse>(endpoint, opts);
+    return fetchRead<VMListResponse>(endpoint, read);
   },
 
   // important: `project` is optional but should be passed whenever the caller knows it. An
