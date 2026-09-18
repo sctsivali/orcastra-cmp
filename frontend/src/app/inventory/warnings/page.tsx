@@ -2,6 +2,7 @@
 
 import { useState, useMemo, useEffect, useCallback, Suspense } from "react";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
+import { currentQuery, replaceQuery } from "@/lib/url-state";
 import { IntentLink } from "@/components/navigation/route-intent";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -203,18 +204,18 @@ function WarningsContent() {
   
   // important: the tab is URL state, read on every render and written on change. It used to be
   // a useState re-seeded from ?tab= on every URL change while nothing ever wrote ?tab=, so a
-  // facet toggle on the certificates tab (a router.replace) bounced the operator back to the
-  // platform tab. Severity and node live in the per-tab filter instances, same store.
+  // facet toggle on the certificates tab bounced the operator back to the platform tab.
+  // Severity and node live in the per-tab filter instances, same store, and the write composes
+  // on the live query so a facet written in the same tick is kept.
   const activeTab = searchParams.get("tab") || "all";
   const setActiveTab = useCallback(
     (value: string) => {
-      const params = new URLSearchParams(searchParams.toString());
+      const params = currentQuery();
       if (value === "all") params.delete("tab");
       else params.set("tab", value);
-      const query = params.toString();
-      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+      replaceQuery(pathname, params);
     },
-    [searchParams, router, pathname],
+    [pathname],
   );
 
   // Bare ?severity= and ?node= predate the tabs being namespaced and are an external

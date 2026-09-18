@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { currentQuery, replaceQuery } from "@/lib/url-state";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, RotateCcw, Send, Trash2 } from "lucide-react";
 
@@ -59,7 +60,7 @@ interface WebhookPanelProps {
 function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookPanelProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const [endpoint, setEndpoint] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
@@ -72,10 +73,10 @@ function WebhookPanelContent({ installId, vocabulary, onSecretIssued }: WebhookP
   // filtered log is what somebody actually wants to send, so the filter goes there too.
   const stateFilter = searchParams.get(DELIVERY_STATE_PARAM) ?? "";
   const setStateFilter = (next: string) => {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = currentQuery();
     if (next) params.set(DELIVERY_STATE_PARAM, next);
     else params.delete(DELIVERY_STATE_PARAM);
-    router.replace(`?${params.toString()}`, { scroll: false });
+    replaceQuery(pathname, params);
     setPage(1);
   };
 

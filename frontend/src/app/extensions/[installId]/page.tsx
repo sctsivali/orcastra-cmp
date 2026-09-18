@@ -2,6 +2,7 @@
 
 import { Suspense, useCallback, useRef } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { replaceUrl } from "@/lib/url-state";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -46,8 +47,8 @@ function InstallDetail() {
   const raw = search.get("panel");
   const panel: Panel = PANELS.includes(raw as Panel) ? (raw as Panel) : "overview";
   const setPanel = useCallback(
-    (next: string) => router.replace(`/extensions/${installId}?panel=${next}`, { scroll: false }),
-    [router, installId],
+    (next: string) => replaceUrl(`/extensions/${installId}?panel=${next}`),
+    [installId],
   );
 
   const install = useQuery({

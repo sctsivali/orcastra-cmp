@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useCallback, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { currentQuery, replaceQuery } from "@/lib/url-state";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 
@@ -57,20 +58,20 @@ const ORG_PARAM = "org";
 function ExtensionsOverviewContent() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
 
   const organizationId = searchParams.get(ORG_PARAM) ?? "";
   const setOrganizationId = useCallback(
     (next: string) => {
-      const params = new URLSearchParams(searchParams.toString());
+      const params = currentQuery();
       if (next) params.set(ORG_PARAM, next);
       else params.delete(ORG_PARAM);
       // replace, not push: a picker change is not a navigation an operator wants Back to undo one
       // selection at a time, and the filter engine writes here the same way.
-      router.replace(`?${params.toString()}`, { scroll: false });
+      replaceQuery(pathname, params);
     },
-    [router, searchParams],
+    [pathname],
   );
 
   const [preview, setPreview] = useState<ExtensionInstallPreview | null>(null);

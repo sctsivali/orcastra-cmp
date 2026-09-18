@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { replaceUrl } from "@/lib/url-state";
 import { Suspense } from "react";
 import { formatHypervisorType, formatLabel} from "@/lib/utils";
 import { LoadingLottiePage } from "@/components/loading-lottie";
@@ -174,7 +175,7 @@ function ClusterMembersContent() {
         clusters.find((c: any) => clusterStatusMeta(c.status).reachable) ?? clusters[0];
       const firstNode = first.cluster_id;
       setNode(firstNode);
-      router.replace(inventoryLinks.members(firstNode));
+      router.replace(inventoryLinks.members(firstNode), { scroll: false });
     }
   }, [nodeParam, clusters, router]);
 
@@ -184,7 +185,7 @@ function ClusterMembersContent() {
     // previous one addresses nothing. Clamping alone would land page 3 of a long cluster on
     // the last page of a short one instead of at the top of it.
     resetPage();
-    router.replace(inventoryLinks.members(value));
+    replaceUrl(inventoryLinks.members(value));
   };
 
   // Sorting

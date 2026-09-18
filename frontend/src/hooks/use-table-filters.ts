@@ -1,8 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useDebouncedValue } from "./use-debounced-value";
+import { replaceQuery } from "@/lib/url-state";
 import {
   MAX_RESTING_FACETS,
   buildFacetOptions,
@@ -206,7 +207,6 @@ export function useTableFilters<T, F extends string, C = void>(
   rows: readonly T[],
   options: TableFilterOptions<F, C, T> = {},
 ) {
-  const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -258,9 +258,9 @@ export function useTableFilters<T, F extends string, C = void>(
   /**
    * The params the last write produced, which is not always what `useSearchParams` reports yet.
    *
-   * important: `router.replace` schedules a navigation. Two writes landing inside one commit both
-   * start from the same rendered `searchParams`, so the second silently drops whatever the first
-   * added. Typing into the search box and picking a scope in the same second is enough: the
+   * important: `useSearchParams` updates on the next transition commit, so two writes landing
+   * inside one commit both start from the same rendered `searchParams`, and the second silently
+   * drops whatever the first added. Typing into the search box and picking a scope in the same second is enough: the
    * debounced write sets `q`, the select writes `host` from a snapshot taken before `q` existed,
    * and the typed term is gone from a URL the operator is about to share or reload. Reproduced on
    * /inventory/snapshots, two runs in three.
@@ -288,10 +288,11 @@ export function useTableFilters<T, F extends string, C = void>(
       pendingParams.current = query;
       // important: replace, never push. push would leave a history entry behind every checkbox
       // and every debounced keystroke, so Back would walk backwards through the filter session
-      // instead of leaving the page. scroll:false keeps the table in place.
-      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+      // instead of leaving the page. And a history write, not a router navigation: a navigation
+      // can scroll the page to the top under the open popover (lib/url-state.ts says how).
+      replaceQuery(pathname, query);
     },
-    [router, pathname, searchParams, syncUrl, localParams],
+    [pathname, searchParams, syncUrl, localParams],
   );
 
   useEffect(() => {
