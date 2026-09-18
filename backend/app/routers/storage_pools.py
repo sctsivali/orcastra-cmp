@@ -190,13 +190,13 @@ async def list_storage_pools(
         cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
         ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
 
+        # used_by is held to the caller's bound for every role; only a tenant loses the row
+        # when nothing they may see uses it.
+        for pool in all_pools:
+            pool.used_by = filter_visible_lxd_references(pool.node, pool.used_by)
+
         if tenant_acl_active():
-            visible_pools = []
-            for pool in all_pools:
-                pool.used_by = filter_visible_lxd_references(pool.node, pool.used_by)
-                if pool.used_by:
-                    visible_pools.append(pool)
-            all_pools = visible_pools
+            all_pools = [pool for pool in all_pools if pool.used_by]
         
         response = StoragePoolListResponse(
             total=len(all_pools),

@@ -269,13 +269,13 @@ async def list_storage_volumes(
         cacheable = fan.cacheable and not unattempted(seeded, lxd_service.connection_manager)
         ttl = DEGRADED_CACHE_TTL if unreachable_nodes else 180
 
+        # used_by is held to the caller's bound for every role; only a tenant loses the row
+        # when nothing they may see uses it.
+        for volume in all_volumes:
+            volume.used_by = filter_visible_lxd_references(volume.node, volume.used_by)
+
         if tenant_acl_active():
-            visible_volumes = []
-            for volume in all_volumes:
-                volume.used_by = filter_visible_lxd_references(volume.node, volume.used_by)
-                if volume.used_by:
-                    visible_volumes.append(volume)
-            all_volumes = visible_volumes
+            all_volumes = [volume for volume in all_volumes if volume.used_by]
         
         # Store in variable first
         response = StorageVolumeListResponse(

@@ -49,7 +49,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("ipam.py", "_fetch_ipam_for_node"): "list_ipam filters the gathered rows, ipam.py:277-286",
     ("network_acls.py", "_fetch_acls_for_node"): "list_network_acls filters, network_acls.py:241",
     ("networks.py", "_fetch_networks_for_node"): "list_networks filters, networks.py:284-287",
-    ("profiles.py", "_fetch_profiles_for_node"): "list_profiles filters and bounds used_by, profiles.py:321-330",
+    ("profiles.py", "_fetch_profiles_for_node"): "list_profiles filters the rows and used_by (the bound lives in filter_visible_lxd_references)",
     ("storage_pools.py", "_fetch_pools_for_node"): "list_storage_pools filters, storage_pools.py:165-171",
     ("storage_volumes.py", "_fetch_volumes_for_node"): "list_storage_volumes filters, storage_volumes.py:176-179",
 }

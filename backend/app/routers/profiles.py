@@ -45,7 +45,6 @@ from app.core.tenant_visibility import (
     filter_visible_lxd_references,
     tenant_acl_active,
     tenant_may_see_project,
-    parse_lxd_reference,
 )
 from app.core.single_flight import single_flight
 from app.core.cache import get_cache_manager
@@ -133,15 +132,6 @@ def _check_path_name(profile_name: str) -> None:
         raise HTTPException(status_code=400, detail="Not a profile name")
 
 
-def _bounded_used_by(host: str, used_by: List[str]) -> List[str]:
-    """The references inside the Partner project bound; the tenant ACL is applied by the caller.
-
-    On a cluster shared by two organizations the other one's projects inherit `default`
-    profiles too, so an unbounded used_by names their instances; the bound exists for that.
-    """
-    return [ref for ref in (used_by or []) if project_is_visible(host, parse_lxd_reference(ref)[0])]
-
-
 def _detail_of(profile_name: str, data: Dict[str, Any], host: str,
                owner: str, etag: Optional[str]) -> "ProfileDetail":
     """The daemon's record as the caller may see it: used_by is filtered to their scope."""
@@ -150,7 +140,7 @@ def _detail_of(profile_name: str, data: Dict[str, Any], host: str,
         description=data.get("description") or "",
         config=data.get("config") or {},
         devices=data.get("devices") or {},
-        used_by=filter_visible_lxd_references(host, _bounded_used_by(host, data.get("used_by") or [])),
+        used_by=filter_visible_lxd_references(host, data.get("used_by") or []),
         node=host,
         project=data.get("project") or owner,
         etag=etag,
@@ -324,7 +314,7 @@ async def list_profiles(
         # the other organization's projects inherit `default` profiles too, and the row feeds
         # the delete confirm and the "in use by N" reason on the page
         for p in all_profiles:
-            p.used_by = filter_visible_lxd_references(p.node, _bounded_used_by(p.node, p.used_by))
+            p.used_by = filter_visible_lxd_references(p.node, p.used_by)
 
         if tenant_acl_active():
             visible_profiles = []
@@ -332,7 +322,6 @@ async def list_profiles(
                 # ownership as well as usage: see tenant_may_see_project
                 if not tenant_may_see_project(profile.node, profile.project):
                     continue
-                profile.used_by = filter_visible_lxd_references(profile.node, profile.used_by)
                 if profile.used_by:
                     visible_profiles.append(profile)
             all_profiles = visible_profiles
@@ -388,7 +377,7 @@ async def get_profile(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
         data, etag = await asyncio.to_thread(read_profile_sync, client, profile_name, owner)
-        used_by = filter_visible_lxd_references(host, _bounded_used_by(host, data.get("used_by") or []))
+        used_by = filter_visible_lxd_references(host, data.get("used_by") or [])
         if tenant_acl_active() and not used_by:
             raise HTTPException(status_code=403, detail="Access denied to this profile")
         if etag:
@@ -595,7 +584,7 @@ async def delete_profile(
         if not project_is_visible(host, owner):
             raise HTTPException(status_code=403, detail="Access denied to this profile")
         current, _etag = await asyncio.to_thread(read_profile_sync, client, profile_name, owner)
-        visible_used_by = filter_visible_lxd_references(host, _bounded_used_by(host, current.get("used_by") or []))
+        visible_used_by = filter_visible_lxd_references(host, current.get("used_by") or [])
         await asyncio.to_thread(delete_profile_sync, client, profile_name, owner, visible_used_by)
         
         # Log activity: profile deletion success

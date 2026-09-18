@@ -78,7 +78,12 @@ def test_a_partner_is_not_shown_instances_outside_its_project_bound(monkeypatch)
     used = dict(PROFILE, used_by=["/1.0/instances/mine", "/1.0/instances/theirs?project=orgb-prod"])
     daemon = Daemon(profile=used)
     tc, _ = app(monkeypatch, daemon)
+    from app.core import tenant_visibility
     from app.routers import profiles as profiles_module
+    # The bound lives in the shared used_by filter now; the fixture stubs that filter to an
+    # identity, so put the real one back and bound the project check it consults.
+    monkeypatch.setattr(profiles_module, "filter_visible_lxd_references", tenant_visibility.filter_visible_lxd_references)
+    monkeypatch.setattr(tenant_visibility, "project_is_visible", lambda host, project: project in ("default",))
     monkeypatch.setattr(profiles_module, "project_is_visible", lambda host, project: project in ("default",))
     r = tc.get("/profiles/web?host=nuc1")
     assert r.status_code == 200, r.text
@@ -96,8 +101,10 @@ def test_the_list_rows_are_held_to_the_same_bound(monkeypatch) -> None:
     used_by = ["/1.0/instances/mine", "/1.0/instances/theirs?project=orgb-prod"]
     rows = [profiles_module.ProfileInfo(name="web", description="", config={}, devices={},
                                         used_by=used_by, node="nuc1", project="default")]
+    from app.core import tenant_visibility
     monkeypatch.setattr(profiles_module, "_fetch_profiles_for_node", lambda svc, node, project: (rows, True))
     monkeypatch.setattr(profiles_module, "project_is_visible", lambda host, project: project in ("default",))
+    monkeypatch.setattr(tenant_visibility, "project_is_visible", lambda host, project: project in ("default",))
     monkeypatch.setattr(profiles_module, "tenant_acl_active", lambda: False)
     monkeypatch.setattr(profiles_module, "verify_cluster_access", lambda host: None, raising=False)
     monkeypatch.setattr(profiles_module, "get_cache_manager", lambda: SimpleNamespace(get=lambda *a, **k: None, set=lambda *a, **k: None))

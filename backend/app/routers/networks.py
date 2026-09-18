@@ -439,6 +439,10 @@ async def list_networks(
         # below never runs for them. On a cluster shared with another organization this is the
         # only thing standing between them and that organization's network configuration.
         all_networks = [n for n in all_networks if project_is_visible(n.node, n.project)]
+        # used_by is held to the caller's bound for every role; only a tenant loses the row
+        # when nothing they may see uses it.
+        for network in all_networks:
+            network.used_by = filter_visible_lxd_references(network.node, network.used_by)
 
         if tenant_acl_active():
             visible_networks = []
@@ -446,7 +450,6 @@ async def list_networks(
                 # ownership as well as usage: see tenant_may_see_project
                 if not tenant_may_see_project(network.node, network.project):
                     continue
-                network.used_by = filter_visible_lxd_references(network.node, network.used_by)
                 if network.used_by:
                     visible_networks.append(network)
             all_networks = visible_networks
