@@ -8,6 +8,7 @@ the bearer token is passed as the ``token`` query parameter.
 """
 import asyncio
 import logging
+import time
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, Depends
@@ -26,6 +27,15 @@ from app.services.lxd.events_hub import get_events_hub
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/events", tags=["Events"])
+
+# How long a subscriber's resolved scope is trusted before it is read again.
+#
+# important: the scope is resolved once at connect and the socket lives as long as the tab. A
+# Partner who connected while a cluster had one owner keeps an unrestricted scope after a second
+# organisation is bound to it, and a tenant keeps a policy that was revoked, until the socket
+# drops. That window always existed for the tenant ACL; with the stream carrying every project
+# it is worth closing, so a busy socket re-reads its scope at most this often.
+SCOPE_REFRESH_S = 60.0
 
 
 def frame_is_visible(host: str, payload: dict) -> bool:
@@ -87,9 +97,14 @@ async def events_websocket(
 
     async def _sender():
         # The scope set above lives in this task's copy of the context, so frame_is_visible
-        # reads the same bound and ACL the handler resolved for this subscriber.
+        # reads the same bound and ACL the handler resolved for this subscriber. A `.set()`
+        # inside this task updates that same copy, which is how the refresh below lands.
+        scope_read_at = time.monotonic()
         while True:
             payload = await queue.get()
+            if time.monotonic() - scope_read_at >= SCOPE_REFRESH_S:
+                await set_org_scope_for_ws(user)
+                scope_read_at = time.monotonic()
             if not frame_is_visible(host, payload):
                 continue
             await websocket.send_json(payload)

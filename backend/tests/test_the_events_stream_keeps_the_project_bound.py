@@ -108,3 +108,21 @@ def test_a_tenant_still_sees_only_its_own_instances():
 def test_a_partner_receives_the_cluster_wide_frames():
     unattributed = {"type": "operation", "host": "nuc2", "instance": None, "project": "default"}
     assert _decide({"nuc2": {"default"}}, None, "nuc2", unattributed) is True
+
+
+def test_a_long_lived_socket_re_reads_its_scope():
+    """The scope is resolved at connect; a socket that lives for hours must not keep it forever.
+
+    Asserted on the sender's source, as the sibling stream tests do, because the sender is a
+    closure over a live WebSocket.
+    """
+    import inspect
+
+    from app.routers import events
+
+    assert 0 < events.SCOPE_REFRESH_S <= 300
+    source = inspect.getsource(events.events_websocket)
+    sender = source.index("async def _sender():")
+    refresh = source.index("await set_org_scope_for_ws(user)", sender)
+    consult = source.index("if not frame_is_visible(host, payload):", sender)
+    assert refresh < consult, "the scope must be re-read before the frame is judged"
