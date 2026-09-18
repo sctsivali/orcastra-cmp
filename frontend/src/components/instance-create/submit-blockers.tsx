@@ -3,6 +3,8 @@ export interface SubmitBlockerInput {
   hasNode: boolean;
   bootFromIso: boolean;
   hasImage: boolean;
+  /** A local image is picked but the store that has to hold it has not answered yet. */
+  imageStoreLoading: boolean;
   hasIso: boolean;
   resourcesValid: boolean;
   hasPool: boolean;
@@ -29,6 +31,11 @@ export function submitBlockers(input: SubmitBlockerInput): SubmitBlocker[] {
   if (!input.hasNode) out.push({ id: "node", reason: "a node" });
   if (input.bootFromIso ? !input.hasIso : !input.hasImage) {
     out.push({ id: "source", reason: input.bootFromIso ? "a boot ISO" : "a base image" });
+  } else if (!input.bootFromIso && input.imageStoreLoading) {
+    // A seeded or carried-over local pick resolves only inside the target project's store,
+    // so the create waits for that store to answer rather than sending a fingerprint it may
+    // not hold.
+    out.push({ id: "image-store", reason: "the project's image store to finish loading" });
   }
   if (!input.resourcesValid) {
     out.push({ id: "resources", reason: "CPU, memory and storage as positive whole numbers" });

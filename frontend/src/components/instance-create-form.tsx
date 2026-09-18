@@ -941,6 +941,7 @@ function InstanceCreateFormContent() {
     hasNode: !!form.selectedNode,
     bootFromIso,
     hasImage: !!form.selectedImage,
+    imageStoreLoading: !!form.selectedImage && form.imageServer === "" && loadingImages,
     hasIso: !!form.selectedIso,
     resourcesValid,
     hasPool: !!effectivePool || loadingPools,
@@ -1066,9 +1067,10 @@ function InstanceCreateFormContent() {
       return;
     }
 
-    // A local pick carried across a project switch is only known to resolve once the new
-    // project's store has answered, so a create is refused until then rather than sent to a
-    // store that may not hold the fingerprint.
+    // A local pick carried across a project switch or seeded by a link is only known to
+    // resolve once the project's store has answered. The buttons are disabled through the
+    // blocker list while that read is in flight; this is the synchronous half, for a click
+    // that lands in the same tick the list arrives.
     if (!bootFromIso && form.selectedImage && form.imageServer === "" && loadingImages) {
       setError("Still loading the image store for this project. Try again in a moment.");
       submitInFlightRef.current = false;
