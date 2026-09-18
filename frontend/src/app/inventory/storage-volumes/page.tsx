@@ -181,9 +181,11 @@ function StorageVolumesContent() {
     currentPage * pageSize,
   );
 
-  // Derived from the headers actually rendered. It used to be the with-Node count, so the
-  // empty row was one column too wide on every scope that returns nothing.
-  const columnCount = 8 + (nodes.length > 0 ? 1 : 0) + (locations.length > 0 ? 1 : 0);
+  // Derived from the headers actually rendered: seven fixed columns (Name, Pool, Type, Content
+  // Type, Used By, Project, Used By Projects) plus Node and Location when the scope has them. It
+  // used to count eight, so the empty row was one column too wide on every scope that returns
+  // nothing; the table-filters spec measures it against the header row.
+  const columnCount = 7 + (nodes.length > 0 ? 1 : 0) + (locations.length > 0 ? 1 : 0);
 
   if (isLoading) {
     return <LoadingLottiePage />;
