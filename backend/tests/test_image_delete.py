@@ -148,10 +148,14 @@ def _service(image=None, vms=None, projects=None) -> LXDService:
     svc.cert_manager = None
     svc.image_manager = ImageManager(conn, None)
 
-    async def _list_all_vms():
-        return list(vms or []), [HOST]
+    class _InstanceManager:
+        # The dependents read asks the one host for its instances across every project.
+        def fetch_node_instances(self, host, endpoint=""):
+            if host != HOST:
+                return [], False
+            return [v for v in (vms or []) if getattr(v, "host", HOST) == host], True
 
-    svc.list_all_vms = _list_all_vms
+    svc.instance_manager = _InstanceManager()
     return svc
 
 
@@ -403,3 +407,35 @@ def test_a_missing_image_names_the_store_it_was_looked_for_in():
     r = _client(svc).delete(f"/images/{FP}", params={"host": HOST, "project": "dev01"})
     assert r.status_code == 404
     assert "dev01" in r.json()["detail"]
+
+
+def test_a_dependent_in_another_project_on_the_host_refuses_the_delete():
+    # An own-store project's instance is built from the store's image; the host-wide read
+    # sees it whatever project it sits in, so the delete is refused without force.
+    image = _FakeImage()
+    vm = _VM("built-elsewhere")
+    vm.project = "qa-store"
+    svc = _service(image, vms=[vm])
+
+    r = _client(svc).delete(f"/images/{FP}", params={"host": HOST, "project": "qa-store"})
+
+    assert r.status_code == 409, r.text
+    assert "built-elsewhere" in r.json()["detail"]
+
+
+def test_an_unreadable_host_never_lets_a_delete_through():
+    # The instances on the host could not be read, so the dependents are unknown; a delete on
+    # the strength of a read that did not happen is the one outcome this must never produce.
+    image = _FakeImage()
+    svc = _service(image, vms=[])
+
+    class _Down:
+        def fetch_node_instances(self, host, endpoint=""):
+            return [], False
+
+    svc.instance_manager = _Down()
+
+    r = _client(svc).delete(f"/images/{FP}", params={"host": HOST})
+
+    assert r.status_code == 503, r.text
+    assert image.deleted is False

@@ -60,6 +60,10 @@ _executor = ThreadPoolExecutor(max_workers=5)
 # is slower than a read but nowhere near an instance create.
 IMAGE_DELETE_TIMEOUT = 60.0
 IMAGE_DELETE_MAX_IN_FLIGHT = 5
+# One node's instance list, every project. The dashboard's preflight waits 8 s on it, so the
+# read has to be that cheap on a healthy node; a node that is not answering trips the breaker
+# well before this.
+IMAGE_USAGE_TIMEOUT = 20.0
 # How many dependent instances a 409 names before it stops listing and starts counting. Long
 # enough to act on, short enough that the message stays readable in a toast.
 DEPENDENTS_NAMED_IN_ERROR = 5
@@ -349,19 +353,35 @@ def _image_fingerprint_of(vm) -> Optional[str]:
 async def _instances_using_image(
     lxd_service: LXDService, host: str, fingerprint: str
 ) -> List[str]:
-    """Names of instances on `host` that were created from `fingerprint`.
+    """Names of instances on `host`, in any of its projects, created from `fingerprint`.
 
-    note: this pays a fleet-wide fan-out to answer a single-host question. It reuses the same
-    call the tenant image filter already makes on every scoped list, so it is a proven path
-    that respects org scope, and the connection breaker short-circuits clusters that are down.
-    A delete is rare and deliberate; a cheaper bespoke pylxd scan here would be a second way
-    of reading instance config, which is how the two keys above came to disagree elsewhere.
+    note: one node, not the fleet. This used to go through ``list_all_vms``, which fans out to
+    every cluster the caller may see; on a fleet with a dead member or a large partner cloud
+    that took longer than the dashboard's preflight budget, so the confirm dialog fell back to
+    its own tenant-filtered count and offered a delete with no dependents to acknowledge. The
+    callers have already passed ``verify_cluster_access(host)``, so a single-node read stays
+    inside the caller's scope. A node that does not answer is an error, never an empty list:
+    a delete must not proceed on the strength of a read that did not happen.
     """
-    all_vms, _ = await lxd_service.list_all_vms()
+    try:
+        vms, connected = await run_blocking(
+            lxd_service.instance_manager.fetch_node_instances,
+            host,
+            timeout=IMAGE_USAGE_TIMEOUT,
+            label=f"image_usage[{host}/{fingerprint[:12]}]",
+            executor=_executor,
+            max_in_flight=IMAGE_DELETE_MAX_IN_FLIGHT,
+        )
+    except BlockingTimeout:
+        raise LXDConnectionError(
+            f"Reading the instances on {host} exceeded {IMAGE_USAGE_TIMEOUT:.0f}s"
+        ) from None
+    except BlockingPoolFull:
+        raise LXDConnectionError("Image operations saturated; please retry shortly") from None
+    if not connected:
+        raise LXDConnectionError(f"Could not read the instances on {host}")
     names = []
-    for vm in all_vms:
-        if getattr(vm, "host", None) != host:
-            continue
+    for vm in vms:
         used = _image_fingerprint_of(vm)
         if not used:
             continue
