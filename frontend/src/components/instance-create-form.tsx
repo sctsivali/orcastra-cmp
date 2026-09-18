@@ -1002,24 +1002,20 @@ function InstanceCreateFormContent() {
   const projectSwitchRef = useRef<{ project: string; clearedIso: boolean; clearedNics: number } | null>(null);
   const selectProject = (project: string) => {
     const clearedNics = nics.length;
+    const keepIso = !!form.selectedIso && isoVisibleIn(project, form.selectedIsoPool, form.selectedIso);
+    const clearedIso = !!form.selectedIso && !keepIso;
+    projectSwitchRef.current =
+      form.selectedImage && form.imageServer === "" ? { project, clearedIso, clearedNics } : null;
     setNics([]);
     setFieldError(null);
-    setForm((prev) => {
-      const keepIso = !!prev.selectedIso && isoVisibleIn(project, prev.selectedIsoPool, prev.selectedIso);
-      const clearedIso = !!prev.selectedIso && !keepIso;
-      projectSwitchRef.current =
-        prev.selectedImage && prev.imageServer === "" ? { project, clearedIso, clearedNics } : null;
-      setChangeNotice(
-        projectChangeNotice({ project, clearedLocalImage: false, clearedIso, clearedNics }),
-      );
-      return {
-        ...prev,
-        selectedProject: project,
-        selectedIso: keepIso ? prev.selectedIso : "",
-        selectedIsoPool: keepIso ? prev.selectedIsoPool : "",
-        selectedIsoLabel: keepIso ? prev.selectedIsoLabel : "",
-      };
-    });
+    setChangeNotice(projectChangeNotice({ project, clearedLocalImage: false, clearedIso, clearedNics }));
+    setForm((prev) => ({
+      ...prev,
+      selectedProject: project,
+      selectedIso: keepIso ? prev.selectedIso : "",
+      selectedIsoPool: keepIso ? prev.selectedIsoPool : "",
+      selectedIsoLabel: keepIso ? prev.selectedIsoLabel : "",
+    }));
   };
   useEffect(() => {
     const pending = projectSwitchRef.current;
