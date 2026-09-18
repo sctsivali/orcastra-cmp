@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { MoreVertical } from "lucide-react";
+import { Loader2, MoreVertical } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +28,11 @@ export interface RowAction {
   unavailableReason?: string;
   /** Renders a separator above this item. */
   separatorBefore?: boolean;
+  /**
+   * The action is running for this row. Swaps the icon for a spinner and marks the item
+   * unavailable; pair it with an unavailableReason that says what is in progress.
+   */
+  pending?: boolean;
 }
 
 interface RowActionsProps {
@@ -86,8 +91,8 @@ export function RowActions({ actions, triggerLabel, className }: RowActionsProps
           scoped here, as create-menu.tsx already does. */}
       <DropdownMenuContent align="end" className="w-60 motion-reduce:animate-none">
         {actions.map((action) => {
-          const Icon = action.icon;
-          const unavailable = !!action.unavailableReason;
+          const Icon = action.pending ? Loader2 : action.icon;
+          const unavailable = !!action.unavailableReason || !!action.pending;
           return (
             <React.Fragment key={action.id}>
               {action.separatorBefore && <DropdownMenuSeparator />}
@@ -108,7 +113,13 @@ export function RowActions({ actions, triggerLabel, className }: RowActionsProps
                   action.onSelect();
                 }}
               >
-                <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                <Icon
+                  className={cn(
+                    "mt-0.5 h-4 w-4 shrink-0",
+                    action.pending && "animate-spin motion-reduce:animate-none",
+                  )}
+                  aria-hidden="true"
+                />
                 <span className="min-w-0">
                   <span className="block">{action.label}</span>
                   {action.unavailableReason && (

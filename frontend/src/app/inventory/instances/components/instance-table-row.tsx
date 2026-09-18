@@ -1,39 +1,35 @@
 "use client";
 
-import { Copy, Monitor, Play, RefreshCw, RotateCw, Square, Terminal, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { OverflowCell } from "@/components/ui/overflow-cell";
+import { RowActions } from "@/components/ui/row-actions";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { NodeLink } from "@/components/ui/node-link";
 import { TableLink } from "@/components/ui/table-link";
-import { EMPTY_VALUE, TableSubText } from "@/components/ui/table-text";
+import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { TagBadge } from "@/components/tag-manager";
 import { useConsoleStore } from "@/lib/console-store";
 import { useTerminalStore } from "@/lib/terminal-store";
 import { formatInstanceType } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
-
-type Permission = "view" | "operate" | "console";
-type RowAction = "start" | "stop" | "restart";
+import { instanceRowActions, type InstancePermission } from "./instance-row-actions";
+import type { InstanceAction } from "./use-instance-actions";
 
 export interface InstanceTableRowProps {
   instance: VMInfo;
   /** From useRowFocus: the row key and, briefly after a create, the mark. */
   rowProps: { "data-row-key": string; "data-row-focus"?: "true" | "false" };
   onOpen: (instance: VMInfo) => void;
-  onAction: (name: string, host: string, project: string, action: RowAction) => void;
+  onAction: (name: string, host: string, project: string, action: InstanceAction) => void;
   actionLoading: string | null;
   isReadOnly: boolean;
-  hasPermission: (host: string, project: string, name: string, permission: Permission) => boolean;
-  permissionTitle: (
+  /** Undefined when the caller may act; otherwise why not, including "still checking". */
+  permissionReason: (
     host: string,
     project: string,
     name: string,
-    permission: Permission,
-    allowed: string,
-    denied: string,
-  ) => string;
+    permission: InstancePermission,
+  ) => string | undefined;
   canDeleteInstance: boolean;
   /** True only for the row whose delete is in flight, so the other rows stay live. */
   deletePending: boolean;
@@ -50,10 +46,7 @@ export interface InstanceTableRowProps {
  * reconciling against a corporate IPAM catalogue needs to see which addresses are planned and
  * which are merely current.
  */
-function hasFixedAddress(instance: {
-  devices?: Record<string, Record<string, string>> | null;
-  expanded_devices?: Record<string, Record<string, string>> | null;
-}): boolean {
+function hasFixedAddress(instance: Pick<VMInfo, "devices" | "expanded_devices">): boolean {
   const sets = [instance.expanded_devices, instance.devices];
   for (const devices of sets) {
     for (const device of Object.values(devices ?? {})) {
@@ -63,25 +56,34 @@ function hasFixedAddress(instance: {
   return false;
 }
 
-function rootDiskLabel(instance: any): { text: string; title: string } {
-  const own = instance?.devices?.root;
-  const effective = instance?.expanded_devices?.root ?? own;
-  if (!effective) return { text: EMPTY_VALUE, title: "No root disk device reported by LXD" };
+// The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
+// instance's own device; an instance that overrode nothing still has one through its profile,
+// and in that case LXD reports no size because the pool default applies.
+function rootDiskLabel(
+  instance: Pick<VMInfo, "devices" | "expanded_devices">,
+): { value: string; detail?: string } | null {
+  const own = instance.devices?.root;
+  const effective = instance.expanded_devices?.root ?? own;
+  if (!effective) return null;
   const size = String(effective.size ?? "").trim();
   const pool = String(effective.pool ?? "").trim();
-  if (!size) {
-    return {
-      text: pool ? `pool default (${pool})` : "pool default",
-      title: "No explicit size on the root disk, so the storage pool default applies",
-    };
+  if (!size) return { value: "Pool default", detail: pool ? `Pool ${pool}` : undefined };
+  const origin = own?.size ? "Set on instance" : "From profile";
+  return { value: size, detail: pool ? `${origin}, pool ${pool}` : origin };
+}
+
+const IN_FLIGHT: Record<InstanceAction, string> = {
+  start: "Starting",
+  stop: "Stopping",
+  restart: "Restarting",
+};
+
+function inFlightLabel(name: string, actionLoading: string | null, deletePending: boolean) {
+  if (deletePending) return "Deleting";
+  for (const action of Object.keys(IN_FLIGHT) as InstanceAction[]) {
+    if (actionLoading === `${name}-${action}`) return IN_FLIGHT[action];
   }
-  const overridden = Boolean(own?.size);
-  return {
-    text: size,
-    title: overridden
-      ? `Set on this instance${pool ? `, pool ${pool}` : ""}`
-      : `Inherited from a profile${pool ? `, pool ${pool}` : ""}`,
-  };
+  return null;
 }
 
 function getStatusColor(status: string) {
@@ -104,14 +106,48 @@ export function InstanceTableRow({
   onAction,
   actionLoading,
   isReadOnly,
-  hasPermission,
-  permissionTitle,
+  permissionReason,
   canDeleteInstance,
   deletePending,
   onCopy,
   onRebuild,
   onDelete,
 }: InstanceTableRowProps) {
+  const project = instance.project || "default";
+  // An instance name is unique only within one project on one host, and this table spans
+  // both, so the trigger names all three. Same shape as components/dashboard/instance-row.tsx.
+  const rowLabel = `${instance.name} in ${project} on ${instance.host}`;
+  const rootDisk = rootDiskLabel(instance);
+  const inFlight = inFlightLabel(instance.name, actionLoading, deletePending);
+
+  const actions = instanceRowActions({
+    instance,
+    isReadOnly,
+    canManage: canDeleteInstance,
+    actionLoading,
+    deletePending,
+    permissionReason: (permission) => permissionReason(instance.host, project, instance.name, permission),
+    onStart: () => onAction(instance.name, instance.host, project, "start"),
+    onStop: () => onAction(instance.name, instance.host, project, "stop"),
+    onRestart: () => onAction(instance.name, instance.host, project, "restart"),
+    onTerminal: () =>
+      useTerminalStore.getState().openTerminal({
+        instanceName: instance.name,
+        host: instance.host,
+        project,
+      }),
+    onConsole: () =>
+      useConsoleStore.getState().openConsole({
+        instanceName: instance.name,
+        instanceType: instance.type || "container",
+        host: instance.host,
+        project,
+      }),
+    onCopy: () => onCopy(instance),
+    onRebuild: () => onRebuild(instance),
+    onDelete: () => onDelete(instance),
+  });
+
   return (
     <TableRow {...rowProps}>
       <TableCell className="font-medium">
@@ -123,12 +159,14 @@ export function InstanceTableRow({
         <Badge variant={getStatusColor(instance.status)}>
           {instance.status}
         </Badge>
+        {/* A closed menu hides the item's spinner, so the row itself reports what is running. */}
+        {inFlight && <TableSubText>{inFlight}</TableSubText>}
       </TableCell>
       <TableCell>{formatInstanceType(instance.type)}</TableCell>
       <TableCell className="whitespace-nowrap">
         <NodeLink clusterId={instance.host} />
       </TableCell>
-      <TableCell className="whitespace-nowrap">{instance.project || "default"}</TableCell>
+      <TableCell className="whitespace-nowrap">{project}</TableCell>
       <TableCell>
         <OverflowCell
           items={instance.ip_addresses}
@@ -160,8 +198,15 @@ export function InstanceTableRow({
           itemLabel="profile"
         />
       </TableCell>
-      <TableCell className="whitespace-nowrap" title={rootDiskLabel(instance).title}>
-        {rootDiskLabel(instance).text}
+      <TableCell className="whitespace-nowrap">
+        {rootDisk ? (
+          <>
+            {rootDisk.value}
+            {rootDisk.detail && <TableSubText>{rootDisk.detail}</TableSubText>}
+          </>
+        ) : (
+          <TableEmptyValue label="No root disk reported" />
+        )}
       </TableCell>
       <TableCell>
         <OverflowCell
@@ -176,129 +221,8 @@ export function InstanceTableRow({
           renderItem={(tag) => <TagBadge tag={tag as string} size="sm" />}
         />
       </TableCell>
-      <TableCell>
-        <div className="flex gap-2">
-          {instance.status !== "Running" && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                onAction(instance.name, instance.host, instance.project || "default", "start")
-              }
-              disabled={actionLoading === `${instance.name}-start` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-              aria-label={`Start instance ${instance.name}`}
-              title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Start instance", "No operate permission")}
-            >
-              <Play className="h-4 w-4" />
-            </Button>
-          )}
-          {instance.status === "Running" && (
-            <>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  onAction(instance.name, instance.host, instance.project || "default", "stop")
-                }
-                disabled={actionLoading === `${instance.name}-stop` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                aria-label={`Stop instance ${instance.name}`}
-                title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Stop instance", "No operate permission")}
-              >
-                <Square className="h-4 w-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() =>
-                  onAction(instance.name, instance.host, instance.project || "default", "restart")
-                }
-                disabled={actionLoading === `${instance.name}-restart` || isReadOnly || !hasPermission(instance.host, instance.project || "default", instance.name, "operate")}
-                aria-label={`Restart instance ${instance.name}`}
-                title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Restart instance", "No operate permission")}
-              >
-                <RotateCw className="h-4 w-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  useTerminalStore.getState().openTerminal({
-                    instanceName: instance.name,
-                    host: instance.host,
-                    project: instance.project || "default",
-                  });
-                }}
-                disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
-                aria-label={`Open terminal for instance ${instance.name}`}
-                title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Terminal", "No console permission")}
-              >
-                <Terminal className="h-4 w-4" />
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => {
-                  useConsoleStore.getState().openConsole({
-                    instanceName: instance.name,
-                    instanceType: instance.type || "container",
-                    host: instance.host,
-                    project: instance.project || "default",
-                  });
-                }}
-                disabled={!hasPermission(instance.host, instance.project || "default", instance.name, "console")}
-                aria-label={`Open console for instance ${instance.name}`}
-                title={permissionTitle(instance.host, instance.project || "default", instance.name, "console", "Open Console", "No console permission")}
-              >
-                <Monitor className="h-4 w-4" />
-              </Button>
-            </>
-          )}
-          {canDeleteInstance && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onCopy(instance)}
-              disabled={
-                isReadOnly ||
-                !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
-              }
-              aria-label={`Copy instance ${instance.name} elsewhere`}
-              title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Copy this instance to another project or cluster", "No operate permission")}
-            >
-              <Copy className="h-4 w-4" />
-            </Button>
-          )}
-          {canDeleteInstance && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onRebuild(instance)}
-              disabled={
-                isReadOnly ||
-                !hasPermission(instance.host, instance.project || "default", instance.name, "operate")
-              }
-              aria-label={`Rebuild instance ${instance.name}`}
-              title={permissionTitle(instance.host, instance.project || "default", instance.name, "operate", isReadOnly ? "Action disabled in read-only mode" : "Rebuild instance (reinstall root disk)", "No operate permission")}
-            >
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-          )}
-          {canDeleteInstance && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="text-destructive hover:text-destructive"
-              onClick={() => onDelete(instance)}
-              // Only the row actually being deleted greys out; a
-              // page-wide isPending would disable every row's button.
-              disabled={isReadOnly || deletePending}
-              aria-label={`Delete instance ${instance.name}`}
-              title={isReadOnly ? "Action disabled in read-only mode" : "Delete instance"}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
+      <TableCell className="text-right">
+        <RowActions triggerLabel={`Actions for instance ${rowLabel}`} actions={actions} />
       </TableCell>
     </TableRow>
   );

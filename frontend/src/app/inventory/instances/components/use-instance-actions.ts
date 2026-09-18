@@ -28,6 +28,10 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
   const { isReadOnly } = useReadOnlyMode();
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  // important: actionLoading and isPending are React state and only reach the DOM on the next
+  // render, so two activations inside one tick both pass. The ref is what actually blocks the
+  // second request. Same recipe as snapshots/components/snapshot-row-actions.tsx.
+  const submitInFlightRef = useRef(false);
   // Instance pending delete confirmation (controls the shared AlertDialog).
   const [deleteTarget, setDeleteTarget] = useState<VMInfo | null>(null);
   // Instance pending rebuild (controls the shared RebuildDialog).
@@ -83,6 +87,8 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
     action: "start" | "stop" | "restart",
     force = false
   ) => {
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     try {
       setActionLoading(`${instanceName}-${action}`);
 
@@ -109,11 +115,14 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
       });
     } finally {
       setActionLoading(null);
+      submitInFlightRef.current = false;
     }
   };
 
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
+    if (submitInFlightRef.current) return;
+    submitInFlightRef.current = true;
     const target = deleteTarget;
     try {
       await deleteInstance.mutateAsync({
@@ -134,6 +143,7 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
       });
     } finally {
       setDeleteTarget(null);
+      submitInFlightRef.current = false;
     }
   };
 

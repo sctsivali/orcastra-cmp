@@ -89,8 +89,7 @@ interface InstancesTableProps {
   onAction: (name: string, host: string, project: string, action: InstanceAction) => void;
   actionLoading: string | null;
   isReadOnly: boolean;
-  hasPermission: Parameters<typeof InstanceTableRow>[0]["hasPermission"];
-  permissionTitle: Parameters<typeof InstanceTableRow>[0]["permissionTitle"];
+  permissionReason: Parameters<typeof InstanceTableRow>[0]["permissionReason"];
   canDeleteInstance: boolean;
   deletePending: (instance: VMInfo) => boolean;
   onCopy: (instance: VMInfo) => void;
@@ -123,7 +122,11 @@ export function InstancesTable(props: InstancesTableProps) {
           <SortableTableHead label="Profiles" field="profiles" currentField={sortField} direction={sortDirection} onSort={handleSort} />
           <TableHead>Root Disk</TableHead>
           <TableHead>Tags</TableHead>
-          <TableHead>Actions</TableHead>
+          {/* Not sortable and not a value, so it carries its name for a screen reader
+              rather than a visible label that would read as a tenth column of data. */}
+          <TableHead className="w-12 text-right">
+            <span className="sr-only">Actions</span>
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -168,8 +171,7 @@ export function InstancesTable(props: InstancesTableProps) {
             onAction={props.onAction}
             actionLoading={props.actionLoading}
             isReadOnly={props.isReadOnly}
-            hasPermission={props.hasPermission}
-            permissionTitle={props.permissionTitle}
+            permissionReason={props.permissionReason}
             canDeleteInstance={props.canDeleteInstance}
             deletePending={props.deletePending(instance)}
             onCopy={props.onCopy}

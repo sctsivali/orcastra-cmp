@@ -63,12 +63,6 @@ import { INSTANCES, InstancesTable } from "./components/instances-table";
 
 import { useInstanceActions } from "./components/use-instance-actions";
 
-
-// The root disk an instance actually runs on. LXD keeps a size chosen at create time on the
-// instance's own device; an instance that overrode nothing still has one through its profile,
-// and in that case LXD reports no size because the pool default applies.
-
-
 function InstancesContent() {
   // Realtime mode: fetch the snapshot once, then keep the list current from the
   // LXD events stream (no polling). useInstanceStream patches this query's cache.
@@ -167,25 +161,25 @@ function InstancesContent() {
   const [isMonitoringModalOpen, setIsMonitoringModalOpen] = useState(false);
   const router = useRouter();
   const { navigate } = useNavigationProgress();
-  // permsLoading matters for the labels below: until the access rules arrive, hasPermission
-  // answers false for everyone, so an operator briefly sees every action disabled and tooltipped
-  // "No permission" when the real answer is "not known yet". The buttons stay disabled, which is
-  // the safe direction, but the label must not claim a denial that has not been established.
+  // permsLoading matters for the reasons below: until the access rules arrive, hasPermission
+  // answers false for everyone, so an operator briefly sees every action withheld and told
+  // "No permission" when the real answer is "not known yet". The items stay withheld, which is
+  // the safe direction, but the reason must not claim a denial that has not been established.
   const { hasPermission, isLoading: permsLoading } = useTenantAccess();
 
-  const permissionTitle = (
+  const permissionReason = (
     host: string,
     project: string,
     name: string,
     permission: Parameters<typeof hasPermission>[3],
-    allowed: string,
-    denied: string,
-  ) =>
+  ): string | undefined =>
     permsLoading
-      ? "Checking permissions..."
+      ? "Checking permissions"
       : hasPermission(host, project, name, permission)
-        ? allowed
-        : denied;
+        ? undefined
+        : permission === "console"
+          ? "No console permission"
+          : "No operate permission";
   const { hasRole } = usePermissions();
   const canCreateInstance = hasRole(Role.PARTNER);
   // Deletion is Partner+ on the backend too (DELETE /vms requires Partner).
@@ -323,8 +317,7 @@ function InstancesContent() {
             onAction={actions.handleAction}
             actionLoading={actions.actionLoading}
             isReadOnly={isReadOnly}
-            hasPermission={hasPermission}
-            permissionTitle={permissionTitle}
+            permissionReason={permissionReason}
             canDeleteInstance={canDeleteInstance}
             deletePending={actions.deletePending}
             onCopy={setCopyTarget}
