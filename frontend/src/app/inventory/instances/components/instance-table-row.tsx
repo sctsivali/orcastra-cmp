@@ -209,7 +209,9 @@ export function InstanceTableRow({
         {rootDisk ? (
           <>
             <span className="whitespace-nowrap">{rootDisk.value}</span>
-            {rootDisk.pool && <TableSubText className="font-mono">{rootDisk.pool}</TableSubText>}
+            {/* Proportional, not mono: the mono glyphs cost the ten pixels that put the table
+                back over its container at the content cap. */}
+            {rootDisk.pool && <TableSubText>{rootDisk.pool}</TableSubText>}
           </>
         ) : (
           <TableEmptyValue label="No root disk reported" />
