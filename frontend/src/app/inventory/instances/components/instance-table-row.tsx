@@ -13,7 +13,7 @@ import { useTerminalStore } from "@/lib/terminal-store";
 import { formatInstanceType } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
 import { instanceRowActions, type InstancePermission } from "./instance-row-actions";
-import type { InstanceAction } from "./use-instance-actions";
+import { actionKey, type InstanceAction } from "./use-instance-actions";
 
 export interface InstanceTableRowProps {
   instance: VMInfo;
@@ -21,7 +21,7 @@ export interface InstanceTableRowProps {
   rowProps: { "data-row-key": string; "data-row-focus"?: "true" | "false" };
   onOpen: (instance: VMInfo) => void;
   onAction: (name: string, host: string, project: string, action: InstanceAction) => void;
-  actionLoading: string | null;
+  pendingActions: ReadonlySet<string>;
   isReadOnly: boolean;
   /** Undefined when the caller may act; otherwise why not, including "still checking". */
   permissionReason: (
@@ -78,10 +78,15 @@ const IN_FLIGHT: Record<InstanceAction, string> = {
   restart: "Restarting",
 };
 
-function inFlightLabel(name: string, actionLoading: string | null, deletePending: boolean) {
+function inFlightLabel(
+  instance: Pick<VMInfo, "name" | "host" | "project">,
+  pendingActions: ReadonlySet<string>,
+  deletePending: boolean,
+) {
   if (deletePending) return "Deleting";
+  const project = instance.project || "default";
   for (const action of Object.keys(IN_FLIGHT) as InstanceAction[]) {
-    if (actionLoading === `${name}-${action}`) return IN_FLIGHT[action];
+    if (pendingActions.has(actionKey(instance.host, project, instance.name, action))) return IN_FLIGHT[action];
   }
   return null;
 }
@@ -104,7 +109,7 @@ export function InstanceTableRow({
   rowProps,
   onOpen,
   onAction,
-  actionLoading,
+  pendingActions,
   isReadOnly,
   permissionReason,
   canDeleteInstance,
@@ -118,13 +123,13 @@ export function InstanceTableRow({
   // both, so the trigger names all three. Same shape as components/dashboard/instance-row.tsx.
   const rowLabel = `${instance.name} in ${project} on ${instance.host}`;
   const rootDisk = rootDiskLabel(instance);
-  const inFlight = inFlightLabel(instance.name, actionLoading, deletePending);
+  const inFlight = inFlightLabel(instance, pendingActions, deletePending);
 
   const actions = instanceRowActions({
     instance,
     isReadOnly,
     canManage: canDeleteInstance,
-    actionLoading,
+    pendingActions,
     deletePending,
     permissionReason: (permission) => permissionReason(instance.host, project, instance.name, permission),
     onStart: () => onAction(instance.name, instance.host, project, "start"),

@@ -48,7 +48,8 @@ const SORTABLE_HEAD_RE = new RegExp(`<SortableTableHead\\b[^>]*\\blabel="${HEADE
 const TABLE_HEAD_RE = new RegExp(`<TableHead\\b[^>]*>\\s*${HEADER_LABEL}\\s*</TableHead>`, 'g');
 const NODE_LINK_RE = /<NodeLink\b/g;
 const CLUSTERS_CALL_RE = /inventoryLinks\.clusters\(/g;
-const EXEMPT_RE = /node-link:\s*exempt\s+(\S.{14,})/g;
+// The reason may not run into the comment terminator, so `exempt */} <TableHead ...` is not a reason.
+const EXEMPT_RE = /node-link:\s*exempt\s+((?:(?!\*\/)[^\n]){15,})/g;
 
 function* walk(dir) {
   for (const entry of readdirSync(dir)) {
@@ -94,27 +95,29 @@ for (const file of walk(src)) {
 
   const roleColumns = code.match(ROLE_NODE_RE)?.length ?? 0;
   const headers = (code.match(SORTABLE_HEAD_RE)?.length ?? 0) + (code.match(TABLE_HEAD_RE)?.length ?? 0);
-  // A table declares its columns once in defineTable and once as headers; take the larger so a
-  // header-only table and a facet-only table are both counted, and neither is counted twice.
-  let declared = Math.max(roleColumns, headers);
   const exempt = [...raw.matchAll(EXEMPT_RE)].length;
-  declared = Math.max(0, declared - exempt);
   const used = code.match(NODE_LINK_RE)?.length ?? 0;
 
-  if (declared === 0 && used === 0 && exempt === 0) continue;
+  if (roleColumns === 0 && headers === 0 && used === 0 && exempt === 0) continue;
   const key = groupOf(rel);
-  const group = groups.get(key) ?? { declared: 0, used: 0, exempt: 0, files: [] };
-  group.declared += declared;
+  const group = groups.get(key) ?? { roles: 0, headers: 0, used: 0, exempt: 0, files: [] };
+  group.roles += roleColumns;
+  group.headers += headers;
   group.used += used;
   group.exempt += exempt;
-  group.files.push(`${rel} (${declared} declared, ${used} NodeLink, ${exempt} exempt)`);
+  group.files.push(`${rel} (${roleColumns} role, ${headers} header, ${used} NodeLink, ${exempt} exempt)`);
   groups.set(key, group);
-  declaredTotal += declared;
-  usedTotal += used;
-  exemptTotal += exempt;
 }
 
 for (const [key, group] of groups) {
+  // A table declares its column once in defineTable and once as a header, and the two can sit
+  // in different files of one feature directory (the definition on the page, the header in a
+  // components/ table). Take the larger of the two sums per directory, so neither a header-only
+  // nor a facet-only table is missed and a split table is not counted twice.
+  group.declared = Math.max(0, Math.max(group.roles, group.headers) - group.exempt);
+  declaredTotal += group.declared;
+  usedTotal += group.used;
+  exemptTotal += group.exempt;
   if (group.declared > group.used) {
     failures.push(
       `${key}: ${group.declared} Node/Cluster column(s) but ${group.used} NodeLink cell(s)\n` +

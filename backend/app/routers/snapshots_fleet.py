@@ -188,7 +188,11 @@ async def list_fleet_snapshots(
         _enforce_snapshot_access(host, project, None)
 
     cache = get_cache_manager()
-    cache_key = get_scope_cache_key(f"snapshots_fleet:list:host={host}:project={project}")
+    # note: `v2` because the body gained fields. The list cache lives in Redis and outlives a
+    # backend swap, so for the 30 s after a deploy the old build's entry would be deserialised
+    # into this model with the counters at their defaults and print "could not be measured" for
+    # a read that never ran. The prefix keeps every existing sweep pattern matching.
+    cache_key = get_scope_cache_key(f"snapshots_fleet:list:v2:host={host}:project={project}")
     cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         return FleetSnapshotListResponse(**cached)

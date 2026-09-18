@@ -315,7 +315,7 @@ function InstancesContent() {
             rowProps={focus.rowProps}
             onOpen={handleInstanceClick}
             onAction={actions.handleAction}
-            actionLoading={actions.actionLoading}
+            pendingActions={actions.pendingActions}
             isReadOnly={isReadOnly}
             permissionReason={permissionReason}
             canDeleteInstance={canDeleteInstance}

@@ -87,7 +87,7 @@ interface InstancesTableProps {
   rowProps: RowFocusState["rowProps"];
   onOpen: (instance: VMInfo) => void;
   onAction: (name: string, host: string, project: string, action: InstanceAction) => void;
-  actionLoading: string | null;
+  pendingActions: ReadonlySet<string>;
   isReadOnly: boolean;
   permissionReason: Parameters<typeof InstanceTableRow>[0]["permissionReason"];
   canDeleteInstance: boolean;
@@ -169,7 +169,7 @@ export function InstancesTable(props: InstancesTableProps) {
             rowProps={props.rowProps(keyFor(instance.host, instance.project || "default", instance.name))}
             onOpen={props.onOpen}
             onAction={props.onAction}
-            actionLoading={props.actionLoading}
+            pendingActions={props.pendingActions}
             isReadOnly={props.isReadOnly}
             permissionReason={props.permissionReason}
             canDeleteInstance={props.canDeleteInstance}

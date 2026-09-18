@@ -215,11 +215,16 @@ def measure_holder_sizes(
     unmeasured: List[Holder] = []
     pending = list(holders)
     in_flight: Dict[Future, Holder] = {}
-    ctx = contextvars.copy_context()
 
     while pending or in_flight:
         while pending and len(in_flight) < parallelism and time.monotonic() < deadline:
             holder = pending.pop(0)
+            # important: one Context copy per read. A Context can be entered by one thread at a
+            # time, so a single copy shared by four concurrent submits made every overlapping
+            # read raise "cannot enter context" and land in unmeasured while looking like a
+            # slow driver. Copying here also carries the request's scope variables onto the
+            # worker, the same reason run_blocking copies them.
+            ctx = contextvars.copy_context()
             future = _SIZES_EXECUTOR.submit(ctx.run, _read_holder_sizes, client, holder, timeout)
             in_flight[future] = holder
         remaining = deadline - time.monotonic()

@@ -1,7 +1,7 @@
 import { Copy, Monitor, Play, RefreshCw, RotateCw, Square, Terminal, Trash2 } from "lucide-react";
 import type { RowAction } from "@/components/ui/row-actions";
 import type { VMInfo } from "@/types/api";
-import type { InstanceAction } from "./use-instance-actions";
+import { actionKey, type InstanceAction } from "./use-instance-actions";
 
 export type InstancePermission = "view" | "operate" | "console";
 
@@ -20,8 +20,8 @@ export interface InstanceRowActionsInput {
   isReadOnly: boolean;
   /** Partner and above. The backend refuses copy, rebuild and delete below that. */
   canManage: boolean;
-  /** `${name}-${action}` for the one lifecycle action in flight, from useInstanceActions. */
-  actionLoading: string | null;
+  /** Keys of the lifecycle actions in flight (actionKey), from useInstanceActions. */
+  pendingActions: ReadonlySet<string>;
   deletePending: boolean;
   /** Undefined when allowed; otherwise the reason shown under the item. */
   permissionReason: (permission: InstancePermission) => string | undefined;
@@ -44,12 +44,13 @@ export interface InstanceRowActionsInput {
  * a greyed button: pending beats read-only, which beats the permission answer.
  */
 export function instanceRowActions(input: InstanceRowActionsInput): RowAction[] {
-  const { instance, isReadOnly, canManage, actionLoading, deletePending, permissionReason } = input;
+  const { instance, isReadOnly, canManage, pendingActions, deletePending, permissionReason } = input;
+  const project = instance.project || "default";
   const running = instance.status === "Running";
   const readOnly = isReadOnly ? READ_ONLY_REASON : undefined;
 
   const lifecycle = (action: InstanceAction): Pick<RowAction, "pending" | "unavailableReason"> => {
-    const pending = actionLoading === `${instance.name}-${action}`;
+    const pending = pendingActions.has(actionKey(instance.host, project, instance.name, action));
     return {
       pending,
       unavailableReason: pending ? IN_PROGRESS[action] : readOnly ?? permissionReason("operate"),

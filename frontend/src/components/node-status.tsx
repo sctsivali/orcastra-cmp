@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ReadErrorState } from "@/components/ui/read-error-state";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NodeConnectionSummary } from "./node-connection-summary";
@@ -69,7 +70,7 @@ export function NodeStatusCards(props: NodeStatusCardsProps) {
 }
 
 function NodeStatusCardsContent({ onRefresh, lastUpdatedAt }: NodeStatusCardsProps) {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt } = useNodesStatus();
+  const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useNodesStatus();
   const { navigate } = useNavigationProgress();
   const { isPartner } = usePermissions();
   const headingId = useId();
@@ -186,25 +187,10 @@ function NodeStatusCardsContent({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
           selectedTags={selectedTags}
         />
 
-        {sortedNodes.length === 0 && filters.activeFilterCount > 0 ? (
-          // A filter that matches nothing is not the same as having no clusters, so it says so
-          // and offers the way back out.
-          <EmptyState
-            icon={Server}
-            title="No cluster matches the current filters"
-            description="Try a different search, or clear a filter."
-            action={
-              <Button size="sm" variant="outline" onClick={filters.clearAll}>
-                Clear filters
-              </Button>
-            }
-          />
-        ) : registeredCount > 0 && onlineNodes.length === 0 ? (
-          <EmptyState
-            icon={AlertTriangle}
-            title="No cluster is online"
-            description="Every registered cluster is offline or still pending. The summary above says why."
-          />
+        {isError && !data ? (
+          // A read that failed is not an empty fleet: a 503 while Vault is sealed or a 429 must
+          // never read as "No clusters yet" with a Register Node button under it.
+          <ReadErrorState noun="clusters" error={error} onRetry={() => refetch()} />
         ) : registeredCount === 0 ? (
           <EmptyState
             icon={Server}
@@ -216,6 +202,27 @@ function NodeStatusCardsContent({ onRefresh, lastUpdatedAt }: NodeStatusCardsPro
                   Register Node
                 </Button>
               ) : undefined
+            }
+          />
+        ) : onlineNodes.length === 0 ? (
+          // Checked before the filter: a bookmarked clusters.q on a fleet that just went dark
+          // would otherwise blame the search.
+          <EmptyState
+            icon={AlertTriangle}
+            title="No cluster is online"
+            description="Every registered cluster is offline or still pending. The summary above says why."
+          />
+        ) : sortedNodes.length === 0 && filters.activeFilterCount > 0 ? (
+          // A filter that matches nothing is not the same as having no clusters, so it says so
+          // and offers the way back out.
+          <EmptyState
+            icon={Server}
+            title="No cluster matches the current filters"
+            description="Try a different search, or clear a filter."
+            action={
+              <Button size="sm" variant="outline" onClick={filters.clearAll}>
+                Clear filters
+              </Button>
             }
           />
         ) : (

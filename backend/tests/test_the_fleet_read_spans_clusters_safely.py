@@ -298,7 +298,7 @@ def test_nothing_is_cached_when_no_cluster_answered():
         # so a test written on its return value passes whatever happened.
         from app.core.org_scope import get_scope_cache_key
 
-        key = get_scope_cache_key("snapshots_fleet:list:host=None:project=None")
+        key = get_scope_cache_key("snapshots_fleet:list:v2:host=None:project=None")
         stored = get_cache_manager().get("api_responses", key)
     finally:
         client._cleanup()

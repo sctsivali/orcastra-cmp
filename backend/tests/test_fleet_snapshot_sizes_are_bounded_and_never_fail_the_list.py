@@ -85,11 +85,18 @@ def test_a_size_phase_that_times_out_does_not_mark_the_cluster_unreachable(monke
     cluster = _cluster([(PROJECT, INSTANCE)])
     cluster.node.size_read_delay[(PROJECT, INSTANCE)] = 1.0
 
-    started = time.monotonic()
-    body = _read(service(cluster))
-    elapsed = time.monotonic() - started
+    # App construction and the cache sweep happen before the clock starts, so the bound below
+    # measures the request alone: the abandoned read holds its thread for 1.0 s, and a request
+    # that joined it would take at least that long.
+    client = _client(service(cluster))
+    try:
+        started = time.monotonic()
+        body = _get(client)
+        elapsed = time.monotonic() - started
+    finally:
+        client._cleanup()
 
-    assert elapsed < 0.9, f"the request waited {elapsed:.2f}s for an abandoned read"
+    assert elapsed < 0.95, f"the request waited {elapsed:.2f}s for an abandoned read"
     assert body["queried_nodes"] == [HOST]
     assert body["unreachable_nodes"] == []
     assert body["size_measurement"] == "skipped"
@@ -213,6 +220,27 @@ def test_sizes_match_rows_by_cluster_and_project_not_by_name():
     sizes = {row["project"]: row["size"] for row in body["items"]}
     assert sizes == {PROJECT: MEASURED_SIZE, OTHER_PROJECT: 20}
     assert {call[1]["project"] for call in _reads(cluster)} == {PROJECT, OTHER_PROJECT}
+
+
+def test_overlapping_size_reads_on_one_cluster_are_all_measured():
+    """Ablation: share one contextvars.Context across the four concurrent reads and every
+    overlapping one raises "cannot enter context", landing in unmeasured while looking like a
+    slow storage driver. Three holders held open long enough to overlap must all measure."""
+    holders = [(PROJECT, INSTANCE), (PROJECT, SECOND_INSTANCE), (PROJECT, THIRD_INSTANCE)]
+    cluster = _cluster(holders)
+    for holder in holders:
+        cluster.node.snapshots_by_instance[holder] = [dict(SNAP, size=MEASURED_SIZE)]
+        cluster.node.size_read_delay[holder] = 0.4
+
+    body = _read(service(cluster))
+
+    # No wall-clock assertion: the overlap is what the 0.4 s delays force, and the ablation
+    # fails on the counters, not on timing, so timing would only add a flake under load.
+    assert body["size_measurement"] == "measured", body
+    assert body["measured_instances"] == 3
+    assert body["unmeasured_instances"] == 0
+    assert all(row["size"] == MEASURED_SIZE for row in body["items"])
+    assert len(_reads(cluster)) == 3
 
 
 def test_a_cached_entry_missing_a_snapshot_name_is_a_miss():

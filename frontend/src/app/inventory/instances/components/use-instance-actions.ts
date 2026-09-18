@@ -19,6 +19,12 @@ export type InstanceAction = "start" | "stop" | "restart";
  * dialogs are controlled by. The page keeps the list, the filters and the layout; a row only
  * needs what this returns.
  */
+
+/** The key one lifecycle action holds while in flight: an instance is unique per host and project. */
+export function actionKey(host: string, project: string, name: string, action: InstanceAction | "delete"): string {
+  return `${host}/${project}/${name}:${action}`;
+}
+
 export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
   const startInstance = useStartInstance();
   const stopInstance = useStopInstance();
@@ -27,7 +33,9 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
   const { toast } = useToast();
   const { isReadOnly } = useReadOnlyMode();
 
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  // The lifecycle actions in flight, keyed like the ref below (host/project/name:action), so a
+  // row shows its own pending state and never a same-named instance's on another cluster.
+  const [pendingActions, setPendingActions] = useState<ReadonlySet<string>>(() => new Set());
   // important: actionLoading and isPending are React state and only reach the DOM on the next
   // render, so two activations inside one tick both pass. The ref is what actually blocks the
   // second request. Same recipe as snapshots/components/snapshot-row-actions.tsx, keyed by
@@ -90,11 +98,11 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
     action: "start" | "stop" | "restart",
     force = false
   ) => {
-    const key = `${host}/${project}/${instanceName}:${action}`;
+    const key = actionKey(host, project, instanceName, action);
     if (actionsInFlightRef.current.has(key)) return;
     actionsInFlightRef.current.add(key);
     try {
-      setActionLoading(`${instanceName}-${action}`);
+      setPendingActions((prev) => new Set(prev).add(key));
 
       if (action === "start") {
         await startInstance.mutateAsync({ name: instanceName, host, project });
@@ -118,7 +126,11 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
         variant: "destructive",
       });
     } finally {
-      setActionLoading(null);
+      setPendingActions((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
       actionsInFlightRef.current.delete(key);
     }
   };
@@ -126,7 +138,7 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
     const target = deleteTarget;
-    const key = `${target.host}/${target.project || "default"}/${target.name}:delete`;
+    const key = actionKey(target.host, target.project || "default", target.name, "delete");
     if (actionsInFlightRef.current.has(key)) return;
     actionsInFlightRef.current.add(key);
     try {
@@ -173,7 +185,7 @@ export function useInstanceActions({ refetch }: { refetch: () => unknown }) {
 
   return {
     isReadOnly,
-    actionLoading,
+    pendingActions,
     deleteTarget,
     setDeleteTarget,
     deleteDisplay,
