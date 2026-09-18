@@ -657,13 +657,14 @@ class InstanceManager:
         # A graceful stop only works if software inside the guest acts on the ACPI
         # power event. A fully-booted OS does so in about a second; the cases below
         # never will, no matter how long the timeout.
+        # note: the remedy comes before the causes. A 5xx detail is cut to 300 characters on
+        # the way out (core/error_sanitizer.py), and the old order lost "retry with force" to
+        # the cut on any name longer than a few characters.
         return LXDGracefulTimeoutError(
             f"Timed out after {timeout}s waiting for '{name}' to shut down gracefully: "
-            f"nothing in the guest acted on the ACPI shutdown request. Common causes: "
-            f"no OS is installed, it is sitting at a boot menu or UEFI shell, it is "
-            f"still early in boot, or the OS does not handle ACPI power events (many "
-            f"live/installer images do not). Retry the {action} with force to "
-            f"power-cycle it."
+            f"nothing in the guest acted on the ACPI request. Retry the {action} with "
+            f"force to power-cycle it. Common causes: no OS installed, a boot menu or "
+            f"UEFI shell, early boot, or an OS that ignores ACPI power events."
         )
 
     @audit_operation("lxd.instance.stop", "instance")
