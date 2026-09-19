@@ -217,7 +217,7 @@ class JournalSink:
         if task.mode not in (MODE_UPLOAD_OPEN, MODE_UPLOAD_CLOSE):
             claimed = await repository.claim_operation_for_audit(
                 db, key=task.key, actor=actor, result=task.result,
-                audit_error=task.audit_error, extra=task.extra,
+                audit_error=task.audit_error, extra=task.extra, kind=task.kind,
             )
             if claimed:
                 return claimed

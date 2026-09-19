@@ -53,7 +53,8 @@ async def test_the_claim_takes_the_newest_unclaimed_stream_row_under_skip_locked
     for column in ("actor_role", "actor_kind", "api_key_id", "source", "request_id"):
         assert f"{column} = :{column}" in sql
     assert "metadata = task_journal.metadata || CAST(:extra AS jsonb)" in sql
-    assert "error = COALESCE(task_journal.error, NULLIF(:audit_error, ''))" in sql
+    assert "ELSE COALESCE(task_journal.error, NULLIF(:audit_error, '')) END" in sql
+    assert "CAST(:kind AS varchar) IN ('rebuild', 'upload')" in sql, "a job's audit verdict wins"
     assert "CASE WHEN task_journal.status IN ('success', 'failure', 'cancelled', 'lost')" in sql
     assert params["new_status"] == "success"
     assert params["source"] == "dashboard"
@@ -150,7 +151,7 @@ async def test_attach_by_id_refuses_a_blank_operation_id_before_any_sql():
 
 
 @pytest.mark.asyncio
-async def test_the_reverse_attach_accepts_a_terminal_dashboard_row():
+async def test_the_reverse_attach_prefers_an_open_dashboard_row_and_accepts_a_fresh_terminal_one():
     """A `wait=True` start has its audit row closed before its frame arrives. The frame still
     attaches: the by-key subquery has no status filter, and the kind flips to lxd_operation."""
 
@@ -164,7 +165,10 @@ async def test_the_reverse_attach_accepts_a_terminal_dashboard_row():
     assert result.id == ROW and result.created is False and result.changed is True
     attach = next(sql for sql in db.statements if "SKIP LOCKED" in sql)
     subquery = attach[attach.index("WHERE id = (SELECT") :]
-    assert "status" not in subquery, "any status: the dashboard row may already be terminal"
+    # A finished dashboard row is this operation only when a wait=True router closed it moments
+    # ago; an open row always; an earlier attempt that failed, never (a review finding).
+    assert "(status IN ('pending', 'running') OR created_at >= now() - interval '2 minutes')" in subquery
+    assert "ORDER BY (status IN ('pending', 'running')) DESC, created_at DESC" in subquery
     assert "operation_id IS NULL" in subquery
     assert "created_at >= now() - interval '15 minutes'" in subquery
     assert "kind = CASE WHEN task_journal.kind = 'dashboard_action' THEN 'lxd_operation'" in attach

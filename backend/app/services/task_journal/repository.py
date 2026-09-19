@@ -126,7 +126,11 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
                     "WHERE id = (SELECT id FROM task_journal WHERE "
                     f"{_KEY_MATCH} AND operation_id IS NULL "
                     "AND created_at >= now() - interval '15 minutes' "
-                    "ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
+                    # An open row is this operation; a finished one only when the wait=True
+                    # router closed it moments ago, never an earlier attempt that failed.
+                    "AND (status IN ('pending', 'running') OR created_at >= now() - interval '2 minutes') "
+                    "ORDER BY (status IN ('pending', 'running')) DESC, created_at DESC "
+                    "LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
                 ),
                 params,
             )
@@ -243,10 +247,12 @@ async def claim_operation_for_audit(
     result: str,
     audit_error: Optional[str],
     extra: Dict[str, Any],
+    kind: str = "dashboard_action",
 ) -> Optional[str]:
     params = {
         **_actor_params(actor),
         **_key_params(key),
+        "kind": kind,
         "new_status": _status_for(result),
         "audit_error": clean_message(audit_error) or "",
         "extra": json_param(extra),

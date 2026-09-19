@@ -336,6 +336,60 @@ def test_an_over_long_client_string_does_not_poison_the_batch(loop, db):
     assert logs.n == 2
 
 
+def test_a_rebuild_job_takes_the_audit_verdict_over_its_one_operation(loop, db):
+    """The LXD rebuild step succeeded (200) and the job's start step then failed: the row is
+    the job, so it reads failure with the job's error, not success with an error beneath."""
+    from app.services.task_journal.follower_writer import JournalWriter
+    from app.services.task_journal.sink import JournalSink
+
+    sink = JournalSink()
+    sink._session_maker = db
+    writer = JournalWriter(db, identities=_Identities())
+    t0 = datetime.now(timezone.utc)
+    op = str(uuid.uuid4())
+    _run(loop, writer.write_batch([
+        _operation(op, status="Success", code=200, name="web-21", description="Rebuilding instance",
+                   created=t0, updated=t0 + timedelta(seconds=5)),
+    ]))
+    audit = _audit("instance.rebuild", target_type="instance", target_id="web-21", result="failure",
+                   details={"operation_id": op, "project": "default"})
+    audit["error_message"] = "Instance is busy"
+    _run(loop, sink._write_batch([audit]))
+    row = _run(loop, _one(db, "SELECT kind, status, error FROM task_journal WHERE operation_id = :op", op=op))
+    assert (row.kind, row.status, row.error) == ("rebuild", "failure", "Instance is busy")
+
+
+def test_a_stream_frame_never_attaches_to_an_earlier_failed_attempt(loop, db):
+    """Start failed a minute ago (audit only, no operation); the operator starts again and the
+    daemon's frame lands before the second audit: it must open a row of its own, not adopt
+    the failed attempt."""
+    from app.services.task_journal.follower_writer import JournalWriter
+    from app.services.task_journal.sink import JournalSink
+
+    sink = JournalSink()
+    sink._session_maker = db
+    writer = JournalWriter(db, identities=_Identities())
+    failed = _audit("instance.start", target_type="instance", target_id="web-31", result="failure",
+                    details={"target_project": "default"})
+    _run(loop, sink._write_batch([failed]))
+    async def age():
+        async with db() as s:
+            await s.execute(text("UPDATE task_journal SET created_at = now() - interval '3 minutes' "
+                                 "WHERE resource_name = 'web-31'"))
+            await s.commit()
+    _run(loop, age())
+    t0 = datetime.now(timezone.utc)
+    op = str(uuid.uuid4())
+    _run(loop, writer.write_batch([
+        _operation(op, status="Running", code=103, name="web-31", description="Starting instance",
+                   created=t0, updated=t0),
+    ]))
+    rows = _run(loop, _rows(db, "SELECT status, operation_id FROM task_journal WHERE resource_name = 'web-31' ORDER BY created_at"))
+    assert len(rows) == 2
+    assert rows[0]["status"] == "failure" and rows[0]["operation_id"] is None
+    assert rows[1]["status"] == "running" and rows[1]["operation_id"] == op
+
+
 def test_uploads_open_and_close_on_their_session(loop, db):
     from app.services.task_journal.sink import JournalSink
 

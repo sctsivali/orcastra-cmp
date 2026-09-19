@@ -116,8 +116,20 @@ _KEY_BACKFILL = (
     "THEN CAST(:project AS varchar) END, ''), task_journal.project), "
 )
 
+# important: a rebuild or an upload is a dashboard-owned job of several steps; its LXD
+# operation is one step. The job's verdict (the audit's) is the row's verdict and its error
+# is the row's error, over a Success the daemon reported for the one step it saw. Every
+# other kind keeps the cluster's verdict. Found by review: a rebuild whose start step failed
+# showed success with an error beneath it.
+_JOB_KIND = "CAST(:kind AS varchar) IN ('rebuild', 'upload')"
+_AUDIT_STATUS = (
+    f"CASE WHEN {_JOB_KIND} AND {_NEW} IN {_TERMINAL_3} THEN {_NEW} "
+    f"ELSE {MONOTONIC_STATUS} END"
+)
+
 _ACTOR_SET = (
     f"{_KEY_BACKFILL}"
+    f"kind = CASE WHEN {_JOB_KIND} THEN CAST(:kind AS varchar) ELSE task_journal.kind END, "
     "actor_email = :actor_email, actor_role = :actor_role, actor_kind = :actor_kind, "
     "api_key_id = :api_key_id, source = :source, request_id = :request_id, "
     "target_organization_id = COALESCE(CAST(:target_organization_id AS integer), "
@@ -125,8 +137,9 @@ _ACTOR_SET = (
     "target_organization_slug = COALESCE(:target_organization_slug, "
     "task_journal.target_organization_slug), "
     "metadata = task_journal.metadata || CAST(:extra AS jsonb), "
-    "error = COALESCE(task_journal.error, NULLIF(:audit_error, '')), "
-    f"status = {MONOTONIC_STATUS}, "
+    f"error = CASE WHEN {_JOB_KIND} THEN COALESCE(NULLIF(:audit_error, ''), task_journal.error) "
+    "ELSE COALESCE(task_journal.error, NULLIF(:audit_error, '')) END, "
+    f"status = {_AUDIT_STATUS}, "
     f"finished_at = {_TERMINAL_FINISH}, "
     "updated_at = now(), seq = nextval('task_journal_seq')"
 )

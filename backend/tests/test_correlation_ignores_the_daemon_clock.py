@@ -52,7 +52,9 @@ async def test_a_frame_from_a_skewed_daemon_still_attaches_to_its_dashboard_row(
     attach = next(sql for sql in db.statements if "SKIP LOCKED" in sql)
     subquery = attach[attach.index("WHERE id = (SELECT") :]
     assert _daemon_columns(subquery) == [], "the window is on Postgres's created_at, not the daemon's clock"
-    assert _window_predicates(subquery) == ["created_at"]
+    # Two windows, both on created_at: the 15 minute key window and the 2 minute one a
+    # finished dashboard row must fall inside; neither reads the daemon's clock.
+    assert _window_predicates(subquery) == ["created_at", "created_at"]
     params = next(p for sql, p in db.calls if "SKIP LOCKED" in sql)
     assert params["lxd_created_at"] == NOW + skew, "the daemon's time is still stored, for display"
 

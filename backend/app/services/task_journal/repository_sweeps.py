@@ -37,6 +37,10 @@ async def merge_racing_pairs(db: AsyncSession, *, window_s: int = 900) -> int:
                 "AND l.actor_email IS NULL AND l.api_key_id IS NULL "
                 "AND d.created_at >= now() - make_interval(secs => CAST(:window_s AS float8)) "
                 "AND l.created_at >= now() - make_interval(secs => CAST(:window_s AS float8)) "
+                # The same rule as the by-key attach: a finished dashboard row is this operation
+                # only when the two landed within two minutes; an earlier failed attempt is not.
+                "AND (d.status IN ('pending', 'running') "
+                "OR abs(extract(epoch FROM (l.created_at - d.created_at))) <= 120) "
                 "ORDER BY d.created_at LIMIT 200 FOR UPDATE OF d, l SKIP LOCKED"
             ),
             {"window_s": float(window_s)},
