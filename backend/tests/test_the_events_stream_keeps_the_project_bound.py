@@ -141,3 +141,28 @@ def test_a_long_lived_socket_re_reads_its_scope():
     refresh = source.index("await set_org_scope_for_ws(user)", sender)
     consult = source.index("if not frame_is_visible(host, payload):", sender)
     assert refresh < consult, "the scope must be re-read before the frame is judged"
+
+
+async def test_a_queued_browser_frame_carries_no_requestor(monkeypatch):
+    """The hub now parses the daemon's `requestor` for the journal follower; a browser queue
+    receives the projection, which never carries it."""
+    import asyncio
+
+    async def _idle(self, host):
+        return
+
+    monkeypatch.setattr(events_hub.LXDEventsHub, "_run_node", _idle)
+    hub = events_hub.LXDEventsHub()
+    queue = await hub.subscribe("nuc2")
+    raw = {"type": "operation", "project": "default",
+           "metadata": {"id": "op-4", "status": "Running", "status_code": 103,
+                        "resources": {"instances": ["/1.0/instances/web-01"]},
+                        "requestor": {"protocol": "unix", "username": "root", "address": "@"}}}
+    payload = events_hub.LXDEventsHub._parse_event("nuc2", json.dumps(raw))
+    assert payload["requestor"] == {"protocol": "unix", "username": "root", "address": "@"}
+
+    hub._fanout("nuc2", payload)
+
+    frame = await asyncio.wait_for(queue.get(), 1)
+    assert "requestor" not in frame
+    assert set(frame) <= events_hub.BROWSER_FRAME_KEYS

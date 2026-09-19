@@ -36,6 +36,10 @@ WATCHED = (
     APP / "services" / "desktop_policy.py",
     APP / "mcp",
     APP / "services" / "webhooks",
+    # The task journal's scope translation and the package behind the task panel. A visibility
+    # predicate nothing calls is a page that answers unscoped, which is the same shape again.
+    APP / "core" / "task_scope.py",
+    APP / "services" / "task_journal",
 )
 
 # Deliberate exceptions, each with the reason it is not a defect.
@@ -66,6 +70,9 @@ EXEMPT: Dict[str, str] = {
     # `test_a_delivery_arrives_signed_over_its_raw_bytes`, which signs with one and verifies with
     # the other, so this is exercised rather than merely present.
     "verify": "the receiver-side reference implementation, round-tripped against sign in tests",
+    # The per-worker follower singleton is read by name in the election test to assert that a
+    # step-down cleared it; the application reaches the follower through start/stop.
+    "get_follower": "a test seam over the per-worker singleton, read by the election test",
 }
 
 

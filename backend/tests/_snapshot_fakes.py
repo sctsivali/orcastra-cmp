@@ -116,6 +116,16 @@ class FakeInstanceNode:
         self.snapshots_by_instance: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
         self.size_read_error: Dict[Tuple[str, str], Exception] = {}
         self.size_read_delay: Dict[Tuple[str, str], float] = {}
+        # What `GET /1.0/operations?recursion=1` answers: bucket name -> operations. The
+        # all-projects read answers `operation_buckets`; a per-project read answers the
+        # project's own entry, so a test can prove the fallback walked every project.
+        self.operation_buckets: Dict[str, List[Dict[str, Any]]] = {}
+        self.operation_buckets_by_project: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        # Raised by the all-projects operations read, so a daemon without the extension can be
+        # played (an exception carrying `.response.status_code == 400`).
+        self.operations_all_projects_error: Optional[Exception] = None
+        # What `GET /1.0/warnings?recursion=1` answers.
+        self.warnings: List[Dict[str, Any]] = []
 
     @property
     def snapshots_api(self):
@@ -264,6 +274,33 @@ class _Operations:
         # The id is carried, not dropped: it is what lets one operation fail while another settles.
         return _OperationNode(self._node, operation_id)
 
+    def get(self, params=None, timeout=None):
+        """The bucketed listing the task journal seeds from, recorded with its params and the
+        socket timeout so a test can assert both."""
+        params = dict(params or {})
+        self._node.recorded.append(("list_operations", params, timeout))
+        if "all-projects" in params:
+            if self._node.operations_all_projects_error is not None:
+                raise self._node.operations_all_projects_error
+            return _Response({"metadata": _copy_buckets(self._node.operation_buckets)})
+        project = params.get("project")
+        return _Response(
+            {"metadata": _copy_buckets(self._node.operation_buckets_by_project.get(project, {}))}
+        )
+
+
+def _copy_buckets(buckets: Dict[str, List[Dict[str, Any]]]) -> Dict[str, List[Dict[str, Any]]]:
+    return {bucket: [dict(op) for op in ops] for bucket, ops in buckets.items()}
+
+
+class _Warnings:
+    def __init__(self, node: FakeInstanceNode):
+        self._node = node
+
+    def get(self, params=None, timeout=None):
+        self._node.recorded.append(("list_warnings", dict(params or {}), timeout))
+        return _Response({"metadata": [dict(w) for w in self._node.warnings]})
+
 
 class _OperationNode:
     def __init__(self, node, operation_id=None):
@@ -323,6 +360,10 @@ class _Api:
     @property
     def projects(self):
         return _Projects(self._node)
+
+    @property
+    def warnings(self):
+        return _Warnings(self._node)
 
     @property
     def storage_pools(self):

@@ -21,7 +21,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:
 
 import pytest  # noqa: E402
 
-from app.models import db_models, extension_models  # noqa: E402
+from app.models import db_models, extension_models, snapshot_schedule_models, task_journal_models  # noqa: E402
 
 # Modules that build queries against the ORM. A new one belongs here.
 MODULES = [
@@ -39,12 +39,17 @@ MODULES = [
     "app.routers.extension_installs",
     "app.routers.extension_webhooks",
     "app.routers.extensions_external",
+    # The task journal: its reads are ORM selects over three new tables and the schedules.
+    "app.services.task_journal.reads",
+    "app.services.task_journal.repository",
+    "app.routers.tasks",
+    "app.routers.cluster_log",
 ]
 
 
 def _model_classes() -> Dict[str, type]:
     classes: Dict[str, type] = {}
-    for module in (db_models, extension_models):
+    for module in (db_models, extension_models, snapshot_schedule_models, task_journal_models):
         for name in dir(module):
             candidate = getattr(module, name)
             if isinstance(candidate, type) and hasattr(candidate, "__tablename__"):
@@ -72,6 +77,7 @@ def test_the_model_inventory_is_not_empty() -> None:
     assert len(MODELS) > 10, f"only found {len(MODELS)} models, so this check sees almost nothing"
     assert "OrganizationCluster" in MODELS
     assert "ExtensionInstallation" in MODELS
+    assert "TaskJournal" in MODELS
 
 
 @pytest.mark.parametrize("module_name", MODULES)

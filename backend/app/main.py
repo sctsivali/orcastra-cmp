@@ -113,7 +113,19 @@ async def lifespan(app: FastAPI):
         logger.info("PostgreSQL database ready")
     except Exception as db_err:
         logger.warning(f"Could not verify database schema: {db_err}")
-    
+
+    # The activity sink copies every audit record into the task journal. Started here, before
+    # the Vault connect below, so the lxd.connection.* records that connect emits are journaled.
+    try:
+        if settings.task_journal_enabled:
+            from app.core.database import async_session_maker
+            from app.services.task_journal.sink import get_journal_sink
+
+            get_journal_sink().start(asyncio.get_running_loop(), async_session_maker)
+            logger.info("Task journal activity sink started")
+    except Exception as sink_err:
+        logger.error("Could not start the task journal sink: %s", sink_err, exc_info=True)
+
     # Initialize LXD service and check connections
     try:
         lxd_service = get_lxd_service()
@@ -352,6 +364,28 @@ async def lifespan(app: FastAPI):
     except Exception as schedule_err:
         logger.error("Could not start the snapshot schedule loop: %s", schedule_err, exc_info=True)
 
+    # The task journal follower (one worker, elected on a Postgres advisory lock) and the prune
+    # loop (every worker, one wins each pass). Its own try, for the reason the block above gives.
+    try:
+        if settings.task_journal_enabled:
+            from app.core.database import DATABASE_URL, async_session_maker
+            from app.services.task_journal.follower import start_follower
+            from app.services.task_journal.prune import start_prune_loop
+
+            start_follower(
+                async_session_maker,
+                get_lxd_service,
+                retry_seconds=settings.task_journal_follower_retry_seconds,
+                database_url=DATABASE_URL,
+            )
+            start_prune_loop(async_session_maker)
+            logger.info(
+                "Task journal follower standing by (retry %ss) and prune loop started",
+                settings.task_journal_follower_retry_seconds,
+            )
+    except Exception as journal_err:
+        logger.error("Could not start the task journal follower: %s", journal_err, exc_info=True)
+
     # Hydrate metrics cache from PostgreSQL (fills chart data after restart)
     try:
         from app.services.metrics_history_service import load_metrics_history
@@ -422,7 +456,21 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down Orcastra CMP API...")
-    
+
+    # Stop the task journal writers first: the follower releases its lock so another worker can
+    # take over, and the sink drains before the database engine below is disposed.
+    try:
+        from app.services.task_journal.follower import stop_follower
+        from app.services.task_journal.prune import stop_prune_loop
+        from app.services.task_journal.sink import get_journal_sink
+
+        await stop_follower()
+        stop_prune_loop()
+        await get_journal_sink().stop()
+        logger.info("Task journal follower, prune loop and sink stopped")
+    except Exception:
+        pass
+
     # Close archive service client
     try:
         from app.services.archive_service import _archive_service
@@ -729,6 +777,16 @@ Ensure your client certificates are properly configured.
     # Events Router (WebSocket: realtime LXD operation/creation progress)
     from app.routers.events import router as events_router
     app.include_router(events_router, prefix=settings.api_prefix)
+
+    # Task journal (the bottom panel): the socket first, then the REST routers. Mounted only
+    # when the journal is on, so a deployment that turned it off has no surface at all.
+    if settings.task_journal_enabled:
+        from app.routers.cluster_log import router as cluster_log_router
+        from app.routers.tasks import router as tasks_router
+        from app.routers.tasks_ws import router as tasks_ws_router
+        app.include_router(tasks_ws_router, prefix=settings.api_prefix)
+        app.include_router(tasks_router, prefix=settings.api_prefix)
+        app.include_router(cluster_log_router, prefix=settings.api_prefix)
 
     # Console Router (VGA/Graphics console access)
     from app.routers.console import router as console_router

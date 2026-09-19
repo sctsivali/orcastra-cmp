@@ -66,6 +66,9 @@ def _resolve(app, method: str, path: str) -> str:
         ("GET", "/api/v1/extensions/acme-backup", "get_extension"),
         ("GET", "/api/v1/extensions/acme-backup/install-preview", "install_preview"),
         ("POST", "/api/v1/extensions/acme-backup/installations", "install"),
+        # The task journal's queue is a literal segment beside the {task_id} slug.
+        ("GET", "/api/v1/tasks/queue", "get_queue"),
+        ("GET", "/api/v1/tasks/9f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f", "get_task"),
     ],
 )
 def test_a_literal_route_wins_over_the_slug_route(app, method, path, expected) -> None:

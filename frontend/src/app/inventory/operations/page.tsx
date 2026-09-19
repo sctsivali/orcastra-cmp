@@ -1,305 +1,308 @@
 "use client";
 
-import { Suspense, useCallback, useState, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { ListChecks, Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
-import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableHeader,
-  TableRow } from "@/components/ui/table";
-import { TableEmptyValue } from "@/components/ui/table-text";
-import { TableLink } from "@/components/ui/table-link";
-import { OverflowText } from "@/components/ui/overflow-text";
-import { OperationDetailDialog } from "./components/operation-detail-dialog";
-import { operationStatusTone } from "./components/operation-status";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle } from "@/components/ui/alert-dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger } from "@/components/ui/tooltip";
-import { Loader2, XCircle, Unplug } from "lucide-react";
-import { useOperations } from "@/hooks/use-lxd";
-import { useLiveRecord } from "@/hooks/use-live-record";
-import { LoadingLottiePage } from "@/components/loading-lottie";
-import { toast } from "@/hooks/use-toast";
-import { API_URL, getAccessToken } from "@/lib/api";
-import type { OperationInfo } from "@/types/api";
-import { useRequireRole } from "@/hooks/use-require-role";
-import { Role } from "@/types/rbac";
-import { formatDateTime, formatLabel} from "@/lib/utils";
-import { useTableSort } from "@/hooks/use-table-sort";
+  TableRow,
+} from "@/components/ui/table";
+import { TableEmptyRow, TableEmptyValue, TableSubText } from "@/components/ui/table-text";
+import { NodeLink } from "@/components/ui/node-link";
+import { PageReadError } from "@/components/ui/read-error-state";
+import { PartialReadNotice } from "@/components/ui/partial-read-notice";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
+import { LoadingLottiePage } from "@/components/loading-lottie";
+import {
+  ActorCell,
+  DescriptionCell,
+  DurationCell,
+  KindCell,
+  ProjectCell,
+  ResourceCell,
+  StartedCell,
+  StatusCell,
+  TaskCancelDialog,
+  TaskDetailDialog,
+  TaskIdCell,
+  TaskRowActions,
+  STATUS_ORDER,
+  actorLabel,
+  durationMs,
+  startedMs,
+} from "@/components/task-panel";
+import { useTaskWindow } from "@/components/task-panel/hooks/use-tasks";
+import { useTaskFeedState } from "@/components/task-panel/use-task-feed";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { useRequireRole } from "@/hooks/use-require-role";
 import { useTableFilters } from "@/hooks/use-table-filters";
+import { useTableSort } from "@/hooks/use-table-sort";
+import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { PageReadError } from "@/components/ui/read-error-state";
-import { NodeLink } from "@/components/ui/node-link";
+import { currentQuery, replaceQuery } from "@/lib/url-state";
+import { formatDateTime, formatLabel, formatRelativeTime, toMillis } from "@/lib/utils";
+import { Role } from "@/types/rbac";
+import type { TaskRecord } from "@/types/tasks";
 
-// The instance an operation belongs to: its own field, else the name inside a websocket
-// console operation's resources. Hoisted so sorting, searching and the row cannot disagree.
-function operationInstance(o: any): string {
-  if (o.instance_name) return o.instance_name;
-  if (o.class_name === "websocket" && o.description === "Executing command" && !o.metadata?.command) {
-    const instances = o.metadata?.resources?.instances || [];
-    if (instances.length > 0) {
-      const match = String(instances[0]).match(/\/instances\/([^?]+)/);
-      if (match) return match[1];
-    }
-  }
-  return "";
+// The full-page view of the task journal. The dock shows the newest 50 to 200 tasks; this page
+// reads a time window of up to 500 and filters, sorts and pages them client side like every
+// other list page. It never opens a socket of its own: the feed state is read from the dock's
+// store, and the window cache is patched by the same frames the dock applies.
+
+type TimeRange = "1h" | "24h" | "7d" | "30d";
+
+const DEFAULT_RANGE: TimeRange = "24h";
+const HOUR_MS = 60 * 60 * 1000;
+const TIME_RANGES: readonly { value: TimeRange; label: string; ms: number }[] = [
+  { value: "1h", label: "Last Hour", ms: HOUR_MS },
+  { value: "24h", label: "Last 24 Hours", ms: 24 * HOUR_MS },
+  { value: "7d", label: "Last 7 Days", ms: 7 * 24 * HOUR_MS },
+  { value: "30d", label: "Last 30 Days", ms: 30 * 24 * HOUR_MS },
+];
+const WINDOW_LIMIT = 500;
+const LIVE_TICK_MS = 1_000;
+const IDLE_TICK_MS = 30_000;
+
+function parseRange(raw: string | null): TimeRange {
+  return TIME_RANGES.some((option) => option.value === raw) ? (raw as TimeRange) : DEFAULT_RANGE;
 }
 
-const OPERATIONS = defineTable<any>()({
-  searchPlaceholder: "Search operations",
-  defaultSort: { field: "created", direction: "desc" },
+/**
+ * The window's lower bound as an ISO timestamp, floored to the minute.
+ *
+ * note: the server takes a datetime, so the URL's `1h` has to become one somewhere. Flooring
+ * keeps the React Query key stable across re-renders and a re-mount within the same minute;
+ * the window then only ever grows, which is what an operator reading a live list expects.
+ */
+function sinceIso(range: TimeRange): string {
+  const ms = TIME_RANGES.find((option) => option.value === range)?.ms ?? 24 * HOUR_MS;
+  const floored = Math.floor((Date.now() - ms) / 60_000) * 60_000;
+  return new Date(floored).toISOString();
+}
+
+// Same columns as the dock's Tasks tab plus Finished, and no `id`: this is the only table on the
+// page, so bare `node`, `project` and `q` keys stay the shared-link contract lib/inventory-links.ts
+// declares. `since` and `task` are read raw by the page itself, so a column may not claim them.
+const OPERATIONS = defineTable<TaskRecord>()({
+  searchPlaceholder: "Search tasks",
+  defaultSort: { field: "started", direction: "desc" },
+  reservedParams: ["since", "task"],
   columns: [
-    { field: "id", label: "Operation ID", sort: (o) => o.id, search: (o) => o.id, filter: fromSort("text") },
-    {
-      field: "instance",
-      label: "Instance",
-      sort: operationInstance,
-      search: operationInstance, filter: fromSort("text") },
-    {
-      field: "description",
-      label: "Description",
-      sort: (o) => o.description,
-      search: (o) => o.description, filter: fromSort("text") },
-    {
-      field: "node",
-      label: "Node",
-      sort: (o) => o.node_name,
-      facet: (o) => o.node_name,
-      facetSpec: { role: "node", primary: true } },
-    {
-      field: "project",
-      label: "Project",
-      sort: (o) => o.project || "default",
-      facet: (o) => o.project || "default",
-      facetSpec: { role: "project",} },
+    { field: "id", label: "Task", sort: (t) => t.id, search: (t) => t.id, filter: fromSort("text") },
+    { field: "description", label: "Description", sort: (t) => t.description, search: (t) => t.description, filter: fromSort("text") },
+    { field: "resource", label: "Resource", sort: (t) => t.resource_name, search: (t) => t.resource_name, filter: fromSort("text") },
+    { field: "node", label: "Node", sort: (t) => t.cluster_id, facet: (t) => t.cluster_id, facetSpec: { role: "node", primary: true } },
+    { field: "project", label: "Project", sort: (t) => t.project, facet: (t) => t.project, facetSpec: { role: "project" } },
     {
       field: "status",
       label: "Status",
-      sort: (o) => o.status,
-      facet: (o) => o.status,
-      facetSpec: { primary: true } },
+      sort: (t) => t.status,
+      facet: (t) => t.status,
+      facetSpec: { primary: true, format: formatLabel, order: STATUS_ORDER },
+    },
+    { field: "actor", label: "Actor", sort: (t) => actorLabel(t), search: (t) => actorLabel(t), filter: fromSort("text") },
+    { field: "kind", label: "Kind", sort: (t) => t.kind, facet: (t) => t.kind, facetSpec: { format: formatLabel } },
+    { field: "started", label: "Started", sort: (t) => startedMs(t), filter: fromSort("date", { horizon: "past" }) },
+    { field: "finished", label: "Finished", sort: (t) => toMillis(t.finished_at), filter: fromSort("date", { horizon: "past" }) },
     {
-      field: "class",
-      label: "Class",
-      sort: (o) => o.class_name,
-      facet: (o) => o.class_name,
-      facetSpec: { primary: true, format: formatLabel } },
-    {
-      field: "created",
-      label: "Created",
-      sort: (o) => (o.created_at ? new Date(o.created_at).getTime() : null), filter: fromSort("date", { horizon: "past" }) },
-  ] });
+      field: "duration",
+      label: "Duration",
+      sort: (t) => durationMs(t),
+      // Seconds for the range control, so its bounds read as "30s to 2m" rather than raw ms.
+      filter: { kind: "number", value: (t) => { const ms = durationMs(t); return ms === null ? null : ms / 1000; }, unit: "seconds", integer: true },
+    },
+  ],
+});
+
+const COLUMN_COUNT = OPERATIONS.columns.length + 1;
+
+/** One second while a running row is on the page and the tab is visible, else a slow tick. */
+function useClock(live: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    let id: number | undefined;
+    const stop = () => {
+      if (id !== undefined) window.clearInterval(id);
+      id = undefined;
+    };
+    const start = () => {
+      stop();
+      id = window.setInterval(() => setNow(Date.now()), live ? LIVE_TICK_MS : IDLE_TICK_MS);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        setNow(Date.now());
+        start();
+      } else {
+        stop();
+      }
+    };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [live]);
+  return now;
+}
+
+/** When the task finished, relative with the absolute time beneath; a placeholder while open. */
+function FinishedCell({ task }: { task: TaskRecord }) {
+  const finished = toMillis(task.finished_at);
+  if (finished === null) {
+    return (
+      <TableCell className="whitespace-nowrap">
+        <TableEmptyValue label="Not finished" />
+      </TableCell>
+    );
+  }
+  return (
+    <TableCell className="whitespace-nowrap">
+      {formatRelativeTime(finished)}
+      <TableSubText>{formatDateTime(task.finished_at)}</TableSubText>
+    </TableCell>
+  );
+}
+
+function TimeRangeSelect({ value, onChange }: { value: TimeRange; onChange: (next: TimeRange) => void }) {
+  const labelId = useId();
+  return (
+    <div className="flex items-center gap-2">
+      {/* note: a Radix trigger is a button, so htmlFor would associate with nothing;
+          aria-labelledby is what names it, the shape sort-select.tsx uses. */}
+      <span id={labelId} className="whitespace-nowrap text-sm font-medium">
+        Time Range
+      </span>
+      <Select value={value} onValueChange={(next) => onChange(parseRange(next))}>
+        <SelectTrigger aria-labelledby={labelId} className="h-9 w-[160px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {TIME_RANGES.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+}
 
 function OperationsContent() {
-  const { data, isLoading, refetch, refreshNow, dataUpdatedAt, isError, error } = useOperations();
-  // Nodes the fan-out could not reach. Their rows are absent, so say so rather
-  // than let an outage read as an empty list.
-  const unreachableNodes: string[] = (data as any)?.unreachable_nodes || [];
-  const operations: OperationRow[] = useMemo(
-    () => ((data as any)?.operations as OperationRow[]) || [],
-    [data],
-  );
-  const nodes = (data as any)?.nodes || [];
-  
-  // note: the id, not the row. Operations are the clearest case for re-deriving: the list
-  // polls every 15s and an operation's status changes underneath an open dialog, then the
-  // operation completes and leaves the list entirely.
-  const [detailOperation, setDetailOperation] = useState<{ id: string; instanceName?: string } | null>(null);
-  // important: keeps the last known row when the operation finishes and leaves the list.
-  // Snapping the dialog shut mid-read is a worse failure than the freeze it replaces.
-  const { record: liveOperation } = useLiveRecord(
-    operations,
-    detailOperation?.id ?? null,
-    operationId,
-  );
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
-  const [killingId, setKillingId] = useState<string | null>(null);
-  const [confirmDialog, setConfirmDialog] = useState<{
-    open: boolean;
-    operationId: string;
-    host: string;
-    description: string;
-    isKillSession?: boolean;
-    instanceName?: string;
-  }>({ open: false, operationId: "", host: "", description: "" });
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const feed = useTaskFeedState();
+  const { isReadOnly } = useReadOnlyMode();
 
+  // important: both keys are URL state, read on every render and written on change through
+  // lib/url-state, never a navigation. The default range is left out of the URL so a plain
+  // /inventory/operations link and the default view are the same address.
+  const range = parseRange(searchParams.get("since"));
+  const setRange = useCallback(
+    (next: TimeRange) => {
+      const params = currentQuery();
+      if (next === DEFAULT_RANGE) params.delete("since");
+      else params.set("since", next);
+      replaceQuery(pathname, params);
+    },
+    [pathname],
+  );
+  const since = useMemo(() => sinceIso(range), [range]);
+
+  // note: the id, not the row. The window is patched by feed frames and re-read on a poll, so an
+  // open dialog tracks status through its own detail query and never snaps shut when the row
+  // moves. Seeded from ?task= so a shared link opens straight onto the task, and kept in the
+  // URL while open so a refresh mid-read lands back on it.
+  const [detailTaskId, setDetailTaskId] = useState<string | null>(() => searchParams.get("task"));
+  const openTask = useCallback(
+    (id: string) => {
+      setDetailTaskId(id);
+      const params = currentQuery();
+      params.set("task", id);
+      replaceQuery(pathname, params);
+    },
+    [pathname],
+  );
+  const closeTask = useCallback(() => {
+    setDetailTaskId(null);
+    const params = currentQuery();
+    if (params.has("task")) {
+      params.delete("task");
+      replaceQuery(pathname, params);
+    }
+  }, [pathname]);
+  const [cancelTask, setCancelTask] = useState<TaskRecord | null>(null);
+
+  const query = useTaskWindow(since, feed.state === "connected");
+  const rows = useMemo(() => query.data?.tasks ?? [], [query.data]);
+  // Clusters the journal follower is not hearing from. What the journal already holds for them
+  // is listed; what happened since the stream dropped is not, which is what the noun says.
+  const disconnectedClusters = query.data?.disconnected_clusters ?? [];
 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
   const resetPage = useCallback(() => setPage(1), []);
 
-  const filters = useTableFilters(OPERATIONS, operations as any[], {
-    onFilterChange: resetPage,
-  });
-
+  const filters = useTableFilters(OPERATIONS, rows, { onFilterChange: resetPage });
   const { sortField, sortDirection, handleSort, sortItems } = useTableSort(
     OPERATIONS.sortAccessors,
     OPERATIONS.defaultSort.field,
     OPERATIONS.defaultSort.direction,
     resetPage,
   );
-  const sortedOperations = useMemo(
-    () => sortItems(filters.filteredRows),
-    [filters.filteredRows, sortItems],
-  );
+  const sorted = useMemo(() => sortItems(filters.filteredRows), [filters.filteredRows, sortItems]);
 
-  // Clamped on read rather than corrected in an effect. This list polls every 15s and
-  // operations leave it as they finish, so the page under the operator shrinks on its own;
-  // an effect would fire after a wrong frame had already painted.
-  const totalPages = Math.max(1, Math.ceil(sortedOperations.length / pageSize));
+  // Clamped on read rather than corrected in an effect: rows arrive and leave live, so the page
+  // under the operator can shrink on its own, and an effect would fire after a wrong frame.
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const currentPage = Math.min(page, totalPages);
-  const pagedOperations = sortedOperations.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize,
+  const paged = useMemo(
+    () => sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+    [sorted, currentPage, pageSize],
   );
 
-  // Find the host for an operation (check metadata, node_name, or iterate nodes)
-  const findOperationHost = (operation: any): string => {
-    // Check if operation has node_name from backend
-    if (operation.node_name) {
-      return operation.node_name;
-    }
-    // Check if operation has host in metadata
-    if (operation.metadata?.host) {
-      return operation.metadata.host;
-    }
-    // Default to first node if we can't determine
-    return nodes[0] || "";
-  };
+  const hasRunning = paged.some((task) => task.status === "running");
+  const now = useClock(hasRunning);
+  const serverNow = now + feed.serverOffsetMs;
 
-  // Extract instance name from console operation description
-  const extractInstanceName = (operation: any): string | null => {
-    // Console operations have description like "Executing command" and metadata with fds
-    if (operation.class_name === "websocket" && operation.description === "Executing command") {
-      // Try to get from metadata
-      if (operation.metadata?.command) {
-        return null; // exec command, not console
-      }
-      // Check resources for instance name
-      const resources = operation.metadata?.resources || {};
-      const instances = resources.instances || [];
-      if (instances.length > 0) {
-        // Path format: /1.0/instances/name?project=xxx
-        const path = instances[0];
-        const match = path.match(/\/instances\/([^?]+)/);
-        if (match) return match[1];
-      }
-    }
-    return null;
-  };
+  // The house loader only before the first window lands. A range change swaps the query key
+  // and empties the data for a moment, and the Time Range control must stay mounted through it.
+  const seeded = useRef(false);
+  if (query.data) seeded.current = true;
+  const switching = !query.data && query.isLoading;
 
-  const handleCancelOperation = async (operationId: string, host: string) => {
-    setCancellingId(operationId);
-    try {
-      const response = await fetch(
-        `${API_URL}/operations/${operationId}?host=${encodeURIComponent(host)}`,
-        {
-          method: "DELETE",
-          headers: {
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
-      );
-      
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: "Failed to cancel" }));
-        throw new Error(error.detail || "Failed to cancel operation");
-      }
-      
-      toast({
-        title: "Operation cancelled",
-        description: `Operation ${operationId} has been cancelled` });
-      
-      // Refresh operations list
-      refetch();
-    } catch (error) {
-      toast({
-        title: "Failed to cancel operation",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive" });
-    } finally {
-      setCancellingId(null);
-      setConfirmDialog({ open: false, operationId: "", host: "", description: "" });
-    }
-  };
-
-  const handleKillSession = async (operationId: string, instanceName: string, host: string) => {
-    setKillingId(operationId);
-    try {
-      const response = await fetch(
-        `${API_URL}/console/${instanceName}/active-sessions/${operationId}?host=${encodeURIComponent(host)}`,
-        {
-          method: "DELETE",
-          headers: {
-            ...(getAccessToken() ? { Authorization: `Bearer ${getAccessToken()}` } : {}) } }
-      );
-      
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: "Failed to kill session" }));
-        throw new Error(error.detail || "Failed to kill session");
-      }
-      
-      toast({
-        title: "Session killed",
-        description: `Console session for ${instanceName} has been terminated` });
-      
-      // Refresh operations list
-      refetch();
-    } catch (error) {
-      toast({
-        title: "Failed to kill session",
-        description: error instanceof Error ? error.message : "Unknown error",
-        variant: "destructive" });
-    } finally {
-      setKillingId(null);
-      setConfirmDialog({ open: false, operationId: "", host: "", description: "" });
-    }
-  };
-
-  const openCancelConfirm = (operation: any, isKillSession = false, instanceName?: string) => {
-    const host = findOperationHost(operation);
-    setConfirmDialog({
-      open: true,
-      operationId: operation.id,
-      host,
-      description: operation.description || `Operation ${operation.id}`,
-      isKillSession,
-      instanceName });
-  };
-
-  if (isLoading) {
+  if (!seeded.current && query.isLoading) {
     return <LoadingLottiePage />;
   }
 
   // A failed read is not an empty list. Rendered before the table so the filtered-empty row
   // cannot blame a filter for a request that did not return.
-  if (isError && !data) {
+  if (query.isError && !query.data) {
     return (
       <PageReadError
         title="Operations"
-        description="Monitor hypervisor operations and background tasks"
-        noun="operations"
-        error={error}
-        onRetry={() => void refetch()}
+        description="Every task on your clusters, live and historical"
+        noun="tasks"
+        error={query.error}
+        onRetry={() => void query.refetch()}
       />
     );
   }
@@ -308,233 +311,128 @@ function OperationsContent() {
     <div className="p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">
-            Operations
-          </h1>
-          <p className="text-muted-foreground mt-2">
-            Monitor hypervisor operations and background tasks
-          </p>
+          <h1 className="text-3xl font-bold">Operations</h1>
+          <p className="text-muted-foreground mt-2">Every task on your clusters, live and historical</p>
         </div>
-        <RefreshButton
-          label="Refresh operations"
-          lastUpdatedAt={dataUpdatedAt}
-          onRefresh={refreshNow}
-        />
+        <RefreshButton label="Refresh tasks" lastUpdatedAt={query.dataUpdatedAt} onRefresh={query.refreshNow} />
       </div>
 
-      {/* Cancel/Kill Confirmation Dialog */}
-      <AlertDialog open={confirmDialog.open} onOpenChange={(open) => setConfirmDialog((prev) => ({ ...prev, open }))}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirmDialog.isKillSession ? "Kill Console Session?" : "Cancel Operation?"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirmDialog.isKillSession ? (
-                <>
-                  Are you sure you want to kill this console session?
-                  <br />
-                  <span className="font-medium text-foreground">Instance: {confirmDialog.instanceName}</span>
-                </>
-              ) : (
-                <>
-                  Are you sure you want to cancel this operation?
-                  <br />
-                  <span className="font-medium text-foreground">{confirmDialog.description}</span>
-                </>
-              )}
-              <br /><br />
-              This action cannot be undone. The {confirmDialog.isKillSession ? "session" : "operation"} will be terminated immediately.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={cancellingId !== null && killingId !== null}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (confirmDialog.isKillSession && confirmDialog.instanceName) {
-                  handleKillSession(confirmDialog.operationId, confirmDialog.instanceName, confirmDialog.host);
-                } else {
-                  handleCancelOperation(confirmDialog.operationId, confirmDialog.host);
-                }
-              }}
-              disabled={cancellingId !== null || killingId !== null}
-              className="bg-status-offline text-status-offline-foreground hover:bg-status-offline/90"
-            >
-              {(cancellingId === confirmDialog.operationId || killingId === confirmDialog.operationId) ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  {confirmDialog.isKillSession ? "Killing..." : "Cancelling..."}
-                </>
-              ) : (
-                confirmDialog.isKillSession ? "Kill Session" : "Cancel Operation"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <UnreachableNodesBanner noun="operations" nodes={unreachableNodes} />
+      <UnreachableNodesBanner noun="newest tasks" nodes={disconnectedClusters} />
 
       <Card>
         <CardHeader className="space-y-4">
-          <CardTitle>Active Operations</CardTitle>
-          <TableToolbar filters={filters} noun="operations" />
+          <CardTitle>Tasks</CardTitle>
+          <TableToolbar
+            filters={filters}
+            noun="tasks"
+            actions={<TimeRangeSelect value={range} onChange={setRange} />}
+          />
         </CardHeader>
-        <CardContent>
-          {sortedOperations.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              {filters.activeFilterCount > 0
-                ? "No operation matches the current filters."
-                : "No active operations"}
-            </div>
-          ) : (
-            <TooltipProvider>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <SortableTableHead label="Operation ID" field="id" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Instance" field="instance" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Class" field="class" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <SortableTableHead label="Created" field="created" currentField={sortField} direction={sortDirection} onSort={handleSort} />
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {pagedOperations.map((operation: any) => {
-                    // Use instance_name from backend, or extract from metadata
-                    const instanceName = operation.instance_name || extractInstanceName(operation) || "";
-                    const isConsoleOp = operation.class_name === "websocket";
-                    
-                    return (
-                    <TableRow key={operation.id}>
-                      <TableCell className="max-w-[18rem] font-mono">
-                        <OverflowText
-                          value={operation.id}
-                          label={`id for the ${operation.description || "operation"}`}
-                          reveal="always"
-                          mono
-                        >
-                          {(expanded) => (
-                            <TableLink
-                              wrap={expanded}
-                              onClick={() => setDetailOperation({ id: operation.id, instanceName })}
-                              aria-label={`Show details for operation ${operation.id}`}
-                            >
-                              {operation.id}
-                            </TableLink>
-                          )}
-                        </OverflowText>
-                      </TableCell>
-                      <TableCell>
-                        {instanceName ? (
-                          <span className="font-medium">{instanceName}</span>
-                        ) : (
-                          <TableEmptyValue label="No instance" />
-                        )}
-                      </TableCell>
-                      <TableCell>{operation.description || <TableEmptyValue label="No description" />}</TableCell>
-                      <TableCell><NodeLink clusterId={operation.node_name} /></TableCell>
-                      <TableCell>
-                        <span className="text-sm">{operation.project || "default"}</span>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={operationStatusTone(operation.status)}>
-                          {formatLabel(operation.status)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {formatLabel(operation.class_name)}
-                      </TableCell>
-                      <TableCell>
-                        {formatDateTime(operation.created_at)}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        {operation.may_cancel ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-status-offline"
-                                onClick={() => openCancelConfirm(operation)}
-                                disabled={cancellingId !== null || killingId !== null}
-                              >
-                                {cancellingId === operation.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <XCircle className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Cancel Operation</TooltipContent>
-                          </Tooltip>
-                        ) : isConsoleOp ? (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-status-pending"
-                                onClick={() => openCancelConfirm(operation, true, instanceName || "N/A")}
-                                disabled={cancellingId !== null || killingId !== null}
-                              >
-                                {killingId === operation.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
-                                ) : (
-                                  <Unplug className="h-4 w-4" />
-                                )}
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>Kill Console Session</TooltipContent>
-                          </Tooltip>
-                        ) : (
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="text-xs text-muted-foreground">
-                                Cannot cancel
-                              </span>
-                            </TooltipTrigger>
-                            <TooltipContent>This operation cannot be cancelled</TooltipContent>
-                          </Tooltip>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  )})}
-                </TableBody>
-              </Table>
+        <CardContent className="space-y-4">
+          {query.data?.has_more ? (
+            <PartialReadNotice data-testid="operations-window-cap">
+              Showing the newest {WINDOW_LIMIT} tasks in this range. Narrow the range to see older ones.
+            </PartialReadNotice>
+          ) : null}
 
-              {/* Absent rather than disabled when everything fits on one page. */}
-              {totalPages > 1 && (
-                <div className="mt-4">
-                  <DataTablePagination
-                    currentPage={currentPage}
-                    totalPages={totalPages}
-                    pageSize={pageSize}
-                    pageSizeOptions={[...TABLE_PAGE_SIZES]}
-                    totalItems={sortedOperations.length}
-                    onPageChange={setPage}
-                    onPageSizeChange={(size) => {
-                      setPageSize(size);
-                      setPage(1);
-                    }}
-                  />
-                </div>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <SortableTableHead label="Task" field="id" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Description" field="description" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Resource" field="resource" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Node" field="node" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Project" field="project" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Status" field="status" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Actor" field="actor" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Kind" field="kind" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Started" field="started" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Finished" field="finished" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <SortableTableHead label="Duration" field="duration" currentField={sortField} direction={sortDirection} onSort={handleSort} />
+                <TableHead pinned="end" className="w-12 text-right">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {switching ? (
+                <TableEmptyRow colSpan={COLUMN_COUNT} icon={Loader2} iconClassName="animate-spin" title="Loading tasks" />
+              ) : sorted.length === 0 ? (
+                <TableEmptyRow
+                  colSpan={COLUMN_COUNT}
+                  icon={ListChecks}
+                  title={filters.activeFilterCount > 0 ? "No task matches the current filters." : "No tasks in this range"}
+                  description={
+                    filters.activeFilterCount > 0
+                      ? undefined
+                      : "Tasks appear here as soon as something starts on a cluster in your scope, including work started from the lxc command line. Widen the time range to see older ones."
+                  }
+                />
+              ) : (
+                paged.map((task) => (
+                  <TableRow key={task.id} data-task-id={task.id} data-task-status={task.status}>
+                    <TaskIdCell task={task} onShow={openTask} />
+                    <DescriptionCell task={task} />
+                    <ResourceCell task={task} />
+                    {/* Inline rather than the shared NodeCell: check-node-link.mjs counts the
+                        literal tag per feature directory against the Node column above. */}
+                    <TableCell className="whitespace-nowrap">
+                      <NodeLink clusterId={task.cluster_id} />
+                    </TableCell>
+                    <ProjectCell task={task} />
+                    <StatusCell task={task} />
+                    <ActorCell task={task} />
+                    <KindCell task={task} />
+                    <StartedCell task={task} />
+                    <FinishedCell task={task} />
+                    <DurationCell task={task} serverNow={serverNow} />
+                    <TableCell pinned="end" className="text-right">
+                      {/* canCancel is unconditional: the page is gated to Partner and above. */}
+                      <TaskRowActions
+                        task={task}
+                        onShow={openTask}
+                        onCancel={setCancelTask}
+                        canCancel
+                        readOnly={isReadOnly}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))
               )}
-            </TooltipProvider>
+            </TableBody>
+          </Table>
+
+          {/* Absent rather than disabled when everything fits on one page. */}
+          {totalPages > 1 && (
+            <DataTablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              pageSize={pageSize}
+              pageSizeOptions={[...TABLE_PAGE_SIZES]}
+              totalItems={sorted.length}
+              onPageChange={setPage}
+              onPageSizeChange={(size) => {
+                setPageSize(size);
+                setPage(1);
+              }}
+            />
           )}
         </CardContent>
       </Card>
 
-      <OperationDetailDialog
-        operation={liveOperation}
-        instanceName={detailOperation?.instanceName}
-        open={!!detailOperation}
+      <TaskDetailDialog
+        taskId={detailTaskId}
+        open={detailTaskId !== null}
         onOpenChange={(next) => {
-          if (!next) setDetailOperation(null);
+          if (!next) closeTask();
+        }}
+        onCancel={setCancelTask}
+      />
+      <TaskCancelDialog
+        task={cancelTask}
+        open={cancelTask !== null}
+        onOpenChange={(next) => {
+          if (!next) setCancelTask(null);
         }}
       />
     </div>
@@ -542,12 +440,7 @@ function OperationsContent() {
 }
 
 // The role gate stays in this file: check-role-gates.mjs reads page text and does not follow
-// imports. Suspense is required because useTableFilters reads useSearchParams.
-/** Row shape the operations table and its detail dialog share. */
-type OperationRow = OperationInfo & { node_name?: string; project?: string };
-
-const operationId = (operation: OperationRow) => operation.id;
-
+// imports. Suspense is required because useTableFilters and the page read useSearchParams.
 export default function OperationsPage() {
   const { allowed: isPartner, isResolved } = useRequireRole(Role.PARTNER);
 

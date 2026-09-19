@@ -245,9 +245,11 @@ function TaskPanelInner() {
           </div>
         ) : null}
       </Tabs>
-      <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+      {/* note: a div, not a p. The harness reads the first `p[role=status]` on a page as the
+          table's row count, and this region must never be that element. */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
         {announcement}
-      </p>
+      </div>
       <TaskDetailDialog
         taskId={detailTaskId}
         open={detailTaskId !== null}

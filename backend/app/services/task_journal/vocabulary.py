@@ -363,13 +363,3 @@ def allowlisted_metadata(source: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
                 value = {k: value.get(k) for k in REQUESTOR_KEYS if value.get(k) is not None}
             out[key] = value
     return bounded_json(out)
-
-
-def progress_percent(progress: Optional[str]) -> Optional[int]:
-    """The first `NN%` in a progress string, clamped to 0..100, else None."""
-    if not progress:
-        return None
-    match = re.search(r"(\d{1,3})%", progress)
-    if not match:
-        return None
-    return max(0, min(100, int(match.group(1))))

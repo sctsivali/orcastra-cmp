@@ -919,26 +919,6 @@ export function useWarnings(host?: string) {
   });
 }
 
-// Operations Hooks
-export function useOperations(host?: string) {
-  return useRefreshableQuery({
-    queryKey: ["operations", host],
-    queryFn: ({ fresh }) => api.operations.list(host, { fresh }),
-    ...DYNAMIC_DATA_CONFIG,
-    refetchInterval: 15000, // Poll every 15s (balanced freshness vs load)
-    refetchIntervalInBackground: false,
-  });
-}
-
-export function useOperation(id: string, host: string) {
-  return useQuery({
-    queryKey: ["operation", id, host],
-    queryFn: () => api.operations.get(id, host),
-    enabled: !!id && !!host,
-    ...DYNAMIC_DATA_CONFIG,
-  });
-}
-
 // IPAM Hooks
 export function useIPAM(host?: string) {
   return useRefreshableQuery({
