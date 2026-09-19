@@ -30,9 +30,11 @@ _TERMINAL_3 = "('success', 'failure', 'cancelled')"
 # important: the audit side never reopens or overrides a finished row, and `pending` never
 # overrides `running`. The existing row is named by table so the same text serves a plain
 # UPDATE and ON CONFLICT DO UPDATE.
+# `lost` is the journal's own mark (a sweep stopped waiting), never a verdict: the terminal
+# audit of an action that expired to lost still closes it.
 MONOTONIC_STATUS = (
-    "CASE WHEN task_journal.status IN ('success', 'failure', 'cancelled', 'lost') "
-    "THEN task_journal.status "
+    f"CASE WHEN task_journal.status IN {_TERMINAL_3} THEN task_journal.status "
+    f"WHEN task_journal.status = 'lost' AND {_NEW} NOT IN {_TERMINAL_3} THEN task_journal.status "
     f"WHEN {_NEW} = 'pending' AND task_journal.status = 'running' THEN task_journal.status "
     f"ELSE {_NEW} END"
 )
@@ -80,7 +82,9 @@ _OPERATION_SET = (
     "progress = COALESCE(:progress, task_journal.progress), "
     # When the cluster's verdict replaces the audit's, its error text replaces the audit's too:
     # a Success frame after a timed-out wait leaves no error on the row (the audit line keeps it).
-    f"error = CASE WHEN {_AUDIT_VERDICT_YIELDS} THEN NULLIF(:error, '') "
+    # A row revived from `lost` drops the sweep's "stopped reporting" text the same way.
+    f"error = CASE WHEN {_AUDIT_VERDICT_YIELDS} OR task_journal.status = 'lost' "
+    "THEN NULLIF(:error, '') "
     "ELSE COALESCE(NULLIF(:error, ''), task_journal.error) END, "
     "may_cancel = :may_cancel, "
     "operation_class = COALESCE(:operation_class, task_journal.operation_class), "

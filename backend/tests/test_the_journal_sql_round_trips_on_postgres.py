@@ -390,6 +390,68 @@ def test_a_stream_frame_never_attaches_to_an_earlier_failed_attempt(loop, db):
     assert rows[1]["status"] == "running" and rows[1]["operation_id"] == op
 
 
+def test_an_unnamed_frame_after_its_audit_joins_the_audit_row(loop, db):
+    """Audit first (a project delete the router waited for), then the daemon's frame with
+    resources {}: one row, named by the audit, closed by the frame."""
+    from app.services.task_journal.follower_writer import JournalWriter
+    from app.services.task_journal.sink import JournalSink
+
+    sink = JournalSink()
+    sink._session_maker = db
+    writer = JournalWriter(db, identities=_Identities())
+    t0 = datetime.now(timezone.utc)
+    _run(loop, sink._write_batch([_audit("project.delete", target_type="project", target_id="qa-z", project="default")]))
+    op = str(uuid.uuid4())
+    frame = _operation(op, status="Success", code=200, name="unused", description="Deleting project",
+                       project="default", created=t0, updated=t0 + timedelta(seconds=1))
+    frame["resources"] = {}
+    _run(loop, writer.write_batch([frame]))
+    rows = _run(loop, _rows(db, "SELECT resource_name, operation_id, status, kind, finished_at FROM task_journal WHERE action = 'project.delete' AND resource_name = 'qa-z' OR operation_id = :op", op=op))
+    assert len(rows) == 1, rows
+    assert rows[0]["resource_name"] == "qa-z" and rows[0]["operation_id"] == op and rows[0]["kind"] == "lxd_operation"
+
+
+def test_a_lost_action_is_closed_by_its_own_terminal_audit_and_a_revived_row_drops_the_sweep_text(loop, db):
+    from app.services.task_journal.follower_writer import JournalWriter
+    from app.services.task_journal.repository_sweeps import expire_stale_actions
+    from app.services.task_journal.sink import JournalSink
+
+    sink = JournalSink()
+    sink._session_maker = db
+    writer = JournalWriter(db, identities=_Identities())
+    # An accepted upload that expired to lost, then its real close.
+    opened = _audit("image.upload.import", target_type="image", target_id="big.tar.gz", result="accepted",
+                    details={"session_id": "sess-9"})
+    _run(loop, sink._write_batch([opened]))
+    async def expire():
+        async with db() as s:
+            await s.execute(text("UPDATE task_journal SET created_at = now() - interval '2 hours', "
+                                 "updated_at = now() - interval '2 hours' WHERE metadata ->> 'session_id' = 'sess-9'"))
+            n = await expire_stale_actions(s, older_than_s=1800)
+            await s.commit()
+            return n
+    assert _run(loop, expire()) == 1
+    closed = _audit("image.upload.import", target_type="image", target_id="big.tar.gz", result="success",
+                    details={"session_id": "sess-9"})
+    _run(loop, sink._write_batch([closed]))
+    row = _run(loop, _one(db, "SELECT status FROM task_journal WHERE metadata ->> 'session_id' = 'sess-9'"))
+    assert row.status == "success"
+
+    # A stream row marked lost, then reported again by the daemon: revived, sweep text gone.
+    t0 = datetime.now(timezone.utc)
+    op = str(uuid.uuid4())
+    _run(loop, writer.write_batch([_operation(op, status="Running", code=103, name="web-41", created=t0, updated=t0)]))
+    async def lose():
+        async with db() as s:
+            await s.execute(text("UPDATE task_journal SET status = 'lost', error = 'The dashboard stopped observing this action', "
+                                 "seq = nextval('task_journal_seq') WHERE operation_id = :op"), {"op": op})
+            await s.commit()
+    _run(loop, lose())
+    _run(loop, writer.write_batch([_operation(op, status="Success", code=200, name="web-41", created=t0, updated=t0 + timedelta(seconds=3))]))
+    back = _run(loop, _one(db, "SELECT status, error FROM task_journal WHERE operation_id = :op", op=op))
+    assert (back.status, back.error) == ("success", None)
+
+
 def test_uploads_open_and_close_on_their_session(loop, db):
     from app.services.task_journal.sink import JournalSink
 
@@ -398,12 +460,12 @@ def test_uploads_open_and_close_on_their_session(loop, db):
     opened = _audit("image.upload.import", target_type="image", target_id="alpine.tar.gz",
                     result="accepted", details={"session_id": "sess-1", "size": 1234})
     _run(loop, sink._write_batch([opened]))
-    row = _run(loop, _one(db, "SELECT id::text AS id, status, kind FROM task_journal WHERE kind = 'upload'"))
+    row = _run(loop, _one(db, "SELECT id::text AS id, status, kind FROM task_journal WHERE kind = 'upload' AND metadata ->> 'session_id' = 'sess-1'"))
     assert row is not None and row.status == "running"
     closed = _audit("image.upload.import", target_type="image", target_id="alpine.tar.gz",
                     result="failure", details={"session_id": "sess-1"})
     _run(loop, sink._write_batch([closed]))
-    rows = _run(loop, _rows(db, "SELECT id::text AS id, status, error FROM task_journal WHERE kind = 'upload'"))
+    rows = _run(loop, _rows(db, "SELECT id::text AS id, status, error FROM task_journal WHERE kind = 'upload' AND metadata ->> 'session_id' = 'sess-1'"))
     assert len(rows) == 1 and rows[0]["id"] == row.id and rows[0]["status"] == "failure"
     assert rows[0]["error"] == "boom"
 

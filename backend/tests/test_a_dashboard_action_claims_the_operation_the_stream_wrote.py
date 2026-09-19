@@ -55,7 +55,9 @@ async def test_the_claim_takes_the_newest_unclaimed_stream_row_under_skip_locked
     assert "metadata = task_journal.metadata || CAST(:extra AS jsonb)" in sql
     assert "ELSE COALESCE(task_journal.error, NULLIF(:audit_error, '')) END" in sql
     assert "CAST(:kind AS varchar) IN ('rebuild', 'upload')" in sql, "a job's audit verdict wins"
-    assert "CASE WHEN task_journal.status IN ('success', 'failure', 'cancelled', 'lost')" in sql
+    assert "CASE WHEN task_journal.status IN ('success', 'failure', 'cancelled') THEN task_journal.status" in sql
+    # `lost` is the sweep's mark, not a verdict: the terminal audit of an expired action closes it.
+    assert "WHEN task_journal.status = 'lost' AND CAST(:new_status AS varchar) NOT IN ('success', 'failure', 'cancelled') THEN task_journal.status" in sql
     assert params["new_status"] == "success"
     assert params["source"] == "dashboard"
     assert params["extra"] == '{"job_id": "j1"}'

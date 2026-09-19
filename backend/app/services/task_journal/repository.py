@@ -102,6 +102,43 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
         )
         return UpsertResult(id=row_id, created=False, changed=result.rowcount == 1)
 
+    if frame.action and not (frame.resource_type and frame.resource_name):
+        # LXD named no resource ("Creating instance", "Deleting project"): the newest dashboard
+        # row for the same action in the same project is this operation, and the row keeps the
+        # name the audit gave it. Without this the frame opened a nameless second row that no
+        # merge could ever pair.
+        attached = returned_id(
+            await db.execute(
+                text(
+                    "UPDATE task_journal SET operation_id = :operation_id, "
+                    "kind = CASE WHEN task_journal.kind = 'dashboard_action' "
+                    "THEN 'lxd_operation' ELSE task_journal.kind END, "
+                    "operation_class = :operation_class, "
+                    f"status = {STREAM_STATUS}, "
+                    "status_code = CAST(:status_code AS integer), progress = :progress, "
+                    "error = COALESCE(NULLIF(:error, ''), task_journal.error), "
+                    f"finished_at = {_STREAM_FINISH}, "
+                    "may_cancel = :may_cancel, "
+                    "lxd_created_at = CAST(:lxd_created_at AS timestamptz), "
+                    "lxd_updated_at = CAST(:lxd_updated_at AS timestamptz), "
+                    "started_at = COALESCE(task_journal.started_at, "
+                    "CAST(:lxd_created_at AS timestamptz)), "
+                    "metadata = task_journal.metadata || CAST(:metadata AS jsonb), "
+                    "seq = nextval('task_journal_seq'), updated_at = now() "
+                    "WHERE id = (SELECT id FROM task_journal WHERE "
+                    "cluster_id = :cluster_id AND project = :project AND action = :action "
+                    "AND operation_id IS NULL "
+                    "AND created_at >= now() - interval '15 minutes' "
+                    "AND (status IN ('pending', 'running') OR created_at >= now() - interval '2 minutes') "
+                    "ORDER BY (status IN ('pending', 'running')) DESC, created_at DESC "
+                    "LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
+                ),
+                params,
+            )
+        )
+        if attached is not None:
+            return UpsertResult(id=attached, created=False, changed=True)
+
     if frame.resource_type and frame.resource_name and frame.action:
         # A dashboard row written by the audit sink for the same key within the window is
         # this operation: the frame attaches to it, whatever its status, because a `wait=True`
@@ -115,6 +152,8 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
                     "operation_class = :operation_class, "
                     f"status = {STREAM_STATUS}, "
                     "status_code = CAST(:status_code AS integer), progress = :progress, "
+                    "error = COALESCE(NULLIF(:error, ''), task_journal.error), "
+                    f"finished_at = {_STREAM_FINISH}, "
                     "may_cancel = :may_cancel, "
                     "lxd_created_at = CAST(:lxd_created_at AS timestamptz), "
                     "lxd_updated_at = CAST(:lxd_updated_at AS timestamptz), "
