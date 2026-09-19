@@ -165,6 +165,11 @@ def record_to_log_row(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     target = _mapping(record.get("target"))
     details = _mapping(record.get("details"))
     actor = actor_fields(record)
+    # A Vault write with no person or key behind it is the platform's own plumbing (the
+    # last-used stamp on an integration key's metadata was 204 rows in two hours); a Vault
+    # action an operator or a key drove still lands.
+    if action.startswith("vault.") and actor.actor_kind == "system":
+        return None
     return {
         "ts": _text(record.get("@timestamp")),
         "kind": "audit",

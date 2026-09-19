@@ -38,6 +38,19 @@ def test_the_live_noise_makers_produce_no_log_row_whatever_their_result():
 
 def test_writes_denials_and_sign_ins_still_land():
     assert record_to_log_row(_record("vault.kv.put"))["message"] == "Vault kv put secret/x"
+
+
+def test_a_vault_write_with_no_person_behind_it_is_plumbing():
+    """Live: 204 `vault.kv.put` rows in two hours, every one the last-used stamp on an
+    integration key's metadata, written by nobody. A person's or a key's Vault write lands."""
+    record = _record("vault.kv.put")
+    record["actor"] = {"user_id": None, "user_type": None, "role": None}
+    assert record_to_log_row(record) is None
+    keyed = _record("vault.kv.put")
+    keyed["actor"] = {"user_id": None, "user_type": "api_key", "role": None}
+    keyed["details"] = {"api_key_id": "oak_1"}
+    row = record_to_log_row(keyed)
+    assert row is not None
     denied = record_to_log_row(_record("rbac.access_denied", target_type="instance", target_id="web-01", result="denied"))
     assert denied is not None and denied["message"].endswith(": denied")
     assert record_to_log_row(_record("auth.login", host=None, target_type="user", target_id="ops@example.test")) is not None
