@@ -29,14 +29,13 @@ import {
   StatusCell,
   TaskIdCell,
 } from "./task-cells";
-import { STATUS_ORDER, actorLabel, durationMs, startedMs } from "./task-format";
+import { STATUS_ORDER, actorLabel, durationMs, kindLabel, startedMs } from "./task-format";
+import { useClock } from "./hooks/use-clock";
 import { TaskRowActions } from "./task-row-actions";
 import type { TaskFeedSnapshot } from "./use-task-feed";
 
 const FIRST_PAGE = 50;
 const MAX_ROWS = 200;
-const LIVE_TICK_MS = 1_000;
-const IDLE_TICK_MS = 30_000;
 
 // Start order, not update order: sorting on updated_at would reorder rows on every progress
 // tick under an operator who is reading them.
@@ -58,7 +57,7 @@ const TASKS = defineTable<TaskRecord>()({
       facetSpec: { primary: true, format: formatLabel, order: STATUS_ORDER },
     },
     { field: "actor", label: "Actor", sort: (t) => actorLabel(t), search: (t) => actorLabel(t), filter: fromSort("text") },
-    { field: "kind", label: "Kind", sort: (t) => t.kind, facet: (t) => t.kind, facetSpec: { format: formatLabel } },
+    { field: "kind", label: "Kind", sort: (t) => t.kind, facet: (t) => t.kind, facetSpec: { format: kindLabel } },
     { field: "started", label: "Started", sort: (t) => startedMs(t), filter: fromSort("date", { horizon: "past" }) },
     {
       field: "duration",
@@ -82,37 +81,6 @@ export interface TasksTabProps {
   onCancel: (task: TaskRecord) => void;
   /** Hands the strip's refresh control this tab's refetch while it is mounted. */
   registerRefresh: (refresh: (() => Promise<unknown>) | null) => void;
-}
-
-/** One second while a row is running and the tab is visible, else a slow tick for "5m ago". */
-function useClock(live: boolean): number {
-  const [now, setNow] = React.useState(() => Date.now());
-  React.useEffect(() => {
-    let id: number | undefined;
-    const stop = () => {
-      if (id !== undefined) window.clearInterval(id);
-      id = undefined;
-    };
-    const start = () => {
-      stop();
-      id = window.setInterval(() => setNow(Date.now()), live ? LIVE_TICK_MS : IDLE_TICK_MS);
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        setNow(Date.now());
-        start();
-      } else {
-        stop();
-      }
-    };
-    if (document.visibilityState === "visible") start();
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      stop();
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [live]);
-  return now;
 }
 
 function TasksTabInner({ feed, height, isPartner, readOnly, onOpenTask, onCancel, registerRefresh }: TasksTabProps) {

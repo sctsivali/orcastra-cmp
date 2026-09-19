@@ -98,6 +98,10 @@ class _NodeStream:
         self.host = host
         self.subscribers: Dict[asyncio.Queue, _Subscriber] = {}
         self.task: Optional[asyncio.Task] = None
+        # True while the upstream socket is open, so a firehose subscriber that joins a node
+        # a browser already holds open is told "connected" at once and seeds; the upstream
+        # loop emits that frame only on connect.
+        self.connected = False
 
 
 class LXDEventsHub:
@@ -134,6 +138,8 @@ class LXDEventsHub:
             )
             if node.task is None or node.task.done():
                 node.task = asyncio.create_task(self._run_node(host))
+            elif firehose and node.connected:
+                queue.put_nowait({"type": "hub", "host": host, "state": "connected", "error": None})
             logger.info(
                 f"[events] subscriber added for {host} (total={len(node.subscribers)})"
             )
@@ -285,6 +291,7 @@ class LXDEventsHub:
                     max_size=4 * 1024 * 1024,
                 ) as ws:
                     backoff = 1
+                    node.connected = True
                     self._notify_firehose(
                         host, {"type": "hub", "host": host, "state": "connected", "error": None}
                     )
@@ -299,6 +306,7 @@ class LXDEventsHub:
                 logger.info(f"[events] upstream cancelled for {host}")
                 return
             except Exception as e:
+                node.connected = False
                 logger.warning(
                     f"[events] upstream error for {host}: {e}; reconnecting in {backoff}s"
                 )

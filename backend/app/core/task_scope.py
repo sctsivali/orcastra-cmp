@@ -14,7 +14,7 @@ ratcheted against naming any of these helpers. Only this module and the routers 
 
 from typing import Any, Iterable, List, Literal, Mapping, Optional
 
-from sqlalchemy import and_, false, func, or_
+from sqlalchemy import and_, case, false, func, or_
 
 from app.core.org_scope import (
     apply_cluster_filter,
@@ -50,6 +50,17 @@ def _owner_project(model: Any) -> Any:
 def _named_project(model: Any) -> Any:
     # A project row with no name reads as the default project, as tenant_may_see_project does.
     return func.coalesce(model.resource_name, "default")
+
+
+def _bound_project(model: Any) -> Any:
+    # The project a row is judged in for the Partner bound. A project-typed row (a project
+    # create or delete) runs in `default` but names the project it is about; the bound must
+    # read the name, or a Partner never sees its own project create and a Partner bound to
+    # `default` on a shared cluster sees every other organisation's.
+    return case(
+        (model.resource_type == "project", _named_project(model)),
+        else_=_owner_project(model),
+    )
 
 
 def _view_rules(acl: Mapping[str, Mapping[tuple, Iterable[str]]]) -> List[tuple]:
@@ -113,7 +124,7 @@ def _scope_conditions(model: Any) -> List[Any]:
                 conditions.append(
                     or_(
                         model.cluster_id != cluster_id,
-                        _owner_project(model).in_(sorted(projects)),
+                        _bound_project(model).in_(sorted(projects)),
                     )
                 )
     acl = get_tenant_acl()
@@ -146,12 +157,13 @@ def _row_in_scope(row: Mapping[str, Any]) -> bool:
     if allowed is not None and cluster_id not in allowed:
         return False
     project = row.get("project") or "default"
-    if not project_is_visible(cluster_id, project):
+    resource_type = row.get("resource_type")
+    resource_name = row.get("resource_name")
+    bound_project = (resource_name or "default") if resource_type == "project" else project
+    if not project_is_visible(cluster_id, bound_project):
         return False
     if not tenant_acl_active():
         return True
-    resource_type = row.get("resource_type")
-    resource_name = row.get("resource_name")
     if resource_type == "instance":
         return bool(resource_name) and check_tenant_permission(
             cluster_id, project, resource_name, "view"

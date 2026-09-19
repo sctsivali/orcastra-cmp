@@ -80,6 +80,48 @@ def json_param(obj: Optional[Mapping[str, Any]]) -> str:
     return json.dumps(dict(obj or {}), default=str)
 
 
+# important: asyncpg refuses a text longer than its varchar column for the whole batch
+# (StringDataRightTruncation), and several of these come from a client (an instance name, a
+# description, a request id). Every bind is cut to its column here so one long value cannot
+# drop the other 199 records in the batch. Widths mirror revision 024.
+COLUMN_WIDTHS = {
+    "action": 96,
+    "actor_email": 255,
+    "actor_kind": 16,
+    "actor_role": 32,
+    "api_key_id": 255,
+    "cluster_id": 255,
+    "description": 255,
+    "event_id": 128,
+    "kind": 24,
+    "message": 512,
+    "operation_class": 16,
+    "operation_id": 64,
+    "progress": 255,
+    "project": 255,
+    "request_id": 64,
+    "resource_name": 255,
+    "resource_type": 32,
+    "result": 16,
+    "severity": 16,
+    "source": 16,
+    "status": 16,
+    "target_organization_slug": 100,
+}
+
+
+def fit(column: str, value: Any) -> Any:
+    """`value` cut to `column`'s width when it is text and the column is a varchar."""
+    width = COLUMN_WIDTHS.get(column)
+    if width is None or not isinstance(value, str) or len(value) <= width:
+        return value
+    return value[:width]
+
+
+def fit_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: fit(key, value) for key, value in params.items()}
+
+
 def returned_id(result: Any) -> Optional[str]:
     row = result.first()
     if row is None:

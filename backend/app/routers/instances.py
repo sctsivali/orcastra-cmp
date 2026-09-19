@@ -304,6 +304,7 @@ async def create_instance(
             target_type="instance",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="accepted",
             details={
                 "image": request.image,
@@ -338,6 +339,7 @@ async def create_instance(
             target_type="instance",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="failure",
             error_code="LXD_OPERATION_ERROR",
             error_message=str(e),
@@ -378,6 +380,7 @@ async def create_instance(
             target_type="instance",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="failure",
             error_code="LXD_CONNECTION_ERROR",
             error_message=str(e),
@@ -392,6 +395,7 @@ async def create_instance(
             target_type="instance",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="failure",
             error_code="UNEXPECTED_ERROR",
             error_message=str(e)
@@ -911,6 +915,7 @@ async def set_instance_nic_address(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(exc),
         )
@@ -935,6 +940,7 @@ async def set_instance_nic_address(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_code="LXD_TIMEOUT",
             error_message=str(exc),
@@ -954,6 +960,7 @@ async def set_instance_nic_address(
         target_type="instance",
         target_id=instance_name,
         target_host=request.host,
+        target_project=project,
         result="success",
         details={
             "device": device_name,

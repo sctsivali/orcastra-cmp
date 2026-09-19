@@ -249,7 +249,7 @@ function LogTabInner({ feed, height, onOpenTask, registerRefresh }: LogTabProps)
       ) : null}
       {atCap ? (
         <p className="shrink-0 border-t px-3 py-1.5 text-xs text-muted-foreground">
-          Showing the newest {MAX_ROWS} entries. Narrow the filters or the time range to see older ones.
+          Showing the newest {MAX_ROWS} entries in the last 24 hours. Older entries stay in the journal and are not listed here.
         </p>
       ) : null}
     </div>

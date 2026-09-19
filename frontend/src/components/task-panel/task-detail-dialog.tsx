@@ -19,12 +19,15 @@ import { formatDateTime, formatLabel } from "@/lib/utils";
 import { Role } from "@/types/rbac";
 import type { ClusterLogEntry, TaskRecord } from "@/types/tasks";
 import { useKillConsoleSession, useTaskDetail } from "./hooks/use-tasks";
+import { useTaskFeedState } from "./use-task-feed";
+import { useClock } from "./hooks/use-clock";
 import {
   actorLabel,
   durationMs,
   formatDuration,
   isTerminal,
   isWebsocketClass,
+  kindLabel,
   progressPercent,
   resourceHref,
   taskStatusTone,
@@ -54,13 +57,16 @@ function metadataEntries(metadata: Record<string, unknown>): Record<string, stri
 function OverviewTab({ task }: { task: TaskRecord }) {
   const href = resourceHref(task);
   const percent = progressPercent(task.progress);
-  const duration = durationMs(task);
+  // The same clock the row uses: server time, ticking while the task is open.
+  const feed = useTaskFeedState();
+  const now = useClock(task.status === "running" || task.status === "pending");
+  const duration = durationMs(task, now + feed.serverOffsetMs);
   return (
     <div className="space-y-4">
       <DetailSection title="What and Where">
         <DetailGrid cols={3}>
           <DetailField label="Action" value={task.action} mono />
-          <DetailField label="Kind" value={formatLabel(task.kind)} />
+          <DetailField label="Kind" value={kindLabel(task.kind)} />
           <DetailField
             label="Resource"
             value={

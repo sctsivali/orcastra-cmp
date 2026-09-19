@@ -72,7 +72,8 @@ async def test_an_accepted_record_claims_as_running_and_nothing_found_is_none():
     assert len(db.calls) == 2
     second = db.calls[1][0][db.calls[1][0].index("WHERE id = (SELECT") :]
     for clause in (
-        "cluster_id = :cluster_id AND action = :action AND resource_name IS NULL",
+        "cluster_id = :cluster_id AND project = :project AND action = :action",
+        "AND resource_name IS NULL",
         "operation_id IS NOT NULL",
         "actor_email IS NULL",
         "created_at >= now() - interval '15 minutes'",

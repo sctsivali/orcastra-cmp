@@ -10,9 +10,11 @@
  *
  * States: idle -> connecting -> connected -> reconnecting (attempt < 3) -> polling (attempt >= 3)
  * -> connected; paused once the tab has been hidden for 60 s (socket closed, reopened on
- * visible). Backoff 2 s doubling to 30 s. A 1008 close (authentication refused) stops every retry
- * until the session token changes; a token rotation while connected closes the socket for a
- * silent reconnect that carries the new token and counts as attempt 0.
+ * visible). Backoff 2 s doubling to 30 s, then one retry a minute once four handshakes in a row
+ * never opened (a browser reports a refused handshake as 1006, the same as an outage). A 1008
+ * close (authentication refused) stops every retry until the session token changes; a token
+ * rotation while connected closes the socket for a silent reconnect that carries the new token
+ * and counts as attempt 0.
  */
 
 import { useEffect, useSyncExternalStore } from "react";
@@ -68,6 +70,13 @@ let hiddenTimer: Timer | null = null;
 let paused = false;
 let halted = false;
 let haltedToken: string | null = null;
+// Sockets that closed before ever opening, in a row. A browser reports a refused handshake
+// (403 on a stale token, a route that is not mounted) as 1006, never as 1008, and a backend
+// that is restarting looks the same; after this many the retry slows to one a minute per tab
+// (the REST poll carries the panel meanwhile) and a rotated token reconnects at once.
+const HANDSHAKE_FAILURES_BEFORE_SLOW = 4;
+const SLOW_RETRY_MS = 60000;
+let handshakeFailures = 0;
 let openedWithToken: string | null = null;
 let silentReconnect = false;
 let helloCount = 0;
@@ -209,7 +218,10 @@ function closeSocket(): void {
 function scheduleRetry(): void {
   clearRetry();
   attempt += 1;
-  const delay = Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS);
+  const delay =
+    handshakeFailures >= HANDSHAKE_FAILURES_BEFORE_SLOW
+      ? SLOW_RETRY_MS
+      : Math.min(BACKOFF_BASE_MS * 2 ** (attempt - 1), BACKOFF_MAX_MS);
   let remaining = Math.ceil(delay / 1000);
   setSnapshot({
     state: attempt >= POLLING_AFTER_ATTEMPTS ? "polling" : "reconnecting",
@@ -247,9 +259,12 @@ function connect(): void {
   socket = ws;
   openedWithToken = getAccessToken();
 
+  let opened = false;
   ws.onopen = () => {
     if (socket !== ws) return;
+    opened = true;
     attempt = 0;
+    handshakeFailures = 0;
     silentReconnect = false;
     setSnapshot({ state: "connected", attempt: 0, nextRetryInSeconds: null });
   };
@@ -263,8 +278,10 @@ function connect(): void {
   ws.onclose = (event: CloseEvent) => {
     if (socket !== ws) return;
     socket = null;
+    if (!opened) handshakeFailures += 1;
     if (event.code === CLOSE_POLICY_VIOLATION) {
       // Authentication refused: retrying with the same token only repeats the refusal.
+      handshakeFailures = 0;
       halted = true;
       haltedToken = openedWithToken;
       silentReconnect = false;

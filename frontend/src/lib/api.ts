@@ -1568,32 +1568,6 @@ export const imageUploadAPI = {
   },
 };
 
-// Operation Operations
-export const operationAPI = {
-  list: async (host?: string, opts: ReadOptions = {}) => {
-    const endpoint = host ? `/operations?host=${encodeURIComponent(host)}` : "/operations";
-    return fetchUncachedRead(endpoint, opts);
-  },
-
-  get: async (id: string, host: string) => {
-    return fetchAPI(`/operations/${id}?host=${encodeURIComponent(host)}`);
-  },
-
-  cancel: async (id: string, host: string) => {
-    return fetchAPI(`/operations/${id}?host=${encodeURIComponent(host)}`, {
-      method: "DELETE",
-    });
-  },
-
-  wait: async (id: string, host: string, timeout?: number) => {
-    const params = new URLSearchParams({ host });
-    if (timeout) params.append("timeout", timeout.toString());
-    
-    return fetchAPI(`/operations/${id}/wait?${params.toString()}`, {
-      method: "POST",
-    });
-  },
-};
 
 // Warning Operations
 export const warningAPI = {
@@ -1987,7 +1961,6 @@ export const integrationsAPI = {
 
 // Regions API
 import { RegionsOverviewResponse, RegionSummary } from "@/types/api";
-import { tasksAPI } from "./tasks-api";
 
 const regionsAPI = {
   getOverview: async (opts: ReadOptions = {}) => {
@@ -2218,7 +2191,6 @@ export const api = {
   storageVolumes: storageVolumeAPI,
   isoUploads: isoUploadAPI,
   imageUploads: imageUploadAPI,
-  operations: operationAPI,
   warnings: warningAPI,
   server: serverAPI,
   identities: identityAPI,
@@ -2234,9 +2206,6 @@ export const api = {
   snapshots: snapshotAPI,
   snapshotSchedules: snapshotScheduleAPI,
   mobility: mobilityAPI,
-  // note: a getter, because tasks-api.ts imports fetchAPI from this file. Read lazily, the
-  // registration is correct whichever side of that cycle a bundle evaluates first.
-  get tasks() { return tasksAPI; },
   clusterMembers: {
     list: async (node: string, opts: ReadOptions = {}) => {
       return fetchRead<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`, opts);

@@ -23,6 +23,7 @@ from app.services.task_journal.repository_types import PRUNE_LOCK
 logger = logging.getLogger(__name__)
 
 FIRST_RUN_DELAY_S = 300.0
+BATCH = 5000
 INTERVAL_S = 6 * 3600.0
 JITTER_S = 600.0
 ACTION_PRUNE = "task.journal.prune"
@@ -35,16 +36,30 @@ async def prune_once(session_maker: Callable[[], Any]) -> Optional[Tuple[int, in
     settings = get_settings()
     task_days = int(settings.task_journal_retention_days)
     log_days = int(settings.cluster_log_retention_days)
-    async with session_maker() as db:
-        result = await db.execute(
-            text("SELECT pg_try_advisory_xact_lock(:classid, :objid)"),
-            {"classid": PRUNE_LOCK[0], "objid": PRUNE_LOCK[1]},
-        )
-        if not bool(result.scalar()):
-            await db.rollback()
-            return None
-        tasks, logs = await repository.prune(db, task_days=task_days, log_days=log_days)
-        await db.commit()
+    # One transaction per batch, the xact lock re-taken each time: a month of rows is never
+    # one long lock, and a worker that dies mid-pass leaves the next pass its remainder.
+    tasks = logs = 0
+    first = True
+    while True:
+        async with session_maker() as db:
+            result = await db.execute(
+                text("SELECT pg_try_advisory_xact_lock(:classid, :objid)"),
+                {"classid": PRUNE_LOCK[0], "objid": PRUNE_LOCK[1]},
+            )
+            if not bool(result.scalar()):
+                await db.rollback()
+                return None if first else (tasks, logs)
+            if first:
+                await repository.mark_stale_open_rows_lost(db, task_days=task_days)
+            t, l, more = await repository.prune_batch(
+                db, task_days=task_days, log_days=log_days, batch=BATCH
+            )
+            await db.commit()
+        first = False
+        tasks += t
+        logs += l
+        if not more:
+            break
     _audit(tasks=tasks, logs=logs, task_days=task_days, log_days=log_days)
     logger.info("Task journal pruned: %d tasks, %d log lines", tasks, logs)
     return tasks, logs

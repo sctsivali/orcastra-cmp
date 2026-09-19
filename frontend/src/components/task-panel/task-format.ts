@@ -80,6 +80,19 @@ export function durationMs(
   return Math.max(0, now - started);
 }
 
+// formatLabel would print "Lxd Operation"; the acronym stays upper case.
+const KIND_LABELS: Record<TaskRecord["kind"], string> = {
+  lxd_operation: "LXD Operation",
+  dashboard_action: "Dashboard Action",
+  upload: "Upload",
+  rebuild: "Rebuild",
+  schedule: "Schedule",
+};
+
+export function kindLabel(kind: string): string {
+  return KIND_LABELS[kind as TaskRecord["kind"]] ?? formatLabel(kind);
+}
+
 export function formatDuration(ms: number): string {
   const totalSeconds = Math.floor(ms / 1000);
   if (totalSeconds < 60) return `${totalSeconds}s`;
@@ -148,7 +161,9 @@ export function resourceHref(
     case "instance":
       return inventoryLinks.instances({ q: name, host: node, project });
     case "image":
-      return inventoryLinks.images({ q: name, node, project });
+      // An image lives in a store, which is the default project's for every project without
+      // features.images; the task's project would filter the fingerprint out of sight.
+      return inventoryLinks.images({ q: name, node });
     case "profile":
       return inventoryLinks.profiles({ q: name, node, project });
     case "storage_pool":

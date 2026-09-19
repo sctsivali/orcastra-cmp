@@ -292,6 +292,7 @@ async def create_vm(
             target_type="vm",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="success",
             details={
                 "image": request.image,
@@ -316,6 +317,7 @@ async def create_vm(
             target_type="vm",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="failure",
             error_code="LXD_OPERATION_ERROR",
             error_message=str(e),
@@ -329,6 +331,7 @@ async def create_vm(
             target_type="vm",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="failure",
             error_code="LXD_CONNECTION_ERROR",
             error_message=str(e)
@@ -348,6 +351,7 @@ async def create_vm(
             target_type="vm",
             target_id=request.name,
             target_host=request.host,
+            target_project=request.project,
             result="failure",
             error_code="UNEXPECTED_ERROR",
             error_message=str(e)
@@ -401,6 +405,7 @@ async def start_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="success"
         )
         
@@ -424,6 +429,7 @@ async def start_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -438,6 +444,7 @@ async def start_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -490,6 +497,7 @@ async def stop_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="success",
             details={"force": request.force, "timeout": request.timeout}
         )
@@ -513,6 +521,7 @@ async def stop_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_code="GRACEFUL_TIMEOUT",
             error_message=str(e),
@@ -530,6 +539,7 @@ async def stop_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -544,6 +554,7 @@ async def stop_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -596,6 +607,7 @@ async def restart_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="success",
             details={"force": request.force, "timeout": request.timeout}
         )
@@ -618,6 +630,7 @@ async def restart_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_code="GRACEFUL_TIMEOUT",
             error_message=str(e),
@@ -635,6 +648,7 @@ async def restart_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -649,6 +663,7 @@ async def restart_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -705,6 +720,7 @@ async def delete_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=host,
+            target_project=project or "default",
             result="success",
             details={"force": force, "project": project}
         )
@@ -728,6 +744,7 @@ async def delete_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=host,
+            target_project=project or "default",
             result="failure",
             error_message=str(e)
         )
@@ -742,6 +759,7 @@ async def delete_vm(
             target_type="vm",
             target_id=vm_name,
             target_host=host,
+            target_project=project or "default",
             result="failure",
             error_message=str(e)
         )

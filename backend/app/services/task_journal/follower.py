@@ -22,7 +22,7 @@ import logging
 import os
 import socket
 import time
-from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, FrozenSet, List, Optional, Set
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -44,6 +44,7 @@ HEARTBEAT_S = 15.0
 REGISTRY_INTERVAL_S = 30.0
 SWEEP_TICK_S = 5.0
 MERGE_INTERVAL_S = 60.0
+LINK_INTERVAL_S = 15.0
 STALE_INTERVAL_S = 60.0
 RECONCILE_INTERVAL_S = 120.0
 WARNINGS_INTERVAL_S = 300.0
@@ -106,6 +107,7 @@ class JournalFollower:
         self._hub = hub or get_events_hub()
         self._engine_factory = engine_factory or _default_engine
         self._excluded = excluded_clusters() if excluded is None else excluded
+        self._warned_unknown_exclusions: List[str] = []
         self._identities = identities or DashboardIdentities()
         self._writer = JournalWriter(
             session_maker, identities=self._identities, on_db_recovered=self._reseed_connected
@@ -233,6 +235,15 @@ class JournalFollower:
         if ids is None:
             return
         wanted: Set[str] = {host for host in ids if not self.is_excluded(host)}
+        # An exclusion that names no registered cluster is a typo protecting nothing; say so
+        # once per registry read so a production cluster is not followed by accident.
+        unknown = sorted(self._excluded - {host.strip().lower() for host in ids})
+        if unknown and unknown != self._warned_unknown_exclusions:
+            self._warned_unknown_exclusions = unknown
+            logger.warning(
+                "TASK_JOURNAL_EXCLUDE_CLUSTERS names no registered cluster: %s (registered: %s)",
+                ", ".join(unknown), ", ".join(sorted(ids)) or "none",
+            )
         current = set(self._queues)
         for host in sorted(wanted - current):
             await self._follow(host)
@@ -323,12 +334,14 @@ class JournalFollower:
     async def _sweep_loop(self) -> None:
         due = {
             "merge": 0.0, "stale": 0.0, "reconcile": RECONCILE_INTERVAL_S, "warnings": 0.0,
+            "link": LINK_INTERVAL_S,
         }
         interval = {
             "merge": MERGE_INTERVAL_S,
             "stale": STALE_INTERVAL_S,
             "reconcile": RECONCILE_INTERVAL_S,
             "warnings": WARNINGS_INTERVAL_S,
+            "link": LINK_INTERVAL_S,
         }
         started = time.monotonic()
         while True:
@@ -350,18 +363,32 @@ class JournalFollower:
             await self._db_sweep(lambda db: repository.merge_racing_pairs(db))
         elif name == "stale":
             await self._db_sweep(lambda db: repository.expire_stale_actions(db))
+        elif name == "link":
+            await self._db_sweep(lambda db: repository.link_lifecycle_rows(db))
         elif name == "reconcile":
-            for host in self.connected_hosts():
-                if health.is_tripped(host):
-                    continue
-                await seed.reconcile_cluster(
+            await self._per_host(
+                name,
+                lambda host: seed.reconcile_cluster(
                     self._get_lxd_service(), host, self._session_maker, self._identities
-                )
+                ),
+            )
         elif name == "warnings":
-            for host in self.connected_hosts():
-                if health.is_tripped(host):
-                    continue
-                await seed.sweep_warnings(self._get_lxd_service(), host, self._session_maker)
+            await self._per_host(
+                name,
+                lambda host: seed.sweep_warnings(self._get_lxd_service(), host, self._session_maker),
+            )
+
+    async def _per_host(self, name: str, fn: Callable[[str], Awaitable[Any]]) -> None:
+        # One host that raises must not starve the hosts sorted after it.
+        for host in self.connected_hosts():
+            if health.is_tripped(host):
+                continue
+            try:
+                await fn(host)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.warning("Task journal sweep %s failed on %s", name, host, exc_info=True)
 
     async def _db_sweep(self, fn: Callable[[Any], Awaitable[int]]) -> int:
         async with self._session_maker() as db:

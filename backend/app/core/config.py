@@ -222,18 +222,24 @@ class Settings(BaseSettings):
         alias="TASK_JOURNAL_ENABLED",
         description="Journal LXD operations and dashboard activity into Postgres and serve the task panel."
     )
+    # important: at least one day. Zero or a negative value would make the first prune pass
+    # delete every row, which is not what an operator reaching for "unlimited" meant; a bad
+    # value refuses to boot instead.
     task_journal_retention_days: int = Field(
         default=30,
+        ge=1,
         alias="TASK_JOURNAL_RETENTION_DAYS",
-        description="Days a task row is kept before the prune loop removes it."
+        description="Days a task row is kept before the prune loop removes it (at least 1)."
     )
     cluster_log_retention_days: int = Field(
         default=30,
+        ge=1,
         alias="CLUSTER_LOG_RETENTION_DAYS",
-        description="Days a cluster log line is kept before the prune loop removes it."
+        description="Days a cluster log line is kept before the prune loop removes it (at least 1)."
     )
     task_journal_follower_retry_seconds: int = Field(
         default=15,
+        ge=1,
         alias="TASK_JOURNAL_FOLLOWER_RETRY_SECONDS",
         description="How often a worker that does not hold the follower lock tries to take it."
     )

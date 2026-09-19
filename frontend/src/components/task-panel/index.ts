@@ -23,6 +23,7 @@ export {
   durationMs,
   formatDuration,
   isTerminal,
+  kindLabel,
   progressPercent,
   resourceHref,
   startedMs,

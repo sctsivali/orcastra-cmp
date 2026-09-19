@@ -15,7 +15,7 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from app.core.blocking import run_blocking
 from app.services.lxd.availability import unreachable_detail
@@ -72,7 +72,8 @@ async def _read(host: str, node: Any, params: Dict[str, str], label: str) -> Any
     )
 
 
-async def _project_names(client: Any, host: str) -> List[str]:
+async def _project_names(client: Any, host: str) -> Tuple[List[str], bool]:
+    """(names, complete): complete is False when the walk was cut at MAX_PROJECTS."""
     response = await _read(host, client.api.projects, {"recursion": "0"}, "projects")
     names: List[str] = []
     for entry in _metadata(response) or []:
@@ -82,13 +83,18 @@ async def _project_names(client: Any, host: str) -> List[str]:
             names.append(str(entry["name"]))
     if len(names) > MAX_PROJECTS:
         logger.warning("%s carries %d projects; reading the first %d", host, len(names), MAX_PROJECTS)
-        names = names[:MAX_PROJECTS]
-    return names
+        return names[:MAX_PROJECTS], False
+    return names, True
 
 
-async def read_operations(client: Any, host: str) -> Dict[str, List[Dict[str, Any]]]:
+async def read_operations(client: Any, host: str) -> Tuple[Dict[str, List[Dict[str, Any]]], bool]:
     """Every bucket of `/1.0/operations` across projects, falling back to a per-project walk
-    when the daemon refuses `all-projects` with a 400."""
+    when the daemon refuses `all-projects` with a 400.
+
+    The second value says whether the read saw every project. A partial read (a project that
+    refused, projects past MAX_PROJECTS) must not feed `mark_lost`, or every live operation in
+    the part it did not see is flipped to lost.
+    """
     try:
         response = await _read(
             host, client.api.operations,
@@ -99,12 +105,15 @@ async def read_operations(client: Any, host: str) -> Dict[str, List[Dict[str, An
             raise
         logger.info("%s refused all-projects on /1.0/operations; walking projects", host)
         return await _read_operations_per_project(client, host)
-    return _buckets(_metadata(response))
+    return _buckets(_metadata(response)), True
 
 
-async def _read_operations_per_project(client: Any, host: str) -> Dict[str, List[Dict[str, Any]]]:
+async def _read_operations_per_project(
+    client: Any, host: str
+) -> Tuple[Dict[str, List[Dict[str, Any]]], bool]:
     merged: Dict[str, List[Dict[str, Any]]] = {bucket: [] for bucket in BUCKETS}
-    for name in await _project_names(client, host):
+    names, complete = await _project_names(client, host)
+    for name in names:
         try:
             response = await _read(
                 host, client.api.operations,
@@ -112,10 +121,11 @@ async def _read_operations_per_project(client: Any, host: str) -> Dict[str, List
             )
         except Exception as exc:  # noqa: BLE001 - one project is not the cluster
             logger.info("Skipping project %s on %s while reading operations: %s", name, host, exc)
+            complete = False
             continue
         for bucket, ops in _buckets(_metadata(response)).items():
             merged.setdefault(bucket, []).extend(ops)
-    return merged
+    return merged, complete
 
 
 def _buckets(metadata: Any) -> Dict[str, List[Dict[str, Any]]]:
@@ -164,18 +174,25 @@ async def reconcile_cluster(
             )
             await db.commit()
         return None
-    buckets = await read_operations(client, host)
+    buckets, complete = await read_operations(client, host)
     known = await identities.for_host(host) if identities is not None else frozenset()
     frames = frames_from_buckets(host, buckets, known)
+    lost = 0
     async with session_maker() as db:
         for frame in frames:
             await repository.upsert_operation(db, frame)
-        lost = await repository.mark_lost(
-            db,
-            cluster_id=host,
-            seen_ids=[frame.operation_id for frame in frames],
-            older_than_s=LOST_AFTER_S,
-        )
+        if complete:
+            lost = await repository.mark_lost(
+                db,
+                cluster_id=host,
+                seen_ids=[frame.operation_id for frame in frames],
+                older_than_s=LOST_AFTER_S,
+            )
+        else:
+            logger.info("%s: partial operations read, nothing marked lost this pass", host)
+        # The REST path answered: the state row says so, whatever an earlier timed-out read
+        # wrote, so the panel does not call a cluster stale while its stream is flowing.
+        await repository.set_cluster_state(db, host, "connected")
         await db.commit()
     if lost:
         logger.info("%s: %d operations the daemon no longer reports marked lost", host, lost)

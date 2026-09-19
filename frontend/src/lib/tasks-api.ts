@@ -100,9 +100,15 @@ export const tasksAPI = {
    * Websocket-class operations (exec, console) are never cancelled through /tasks; they are
    * ended the way the Sessions page ends them.
    */
-  killConsoleSession: (instanceName: string, operationId: string, host: string): Promise<unknown> =>
-    fetchAPI<unknown>(
+  // The console route answers 200 with `success: false` when the cluster did not act (its
+  // ActionResponse idiom), so the outcome is read from the body, not the status.
+  killConsoleSession: async (instanceName: string, operationId: string, host: string): Promise<void> => {
+    const result = await fetchAPI<{ success?: boolean; error?: string | null; message?: string | null }>(
       `/console/${seg(instanceName)}/active-sessions/${seg(operationId)}?host=${seg(host)}`,
       { method: "DELETE" },
-    ),
+    );
+    if (result && result.success === false) {
+      throw new Error(result.error || result.message || "The cluster did not end the session");
+    }
+  },
 };

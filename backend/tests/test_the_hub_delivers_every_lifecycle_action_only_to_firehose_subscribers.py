@@ -207,3 +207,22 @@ async def test_subscribe_keeps_its_positional_shape(hub):
     with pytest.raises(TypeError):
         await hub.subscribe("nuc2", None, True)  # firehose is keyword-only
     assert isinstance(queue, asyncio.Queue)
+
+
+async def test_a_firehose_subscriber_joining_an_open_node_is_told_connected_at_once(hub):
+    """A browser held nuc2 open before the follower was elected on this worker: the upstream
+    loop emitted its `connected` frame long ago, so without this the follower never seeds.
+    A browser subscriber gets nothing: the frame is not in BROWSER_FRAME_KEYS territory."""
+    browser = await hub.subscribe("nuc2")
+    node = hub._nodes["nuc2"]
+    node.connected = True
+    late_firehose = await hub.subscribe("nuc2", firehose=True)
+    frame = late_firehose.get_nowait()
+    assert frame == {"type": "hub", "host": "nuc2", "state": "connected", "error": None}
+    assert browser.empty()
+    late_browser = await hub.subscribe("nuc2")
+    assert late_browser.empty()
+    # A node whose socket is not open says nothing; the upstream loop will.
+    node.connected = False
+    silent = await hub.subscribe("nuc2", firehose=True)
+    assert silent.empty()

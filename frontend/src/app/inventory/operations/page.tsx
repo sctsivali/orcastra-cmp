@@ -46,6 +46,7 @@ import {
   actorLabel,
   durationMs,
   startedMs,
+  kindLabel,
 } from "@/components/task-panel";
 import { useTaskWindow } from "@/components/task-panel/hooks/use-tasks";
 import { useTaskFeedState } from "@/components/task-panel/use-task-feed";
@@ -117,7 +118,7 @@ const OPERATIONS = defineTable<TaskRecord>()({
       facetSpec: { primary: true, format: formatLabel, order: STATUS_ORDER },
     },
     { field: "actor", label: "Actor", sort: (t) => actorLabel(t), search: (t) => actorLabel(t), filter: fromSort("text") },
-    { field: "kind", label: "Kind", sort: (t) => t.kind, facet: (t) => t.kind, facetSpec: { format: formatLabel } },
+    { field: "kind", label: "Kind", sort: (t) => t.kind, facet: (t) => t.kind, facetSpec: { format: kindLabel } },
     { field: "started", label: "Started", sort: (t) => startedMs(t), filter: fromSort("date", { horizon: "past" }) },
     { field: "finished", label: "Finished", sort: (t) => toMillis(t.finished_at), filter: fromSort("date", { horizon: "past" }) },
     {
@@ -331,7 +332,7 @@ function OperationsContent() {
         <CardContent className="space-y-4">
           {query.data?.has_more ? (
             <PartialReadNotice data-testid="operations-window-cap">
-              Showing the newest {WINDOW_LIMIT} tasks in this range. Narrow the range to see older ones.
+              Showing the newest {WINDOW_LIMIT} tasks in this range. Older tasks in the range are not listed.
             </PartialReadNotice>
           ) : null}
 

@@ -81,6 +81,9 @@ export function useTaskList(feedConnected: boolean, limit: number) {
     enabled: isAuthenticated,
     refetchInterval,
     refetchIntervalInBackground: false,
+    // Show More changes the key; the rows in hand stay up until the larger page lands, so the
+    // toolbar, the search text and the scroll position survive the click.
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -133,6 +136,7 @@ export function useClusterLog(enabled: boolean, feedConnected: boolean, limit: n
     enabled: isAuthenticated && enabled,
     refetchInterval,
     refetchIntervalInBackground: false,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -161,7 +165,7 @@ export interface KillConsoleSessionInput {
 
 export function useKillConsoleSession() {
   const queryClient = useQueryClient();
-  return useMutation<unknown, Error, KillConsoleSessionInput>({
+  return useMutation<void, Error, KillConsoleSessionInput>({
     mutationFn: ({ instanceName, operationId, host }) =>
       tasksAPI.killConsoleSession(instanceName, operationId, host),
     onSuccess: (_data, { instanceName }) => {
@@ -207,7 +211,7 @@ function invalidateDebounced(queryClient: QueryClient, queryKey: readonly unknow
 function upsertInList(
   data: TaskListResponse,
   task: TaskRecord,
-): { next: TaskListResponse; previous: TaskRecord | null } {
+): { next: TaskListResponse; previous: TaskRecord | null; stale?: boolean } {
   const index = data.tasks.findIndex((row) => row.id === task.id);
   if (index === -1) {
     const tasks = [task, ...data.tasks];
@@ -223,7 +227,8 @@ function upsertInList(
     };
   }
   const previous = data.tasks[index];
-  if (previous.seq >= task.seq) return { next: data, previous };
+  // A frame older than the row in hand is not a change: it must not move the counts either.
+  if (previous.seq >= task.seq) return { next: data, previous: null, stale: true };
   const tasks = data.tasks.slice();
   tasks[index] = task;
   return { next: { ...data, tasks }, previous };
@@ -232,11 +237,13 @@ function upsertInList(
 export function upsertTaskInCaches(queryClient: QueryClient, task: TaskRecord): void {
   let previous: TaskRecord | null = null;
   let seen = false;
+  let stale = false;
 
   for (const prefix of [["tasks", "list"], ["tasks", "window"]] as const) {
     for (const [key, data] of queryClient.getQueriesData<TaskListResponse>({ queryKey: prefix })) {
       if (!data) continue;
       const result = upsertInList(data, task);
+      if (result.stale) stale = true;
       if (result.previous) {
         seen = true;
         previous = previous ?? result.previous;
@@ -244,6 +251,8 @@ export function upsertTaskInCaches(queryClient: QueryClient, task: TaskRecord): 
       if (result.next !== data) queryClient.setQueryData(key, result.next);
     }
   }
+  // Rejected as older than what a list already holds: the row and the counts stay as they are.
+  if (stale) return;
 
   const detailKey = taskKeys.detail(task.id);
   const detail = queryClient.getQueryData<TaskDetailResponse>(detailKey);

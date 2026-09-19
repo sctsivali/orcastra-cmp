@@ -152,6 +152,31 @@ async def test_a_daemon_that_refuses_all_projects_is_walked_project_by_project()
     assert ids == {"op-d", "op-a"}
 
 
+async def test_a_partial_walk_marks_nothing_lost_and_still_writes_connected():
+    """One project refused mid-walk: the rows it holds were not seen, so nothing may be flipped
+    to lost this pass (a review finding), and the REST path answering still records the
+    cluster connected."""
+    node = FakeInstanceNode()
+    node.projects = ["default", "cust-a"]
+    node.operation_buckets_by_project = {"default": {"running": [_op("op-d", "Running", 103)]}}
+    node.operations_project_errors = {"cust-a": RuntimeError("timed out")}
+
+    class _Refused(Exception):
+        class response:  # noqa: N801
+            status_code = 400
+
+    node.operations_all_projects_error = _Refused()
+    maker = FakeSessionMaker()
+
+    count = await seed.reconcile_cluster(service(FakeClient(node), hosts=(HOST,)), HOST, maker)
+
+    assert count == 1
+    lost = [sql for db in maker.sessions for sql, _ in db.calls if "SET status = 'lost'" in sql]
+    assert lost == []
+    states = [p for db in maker.sessions for sql, p in db.calls if "INSERT INTO task_follower_clusters" in sql]
+    assert states and states[-1]["state"] == "connected"
+
+
 async def test_any_other_refusal_propagates_rather_than_walking():
     node = FakeInstanceNode()
 

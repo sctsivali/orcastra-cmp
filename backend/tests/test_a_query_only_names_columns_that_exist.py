@@ -42,6 +42,9 @@ MODULES = [
     # The task journal: its reads are ORM selects over three new tables and the schedules.
     "app.services.task_journal.reads",
     "app.services.task_journal.repository",
+    "app.services.task_journal.repository_sql",
+    "app.services.task_journal.repository_sweeps",
+    "app.services.task_journal.repository_log",
     "app.routers.tasks",
     "app.routers.cluster_log",
 ]

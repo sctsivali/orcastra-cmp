@@ -9,7 +9,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.error_sanitizer import sanitize_error
-from app.services.task_journal.repository_types import json_param
+from app.services.task_journal.repository_types import fit_params, json_param
 from app.services.task_journal.vocabulary import parse_lxd_time
 
 _LOG_COLUMNS = (
@@ -30,7 +30,7 @@ def _log_params(row: Mapping[str, Any]) -> Dict[str, Any]:
     params["actor_kind"] = row.get("actor_kind") or "system"
     params["details"] = json_param(row["details"]) if row.get("details") is not None else None
     params["task_id"] = str(row["task_id"]) if row.get("task_id") else None
-    return params
+    return fit_params(params)
 
 
 async def insert_log_rows(db: AsyncSession, rows: List[Dict[str, Any]]) -> int:

@@ -14,6 +14,7 @@ import {
   actorSubText,
   durationMs,
   formatDuration,
+  kindLabel,
   resourceHref,
   severityTone,
   startedMs,
@@ -112,7 +113,7 @@ export function ActorCell({ task }: TaskCellProps) {
 }
 
 export function KindCell({ task }: TaskCellProps) {
-  return <TableCell className="whitespace-nowrap">{formatLabel(task.kind)}</TableCell>;
+  return <TableCell className="whitespace-nowrap">{kindLabel(task.kind)}</TableCell>;
 }
 
 export function StartedCell({ task }: TaskCellProps) {

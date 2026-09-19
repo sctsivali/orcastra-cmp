@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.task_journal.vocabulary import LIFECYCLE_TO_ACTION
 from app.services.task_journal.repository_types import (
     FOLLOWER_LOCK,
     LOST_MESSAGE,
@@ -104,6 +105,48 @@ async def mark_lost(
     return max(result.rowcount, 0)
 
 
+async def link_lifecycle_rows(db: AsyncSession, *, window_s: int = 900) -> int:
+    """Attach every unlinked lifecycle line of the last `window_s` to the task its key names.
+
+    The writer links a line inline when the task row already exists; this is the backstop for
+    the orders it cannot see (the lifecycle frame ahead of the operation frame in one batch,
+    a hand-over, a row the sink was still claiming). The closest task in time wins when two
+    share a key inside the window. The action map is the vocabulary's, bound as a VALUES list
+    so the mapping lives in one place.
+    """
+    pairs = list(LIFECYCLE_TO_ACTION.items())
+    if not pairs:
+        return 0
+    values = ", ".join(
+        f"(CAST(:la{i} AS varchar), CAST(:ta{i} AS varchar))" for i in range(len(pairs))
+    )
+    params: Dict[str, Any] = {"window_s": float(window_s)}
+    for i, (lifecycle_action, task_action) in enumerate(pairs):
+        params[f"la{i}"] = lifecycle_action
+        params[f"ta{i}"] = task_action
+    result = await db.execute(
+        text(
+            "UPDATE cluster_log AS l SET task_id = c.task_id FROM ("
+            "SELECT l2.id AS log_id, ("
+            "SELECT t.id FROM task_journal AS t WHERE t.kind = 'lxd_operation' "
+            "AND t.cluster_id = l2.cluster_id AND t.project = l2.project "
+            "AND t.resource_type = l2.resource_type AND t.resource_name = l2.resource_name "
+            "AND t.action = m.task_action "
+            "AND t.created_at BETWEEN l2.ts - interval '15 minutes' AND l2.ts + interval '2 minutes' "
+            "ORDER BY abs(extract(epoch FROM (l2.ts - t.created_at))) LIMIT 1) AS task_id "
+            "FROM cluster_log AS l2 "
+            f"JOIN (VALUES {values}) AS m(lifecycle_action, task_action) "
+            "ON m.lifecycle_action = l2.action "
+            "WHERE l2.kind = 'lifecycle' AND l2.task_id IS NULL AND l2.resource_name IS NOT NULL "
+            "AND l2.ts >= now() - make_interval(secs => CAST(:window_s AS float8))"
+            ") AS c WHERE c.log_id = l.id AND c.task_id IS NOT NULL"
+        ),
+        params,
+    )
+    count = getattr(result, "rowcount", 0)
+    return count if isinstance(count, int) and count >= 0 else 0
+
+
 async def expire_stale_actions(db: AsyncSession, *, older_than_s: int = 1800) -> int:
     result = await db.execute(
         text(
@@ -187,20 +230,9 @@ async def follower_is_active(db: AsyncSession) -> bool:
     return bool(result.scalar())
 
 
-async def _delete_batches(db: AsyncSession, statement: str, params: Dict[str, Any], batch: int) -> int:
-    total = 0
-    while True:
-        result = await db.execute(text(statement), {**params, "batch": batch})
-        count = max(result.rowcount, 0)
-        total += count
-        if count < batch:
-            return total
 
-
-async def prune(
-    db: AsyncSession, *, task_days: int, log_days: int, batch: int = 5000
-) -> Tuple[int, int]:
-    await db.execute(
+async def mark_stale_open_rows_lost(db: AsyncSession, *, task_days: int) -> int:
+    result = await db.execute(
         text(
             "UPDATE task_journal SET status = 'lost', "
             "error = COALESCE(task_journal.error, :message), "
@@ -211,18 +243,28 @@ async def prune(
         ),
         {"message": STALE_MESSAGE, "days": int(task_days)},
     )
-    logs = await _delete_batches(
-        db,
-        "DELETE FROM cluster_log WHERE id IN (SELECT id FROM cluster_log "
-        "WHERE ts < now() - make_interval(days => CAST(:days AS integer)) LIMIT :batch)",
-        {"days": int(log_days)},
-        batch,
+    return max(getattr(result, "rowcount", 0) or 0, 0)
+
+
+async def prune_batch(
+    db: AsyncSession, *, task_days: int, log_days: int, batch: int = 5000
+) -> Tuple[int, int, bool]:
+    """One batch of each delete; the third value says whether a full batch was deleted, so the
+    caller commits and comes back for more. Nothing here holds more than one batch's rows."""
+    logs = await db.execute(
+        text(
+            "DELETE FROM cluster_log WHERE id IN (SELECT id FROM cluster_log "
+            "WHERE ts < now() - make_interval(days => CAST(:days AS integer)) LIMIT :batch)"
+        ),
+        {"days": int(log_days), "batch": batch},
     )
-    tasks = await _delete_batches(
-        db,
-        "DELETE FROM task_journal WHERE id IN (SELECT id FROM task_journal "
-        "WHERE created_at < now() - make_interval(days => CAST(:days AS integer)) LIMIT :batch)",
-        {"days": int(task_days)},
-        batch,
+    tasks = await db.execute(
+        text(
+            "DELETE FROM task_journal WHERE id IN (SELECT id FROM task_journal "
+            "WHERE created_at < now() - make_interval(days => CAST(:days AS integer)) LIMIT :batch)"
+        ),
+        {"days": int(task_days), "batch": batch},
     )
-    return tasks, logs
+    log_count = max(getattr(logs, "rowcount", 0) or 0, 0)
+    task_count = max(getattr(tasks, "rowcount", 0) or 0, 0)
+    return task_count, log_count, (log_count >= batch or task_count >= batch)

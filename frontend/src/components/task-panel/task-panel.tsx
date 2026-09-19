@@ -44,10 +44,12 @@ function outcomeWord(status: TaskRecord["status"]): string {
   }
 }
 
-/** Mounted once by MainLayout. Absent entirely on a deployment without the task journal. */
+/** Mounted once by MainLayout. Absent entirely on a deployment without the task journal, and
+ *  absent until the settings say so: mounting on "unknown" opened a socket and a list read
+ *  against routes that a journal-off deployment does not serve, for a strip that then vanished. */
 export function TaskPanel() {
   const enabled = useTaskJournalEnabled();
-  if (enabled === false) return null;
+  if (enabled !== true) return null;
   return <TaskPanelInner />;
 }
 

@@ -133,11 +133,14 @@ def _under(name: str, fn: Callable[[], Any]) -> Any:
 
 
 def _reference(row: Dict[str, Any]) -> bool:
-    """The helpers themselves, called the way the instance list calls them."""
+    """The helpers themselves, called the way the instance list calls them for an instance row
+    and the way the projects list calls them for a project row: a project create or delete runs
+    in `default` but is about the project it names, so the bound reads the name."""
     allowed = org_scope.get_current_allowed_clusters()
     if allowed is not None and row["cluster_id"] not in allowed:
         return False
-    if not org_scope.project_is_visible(row["cluster_id"], row["project"]):
+    bound_project = (row["resource_name"] or "default") if row["resource_type"] == "project" else row["project"]
+    if not org_scope.project_is_visible(row["cluster_id"], bound_project):
         return False
     if not tenant_acl_active():
         return True
@@ -181,9 +184,17 @@ def test_the_partner_bound_drops_the_other_organisations_projects(engine) -> Non
         row = rows[row_id]
         assert row["cluster_id"] in ("nuc1", "nuc2")
         if row["cluster_id"] == "nuc2":
-            assert row["project"] in ("default", "cust-a"), row
+            judged = (row["resource_name"] or "default") if row["resource_type"] == "project" else row["project"]
+            assert judged in ("default", "cust-a"), row
     # nuc1 carries no bound, so every project passes there.
     assert any(rows[i]["cluster_id"] == "nuc1" and rows[i]["project"] == "cust-c" for i in ids)
+    # A project row is judged by the project it names: the Partner's own `cust-a` create (run
+    # in default) is theirs, another organisation's `cust-b` create (also run in default) is not.
+    own = [r for r in CORPUS if r["cluster_id"] == "nuc2" and r["resource_type"] == "project" and r["resource_name"] == "cust-a" and r["project"] == "default"]
+    foreign = [r for r in CORPUS if r["cluster_id"] == "nuc2" and r["resource_type"] == "project" and r["resource_name"] == "cust-b" and r["project"] == "default"]
+    assert own and foreign, "the corpus holds both shapes"
+    assert all(r["id"] in ids for r in own)
+    assert not any(r["id"] in ids for r in foreign)
 
 
 @pytest.mark.parametrize("name", ["tenant_wildcard", "tenant_instance", "tenant_no_view", "tenant_empty"])

@@ -82,5 +82,9 @@ def test_the_sweeps_only_visit_hosts_the_follower_tracks():
     import inspect
 
     source = inspect.getsource(follower_module.JournalFollower.run_sweep)
-    assert source.count("for host in self.connected_hosts():") == 2
-    assert "health.is_tripped(host)" in source
+    assert source.count("await self._per_host(") == 2, "reconcile and warnings go through the per-host loop"
+    per_host = inspect.getsource(follower_module.JournalFollower._per_host)
+    assert "for host in self.connected_hosts():" in per_host
+    assert "health.is_tripped(host)" in per_host
+    # One host that raises must not starve the hosts sorted after it (a review finding).
+    assert "except Exception" in per_host and "continue" in per_host

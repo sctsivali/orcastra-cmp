@@ -121,6 +121,7 @@ class FakeInstanceNode:
         # project's own entry, so a test can prove the fallback walked every project.
         self.operation_buckets: Dict[str, List[Dict[str, Any]]] = {}
         self.operation_buckets_by_project: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+        self.operations_project_errors: Dict[str, Exception] = {}
         # Raised by the all-projects operations read, so a daemon without the extension can be
         # played (an exception carrying `.response.status_code == 400`).
         self.operations_all_projects_error: Optional[Exception] = None
@@ -284,6 +285,9 @@ class _Operations:
                 raise self._node.operations_all_projects_error
             return _Response({"metadata": _copy_buckets(self._node.operation_buckets)})
         project = params.get("project")
+        refused = getattr(self._node, "operations_project_errors", {}).get(project)
+        if refused is not None:
+            raise refused
         return _Response(
             {"metadata": _copy_buckets(self._node.operation_buckets_by_project.get(project, {}))}
         )

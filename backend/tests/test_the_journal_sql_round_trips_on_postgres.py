@@ -284,6 +284,58 @@ def test_an_operation_the_daemon_did_not_name_takes_its_key_from_the_audit(loop,
     assert rows[0]["actor_email"] == "ops@example.test" and rows[0]["kind"] == "lxd_operation"
 
 
+def test_a_lifecycle_line_ahead_of_its_operation_is_linked_by_the_sweep(loop, db):
+    """Live on nuc1: the admin's stop had its `instance-stopped` line unlinked while the
+    partner's was linked, with the same frame order; the sweep makes the link deterministic."""
+    from app.services.task_journal.follower_writer import JournalWriter
+    from app.services.task_journal.repository_sweeps import link_lifecycle_rows
+
+    writer = JournalWriter(db, identities=_Identities())
+    t0 = datetime.now(timezone.utc)
+    op = str(uuid.uuid4())
+    # The lifecycle frame first: no task row yet, so the inline link finds nothing.
+    _run(loop, writer.write_batch([{
+        "type": "lifecycle", "host": HOST, "action": "instance-stopped", "name": "web-11",
+        "project": "default", "source": "/1.0/instances/web-11", "timestamp": _lxd(t0),
+        "requestor": {"protocol": "tls", "username": "dashboard-fingerprint", "address": "1.2.3.4:1"},
+    }]))
+    unlinked = _run(loop, _one(db, "SELECT task_id FROM cluster_log WHERE resource_name = 'web-11'"))
+    assert unlinked.task_id is None
+    _run(loop, writer.write_batch([
+        _operation(op, status="Success", code=200, name="web-11", created=t0, updated=t0 + timedelta(seconds=1)),
+    ]))
+    async def sweep():
+        async with db() as s:
+            n = await link_lifecycle_rows(s, window_s=900)
+            await s.commit()
+            return n
+    assert _run(loop, sweep()) == 1
+    linked = _run(loop, _one(db, "SELECT task_id::text AS task_id FROM cluster_log WHERE resource_name = 'web-11'"))
+    task = _run(loop, _one(db, "SELECT id::text AS id FROM task_journal WHERE operation_id = :op", op=op))
+    assert linked.task_id == task.id
+    # Idempotent: nothing left to link.
+    assert _run(loop, sweep()) == 0
+
+
+def test_an_over_long_client_string_does_not_poison_the_batch(loop, db):
+    """One 600-character instance name in a batch of two audit records: both rows land."""
+    from app.services.task_journal.sink import JournalSink
+
+    sink = JournalSink()
+    sink._session_maker = db
+    long_name = "x" * 600
+    a = _audit("instance.stop", target_type="instance", target_id=long_name, request_id="r" * 200)
+    b = _audit("instance.stop", target_type="instance", target_id="web-short")
+    _run(loop, sink._write_batch([a, b]))
+    rows = _run(loop, _rows(db, "SELECT resource_name, request_id FROM task_journal WHERE action = 'instance.stop' "
+                                "AND resource_name IN (:l, 'web-short')", l=long_name[:255]))
+    assert len(rows) == 2
+    assert any(len(r["resource_name"]) == 255 for r in rows)
+    assert all(r["request_id"] is None or len(r["request_id"]) <= 64 for r in rows)
+    logs = _run(loop, _one(db, "SELECT count(*) AS n FROM cluster_log WHERE resource_name IN (:l, 'web-short')", l=long_name[:255]))
+    assert logs.n == 2
+
+
 def test_uploads_open_and_close_on_their_session(loop, db):
     from app.services.task_journal.sink import JournalSink
 
@@ -430,7 +482,7 @@ def test_every_read_returns_rows_the_presenter_and_models_accept(loop, db):
 
 
 def test_the_prune_deletes_old_rows_under_its_lock_and_the_downgrade_is_clean(loop, db):
-    from app.services.task_journal import repository
+    from app.services.task_journal import prune as prune_module
 
     async def go():
         async with db() as s:
@@ -438,17 +490,20 @@ def test_the_prune_deletes_old_rows_under_its_lock_and_the_downgrade_is_clean(lo
                                  "created_at = now() - interval '40 days' WHERE status = 'lost'"))
             await s.execute(text("UPDATE cluster_log SET ts = now() - interval '40 days' WHERE kind = 'lifecycle'"))
             await s.commit()
-            tasks, logs = await repository.prune(s, task_days=30, log_days=30, batch=5000)
-            await s.commit()
+        # The production pass: one transaction per batch, the xact lock re-taken each time.
+        result = await prune_module.prune_once(db)
+        assert result is not None
+        tasks, logs = result
+        async with db() as s:
             assert tasks >= 2 and logs >= 1
             assert (await s.execute(text("SELECT count(*) FROM task_journal WHERE status = 'lost'"))).scalar() == 0
             # Open rows are never pruned by age.
             open_rows = (await s.execute(text("SELECT count(*) FROM task_journal WHERE status IN ('pending','running')"))).scalar()
             await s.execute(text("UPDATE task_journal SET updated_at = now() - interval '40 days' WHERE status IN ('pending','running')"))
             await s.commit()
-            t2, _ = await repository.prune(s, task_days=30, log_days=30, batch=5000)
-            await s.commit()
+        second = await prune_module.prune_once(db)
+        async with db() as s:
             still = (await s.execute(text("SELECT count(*) FROM task_journal WHERE status IN ('pending','running')"))).scalar()
-            assert still == open_rows, (t2, open_rows, still)
+            assert still == open_rows, (second, open_rows, still)
 
     _run(loop, go())

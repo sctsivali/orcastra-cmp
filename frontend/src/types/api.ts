@@ -877,31 +877,6 @@ export interface StorageVolumeCreateRequest {
 }
 
 // Operation Types
-export interface OperationInfo {
-  id: string;
-  class_name: string;
-  created_at: string;
-  updated_at: string;
-  status: string;
-  status_code: number;
-  description: string;
-  err: string;
-  may_cancel: boolean;
-  metadata: Record<string, any>;
-  /** All three are set by lxd_operations.py and were missing here, which is why the page
-   *  had to fall back to `any` and lost checking on exactly the fields it filters by. */
-  node_name?: string;
-  project?: string;
-  instance_name?: string;
-}
-
-export interface OperationListResponse {
-  total: number;
-  operations: OperationInfo[];
-  nodes: string[];
-}
-
-// Warning Types
 export interface WarningInfo {
   uuid: string;
   location: string;
