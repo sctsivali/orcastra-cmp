@@ -133,6 +133,30 @@ TASK_ACTIONS: Dict[str, Tuple[str, str]] = {
 
 # The router action and its service-layer twin both fire for one click. The twin is dropped so a
 # click is one log line and one task; `lxd.connection.*` has no twin and stays.
+# important: the console's own start/stop/restart/create/delete path audits `vm.*`, the
+# `/instances` twins audit `instance.*`, and the daemon's frame maps to `instance.*`. The
+# task key carries the canonical name so either router's click meets its operation; the
+# stdout audit keeps the name the router emitted. Found by review: every console start
+# listed twice.
+TASK_ACTION_ALIASES: Dict[str, str] = {
+    "vm.create": "instance.create",
+    "vm.start": "instance.start",
+    "vm.stop": "instance.stop",
+    "vm.restart": "instance.restart",
+    "vm.delete": "instance.delete",
+    "integration.instance.delete": "instance.delete",
+    "integration.image.delete": "image.delete",
+    "integration.network.delete": "network.delete",
+    "integration.project.delete": "project.delete",
+    "integration.profile.delete": "profile.delete",
+    "integration.storage.pool.delete": "storage.pool.delete",
+}
+
+
+def canonical_task_action(action: str) -> str:
+    return TASK_ACTION_ALIASES.get(action, action)
+
+
 SUPPRESSED_ACTIONS = frozenset(
     {
         "lxd.instance.create",

@@ -18,6 +18,7 @@ from app.services.task_journal.vocabulary import (
     ACTION_DESCRIPTIONS,
     LOG_SUPPRESSED_ACTIONS,
     SUPPRESSED_ACTIONS,
+    canonical_task_action,
     humanise_action,
     TARGET_TYPE_TO_RESOURCE,
     TASK_ACTIONS,
@@ -208,6 +209,8 @@ def record_to_task(record: Mapping[str, Any]) -> Optional[TaskWrite]:
     if result == "denied":
         return None
     kind, resource_type = TASK_ACTIONS[action]
+    # The key and the description use the canonical action; the log row keeps the emitted one.
+    action = canonical_task_action(action)
     target = _mapping(record.get("target"))
     details = _mapping(record.get("details"))
 

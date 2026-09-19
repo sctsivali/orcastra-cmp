@@ -55,10 +55,24 @@ async def insert_log_rows(db: AsyncSession, rows: List[Dict[str, Any]]) -> int:
 
 
 async def link_log_to_task(db: AsyncSession, *, event_id: str, task_id: str) -> None:
-    await db.execute(
+    result = await db.execute(
         text(
             "UPDATE cluster_log SET task_id = CAST(:task_id AS uuid) "
             "WHERE event_id = :event_id AND task_id IS NULL"
         ),
         {"event_id": event_id, "task_id": str(task_id)},
+    )
+    if getattr(result, "rowcount", 0):
+        await bump_task(db, task_id)
+
+
+async def bump_task(db: AsyncSession, task_id: str) -> None:
+    """A new line under a task is a change to the task: the seq moves so the tailer sends a
+    frame and an open detail dialog re-reads its lines."""
+    await db.execute(
+        text(
+            "UPDATE task_journal SET seq = nextval('task_journal_seq'), updated_at = now() "
+            "WHERE id = CAST(:task_id AS uuid)"
+        ),
+        {"task_id": str(task_id)},
     )

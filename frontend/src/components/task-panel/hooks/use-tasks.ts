@@ -263,6 +263,10 @@ export function upsertTaskInCaches(queryClient: QueryClient, task: TaskRecord): 
     }
     if (detail.task.seq < task.seq) {
       queryClient.setQueryData<TaskDetailResponse>(detailKey, { ...detail, task });
+      // A line linked to the task after the fact bumps its seq without a log frame of its
+      // own (the lifecycle line the writer could only attach in a later sweep), so the open
+      // dialog re-reads its lines.
+      invalidateDebounced(queryClient, detailKey);
     }
   }
 

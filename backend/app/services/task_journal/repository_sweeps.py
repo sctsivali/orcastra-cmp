@@ -143,12 +143,21 @@ async def link_lifecycle_rows(db: AsyncSession, *, window_s: int = 900) -> int:
             "ON m.lifecycle_action = l2.action "
             "WHERE l2.kind = 'lifecycle' AND l2.task_id IS NULL AND l2.resource_name IS NOT NULL "
             "AND l2.ts >= now() - make_interval(secs => CAST(:window_s AS float8))"
-            ") AS c WHERE c.log_id = l.id AND c.task_id IS NOT NULL"
+            ") AS c WHERE c.log_id = l.id AND c.task_id IS NOT NULL "
+            "RETURNING l.task_id"
         ),
         params,
     )
-    count = getattr(result, "rowcount", 0)
-    return count if isinstance(count, int) and count >= 0 else 0
+    linked = [str(row[0]) for row in result.all() if row[0]]
+    for task_id in sorted(set(linked)):
+        await db.execute(
+            text(
+                "UPDATE task_journal SET seq = nextval('task_journal_seq'), updated_at = now() "
+                "WHERE id = CAST(:task_id AS uuid)"
+            ),
+            {"task_id": task_id},
+        )
+    return len(linked)
 
 
 async def expire_stale_actions(db: AsyncSession, *, older_than_s: int = 1800) -> int:
