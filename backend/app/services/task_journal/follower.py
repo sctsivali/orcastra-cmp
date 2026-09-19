@@ -303,7 +303,9 @@ class JournalFollower:
 
     async def _seed(self, host: str) -> None:
         try:
-            await seed.seed_cluster(self._get_lxd_service(), host, self._session_maker)
+            await seed.seed_cluster(
+                self._get_lxd_service(), host, self._session_maker, self._identities
+            )
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001 - the next connect or reconcile tries again
@@ -352,7 +354,9 @@ class JournalFollower:
             for host in self.connected_hosts():
                 if health.is_tripped(host):
                     continue
-                await seed.reconcile_cluster(self._get_lxd_service(), host, self._session_maker)
+                await seed.reconcile_cluster(
+                    self._get_lxd_service(), host, self._session_maker, self._identities
+                )
         elif name == "warnings":
             for host in self.connected_hosts():
                 if health.is_tripped(host):

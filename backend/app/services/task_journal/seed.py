@@ -128,7 +128,9 @@ def _buckets(metadata: Any) -> Dict[str, List[Dict[str, Any]]]:
     }
 
 
-def frames_from_buckets(host: str, buckets: Dict[str, List[Dict[str, Any]]]) -> List[Any]:
+def frames_from_buckets(
+    host: str, buckets: Dict[str, List[Dict[str, Any]]], identities: frozenset = frozenset()
+) -> List[Any]:
     """Repository frames for every operation in every bucket, through the hub's own parser so a
     seeded operation and a streamed one are read identically (and the inner metadata is never
     copied)."""
@@ -137,14 +139,17 @@ def frames_from_buckets(host: str, buckets: Dict[str, List[Dict[str, Any]]]) -> 
         for op in buckets.get(bucket, []):
             raw = json.dumps({"type": "operation", "metadata": op}, default=str)
             payload = LXDEventsHub._parse_event(host, raw)
-            mapped = operation_frame(payload) if payload else None
+            mapped = operation_frame(payload, identities) if payload else None
             if mapped is not None:
                 frames.append(mapped)
     return frames
 
 
 async def reconcile_cluster(
-    lxd_service: Any, host: str, session_maker: Callable[[], Any]
+    lxd_service: Any,
+    host: str,
+    session_maker: Callable[[], Any],
+    identities: Optional[Any] = None,
 ) -> Optional[int]:
     """Upsert every operation the daemon holds and mark vanished open rows lost.
 
@@ -160,7 +165,8 @@ async def reconcile_cluster(
             await db.commit()
         return None
     buckets = await read_operations(client, host)
-    frames = frames_from_buckets(host, buckets)
+    known = await identities.for_host(host) if identities is not None else frozenset()
+    frames = frames_from_buckets(host, buckets, known)
     async with session_maker() as db:
         for frame in frames:
             await repository.upsert_operation(db, frame)
@@ -177,10 +183,13 @@ async def reconcile_cluster(
 
 
 async def seed_cluster(
-    lxd_service: Any, host: str, session_maker: Callable[[], Any]
+    lxd_service: Any,
+    host: str,
+    session_maker: Callable[[], Any],
+    identities: Optional[Any] = None,
 ) -> Optional[int]:
     """`reconcile_cluster` plus the seeded stamp on the cluster's state row."""
-    count = await reconcile_cluster(lxd_service, host, session_maker)
+    count = await reconcile_cluster(lxd_service, host, session_maker, identities)
     if count is None:
         return None
     async with session_maker() as db:

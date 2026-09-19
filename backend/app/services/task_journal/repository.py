@@ -46,32 +46,65 @@ from app.services.task_journal.repository_types import (  # noqa: F401 - public 
     json_param,
     returned_id,
 )
-from app.services.task_journal.vocabulary import TERMINAL
 
 _RESULT_STATUS = {"accepted": "running", "success": "success", "failure": "failure"}
 
-# important: a terminal status is final and `pending` never overrides `running`. The existing
-# row is named by table so the same text serves a plain UPDATE and ON CONFLICT DO UPDATE.
+# important: asyncpg deduces one type per bind. `:new_status` is read in VALUES (a varchar
+# column), in a CASE and in an IN list (text), so every use carries the same cast or Postgres
+# refuses the statement with "inconsistent types deduced". Found on the first live seed.
+_NEW = "CAST(:new_status AS varchar)"
+_TERMINAL_3 = "('success', 'failure', 'cancelled')"
+
+# important: the audit side never reopens or overrides a finished row, and `pending` never
+# overrides `running`. The existing row is named by table so the same text serves a plain
+# UPDATE and ON CONFLICT DO UPDATE.
 MONOTONIC_STATUS = (
     "CASE WHEN task_journal.status IN ('success', 'failure', 'cancelled', 'lost') "
     "THEN task_journal.status "
-    "WHEN :new_status = 'pending' AND task_journal.status = 'running' THEN task_journal.status "
-    "ELSE :new_status END"
+    f"WHEN {_NEW} = 'pending' AND task_journal.status = 'running' THEN task_journal.status "
+    f"ELSE {_NEW} END"
+)
+
+# important: the stream side is the cluster's own verdict. Only a stream frame writes
+# `status_code`, and only a terminal frame writes one of 200 / 400 / 401, so a finished row
+# carrying a code of 200 or more is final. A finished row with no code, or an open code (105
+# Pending, 103 Running), was closed by the dashboard's audit (a `wait=True` router that timed
+# out or answered early) and yields to the cluster's terminal frame, never to an open one.
+# `lost` is the journal's own mark and yields to whatever the cluster reports next. Found on
+# the scratch database: a Pending frame, the router's success, then the cluster's Failure
+# left the row on success.
+_CLUSTER_VERDICT_FINAL = (
+    f"task_journal.status IN {_TERMINAL_3} AND task_journal.status_code >= 200"
+)
+_AUDIT_VERDICT_YIELDS = (
+    f"task_journal.status IN {_TERMINAL_3} "
+    "AND (task_journal.status_code IS NULL OR task_journal.status_code < 200) "
+    f"AND {_NEW} IN {_TERMINAL_3}"
+)
+STREAM_STATUS = (
+    f"CASE WHEN {_CLUSTER_VERDICT_FINAL} THEN task_journal.status "
+    f"WHEN task_journal.status IN {_TERMINAL_3} AND {_NEW} NOT IN {_TERMINAL_3} "
+    "THEN task_journal.status "
+    f"WHEN {_NEW} = 'pending' AND task_journal.status = 'running' THEN task_journal.status "
+    f"ELSE {_NEW} END"
 )
 
 _TERMINAL_FINISH = (
-    "CASE WHEN :new_status IN ('success', 'failure', 'cancelled') "
+    "CASE WHEN CAST(:new_status AS varchar) IN ('success', 'failure', 'cancelled') "
     "THEN COALESCE(task_journal.finished_at, now()) ELSE task_journal.finished_at END"
 )
 
 _OPERATION_SET = (
-    f"status = {MONOTONIC_STATUS}, "
+    f"status = {STREAM_STATUS}, "
     "status_code = COALESCE(CAST(:status_code AS integer), task_journal.status_code), "
     "progress = COALESCE(:progress, task_journal.progress), "
-    "error = COALESCE(NULLIF(:error, ''), task_journal.error), "
+    # When the cluster's verdict replaces the audit's, its error text replaces the audit's too:
+    # a Success frame after a timed-out wait leaves no error on the row (the audit line keeps it).
+    f"error = CASE WHEN {_AUDIT_VERDICT_YIELDS} THEN NULLIF(:error, '') "
+    "ELSE COALESCE(NULLIF(:error, ''), task_journal.error) END, "
     "may_cancel = :may_cancel, "
     "operation_class = COALESCE(:operation_class, task_journal.operation_class), "
-    "description = COALESCE(NULLIF(:description, ''), task_journal.description), "
+    "description = COALESCE(NULLIF(CAST(:description AS varchar), ''), task_journal.description), "
     "lxd_updated_at = GREATEST("
     "COALESCE(task_journal.lxd_updated_at, CAST(:lxd_updated_at AS timestamptz)), "
     "CAST(:lxd_updated_at AS timestamptz)), "
@@ -84,7 +117,7 @@ _OPERATION_SET = (
 _OPERATION_GUARD = (
     "(task_journal.lxd_updated_at IS NULL OR CAST(:lxd_updated_at AS timestamptz) IS NULL "
     "OR CAST(:lxd_updated_at AS timestamptz) >= task_journal.lxd_updated_at "
-    "OR :new_status IN ('success', 'failure', 'cancelled')) "
+    "OR CAST(:new_status AS varchar) IN ('success', 'failure', 'cancelled')) "
     "AND (task_journal.status IS DISTINCT FROM :effective "
     "OR task_journal.progress IS DISTINCT FROM :progress "
     "OR task_journal.error IS DISTINCT FROM NULLIF(:error, ''))"
@@ -112,9 +145,12 @@ _KEY_MATCH = (
 )
 
 
-def _effective(current: str, new: str) -> str:
-    if current in TERMINAL:
-        return current
+def _effective(current: str, new: str, *, cluster_verdict: bool) -> str:
+    """STREAM_STATUS in Python, for the change guard: the row is touched only if this differs."""
+    if current in ("success", "failure", "cancelled"):
+        if cluster_verdict or new not in ("success", "failure", "cancelled"):
+            return current
+        return new
     if new == "pending" and current == "running":
         return current
     return new
@@ -175,6 +211,7 @@ def _frame_params(frame: OperationFrame, operation_id: str) -> Dict[str, Any]:
         "metadata": json_param(frame.metadata),
         "actor_kind": frame.actor_kind,
         "source": frame.source,
+        "actor_email": frame.actor_email,
     }
 
 
@@ -185,7 +222,7 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
     found = (
         await db.execute(
             text(
-                "SELECT id, status, lxd_updated_at FROM task_journal "
+                "SELECT id, status, lxd_updated_at, status_code FROM task_journal "
                 "WHERE cluster_id = :cluster_id AND operation_id = :operation_id FOR UPDATE"
             ),
             {"cluster_id": frame.cluster_id, "operation_id": operation_id},
@@ -193,7 +230,9 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
     ).first()
     if found is not None:
         row_id, current = str(found[0]), str(found[1])
-        params["effective"] = _effective(current, frame.status)
+        params["effective"] = _effective(
+            current, frame.status, cluster_verdict=(found[3] or 0) >= 200
+        )
         params["id"] = row_id
         result = await db.execute(
             text(
@@ -215,14 +254,14 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
                     "kind = CASE WHEN task_journal.kind = 'dashboard_action' "
                     "THEN 'lxd_operation' ELSE task_journal.kind END, "
                     "operation_class = :operation_class, "
-                    f"status = {MONOTONIC_STATUS}, "
+                    f"status = {STREAM_STATUS}, "
                     "status_code = CAST(:status_code AS integer), progress = :progress, "
                     "may_cancel = :may_cancel, "
                     "lxd_created_at = CAST(:lxd_created_at AS timestamptz), "
                     "lxd_updated_at = CAST(:lxd_updated_at AS timestamptz), "
                     "started_at = COALESCE(task_journal.started_at, "
                     "CAST(:lxd_created_at AS timestamptz)), "
-                    "description = COALESCE(NULLIF(task_journal.description, ''), :description), "
+                    "description = COALESCE(NULLIF(task_journal.description, ''), CAST(:description AS varchar)), "
                     "metadata = task_journal.metadata || CAST(:metadata AS jsonb), "
                     "seq = nextval('task_journal_seq'), updated_at = now() "
                     "WHERE id = (SELECT id FROM task_journal WHERE "
@@ -242,15 +281,15 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
             text(
                 "INSERT INTO task_journal (kind, cluster_id, project, resource_type, "
                 "resource_name, operation_id, operation_class, action, description, status, "
-                "status_code, progress, error, may_cancel, actor_kind, source, metadata, "
-                "lxd_created_at, lxd_updated_at, started_at, finished_at) VALUES ("
+                "status_code, progress, error, may_cancel, actor_kind, source, actor_email, "
+                "metadata, lxd_created_at, lxd_updated_at, started_at, finished_at) VALUES ("
                 "'lxd_operation', :cluster_id, :project, :resource_type, :resource_name, "
-                ":operation_id, :operation_class, :action, :description, :new_status, "
+                ":operation_id, :operation_class, :action, CAST(:description AS varchar), CAST(:new_status AS varchar), "
                 "CAST(:status_code AS integer), :progress, NULLIF(:error, ''), :may_cancel, "
-                ":actor_kind, :source, CAST(:metadata AS jsonb), "
+                ":actor_kind, :source, :actor_email, CAST(:metadata AS jsonb), "
                 "CAST(:lxd_created_at AS timestamptz), CAST(:lxd_updated_at AS timestamptz), "
                 "COALESCE(CAST(:lxd_created_at AS timestamptz), now()), "
-                "CASE WHEN :new_status IN ('success', 'failure', 'cancelled') THEN now() END) "
+                "CASE WHEN CAST(:new_status AS varchar) IN ('success', 'failure', 'cancelled') THEN now() END) "
                 f"{_ON_CONFLICT} DO UPDATE SET {_OPERATION_SET} WHERE {_OPERATION_GUARD} "
                 "RETURNING id, (xmax = 0) AS inserted"
             ),
@@ -323,11 +362,11 @@ async def attach_operation_by_id(
                 "actor_role, actor_kind, api_key_id, source, request_id, "
                 "target_organization_id, target_organization_slug, metadata, started_at, "
                 "finished_at) VALUES (:kind, :cluster_id, :project, :resource_type, "
-                ":resource_name, :operation_id, :action, :description, :new_status, "
+                ":resource_name, :operation_id, :action, CAST(:description AS varchar), CAST(:new_status AS varchar), "
                 "NULLIF(:audit_error, ''), :actor_email, :actor_role, :actor_kind, :api_key_id, "
                 ":source, :request_id, CAST(:target_organization_id AS integer), "
                 ":target_organization_slug, CAST(:extra AS jsonb), now(), "
-                "CASE WHEN :new_status IN ('success', 'failure') THEN now() END) "
+                "CASE WHEN CAST(:new_status AS varchar) IN ('success', 'failure') THEN now() END) "
                 f"{_ON_CONFLICT} DO UPDATE SET {_ACTOR_SET} RETURNING id"
             ),
             params,
@@ -401,12 +440,12 @@ async def insert_action(
                 "actor_kind, api_key_id, source, request_id, target_organization_id, "
                 "target_organization_slug, metadata, started_at, finished_at) VALUES ("
                 ":kind, :cluster_id, :project, :resource_type, :resource_name, :action, "
-                ":description, :new_status, NULLIF(:audit_error, ''), :actor_email, "
+                "CAST(:description AS varchar), CAST(:new_status AS varchar), NULLIF(:audit_error, ''), :actor_email, "
                 ":actor_role, :actor_kind, :api_key_id, :source, :request_id, "
                 "CAST(:target_organization_id AS integer), :target_organization_slug, "
                 "CAST(:extra AS jsonb), "
                 "now() - make_interval(secs => COALESCE(CAST(:duration_ms AS float8), 0) / 1000.0), "
-                "CASE WHEN :new_status IN ('success', 'failure') THEN now() END) RETURNING id"
+                "CASE WHEN CAST(:new_status AS varchar) IN ('success', 'failure') THEN now() END) RETURNING id"
             ),
             params,
         )

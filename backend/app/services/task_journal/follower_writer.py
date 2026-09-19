@@ -287,7 +287,8 @@ class JournalWriter:
             await db.commit()
 
     async def _write_operation(self, db: Any, frame: dict) -> None:
-        mapped = operation_frame(frame)
+        identities = await self._identities.for_host(str(frame.get("host") or ""))
+        mapped = operation_frame(frame, identities)
         if mapped is None:
             return
         await repository.upsert_operation(db, mapped)

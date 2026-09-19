@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Dict, List, Mapping
 
 from sqlalchemy import text
@@ -9,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.error_sanitizer import sanitize_error
 from app.services.task_journal.repository_types import json_param
+from app.services.task_journal.vocabulary import parse_lxd_time
 
 _LOG_COLUMNS = (
     "ts", "kind", "severity", "cluster_id", "project", "resource_type", "resource_name",
@@ -19,6 +21,11 @@ _LOG_COLUMNS = (
 
 def _log_params(row: Mapping[str, Any]) -> Dict[str, Any]:
     params: Dict[str, Any] = {column: row.get(column) for column in _LOG_COLUMNS}
+    # important: asyncpg binds a timestamptz parameter from a datetime only; the audit record
+    # and an LXD warning both carry the time as ISO text, and a text that does not parse
+    # falls back to now() in the statement rather than dropping the row.
+    ts = row.get("ts")
+    params["ts"] = ts if isinstance(ts, datetime) else parse_lxd_time(ts)
     params["message"] = sanitize_error(str(row.get("message") or ""), limit=512)
     params["actor_kind"] = row.get("actor_kind") or "system"
     params["details"] = json_param(row["details"]) if row.get("details") is not None else None

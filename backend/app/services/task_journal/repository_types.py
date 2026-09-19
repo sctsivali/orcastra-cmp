@@ -41,6 +41,7 @@ class OperationFrame:
     requestor: Optional[Dict[str, Any]]
     actor_kind: str = "system"
     source: str = "events"
+    actor_email: Optional[str] = None
 
 
 @dataclass(frozen=True)

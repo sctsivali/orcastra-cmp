@@ -44,8 +44,15 @@ def _requestor(value: Any) -> Optional[Dict[str, Any]]:
     return picked or None
 
 
-def operation_frame(payload: Mapping[str, Any]) -> Optional[OperationFrame]:
+def operation_frame(
+    payload: Mapping[str, Any], dashboard_identities: frozenset = frozenset()
+) -> Optional[OperationFrame]:
     """The repository frame for one hub `operation` payload; None for a blank operation id.
+
+    The requestor names the actor the same way a lifecycle frame does, so an operation that
+    only ever reaches the journal through the seed (an `lxc exec` from the host's shell, an
+    operation the stream missed while the follower was down) still reads as CLI work. On the
+    scratch database the first cut stored such a row as `system` / `events`.
 
     note: the hub already stripped `?project=` from every resource name and never carries the
     inner metadata, so nothing here can see a file descriptor or an exec command line. A
@@ -71,6 +78,10 @@ def operation_frame(payload: Mapping[str, Any]) -> Optional[OperationFrame]:
         }
     )
     status_code = payload.get("status_code")
+    actor_kind, source = requestor_kind(requestor, dashboard_identities)
+    actor_email = None
+    if actor_kind == "external" and requestor and requestor.get("username"):
+        actor_email = str(requestor["username"])
     return OperationFrame(
         cluster_id=host,
         operation_id=operation_id,
@@ -89,6 +100,9 @@ def operation_frame(payload: Mapping[str, Any]) -> Optional[OperationFrame]:
         lxd_updated_at=parse_lxd_time(payload.get("updated_at")),
         metadata=metadata,
         requestor=requestor,
+        actor_kind=actor_kind,
+        source=source,
+        actor_email=actor_email,
     )
 
 

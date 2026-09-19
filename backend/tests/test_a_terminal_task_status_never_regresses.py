@@ -1,10 +1,14 @@
-"""A finished task stays finished, whatever frame arrives next.
+"""A task the cluster finished stays finished, whatever frame arrives next.
 
 The events stream delivers an operation's frames out of order, twice, and from a daemon whose
 clock is not this database's. Two followers can overlap during a hand-over. The one statement
-that absorbs all of that is the monotonic UPDATE: a terminal status is final, `pending` never
+that absorbs all of that is the monotonic UPDATE: the cluster's verdict (a terminal status with
+a status code of 200 or more, which only a terminal frame writes) is final, `pending` never
 overrides `running`, an older non-terminal frame is a no-op, and a no-op bumps no `seq`, so the
-tailer never re-sends a row nothing happened to.
+tailer never re-sends a row nothing happened to. A verdict the dashboard's audit set (no code,
+or an open one) yields to the cluster's terminal frame and never to an open frame, and `lost`
+yields to anything the cluster reports: the scratch-database round trip found a Pending frame,
+a router success and a cluster Failure leaving the row on success.
 
 These drive `upsert_operation` against a session that records what it compiled and pin the
 text of the statement and the parameters it carried, which is what a hermetic test can prove.
@@ -20,20 +24,28 @@ from tests._journal_fakes import FakeDB, FakeResult, frame
 
 NOW = datetime(2026, 9, 19, 12, 0, tzinfo=timezone.utc)
 TERMINAL_CASE = (
-    "CASE WHEN task_journal.status IN ('success', 'failure', 'cancelled', 'lost') "
+    "CASE WHEN task_journal.status IN ('success', 'failure', 'cancelled') "
+    "AND task_journal.status_code >= 200 THEN task_journal.status"
+)
+AUDIT_VERDICT_YIELDS_ONLY_TO_A_VERDICT = (
+    "WHEN task_journal.status IN ('success', 'failure', 'cancelled') "
+    "AND CAST(:new_status AS varchar) NOT IN ('success', 'failure', 'cancelled') "
     "THEN task_journal.status"
 )
 PENDING_NEVER_OVERRIDES = (
-    "WHEN :new_status = 'pending' AND task_journal.status = 'running' THEN task_journal.status"
+    "WHEN CAST(:new_status AS varchar) = 'pending' AND task_journal.status = 'running' "
+    "THEN task_journal.status"
 )
 
 
-def _found(status: str, lxd_updated_at=None, rowcount: int = 0):
+def _found(status: str, lxd_updated_at=None, rowcount: int = 0, status_code=None):
     """A session whose SELECT ... FOR UPDATE finds one row and whose UPDATE reports rowcount."""
 
     def respond(sql, params):
-        if sql.startswith("SELECT id, status, lxd_updated_at"):
-            return FakeResult(rows=[("11111111-1111-1111-1111-111111111111", status, lxd_updated_at)])
+        if sql.startswith("SELECT id, status, lxd_updated_at, status_code"):
+            return FakeResult(
+                rows=[("11111111-1111-1111-1111-111111111111", status, lxd_updated_at, status_code)]
+            )
         if sql.startswith("UPDATE task_journal SET status = CASE"):
             return FakeResult(rowcount=rowcount)
         return None
@@ -57,6 +69,7 @@ async def test_the_update_carries_the_monotonic_case_and_the_change_guard():
     result = await _run(db, frame("success"))
     sql, params = _update(db)
     assert TERMINAL_CASE in sql
+    assert AUDIT_VERDICT_YIELDS_ONLY_TO_A_VERDICT in sql
     assert PENDING_NEVER_OVERRIDES in sql
     assert "seq = nextval('task_journal_seq')" in sql
     assert "task_journal.status IS DISTINCT FROM :effective" in sql
@@ -85,7 +98,7 @@ async def test_an_older_non_terminal_frame_is_a_no_op_and_a_terminal_frame_alway
     sql, _params = _update(db)
     assert (
         "CAST(:lxd_updated_at AS timestamptz) >= task_journal.lxd_updated_at "
-        "OR :new_status IN ('success', 'failure', 'cancelled')"
+        "OR CAST(:new_status AS varchar) IN ('success', 'failure', 'cancelled')"
     ) in sql, "an older frame is skipped unless it is the terminal one"
     assert "GREATEST(COALESCE(task_journal.lxd_updated_at" in sql, "the daemon clock only ever moves forward"
 
@@ -102,21 +115,50 @@ async def test_a_duplicate_frame_bumps_no_seq():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("terminal", ["success", "failure", "cancelled", "lost"])
-async def test_a_terminal_status_is_kept_whatever_comes_next(terminal):
+@pytest.mark.parametrize("terminal", ["success", "failure", "cancelled"])
+async def test_the_cluster_verdict_is_kept_whatever_comes_next(terminal):
     for incoming in ("cancelled", "running", "pending", "success", "failure"):
-        db = _found(terminal, rowcount=0)
+        db = _found(terminal, rowcount=0, status_code=200 if terminal == "success" else 400)
         await _run(db, frame(incoming))
         _sql, params = _update(db)
         assert params["effective"] == terminal, (terminal, incoming)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("audit_code", [None, 105, 103])
+async def test_an_audit_verdict_yields_to_the_cluster_verdict_and_not_to_an_open_frame(audit_code):
+    for incoming in ("running", "pending"):
+        db = _found("success", rowcount=0, status_code=audit_code)
+        await _run(db, frame(incoming))
+        _sql, params = _update(db)
+        assert params["effective"] == "success", incoming
+    for incoming in ("failure", "cancelled", "success"):
+        db = _found("success", rowcount=1, status_code=audit_code)
+        await _run(db, frame(incoming))
+        sql, params = _update(db)
+        assert params["effective"] == incoming, incoming
+        assert "THEN NULLIF(:error, '')" in sql, "the cluster's error text replaces the audit's"
+
+
+@pytest.mark.asyncio
+async def test_lost_yields_to_whatever_the_cluster_reports():
+    for incoming in ("running", "success", "failure"):
+        db = _found("lost", rowcount=1, status_code=103)
+        await _run(db, frame(incoming))
+        _sql, params = _update(db)
+        assert params["effective"] == incoming, incoming
+
+
 def test_the_effective_status_rule_is_the_case_in_python_form():
-    assert repository._effective("success", "cancelled") == "success"
-    assert repository._effective("running", "pending") == "running"
-    assert repository._effective("pending", "running") == "running"
-    assert repository._effective("running", "failure") == "failure"
-    assert repository._effective("lost", "success") == "lost"
+    eff = repository._effective
+    assert eff("success", "cancelled", cluster_verdict=True) == "success"
+    assert eff("success", "cancelled", cluster_verdict=False) == "cancelled"
+    assert eff("failure", "running", cluster_verdict=False) == "failure"
+    assert eff("running", "pending", cluster_verdict=False) == "running"
+    assert eff("pending", "running", cluster_verdict=False) == "running"
+    assert eff("running", "failure", cluster_verdict=False) == "failure"
+    assert eff("lost", "success", cluster_verdict=False) == "success"
+    assert eff("lost", "running", cluster_verdict=False) == "running"
 
 
 @pytest.mark.asyncio

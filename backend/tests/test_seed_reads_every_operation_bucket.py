@@ -194,7 +194,7 @@ async def test_seed_stamps_the_cluster_seeded_after_reconciling():
 async def test_the_reconcile_sweep_skips_a_tripped_cluster(monkeypatch):
     calls = []
 
-    async def fake_reconcile(lxd_service, host, session_maker):
+    async def fake_reconcile(lxd_service, host, session_maker, identities=None):
         calls.append(host)
         return 0
 
