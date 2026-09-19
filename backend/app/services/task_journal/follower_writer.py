@@ -305,15 +305,19 @@ class JournalWriter:
         if key is None:
             return
         requestor = row.get("details", {}).get("requestor") if row.get("details") else None
-        if not requestor:
-            return
-        task_id = await repository.attach_requestor(
-            db,
-            key=key,
-            requestor=requestor,
-            actor_kind=actor_kind,
-            source=source,
-            actor_email=actor_email,
-        )
+        task_id = None
+        if requestor:
+            task_id = await repository.attach_requestor(
+                db,
+                key=key,
+                requestor=requestor,
+                actor_kind=actor_kind,
+                source=source,
+                actor_email=actor_email,
+            )
+        # A row the dashboard already claimed keeps its actor, and the lifecycle line still
+        # belongs to it; the link is by key, claimed or not.
+        if task_id is None:
+            task_id = await repository.find_task_by_key(db, key=key)
         if task_id and row.get("event_id"):
             await repository.link_log_to_task(db, event_id=row["event_id"], task_id=task_id)

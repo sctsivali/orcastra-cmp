@@ -522,6 +522,28 @@ async def update_action_by_session(
     )
 
 
+async def find_task_by_key(
+    db: AsyncSession, *, key: CorrelationKey, window_s: int = 120
+) -> Optional[str]:
+    """The newest task for a lifecycle frame's key, claimed or not, for the log link only.
+
+    Found live: the dashboard's own stop had claimed the row before its `instance-stopped`
+    frame arrived, `attach_requestor` rightly left the actor alone, and the lifecycle line
+    never reached the task's Log tab.
+    """
+    return returned_id(
+        await db.execute(
+            text(
+                "SELECT id FROM task_journal WHERE "
+                f"{_KEY_MATCH} AND kind = 'lxd_operation' "
+                "AND created_at >= now() - make_interval(secs => CAST(:window_s AS float8)) "
+                "ORDER BY created_at DESC LIMIT 1"
+            ),
+            {**_key_params(key), "window_s": float(window_s)},
+        )
+    )
+
+
 async def attach_requestor(
     db: AsyncSession,
     *,

@@ -194,6 +194,11 @@ def test_the_sink_writes_an_audit_record_and_the_stream_lands_on_the_same_row(lo
     assert len(life) == 1 and life[0]["actor_kind"] == "external"
     assert life[0]["message"] == "Instance web-01 stopped"
     assert life[0]["event_id"].startswith(f"lifecycle:{HOST}:")
+    # Live: the dashboard had claimed the row, so attach_requestor rightly left the actor
+    # alone, and the lifecycle line must still be linked to the task by key.
+    assert life[0]["task_id"] == task_id, "the lifecycle line belongs to the claimed task"
+    kept = _run(loop, _one(db, "SELECT actor_email, source, actor_kind FROM task_journal WHERE id = CAST(:id AS uuid)", id=task_id))
+    assert (kept.actor_email, kept.source, kept.actor_kind) == ("ops@example.test", "dashboard", "user")
     # The same lifecycle frame twice (a follower hand-over) is one row.
     _run(loop, writer.write_batch([{
         "type": "lifecycle", "host": HOST, "action": "instance-stopped", "name": "web-01",

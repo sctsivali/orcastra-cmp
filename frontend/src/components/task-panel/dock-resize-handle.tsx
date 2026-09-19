@@ -134,6 +134,8 @@ export function DockResizeHandle({ height, min, max, onChange, onCommit }: DockR
       onPointerDown={(event) => {
         if (event.button !== 0) return;
         event.preventDefault();
+        // A keyboard step still waiting to commit must not land after this pointer gesture.
+        window.clearTimeout(keyTimer.current);
         drag.current = { startY: event.clientY, startHeight: latest.current, last: latest.current };
         event.currentTarget.setPointerCapture(event.pointerId);
         event.currentTarget.setAttribute("data-dragging", "");
@@ -149,6 +151,7 @@ export function DockResizeHandle({ height, min, max, onChange, onCommit }: DockR
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
       onDoubleClick={() => {
+        window.clearTimeout(keyTimer.current);
         onChange(DOCK_DEFAULT);
         onCommit(DOCK_DEFAULT);
       }}
