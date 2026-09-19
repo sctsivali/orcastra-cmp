@@ -15,10 +15,10 @@ import {
   durationMs,
   formatDuration,
   kindLabel,
+  logSeverityDisplay,
   resourceHref,
-  severityTone,
   startedMs,
-  taskStatusTone,
+  taskStatusDisplay,
 } from "./task-format";
 
 // The cells of a task row. One implementation for the dock and the Operations page, so the
@@ -92,9 +92,10 @@ export function ProjectCell({ task }: TaskCellProps) {
 }
 
 export function StatusCell({ task }: TaskCellProps) {
+  const status = taskStatusDisplay(task.status);
   return (
     <TableCell className="whitespace-nowrap">
-      <Badge variant={taskStatusTone(task.status)}>{formatLabel(task.status)}</Badge>
+      <Badge variant={status.tone}>{status.label}</Badge>
       {task.status === "running" && task.progress ? (
         <TableSubText className="max-w-[10rem]">{task.progress}</TableSubText>
       ) : null}
@@ -145,10 +146,10 @@ export function DurationCell({ task, serverNow }: TaskCellProps & { serverNow: n
 
 /** A chip for error and warning; plain text for the two that need no attention. */
 export function SeverityCell({ severity }: { severity: LogSeverity }) {
-  const tone = severityTone(severity);
+  const display = logSeverityDisplay(severity);
   return (
     <TableCell className="whitespace-nowrap">
-      {tone ? <Badge variant={tone}>{formatLabel(severity)}</Badge> : formatLabel(severity)}
+      {display.tone ? <Badge variant={display.tone}>{display.label}</Badge> : display.label}
     </TableCell>
   );
 }

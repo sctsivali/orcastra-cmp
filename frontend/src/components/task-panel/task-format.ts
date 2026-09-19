@@ -25,25 +25,58 @@ export const STATUS_ORDER: readonly TaskStatus[] = [
 
 export const SEVERITY_ORDER: readonly LogSeverity[] = ["error", "warning", "notice", "info"];
 
+export interface TaskStatusDisplay {
+  label: string;
+  tone: BadgeTone;
+}
+
+const TASK_STATUS_DISPLAY: Record<TaskStatus, TaskStatusDisplay> = {
+  pending: { label: "Pending", tone: "neutral" },
+  running: { label: "Running", tone: "caution" },
+  success: { label: "Success", tone: "positive" },
+  failure: { label: "Failure", tone: "negative" },
+  cancelled: { label: "Cancelled", tone: "negative" },
+  lost: { label: "Lost", tone: "neutral" },
+};
+
+/** Operator-facing metadata. The normalized wire value remains unchanged everywhere else. */
+export function taskStatusDisplay(status: string): TaskStatusDisplay {
+  const normalized = status.trim().toLowerCase() as TaskStatus;
+  return TASK_STATUS_DISPLAY[normalized] ?? { label: formatLabel(status), tone: "neutral" };
+}
+
+export function taskStatusLabel(status: string): string {
+  return taskStatusDisplay(status).label;
+}
+
 export function taskStatusTone(status: TaskStatus): BadgeTone {
-  switch (status) {
-    case "success":
-      return "positive";
-    case "running":
-      return "caution";
-    case "failure":
-    case "cancelled":
-      return "negative";
-    default:
-      return "neutral";
-  }
+  return taskStatusDisplay(status).tone;
+}
+
+export interface LogSeverityDisplay {
+  label: string;
+  tone: BadgeTone | null;
+}
+
+const LOG_SEVERITY_DISPLAY: Record<LogSeverity, LogSeverityDisplay> = {
+  error: { label: "Error", tone: "negative" },
+  warning: { label: "Warning", tone: "caution" },
+  notice: { label: "Notice", tone: null },
+  info: { label: "Info", tone: null },
+};
+
+export function logSeverityDisplay(severity: string): LogSeverityDisplay {
+  const normalized = severity.trim().toLowerCase() as LogSeverity;
+  return LOG_SEVERITY_DISPLAY[normalized] ?? { label: formatLabel(severity), tone: null };
+}
+
+export function logSeverityLabel(severity: string): string {
+  return logSeverityDisplay(severity).label;
 }
 
 /** A chip only for the two severities that need attention. Everything else is plain text. */
 export function severityTone(severity: LogSeverity): BadgeTone | null {
-  if (severity === "error") return "negative";
-  if (severity === "warning") return "caution";
-  return null;
+  return logSeverityDisplay(severity).tone;
 }
 
 export function isTerminal(status: TaskStatus): boolean {

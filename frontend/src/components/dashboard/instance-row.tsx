@@ -42,6 +42,8 @@ import { useTerminalStore } from "@/lib/terminal-store";
 import { useConsoleStore } from "@/lib/console-store";
 import { VMInfo } from "@/types";
 import { useTenantAccess } from "@/hooks/use-tenant-access";
+import { instanceStatusDisplay } from "@/lib/instance-status";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 
 interface InstanceRowProps {
   vm: VMInfo;
@@ -59,6 +61,9 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   const [showMonitoring, setShowMonitoring] = React.useState(false);
   const { isPartner } = usePermissions();
   const { hasPermission } = useTenantAccess();
+  const { scopeKey } = useActorQueryScope();
+  const activeActorScopeRef = React.useRef(scopeKey);
+  activeActorScopeRef.current = scopeKey;
 
   // tenant permission checks for this instance
   const canOperate = hasPermission(vm.host, vm.project || "default", vm.name, "operate");
@@ -71,6 +76,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   const rowLabel = `${vm.name} in ${vm.project || "default"} on ${vm.host}`;
 
   const handleTagsChange = async (newTags: string[]) => {
+    const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
@@ -84,12 +90,14 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         instanceName: vm.name,
         tags: newTags,
         project: vm.project || "default" });
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "Tags Updated",
         description: `Tags for ${vm.name} have been updated.`,
         variant: "success" });
       onTagsUpdate?.();
     } catch (error) {
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "Failed to update tags",
         description: error instanceof Error ? error.message : "Unknown error",
@@ -98,6 +106,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   };
 
   const handleStart = async () => {
+    const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
@@ -109,11 +118,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
       await startVM.mutateAsync({
         name: vm.name,
         request: { host: vm.host, project: vm.project || "default" } });
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "VM Started",
         description: `${vm.name} is now starting.`,
         variant: "success" });
     } catch (error) {
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "Failed to start VM",
         description: error instanceof Error ? error.message : "Unknown error",
@@ -122,6 +133,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   };
 
   const handleStop = async () => {
+    const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
@@ -133,11 +145,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
       await stopVM.mutateAsync({
         name: vm.name,
         request: { host: vm.host, project: vm.project || "default" } });
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "VM Stopped",
         description: `${vm.name} is now stopping.`,
         variant: "success" });
     } catch (error) {
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "Failed to stop VM",
         description: error instanceof Error ? error.message : "Unknown error",
@@ -146,6 +160,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   };
 
   const handleRestart = async () => {
+    const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
@@ -157,11 +172,13 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
       await restartVM.mutateAsync({
         name: vm.name,
         request: { host: vm.host, project: vm.project || "default" } });
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "VM Restarted",
         description: `${vm.name} is now restarting.`,
         variant: "success" });
     } catch (error) {
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "Failed to restart VM",
         description: error instanceof Error ? error.message : "Unknown error",
@@ -170,6 +187,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
   };
 
   const handleDelete = async () => {
+    const requestActorScope = scopeKey;
     if (isReadOnly) {
       toast({
         title: "Read-Only Mode Active",
@@ -184,21 +202,26 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         host: vm.host,
         force: true,
         project: vm.project || "default" });
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "VM Deleted",
         description: `${vm.name} has been deleted.`,
         variant: "success" });
     } catch (error) {
+      if (activeActorScopeRef.current !== requestActorScope) return;
       toast({
         title: "Failed to delete VM",
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive" });
     } finally {
-      setIsDeleting(false);
+      if (activeActorScopeRef.current === requestActorScope) {
+        setIsDeleting(false);
+      }
     }
   };
 
-  const isRunning = vm.status === "Running";
+  const statusDisplay = instanceStatusDisplay(vm.status);
+  const isRunning = String(vm.status).toLowerCase() === "running";
   const isPending = startVM.isPending || stopVM.isPending || restartVM.isPending;
 
   return (
@@ -235,8 +258,8 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
               <Container className="h-4 w-4 text-muted-foreground flex-shrink-0" />
             )}
             <span className="text-sm font-medium truncate">{vm.name}</span>
-            <Badge variant={isRunning ? "success" : "secondary"} className="text-xs">
-              {vm.status}
+            <Badge variant={statusDisplay.tone} className="text-xs">
+              {statusDisplay.label}
             </Badge>
           </div>
           
@@ -440,7 +463,7 @@ export function InstanceRow({ vm, onTagsUpdate, isReadOnly = false }: InstanceRo
         instance={vm}
         isOpen={showMonitoring}
         onClose={() => setShowMonitoring(false)}
-        project="default"
+        project={vm.project || "default"}
       />
     </div>
   );

@@ -44,6 +44,7 @@ import { useRowFocus } from "@/hooks/use-row-focus";
 import { requestRowFocus } from "@/lib/row-focus";
 import { RowFocusNotice } from "@/components/ui/row-focus-notice";
 import { NodeLink } from "@/components/ui/node-link";
+import { networkStatusDisplay } from "@/lib/resource-status";
 
 /** One key for a row and for the create dialog's report of what it made. */
 const networkRowKey = (n: { node?: string | null; project?: string | null; name: string }) =>
@@ -78,7 +79,7 @@ const NETWORKS = defineTable<NetworkInfo>()({
       label: "Status",
       sort: (n) => n.status,
       facet: (n) => n.status,
-      facetSpec: { primary: true },
+      facetSpec: { primary: true, format: (status) => networkStatusDisplay(status).label },
     },
     {
       field: "managed",
@@ -295,6 +296,7 @@ function NetworksContent() {
                   const ipv4 = !rawIpv4 || rawIpv4 === "none" ? null : rawIpv4;
                   const rawIpv6 = network.config?.["ipv6.address"];
                   const ipv6 = !rawIpv6 || rawIpv6 === "none" ? null : rawIpv6;
+                  const status = networkStatusDisplay(network.status);
 
                   return (
                     <TableRow key={networkRowKey(network)} {...focus.rowProps(networkRowKey(network))}>
@@ -319,8 +321,8 @@ function NetworksContent() {
                       </TableCell>
                       <TableCell>
                         {network.status ? (
-                          <Badge variant={network.status === "Created" ? "default" : "secondary"}>
-                            {network.status}
+                          <Badge variant={status.tone}>
+                            {status.label}
                           </Badge>
                         ) : (
                           <TableEmptyValue label="No status" />
@@ -416,7 +418,7 @@ function networkSubject(network: NetworkInfo): UsedBySubject {
     usedBy: network.used_by ?? [],
     facts: [
       { label: "Type", value: formatLabel(network.type) },
-      { label: "Status", value: network.status },
+      { label: "Status", value: networkStatusDisplay(network.status).label },
       { label: "Managed", value: network.managed ? "Yes" : "No" },
       { label: "Node", value: <NodeLink clusterId={network.node} /> },
       { label: "IPv4", value: config["ipv4.address"] || EMPTY_VALUE },

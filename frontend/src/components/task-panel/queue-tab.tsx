@@ -9,11 +9,11 @@ import { OverflowText } from "@/components/ui/overflow-text";
 import { ReadErrorState } from "@/components/ui/read-error-state";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { TableLink } from "@/components/ui/table-link";
-import { formatLabel, toMillis } from "@/lib/utils";
+import { toMillis } from "@/lib/utils";
 import type { DueSchedule, QueueCluster, TaskRecord } from "@/types/tasks";
 import { useTaskQueue } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
-import { durationMs, formatDuration, startedMs, taskStatusTone } from "./task-format";
+import { durationMs, formatDuration, startedMs, taskStatusDisplay } from "./task-format";
 import type { TaskFeedSnapshot } from "./use-task-feed";
 
 const TICK_MS = 1_000;
@@ -41,6 +41,7 @@ function QueueRow({
   serverNow: number;
   onOpenTask: (id: string) => void;
 }) {
+  const status = taskStatusDisplay(task.status);
   // Running rows show how long they have run; waiting rows how long they have waited.
   const elapsed = task.status === "running" ? durationMs(task, serverNow) : null;
   const accepted = startedMs(task);
@@ -63,7 +64,7 @@ function QueueRow({
           </TableLink>
         )}
       </OverflowText>
-      <Badge variant={taskStatusTone(task.status)}>{formatLabel(task.status)}</Badge>
+      <Badge variant={status.tone}>{status.label}</Badge>
       <span className="min-w-[4rem] text-right tabular-nums text-muted-foreground">{timing}</span>
     </li>
   );

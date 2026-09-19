@@ -13,6 +13,7 @@ import { useTheme } from "../theme-provider";
 import { useLayout } from "../layout-provider";
 import { usePersonalization, useCurrentLogo } from "../personalization-provider";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useRouteIntent, linkIntentProps } from "@/components/navigation/route-intent";
 import { NAV_GROUPS, filterGroups, buildPrefetchMap } from "./nav-config";
 import { resolveActiveHref } from "./use-active-path";
@@ -38,8 +39,12 @@ export function Sidebar({ className }: SidebarProps) {
   const { isAdmin, isPartner, isTenant } = usePermissions();
   const pathname = usePathname();
   const queryClient = useQueryClient();
+  const { scopeKey } = useActorQueryScope();
 
-  const prefetchMap = React.useMemo(() => buildPrefetchMap(queryClient), [queryClient]);
+  const prefetchMap = React.useMemo(
+    () => buildPrefetchMap(queryClient, scopeKey, isPartner),
+    [isPartner, queryClient, scopeKey],
+  );
   const groups = React.useMemo(
     () => filterGroups(NAV_GROUPS, { isAdmin, isPartner, isTenant }),
     [isAdmin, isPartner, isTenant]

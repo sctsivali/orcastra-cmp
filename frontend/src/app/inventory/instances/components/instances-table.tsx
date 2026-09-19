@@ -20,6 +20,7 @@ import type { RowFocusState } from "@/hooks/use-row-focus";
 import { PendingCreateRows } from "./pending-create-rows";
 import { InstanceTableRow } from "./instance-table-row";
 import type { InstanceAction } from "./use-instance-actions";
+import { instanceStatusDisplay } from "@/lib/instance-status";
 
 
 // note: the facet fields are named `host` and `project` deliberately, matching both the
@@ -35,7 +36,7 @@ export const INSTANCES = defineTable<any>()({
       label: "Status",
       sort: (i) => i.status,
       facet: (i) => i.status,
-      facetSpec: { primary: true },
+      facetSpec: { primary: true, format: (status) => instanceStatusDisplay(status).label },
     },
     {
       field: "type",

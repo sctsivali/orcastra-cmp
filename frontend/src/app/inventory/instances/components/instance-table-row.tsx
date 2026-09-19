@@ -14,6 +14,7 @@ import { formatInstanceType } from "@/lib/utils";
 import type { VMInfo } from "@/types/api";
 import { instanceRowActions, type InstancePermission } from "./instance-row-actions";
 import { actionKey, type InstanceAction } from "./use-instance-actions";
+import { instanceStatusDisplay } from "@/lib/instance-status";
 
 export interface InstanceTableRowProps {
   instance: VMInfo;
@@ -90,19 +91,6 @@ function inFlightLabel(
   return null;
 }
 
-function getStatusColor(status: string) {
-  switch (status.toLowerCase()) {
-    case "running":
-      return "default";
-    case "stopped":
-      return "secondary";
-    case "frozen":
-      return "outline";
-    default:
-      return "destructive";
-  }
-}
-
 export function InstanceTableRow({
   instance,
   rowProps,
@@ -123,6 +111,7 @@ export function InstanceTableRow({
   const rowLabel = `${instance.name} in ${project} on ${instance.host}`;
   const rootDisk = rootDiskLabel(instance);
   const inFlight = inFlightLabel(instance, pendingActions, deletePending);
+  const statusDisplay = instanceStatusDisplay(instance.status);
 
   const actions = instanceRowActions({
     instance,
@@ -160,8 +149,8 @@ export function InstanceTableRow({
         </TableLink>
       </TableCell>
       <TableCell>
-        <Badge variant={getStatusColor(instance.status)}>
-          {instance.status}
+        <Badge variant={statusDisplay.tone}>
+          {statusDisplay.label}
         </Badge>
         {/* A closed menu hides the item's spinner, so the row itself reports what is running. */}
         {inFlight && <TableSubText>{inFlight}</TableSubText>}

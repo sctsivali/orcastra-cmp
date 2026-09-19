@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { api, projectAPI, instanceAPI, integrationsAPI } from "@/lib/api";
 import { queryKeys, useClusters } from "@/hooks/use-lxd";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useToast } from "@/hooks/use-toast";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -137,6 +138,7 @@ function RuleEditor({
   onRemove: (index: number) => void;
 }) {
   const [expanded, setExpanded] = useState(true);
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
 
   // find the selected cluster for display & data fetching
   const selectedCluster = clusters.find((c) => c.cluster_id === rule.cluster_id);
@@ -144,17 +146,17 @@ function RuleEditor({
 
   // fetch projects for this cluster (API expects cluster_id as host)
   const { data: projectsData, isLoading: projectsLoading } = useQuery({
-    queryKey: ["projects", hostId],
+    queryKey: queryKeys.projectsFor(scopeKey, hostId),
     queryFn: () => projectAPI.list(hostId),
-    enabled: !!hostId,
+    enabled: isAuthenticated && !!hostId,
     staleTime: 60_000,
   });
 
   // fetch instances for this cluster
   const { data: instancesData, isLoading: instancesLoading } = useQuery({
-    queryKey: queryKeys.instances(hostId),
+    queryKey: queryKeys.instancesFor(scopeKey, hostId),
     queryFn: () => instanceAPI.list(hostId),
-    enabled: !!hostId,
+    enabled: isAuthenticated && !!hostId,
     staleTime: 60_000,
   });
 

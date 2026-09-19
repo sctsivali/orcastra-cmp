@@ -5,33 +5,44 @@ import { AlertTriangle, Server } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { PartialReadNotice } from "@/components/ui/partial-read-notice";
+import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { LoadingLottiePageEnhanced } from "@/components/loading-lottie";
 import { useNodesStatus } from "@/hooks/use-lxd";
+import { usePermissions } from "@/hooks/use-permissions";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { APIError } from "@/types/api";
 import { HardwareAggregate, buildHardwareCategories } from "./components/hardware-aggregate";
-import { NodeHardwareList } from "./components/node-hardware-list";
 import { SoftwareInventory } from "./components/software-inventory";
+import { TenantInstanceTechnologies } from "./components/tenant-instance-technologies";
+import { useInstanceSpecifications } from "./use-instance-specifications";
 
-function PageHeader() {
+function PageHeader({ tenant = false }: { tenant?: boolean }) {
   return (
     <div>
       <h1 className="text-4xl font-bold mb-2">Technologies</h1>
       <p className="text-muted-foreground text-lg">
-        Explore the hardware and software powering the Orcastra platform
+        {tenant
+          ? "Review the resources assigned to the instances your account can access"
+          : "Explore the hardware and software powering the Orcastra platform"}
       </p>
     </div>
   );
 }
 
-export default function TechnologiesPage() {
+function PlatformTechnologies() {
   // important: through the owning hook, not a bare useQuery on the same key. This page
   // subscribed to ["nodes"] with no options at all, so whether its hardware totals ever
   // refreshed depended on whether some other component happened to be mounted in the same
   // tab session to carry the interval.
-  const { data: nodesResponse, isLoading, isError, refetch } = useNodesStatus();
+  const { data: nodesResponse, isLoading, isFetching, isError, refetch } = useNodesStatus();
 
   const nodes = nodesResponse?.nodes || [];
   const hardwareInfo = React.useMemo(() => buildHardwareCategories(nodes), [nodes]);
+  const unreachable = nodes.filter((node) => !node.connected);
+  const unreachableReasons = Object.fromEntries(
+    unreachable.map((node) => [node.name, node.error || "no reason reported"]),
+  );
 
   if (isLoading) {
     return (
@@ -82,11 +93,23 @@ export default function TechnologiesPage() {
 
         {/* Hardware Tab */}
         <TabsContent value="hardware" className="space-y-6 mt-6">
-          {hardwareInfo ? (
-            <>
-              <HardwareAggregate categories={hardwareInfo} />
-              <NodeHardwareList nodes={nodes} />
-            </>
+          <UnreachableNodesBanner
+            nodes={unreachable.map((node) => node.name)}
+            reasons={unreachableReasons}
+            noun="hardware readings"
+          />
+          {isError && nodesResponse ? (
+            <PartialReadNotice>
+              The latest refresh failed. The last successful hardware reading remains visible.
+            </PartialReadNotice>
+          ) : null}
+          {nodes.length > 0 && hardwareInfo ? (
+            <HardwareAggregate
+              categories={hardwareInfo}
+              nodes={nodes}
+              isRefreshing={isFetching}
+              refreshError={isError}
+            />
           ) : (
             <Card>
               <CardContent className="pt-6">
@@ -107,4 +130,86 @@ export default function TechnologiesPage() {
       </Tabs>
     </div>
   );
+}
+
+function TenantTechnologies() {
+  const { data, isLoading, isFetching, isError, error, refetch } = useInstanceSpecifications();
+
+  if (isLoading) {
+    return (
+      <div className="container py-8">
+        <LoadingLottiePageEnhanced context="instances" />
+      </div>
+    );
+  }
+
+  if (isError && !data) {
+    const denied = error instanceof APIError && (error.status === 401 || error.status === 403);
+    return (
+      <div className="container py-8 space-y-8">
+        <PageHeader tenant />
+        <Card>
+          <CardContent className="pt-6">
+            <EmptyState
+              icon={AlertTriangle}
+              title={denied ? "Instance specifications are not available" : "Could not load instance specifications"}
+              description={
+                denied
+                  ? "Your current session does not have access to this view. Sign in again or contact your organization administrator."
+                  : "The dashboard did not get an answer. Your instances may still be running normally."
+              }
+              action={
+                denied ? undefined : (
+                  <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                    Retry
+                  </Button>
+                )
+              }
+            />
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!data) {
+    return (
+      <div className="container py-8">
+        <LoadingLottiePageEnhanced context="instances" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="container py-8 space-y-8">
+      <PageHeader tenant />
+      {isError ? (
+        <PartialReadNotice>
+          The latest refresh failed. The last successful instance specifications remain visible.
+        </PartialReadNotice>
+      ) : null}
+      <TenantInstanceTechnologies
+        response={data}
+        isRefreshing={isFetching}
+        refreshError={isError}
+      />
+    </div>
+  );
+}
+
+export default function TechnologiesPage() {
+  const { isLoading, isPartner } = usePermissions();
+
+  if (isLoading) {
+    return (
+      <div className="container py-8">
+        <LoadingLottiePageEnhanced context="data" />
+      </div>
+    );
+  }
+
+  // Separate mounted trees are a security boundary as well as a presentation choice. A Tenant
+  // never mounts useNodesStatus, so the browser does not request platform inventory and briefly
+  // hide it after the response arrives.
+  return isPartner ? <PlatformTechnologies /> : <TenantTechnologies />;
 }

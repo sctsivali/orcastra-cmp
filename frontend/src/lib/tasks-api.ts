@@ -102,9 +102,15 @@ export const tasksAPI = {
    */
   // The console route answers 200 with `success: false` when the cluster did not act (its
   // ActionResponse idiom), so the outcome is read from the body, not the status.
-  killConsoleSession: async (instanceName: string, operationId: string, host: string): Promise<void> => {
+  killConsoleSession: async (
+    instanceName: string,
+    operationId: string,
+    host: string,
+    project: string,
+  ): Promise<void> => {
     const result = await fetchAPI<{ success?: boolean; error?: string | null; message?: string | null }>(
-      `/console/${seg(instanceName)}/active-sessions/${seg(operationId)}?host=${seg(host)}`,
+      `/console/${seg(instanceName)}/active-sessions/${seg(operationId)}` +
+        `?host=${seg(host)}&project=${seg(project || "default")}`,
       { method: "DELETE" },
     );
     if (result && result.success === false) {

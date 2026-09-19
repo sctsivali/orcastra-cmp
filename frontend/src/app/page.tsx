@@ -10,7 +10,7 @@ import { useCounterAnimation } from "@/hooks/use-counter-animation";
 import { usePersonalization } from "@/components/personalization-provider";
 import { DEFAULT_PERSONALIZATION } from "@/types/personalization";
 import { usePermissions } from "@/hooks/use-permissions";
-import { useAllProjects, useInstances, useNodesStatus } from "@/hooks/use-lxd";
+import { useAllProjects, useInstances, useNodeAvailability } from "@/hooks/use-lxd";
 
 export default function HomePage() {
   const { settings } = usePersonalization();
@@ -19,13 +19,12 @@ export default function HomePage() {
   // important: through the owning hooks. These were three bare useQuery calls on the same keys
   // with different options, so whether the counters on this page moved depended on which other
   // component happened to be mounted in the same tab session to carry the interval.
-  const { data: nodesData, isLoading: isLoadingNodes } = useNodesStatus();
+  const { data: nodesData, isLoading: isLoadingNodes } = useNodeAvailability();
   const { data: vmsData, isLoading: isLoadingVMs } = useInstances();
   const { data: projectsData, isLoading: isLoadingProjects } = useAllProjects();
 
-  const totalNodes = nodesData?.nodes?.length || 0;
-  // Only count nodes as connected if they are authenticated (has server_version)
-  const connectedNodes = nodesData?.nodes?.filter(n => n.connected && n.server_version).length || 0;
+  const totalNodes = nodesData?.total_count || 0;
+  const connectedNodes = nodesData?.online_count || 0;
   const totalVMs = vmsData?.total || 0;
   const runningVMs = vmsData?.vms?.filter(vm => vm.status === "Running").length || 0;
   const totalProjects = projectsData?.reduce((sum, node) => sum + (node.projects?.length || 0), 0) || 0;

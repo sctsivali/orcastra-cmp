@@ -142,15 +142,36 @@ jobs:
       # the project picker on the create form outgrew its popover on one fleet.
       - name: Long-list selects
         run: node scripts/checks/check-long-list-selects.mjs .
+      - name: Banner role gates
+        run: node scripts/checks/check-banner-role-gate.mjs .
       # The nav hides a route by role; the route itself must also refuse it. Two of the seven
       # partner destinations shipped with no page-level gate at all.
       - name: Role gates
         run: node scripts/checks/check-role-gates.mjs .
+      # A logout or role transition must clear every role-scoped query and live transport before
+      # the next identity can render. This keeps an in-process browser session from carrying
+      # operator inventory into a Tenant view.
+      - name: Auth transition isolation
+        run: node scripts/checks/check-auth-transition-isolation.mjs .
+      # Tenant UI must use the minimal availability and instance-specification projections; a
+      # direct node inventory read is both unnecessary and a host-capacity disclosure.
+      - name: Tenant node-inventory isolation
+        run: node scripts/checks/check-tenant-node-inventory.mjs .
+      # Controlled wire values stay lowercase, while the display layer owns their Title Case
+      # labels. The guard rejects a raw status field rendered back into JSX.
+      - name: Controlled status labels
+        run: node scripts/checks/check-status-display.mjs .
+      - name: Technologies role split
+        run: node scripts/checks/check-technologies-role-split.mjs .
+      - name: Instance live Metrics contract
+        run: node scripts/checks/check-instance-live-metrics.mjs .
       # A document reload anywhere in the console surface beacons kill-all-sessions, so it
       # takes out every other console and terminal the operator has open, not just the panel
       # that failed. Two of these shipped and were removed.
       - name: Console reloads
         run: node scripts/checks/check-no-console-reload.mjs .
+      - name: Console session project scope
+        run: node scripts/checks/check-console-session-project-scope.mjs .
       # useSearchParams opts a component out of prerendering, so Next needs a Suspense
       # boundary above it or `next build` fails on that route. Typecheck does not see it, so
       # this used to surface only at the Build step minutes later.
@@ -249,6 +270,9 @@ jobs:
       - name: Organization branding target
         run: node scripts/checks/check-org-branding-target.mjs .
 
+      - name: Terminal theme
+        run: node scripts/checks/check-terminal-theme.mjs .
+
       # An em dash joined the two halves of the stop dialog's warning, and the same character
       # was in 83 other places across the console, the API layer and the README. tsc and
       # eslint do not read English, so nothing saw it. Advisory for now: it reports and exits
@@ -256,6 +280,12 @@ jobs:
       # character and the rule that separates them is worth watching before it becomes a gate.
       - name: Prose typography
         run: node scripts/checks/check-prose-typography.mjs .
+
+      - name: Byte units
+        run: node scripts/checks/check-byte-units.mjs .
+
+      - name: Documentation index
+        run: node scripts/checks/check-doc-index.mjs .
 
       # The image picker's row list scrolled vertically in one box and horizontally in another,
       # so its horizontal scrollbar was painted below the last row and only appeared once the
@@ -287,3 +317,67 @@ jobs:
       - name: Lint commit messages
         working-directory: frontend
         run: npx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }}
+
+  browser-e2e:
+    name: Browser role and behavior QA
+    runs-on: ubuntu-latest
+    needs: frontend
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CI: 'true'
+      ORCASTRA_E2E_BASE_URL: http://127.0.0.1:2025
+      ORCASTRA_E2E_OUTPUT_DIR: ${{ runner.temp }}/orcastra-e2e/test-results
+      ORCASTRA_E2E_REPORT_DIR: ${{ runner.temp }}/orcastra-e2e/playwright-report
+      AUTH_SECRET: orcastra-e2e-only-secret-32-characters-minimum
+      NEXTAUTH_SECRET: orcastra-e2e-only-secret-32-characters-minimum
+      NEXTAUTH_URL: http://127.0.0.1:2025
+      AUTHENTIK_ISSUER: https://idp.invalid/application/o/orcastra/
+      AUTHENTIK_CLIENT_ID: orcastra-e2e-client
+      AUTHENTIK_CLIENT_SECRET: unused-e2e-client-secret
+      NEXT_PUBLIC_API_URL: ''
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install application dependencies
+        working-directory: frontend
+        run: npm ci
+
+      # Keep browser QA outside the production dependency graph. The pinned runner is installed
+      # only for this disposable job and neither package manifest is rewritten.
+      - name: Install pinned browser test runner
+        working-directory: frontend
+        run: npm install --no-save --no-package-lock @playwright/test@1.51.1
+
+      - name: Install Chromium
+        working-directory: frontend
+        run: ./node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Build production frontend
+        working-directory: frontend
+        run: npm run build
+
+      # The suite creates encrypted local Auth.js sessions and rejects every unexpected API call
+      # or mutation. No deployment credential or live Orcastra service is available to this job.
+      - name: Run role-scoped browser scenarios
+        working-directory: frontend
+        run: ./node_modules/.bin/playwright test --config=playwright.config.cjs
+
+      - name: Upload browser QA artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-artifacts
+          path: |
+            ${{ runner.temp }}/orcastra-e2e/playwright-report
+            ${{ runner.temp }}/orcastra-e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 7

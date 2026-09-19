@@ -280,8 +280,20 @@ test-frontend: ## Run the frontend checks that exist (typecheck + structural gua
 	@node scripts/checks/check-banner-role-gate.mjs
 	@echo "$(COLOR_GREEN)Checking role gates...$(COLOR_RESET)"
 	@node scripts/checks/check-role-gates.mjs
+	@echo "$(COLOR_GREEN)Checking auth transition isolation...$(COLOR_RESET)"
+	@node scripts/checks/check-auth-transition-isolation.mjs
+	@echo "$(COLOR_GREEN)Checking tenant node-inventory isolation...$(COLOR_RESET)"
+	@node scripts/checks/check-tenant-node-inventory.mjs
+	@echo "$(COLOR_GREEN)Checking controlled status labels...$(COLOR_RESET)"
+	@node scripts/checks/check-status-display.mjs
+	@echo "$(COLOR_GREEN)Checking Technologies role split...$(COLOR_RESET)"
+	@node scripts/checks/check-technologies-role-split.mjs
+	@echo "$(COLOR_GREEN)Checking instance live Metrics...$(COLOR_RESET)"
+	@node scripts/checks/check-instance-live-metrics.mjs
 	@echo "$(COLOR_GREEN)Checking console reloads...$(COLOR_RESET)"
 	@node scripts/checks/check-no-console-reload.mjs
+	@echo "$(COLOR_GREEN)Checking console session project scope...$(COLOR_RESET)"
+	@node scripts/checks/check-console-session-project-scope.mjs
 	@echo "$(COLOR_GREEN)Checking searchparams Suspense boundaries...$(COLOR_RESET)"
 	@node scripts/checks/check-searchparams-suspense.mjs
 	@echo "$(COLOR_GREEN)Checking table filter coverage...$(COLOR_RESET)"

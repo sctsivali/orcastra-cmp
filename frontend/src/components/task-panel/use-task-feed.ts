@@ -19,7 +19,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useSession } from "next-auth/react";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { getAccessToken } from "@/lib/api";
 import { getTasksWsUrl } from "@/lib/ws-url";
 import type { TaskFeedFrame } from "@/types/tasks";
@@ -62,6 +62,7 @@ const frameListeners = new Set<(frame: TaskFeedFrame) => void>();
 
 let refs = 0;
 let queryClient: QueryClient | null = null;
+let activeScopeKey: string | null = null;
 let socket: WebSocket | null = null;
 let attempt = 0;
 let retryTimer: Timer | null = null;
@@ -114,9 +115,9 @@ function wanted(): boolean {
 // ---------------------------------------------------------------------------------------------
 
 function invalidateAll(): void {
-  if (!queryClient) return;
-  void queryClient.invalidateQueries({ queryKey: taskKeys.all });
-  void queryClient.invalidateQueries({ queryKey: logKeys.all });
+  if (!queryClient || !activeScopeKey) return;
+  void queryClient.invalidateQueries({ queryKey: taskKeys.all(activeScopeKey) });
+  void queryClient.invalidateQueries({ queryKey: logKeys.all(activeScopeKey) });
 }
 
 function handleFrame(frame: TaskFeedFrame): void {
@@ -134,10 +135,14 @@ function handleFrame(frame: TaskFeedFrame): void {
       return;
     }
     case "task":
-      if (queryClient) upsertTaskInCaches(queryClient, frame.task);
+      if (queryClient && activeScopeKey) {
+        upsertTaskInCaches(queryClient, activeScopeKey, frame.task);
+      }
       return;
     case "log":
-      if (queryClient) appendLogInCaches(queryClient, frame.entry);
+      if (queryClient && activeScopeKey) {
+        appendLogInCaches(queryClient, activeScopeKey, frame.entry);
+      }
       return;
     case "follower":
       setSnapshot({ followerActive: frame.active });
@@ -330,8 +335,9 @@ function onVisibilityChange(): void {
   connect();
 }
 
-function acquire(client: QueryClient): void {
+function acquire(client: QueryClient, scopeKey: string): void {
   queryClient = client;
+  activeScopeKey = scopeKey;
   refs += 1;
   if (!visibilityBound && typeof document !== "undefined") {
     visibilityBound = true;
@@ -354,10 +360,20 @@ function release(): void {
   closeSocket();
   attempt = 0;
   helloCount = 0;
+  handshakeFailures = 0;
   paused = false;
+  halted = false;
+  haltedToken = null;
+  openedWithToken = null;
   silentReconnect = false;
   buffer = [];
-  snapshot = { ...IDLE, followerActive: snapshot.followerActive };
+  flushScheduled = false;
+  queryClient = null;
+  activeScopeKey = null;
+  // Actor changes use the same singleton. Nothing learned from the previous socket, including
+  // whether its worker follower was active or whether its token was rejected, may become the
+  // next actor's initial state.
+  snapshot = { ...IDLE };
   emit();
 }
 
@@ -412,14 +428,13 @@ export function subscribeTaskFrames(fn: (frame: TaskFeedFrame) => void): () => v
 /** Mounts the singleton socket while `enabled`; the panel is the one caller. */
 export function useTaskFeed(enabled: boolean): TaskFeedSnapshot {
   const client = useQueryClient();
-  const { data: session } = useSession();
-  const token = session?.accessToken ?? null;
+  const { scopeKey, accessToken: token } = useActorQueryScope();
 
   useEffect(() => {
     if (!enabled) return;
-    acquire(client);
+    acquire(client, scopeKey);
     return release;
-  }, [enabled, client]);
+  }, [enabled, client, scopeKey]);
 
   useEffect(() => {
     if (enabled) noteToken(token);

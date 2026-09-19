@@ -24,8 +24,12 @@ export {
   formatDuration,
   isTerminal,
   kindLabel,
+  logSeverityDisplay,
+  logSeverityLabel,
   progressPercent,
   resourceHref,
   startedMs,
+  taskStatusDisplay,
+  taskStatusLabel,
   taskStatusTone,
 } from "./task-format";

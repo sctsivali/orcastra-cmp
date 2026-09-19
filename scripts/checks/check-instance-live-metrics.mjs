@@ -1,0 +1,246 @@
+#!/usr/bin/env node
+/**
+ * Guard the instance detail split: Overview is static row detail, while Metrics owns live reads.
+ * The Monitoring chart is the one exception because its top-consumer row is deliberately partial
+ * and must opt into hydration. This check keeps that exception explicit and prevents a future
+ * cleanup from restoring an eager detail request for every dialog opening.
+ *
+ * Run: node scripts/checks/check-instance-live-metrics.mjs [repo-root]
+ */
+
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+const files = {
+  dialog: "frontend/src/components/instance-detail/instance-detail-dialog.tsx",
+  metrics: "frontend/src/components/instance-detail/instance-metrics-tab.tsx",
+  monitoring: "frontend/src/app/inventory/monitoring/monitoring-content.tsx",
+  overview: "frontend/src/components/instance-detail/instance-overview-tab.tsx",
+  queryConfig: "frontend/src/lib/query-config.ts",
+  queryScope: "frontend/src/hooks/use-query-scope.ts",
+  hooks: "frontend/src/hooks/use-lxd.ts",
+  types: "frontend/src/types/api.ts",
+  stream: "frontend/src/hooks/use-instance-stream.ts",
+  sidebar: "frontend/src/components/sidebar/nav-config.tsx",
+  tenantAccess: "frontend/src/components/tenant-access-dialog.tsx",
+  policyManagement: "frontend/src/components/policy-management-section.tsx",
+  pendingCreates: "frontend/src/lib/pending-creates.ts",
+  createForm: "frontend/src/components/instance-create-form.tsx",
+  instancesPage: "frontend/src/app/inventory/instances/page.tsx",
+  instancesTable: "frontend/src/app/inventory/instances/components/instances-table.tsx",
+  instanceRow: "frontend/src/app/inventory/instances/components/instance-table-row.tsx",
+  instanceActions: "frontend/src/app/inventory/instances/components/use-instance-actions.ts",
+  pendingRows: "frontend/src/app/inventory/instances/components/pending-create-rows.tsx",
+};
+
+const bodies = Object.fromEntries(
+  Object.entries(files).map(([name, file]) => [name, readFileSync(join(root, file), "utf8")]),
+);
+
+const checks = [
+  [
+    !existsSync(
+      join(root, "frontend/src/components/instance-detail/instance-resources-section.tsx"),
+    ),
+    "the retired Overview Resources section still exists",
+  ],
+  [
+    !/InstanceResourcesSection|title=["']Resources["']/.test(bodies.overview),
+    "Overview renders the retired Resources section",
+  ],
+  [
+    /isOpen && !!instance && hydrateDetail/.test(bodies.dialog),
+    "the detail request is not gated by the explicit hydrateDetail opt-in",
+  ],
+  [
+    /hydrateDetail=\{monitoringUiIsCurrent && !selectedListInstance && !!selectedTopConsumer\}/.test(
+      bodies.monitoring,
+    ),
+    "Monitoring does not limit hydration to an incomplete top-consumer summary",
+  ],
+  [
+    /tab === "metrics" && pageVisible && detail\.status === "Running"/.test(bodies.dialog),
+    "metrics are not gated by the open Metrics tab, visibility, and Running state",
+  ],
+  [
+    /live:\s*5 \* 1000/.test(bodies.queryConfig) &&
+      /live:\s*3 \* POLL_MS\.live/.test(bodies.queryConfig),
+    "live metrics must poll at five seconds and become stale after three intervals",
+  ],
+  [
+    /backingOffInterval\(POLL_MS\.live/.test(bodies.hooks) &&
+      /401 \|\| error\.status === 403 \|\| error\.status === 429/.test(bodies.hooks) &&
+      /query\.state\.data\.status !== "Running"/.test(bodies.hooks) &&
+      /refetchIntervalInBackground:\s*false/.test(bodies.hooks),
+    "the metrics query lost backoff, terminal-error, stopped-instance, or background guards",
+  ],
+  [
+    /queryKeys\.instanceMetrics\(scopeKey, host, instanceName, project\)/.test(bodies.hooks) &&
+      /queryKeys\.instanceDetail\(scopeKey, host, effectiveProject, name\)/.test(bodies.hooks) &&
+      /queryKeys\.vmsFor\(scopeKey, host, status\)/.test(bodies.hooks) &&
+      /queryKeys\.vmsFor\(actorScope, undefined, undefined\)/.test(bodies.monitoring) &&
+      /user\?\.id \?\? user\?\.email/.test(bodies.queryScope) &&
+      /user\?\.groups/.test(bodies.queryScope),
+    "live Metrics, Top Consumer hydration, or its VM list is not isolated by actor scope",
+  ],
+  [
+    !/\["vms", \{ host: undefined, status: undefined \}\]/.test(bodies.monitoring),
+    "Monitoring still reads or writes the unscoped all-VM cache key",
+  ],
+  [
+    /queryKeys\.instancesFor\(scopeKey, host, opts\?\.project\)/.test(bodies.hooks) &&
+      /queryKey: \["instances", scopeKey\]/.test(bodies.stream) &&
+      /actor === scopeKey/.test(bodies.stream) &&
+      /queryKeys\.instancesFor\(actorScope, undefined\)/.test(bodies.sidebar) &&
+      /queryKeys\.instancesFor\(scopeKey, hostId\)/.test(bodies.tenantAccess) &&
+      /queryKeys\.instancesFor\(scopeKey, hostId\)/.test(bodies.policyManagement),
+    "an instance-list producer or consumer is not isolated by actor scope",
+  ],
+  [
+    /let active = true/.test(bodies.stream) &&
+      /reconnectTimers\.forEach\(clearTimeout\)/.test(bodies.stream) &&
+      /ipRetryTimers\.forEach\(clearTimeout\)/.test(bodies.stream) &&
+      /conn\.ws\.onclose = null/.test(bodies.stream) &&
+      /active = false/.test(bodies.stream),
+    "the instance event stream can survive an actor change through a socket or retry timer",
+  ],
+  [
+    !/queryKey:\s*\["instances",\s*(?:undefined|host|hostId)\]/.test(
+      [bodies.stream, bodies.sidebar, bodies.tenantAccess, bodies.policyManagement].join("\n"),
+    ),
+    "a concrete instance-list query still uses an unscoped browser-cache key",
+  ],
+  [
+    /previousActorScopeRef\.current === actorScope/.test(bodies.monitoring) &&
+      /setInstanceDialogOpen\(false\)/.test(bodies.monitoring) &&
+      /setAllInstances\(\[\]\)/.test(bodies.monitoring) &&
+      /setSelectedTopConsumer\(null\)/.test(bodies.monitoring) &&
+      /setSelectedListInstance\(null\)/.test(bodies.monitoring) &&
+      /setSelectedNode\("all"\)/.test(bodies.monitoring) &&
+      /setVisibleNodes\(\{\}\)/.test(bodies.monitoring) &&
+      /setZoomLevel\(1\)/.test(bodies.monitoring) &&
+      /open=\{monitoringUiIsCurrent && instanceDialogOpen\}/.test(bodies.monitoring) &&
+      /activeActorScopeRef\.current !== requestActorScope/.test(bodies.monitoring),
+    "Monitoring dialogs or node/chart selections can retain another actor's local state",
+  ],
+  [
+    /key=\{`\$\{instance\.host\}:\$\{project\}:\$\{instance\.name\}`\}/.test(
+      bodies.monitoring,
+    ) &&
+      /\{instance\.host\} \/ \{project\}/.test(bodies.monitoring) &&
+      /project \$\{project\}`\}/.test(bodies.monitoring) &&
+      /key=\{keyFor\(instance\.host, instance\.project \|\| "default", instance\.name\)\}/.test(
+        bodies.instancesTable,
+      ) &&
+      /const rowLabel = `\$\{instance\.name\} in \$\{project\} on \$\{instance\.host\}`/.test(
+        bodies.instanceRow,
+      ),
+    "same-named instances must keep project-qualified React and accessible identities",
+  ],
+  [
+    /const actionUiIsCurrent = actionUiActorScope === scopeKey/.test(bodies.instanceActions) &&
+      /deleteTarget: actionUiIsCurrent \? deleteTarget : null/.test(
+        bodies.instanceActions,
+      ) &&
+      /const currentSelectedInstance = selectionIsCurrent \? selectedInstance : null/.test(
+        bodies.instancesPage,
+      ) &&
+      /setDeleteTarget\(null\)/.test(bodies.instanceActions) &&
+      /setRebuildTarget\(null\)/.test(bodies.instanceActions) &&
+      /setCopyTarget\(null\)/.test(bodies.instanceActions) &&
+      /setSelectedInstance\(null\)/.test(bodies.instancesPage) &&
+      /setConfirmAction\(\{[\s\S]{0,160}open: false/.test(bodies.instanceActions) &&
+      /activeActorScopeRef\.current !== scopeKey/.test(bodies.instanceActions),
+    "Instances action targets need render-time actor gates and transition cleanup",
+  ],
+  [
+    /type MonitoringDisplaySnapshot/.test(bodies.monitoring) &&
+      /isPaused && pausedSnapshot\?\.actorScope === actorScope/.test(bodies.monitoring) &&
+      /const dashboardData = isPaused \? frozenSnapshot\?\.dashboard : liveDashboardData/.test(
+        bodies.monitoring,
+      ) &&
+      /const historyData = isPaused \? frozenSnapshot\?\.history : liveHistoryData/.test(
+        bodies.monitoring,
+      ) &&
+      /Promise\.allSettled/.test(bodies.monitoring) &&
+      /setPausedSnapshot\(\{[\s\S]{0,700}dashboardState\?\.data \?\? previous\?\.dashboard/.test(
+        bodies.monitoring,
+      ) &&
+      /cancelQueries\(\{[\s\S]{0,100}monitoring[\s\S]{0,100}dashboard/.test(
+        bodies.monitoring,
+      ),
+    "Pause must freeze displayed Monitoring payloads and manual refresh must replace the snapshot",
+  ],
+  [
+    /pendingByActor = new Map<string, PendingCreate\[\]>/.test(bodies.pendingCreates) &&
+      /subscribePending\(actorScope: string, listener: Listener\)/.test(bodies.pendingCreates) &&
+      /getPendingSnapshot\(actorScope: string\)/.test(bodies.pendingCreates) &&
+      /addPendingCreate\(\s*actorScope: string,/.test(bodies.pendingCreates) &&
+      /removePendingCreate\(actorScope: string, id: string\)/.test(bodies.pendingCreates),
+    "the module-global pending-create registry is not partitioned by actor",
+  ],
+  [
+    /subscribePending\(scopeKey, listener\)/.test(bodies.stream) &&
+      /getPendingSnapshot\(scopeKey\)/.test(bodies.stream) &&
+      /addPendingCreate\(scopeKey, \{/.test(bodies.createForm) &&
+      /resolvePendingCreate\(scopeKey, p\.id\)/.test(bodies.instancesPage) &&
+      /removePendingCreate\(scopeKey, p\.id\)/.test(bodies.pendingRows),
+    "a pending-create producer or consumer can cross actor scope",
+  ],
+  [
+    /<LiveTimestamp/.test(bodies.metrics) &&
+      /staleAfterMs=\{STALE_AFTER_MS\.live\}/.test(bodies.metrics) &&
+      /<RefreshButton/.test(bodies.metrics) &&
+      /Showing the last successful readings/.test(bodies.metrics),
+    "the Metrics panel lost freshness, manual refresh, or last-good error feedback",
+  ],
+  [
+    /refetchMetrics\(\{ throwOnError: true \}\)/.test(bodies.dialog),
+    "manual metrics refresh must reject so RefreshButton can report a failed request",
+  ],
+  [
+    /instance\.status === "Running" \? metrics\?\.status \?\? instance\.status : instance\.status/.test(
+      bodies.metrics,
+    ) &&
+      /instance\.status === "Running" && !!metrics && metrics\.status !== "Running"/.test(
+        bodies.metrics,
+      ) &&
+      /label="Check instance metrics again"/.test(bodies.metrics),
+    "cached Running metrics must not override a current stopped instance, while fresh stopped metrics must win over a stale Running row",
+  ],
+  [
+    !/metricsSampleCount|trackedMetricsIdentity|lastMetricsTimestamp|isCpuCalculating/.test(
+      bodies.dialog,
+    ) &&
+      /metrics\.cpu_sample_status === "calculating"/.test(bodies.metrics) &&
+      /metrics\.cpu_sample_status === "unavailable"/.test(bodies.metrics),
+    "CPU readiness must use the server contract rather than a local sample-count heuristic",
+  ],
+  [
+    /cpu_sample_status: InstanceCpuSampleStatus/.test(bodies.types) &&
+      /unavailable_sections: InstanceMetricSection\[\]/.test(bodies.types) &&
+      /"ready"[\s\S]{0,100}"calculating"[\s\S]{0,100}"unavailable"[\s\S]{0,100}"not_applicable"/.test(
+        bodies.types,
+      ),
+    "the frontend InstanceMetrics type must preserve the server readiness and availability contract",
+  ],
+  [
+    /new Set\(metrics\.unavailable_sections\)/.test(bodies.metrics) &&
+      /<PartialReadNotice>/.test(bodies.metrics) &&
+      /formatSectionList\(metrics\.unavailable_sections\)/.test(bodies.metrics) &&
+      /allSectionsUnavailable/.test(bodies.metrics),
+    "partial and fully unavailable metric sections must remain distinct and name the missing readings",
+  ],
+];
+
+const failures = checks.filter(([passed]) => !passed).map(([, reason]) => reason);
+if (failures.length > 0) {
+  console.error(`instance live metrics: ${failures.length} failure(s)`);
+  for (const failure of failures) console.error(`  ${failure}`);
+  process.exit(1);
+}
+
+console.log(`instance live metrics: ${checks.length} contracts verified`);

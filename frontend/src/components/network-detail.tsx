@@ -32,6 +32,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { Role } from "@/types/rbac";
 import { NetworkInfo } from "@/types/api";
 import { formatBytes } from "@/lib/utils";
+import { networkStatusDisplay } from "@/lib/resource-status";
 import { Network, Box, Layers, Trash2, Loader2 } from "lucide-react";
 
 interface NetworkDetailProps {
@@ -302,7 +303,9 @@ export function NetworkDetail({ name, host, project }: NetworkDetailProps) {
               ? `${tx} (${counters.packets_sent ?? 0} packets)`
               : "-"}
           </Field>
-          <Field label="Status">{network.status || "-"}</Field>
+          <Field label="Status">
+            {network.status ? networkStatusDisplay(network.status).label : "-"}
+          </Field>
           <Field label="Managed">{network.managed ? "Yes" : "No"}</Field>
           <Field label="Used by profiles">
             {profiles.length === 0 ? (

@@ -9,7 +9,9 @@
  * appears (or the operation fails).
  *
  * Kept outside React (and outside React Query) so it survives the navigation
- * from the create page to the list page.
+ * from the create page to the list page. Entries and subscriptions are scoped
+ * by authenticated actor because this module also survives sign-out/sign-in
+ * transitions in the same browser document.
  */
 import { requestRowFocus } from "@/lib/row-focus";
 
@@ -56,22 +58,26 @@ export function isStalePending(
 
 type Listener = () => void;
 
-let pending: PendingCreate[] = [];
-const listeners = new Set<Listener>();
+const EMPTY_PENDING: PendingCreate[] = [];
+const pendingByActor = new Map<string, PendingCreate[]>();
+const listenersByActor = new Map<string, Set<Listener>>();
 
-function emit() {
-  for (const l of listeners) l();
+function emit(actorScope: string) {
+  for (const listener of listenersByActor.get(actorScope) ?? []) listener();
 }
 
-export function subscribePending(listener: Listener): () => void {
+export function subscribePending(actorScope: string, listener: Listener): () => void {
+  const listeners = listenersByActor.get(actorScope) ?? new Set<Listener>();
   listeners.add(listener);
+  listenersByActor.set(actorScope, listeners);
   return () => {
     listeners.delete(listener);
+    if (listeners.size === 0) listenersByActor.delete(actorScope);
   };
 }
 
-export function getPendingSnapshot(): PendingCreate[] {
-  return pending;
+export function getPendingSnapshot(actorScope: string): PendingCreate[] {
+  return pendingByActor.get(actorScope) ?? EMPTY_PENDING;
 }
 
 export function keyFor(host: string, project: string, name: string): string {
@@ -79,6 +85,7 @@ export function keyFor(host: string, project: string, name: string): string {
 }
 
 export function addPendingCreate(
+  actorScope: string,
   input: Omit<PendingCreate, "id" | "createdAt"> & { createdAt?: number },
 ): void {
   const id = keyFor(input.host, input.project, input.name);
@@ -89,25 +96,36 @@ export function addPendingCreate(
     createdAt: input.createdAt ?? Date.now(),
   };
   // Replace any existing entry with the same key, keep newest first.
-  pending = [entry, ...pending.filter((p) => p.id !== id)];
-  emit();
+  const pending = getPendingSnapshot(actorScope);
+  pendingByActor.set(actorScope, [entry, ...pending.filter((p) => p.id !== id)]);
+  emit(actorScope);
 }
 
-export function updatePendingCreate(id: string, patch: Partial<PendingCreate>): void {
+export function updatePendingCreate(
+  actorScope: string,
+  id: string,
+  patch: Partial<PendingCreate>,
+): void {
+  const pending = getPendingSnapshot(actorScope);
   let changed = false;
-  pending = pending.map((p) => {
+  const next = pending.map((p) => {
     if (p.id !== id) return p;
     changed = true;
     return { ...p, ...patch };
   });
-  if (changed) emit();
+  if (changed) {
+    pendingByActor.set(actorScope, next);
+    emit(actorScope);
+  }
 }
 
-export function removePendingCreate(id: string): void {
+export function removePendingCreate(actorScope: string, id: string): void {
+  const pending = getPendingSnapshot(actorScope);
   const next = pending.filter((p) => p.id !== id);
   if (next.length !== pending.length) {
-    pending = next;
-    emit();
+    if (next.length > 0) pendingByActor.set(actorScope, next);
+    else pendingByActor.delete(actorScope);
+    emit(actorScope);
   }
 }
 
@@ -120,9 +138,9 @@ export function removePendingCreate(id: string): void {
  * accident. The freshness the focus trusts is the placeholder's own createdAt: the list that
  * resolved it is by definition newer.
  */
-export function resolvePendingCreate(id: string): void {
-  const entry = pending.find((p) => p.id === id);
+export function resolvePendingCreate(actorScope: string, id: string): void {
+  const entry = getPendingSnapshot(actorScope).find((p) => p.id === id);
   if (!entry) return;
-  removePendingCreate(id);
+  removePendingCreate(actorScope, id);
   requestRowFocus("instances", entry.id, entry.name, { at: entry.createdAt });
 }
