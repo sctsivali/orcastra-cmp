@@ -191,6 +191,28 @@ ACTION_CATEGORIES = {
     "lxd.connection.reconnect": EventCategory.LXD_INFRA,
     # Cluster management
     "cluster.location.update": EventCategory.ADMIN,
+
+    # The task journal behind the bottom panel. Cancelling ends work someone else started, and
+    # the follower's election and loss are the two facts an operator reads when the panel says
+    # "Journal paused".
+    "task.cancel": EventCategory.LXD_INFRA,
+    "task.journal.prune": EventCategory.ADMIN,
+    "task.journal.follower.elected": EventCategory.ADMIN,
+    "task.journal.follower.lost": EventCategory.ADMIN,
+    # Dashboard uploads had no audit record at all; these two are the accepted and terminal
+    # records the journal turns into an upload task.
+    "image.upload.import": EventCategory.LXD_INFRA,
+    "storage.iso.upload.import": EventCategory.STORAGE,
+    # Emitted for a long time without a registration, so they filed under LXD_INFRA/MEDIUM by
+    # accident. Registered here so the cluster log's category column says what they are.
+    "audit.view": EventCategory.ADMIN,
+    "extension.version.publish": EventCategory.SETTINGS,
+    "file.push": EventCategory.ADMIN,
+    "instance.rebuild": EventCategory.LXD_INFRA,
+    "instance.autostart": EventCategory.LXD_INFRA,
+    "instance.nic.address": EventCategory.NETWORK,
+    "integration.mcp.tool_call": EventCategory.ADMIN,
+    "rbac.access_denied": EventCategory.IDENTITY,
 }
 
 # High severity actions
@@ -254,6 +276,10 @@ HIGH_SEVERITY_ACTIONS = {
     "lxd.connection.establish",
     "lxd.connection.remove",
     "lxd.connection.reconnect",
+    # Ends work another operator started.
+    "task.cancel",
+    "instance.rebuild",
+    "file.push",
 }
 
 

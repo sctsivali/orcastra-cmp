@@ -25,6 +25,7 @@ from app.models import db_models
 # tables must be imported here.
 from app.models import extension_models  # noqa: F401
 from app.models import snapshot_schedule_models  # noqa: F401
+from app.models import task_journal_models  # noqa: F401
 
 # Alembic Config object
 config = context.config

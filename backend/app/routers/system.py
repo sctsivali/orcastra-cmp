@@ -49,6 +49,8 @@ class SystemSettings(BaseModel):
     # This endpoint is already polled every 60 seconds for read_only_mode, so the console learns
     # what this deployment can do without a second request or a probe against a missing route.
     snapshot_schedules_enabled: bool
+    # The task panel is mounted only when the journal is on; the console hides the dock otherwise.
+    task_journal_enabled: bool
 
 
 class VersionInfo(BaseModel):
@@ -97,6 +99,7 @@ async def get_system_settings():
         api_version=settings.api_version,
         debug=settings.debug,
         snapshot_schedules_enabled=settings.snapshot_schedules_enabled,
+        task_journal_enabled=settings.task_journal_enabled,
     )
 
 

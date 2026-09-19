@@ -212,6 +212,40 @@ class Settings(BaseSettings):
         description="How many due schedules one worker claims per tick."
     )
 
+    # ── Task journal (the bottom panel's Tasks, Queue and Cluster Log) ─────────────────────────
+    # On by default: it only reads the clusters and writes the dashboard's own database. One flag
+    # gates the follower, the activity sink, the prune loop and the routes together, so a
+    # deployment that has turned it off has no surface at all rather than one that answers but
+    # never fills.
+    task_journal_enabled: bool = Field(
+        default=True,
+        alias="TASK_JOURNAL_ENABLED",
+        description="Journal LXD operations and dashboard activity into Postgres and serve the task panel."
+    )
+    task_journal_retention_days: int = Field(
+        default=30,
+        alias="TASK_JOURNAL_RETENTION_DAYS",
+        description="Days a task row is kept before the prune loop removes it."
+    )
+    cluster_log_retention_days: int = Field(
+        default=30,
+        alias="CLUSTER_LOG_RETENTION_DAYS",
+        description="Days a cluster log line is kept before the prune loop removes it."
+    )
+    task_journal_follower_retry_seconds: int = Field(
+        default=15,
+        alias="TASK_JOURNAL_FOLLOWER_RETRY_SECONDS",
+        description="How often a worker that does not hold the follower lock tries to take it."
+    )
+    # important: a cluster registered read-only for inspection (a partner's production cluster in a
+    # development deployment) must not have its operations copied into this database, and must
+    # never become a cancel target. Names here are never subscribed, seeded or listed.
+    task_journal_exclude_clusters: str = Field(
+        default="",
+        alias="TASK_JOURNAL_EXCLUDE_CLUSTERS",
+        description="Comma-separated cluster ids the task journal never follows."
+    )
+
     # ── MCP (Model Context Protocol) server ────────────────────────────────────────────────────
     # On, with an off switch kept for an operator who wants one.
     #

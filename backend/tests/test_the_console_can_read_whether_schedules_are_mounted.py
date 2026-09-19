@@ -32,6 +32,7 @@ def _read(monkeypatch, *, enabled: bool) -> SystemSettings:
             api_version="1.0",
             debug=False,
             snapshot_schedules_enabled=enabled,
+            task_journal_enabled=True,
         ),
     )
     return asyncio.run(system.get_system_settings())
