@@ -182,6 +182,7 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
         name, host, project = row.instance_name, row.cluster_id, row.project
         mode, source, cloud_init = row.mode, row.source, row.cloud_init
 
+    op_id: Optional[str] = None
     try:
         # 1. Stop (rebuild requires the instance stopped). Force-stop covers a
         #    running or frozen guest.
@@ -215,16 +216,16 @@ async def _run_rebuild(job_id: str, run_provisioning: bool) -> None:
 
         activity_logger.log_activity(
             action="instance.rebuild", target_type="instance", target_id=name,
-            target_host=host, result="success",
-            details={"mode": mode, "job_id": job_id},
+            target_host=host, target_project=project, result="success",
+            details={"mode": mode, "job_id": job_id, "operation_id": op_id, "project": project},
         )
         logger.info("Rebuild job %s completed: instance=%s mode=%s", job_id, name, mode)
     except Exception as e:  # noqa: BLE001 - record the failure for the operator
         await _set_status(job_id, "failed", error=str(e)[:1000])
         activity_logger.log_activity(
             action="instance.rebuild", target_type="instance", target_id=name,
-            target_host=host, result="failure", error_message=str(e),
-            details={"mode": mode, "job_id": job_id},
+            target_host=host, target_project=project, result="failure", error_message=str(e),
+            details={"mode": mode, "job_id": job_id, "operation_id": op_id, "project": project},
         )
         logger.error("Rebuild job %s failed: instance=%s error=%s", job_id, name, e)
 

@@ -415,6 +415,7 @@ async def create_snapshot(
         "instance.snapshot.create", instance_name, body.host, body.project,
         result="success" if outcome.get("settled") else "accepted",
         details={
+            "operation_id": operation_id,
             "snapshot": snapshot_name,
             "expires_at": expires_at,
             "stateful": body.stateful,
@@ -555,6 +556,7 @@ async def delete_snapshot(
         "instance.snapshot.delete", instance_name, host, project,
         result="success" if outcome.get("settled") else "accepted",
         details={
+            "operation_id": operation_id,
             "snapshot": snapshot_name,
             "requester": user.email or user.user_id,
             "settled": outcome.get("settled"),
@@ -712,6 +714,7 @@ async def restore_snapshot(
         "instance.snapshot.restore", instance_name, body.host, body.project,
         result="success" if outcome.get("settled") else "accepted",
         details={
+            "operation_id": operation_id,
             "snapshot": snapshot_name,
             "safety_snapshot": safety_name,
             "requester": user.email or user.user_id,

@@ -1,0 +1,193 @@
+import type { BadgeTone } from "@/components/ui/badge";
+import { inventoryLinks } from "@/lib/inventory-links";
+import { formatLabel, toMillis } from "@/lib/utils";
+import type { ClusterLogEntry, LogSeverity, TaskRecord, TaskStatus } from "@/types/tasks";
+
+// Display rules for a task row, shared by the dock, the detail dialog and the Operations page,
+// so the three surfaces cannot disagree on a tone, a duration or an actor's name.
+
+export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
+  "success",
+  "failure",
+  "cancelled",
+  "lost",
+]);
+
+/** The facet order for the Status column: what needs attention first. */
+export const STATUS_ORDER: readonly TaskStatus[] = [
+  "running",
+  "pending",
+  "failure",
+  "cancelled",
+  "lost",
+  "success",
+];
+
+export const SEVERITY_ORDER: readonly LogSeverity[] = ["error", "warning", "notice", "info"];
+
+export function taskStatusTone(status: TaskStatus): BadgeTone {
+  switch (status) {
+    case "success":
+      return "positive";
+    case "running":
+      return "caution";
+    case "failure":
+    case "cancelled":
+      return "negative";
+    default:
+      return "neutral";
+  }
+}
+
+/** A chip only for the two severities that need attention. Everything else is plain text. */
+export function severityTone(severity: LogSeverity): BadgeTone | null {
+  if (severity === "error") return "negative";
+  if (severity === "warning") return "caution";
+  return null;
+}
+
+export function isTerminal(status: TaskStatus): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
+
+export function isWebsocketClass(task: Pick<TaskRecord, "operation_class">): boolean {
+  return task.operation_class === "websocket";
+}
+
+/** When the task started, falling back to when the journal first saw it. */
+export function startedMs(task: Pick<TaskRecord, "started_at" | "created_at">): number | null {
+  return toMillis(task.started_at) ?? toMillis(task.created_at);
+}
+
+/**
+ * Milliseconds the task has run. Live against `serverNow` while running, fixed once finished,
+ * null while pending because nothing has started.
+ */
+export function durationMs(
+  task: Pick<TaskRecord, "status" | "started_at" | "created_at" | "finished_at" | "duration_ms">,
+  serverNow?: number,
+): number | null {
+  if (task.status === "pending") return null;
+  if (task.duration_ms !== null && task.duration_ms !== undefined && isTerminal(task.status)) {
+    return task.duration_ms;
+  }
+  const started = startedMs(task);
+  if (started === null) return null;
+  const finished = toMillis(task.finished_at);
+  if (finished !== null) return Math.max(0, finished - started);
+  if (task.status !== "running") return null;
+  const now = serverNow ?? Date.now();
+  return Math.max(0, now - started);
+}
+
+export function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 60) return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
+export function actorLabel(
+  task: Pick<TaskRecord, "actor_kind" | "actor_email" | "api_key_id" | "requestor">,
+): string {
+  switch (task.actor_kind) {
+    case "user":
+      return task.actor_email ?? "Unknown user";
+    case "api_key":
+      return task.api_key_id ? `API key ${task.api_key_id}` : "API key";
+    case "system":
+      return "System";
+    default:
+      return task.requestor?.username ?? "Not attributed";
+  }
+}
+
+/** The log row's actor. A log row carries no requestor, so an external actor is just that. */
+export function logActorLabel(
+  entry: Pick<ClusterLogEntry, "actor_kind" | "actor_email" | "api_key_id">,
+): string {
+  switch (entry.actor_kind) {
+    case "user":
+      return entry.actor_email ?? "Unknown user";
+    case "api_key":
+      return entry.api_key_id ? `API key ${entry.api_key_id}` : "API key";
+    case "system":
+      return "System";
+    default:
+      return "External";
+  }
+}
+
+export function actorSubText(
+  task: Pick<TaskRecord, "actor_kind" | "actor_role" | "source" | "requestor">,
+): string {
+  switch (task.actor_kind) {
+    case "user":
+      return task.actor_role ? `${formatLabel(task.actor_role)} · ${task.source}` : task.source;
+    case "external":
+      return task.requestor?.protocol ?? "cli";
+    default:
+      return task.source;
+  }
+}
+
+/** The filtered list the task's resource lives in, or null when there is no such list. */
+export function resourceHref(
+  task: Pick<TaskRecord, "resource_type" | "resource_name" | "cluster_id" | "project">,
+): string | null {
+  const name = task.resource_name;
+  if (!name) return null;
+  const node = task.cluster_id;
+  const project = task.project;
+  switch (task.resource_type) {
+    case "instance":
+      return inventoryLinks.instances({ q: name, host: node, project });
+    case "image":
+      return inventoryLinks.images({ q: name, node, project });
+    case "profile":
+      return inventoryLinks.profiles({ q: name, node, project });
+    case "storage_pool":
+      return inventoryLinks.storagePools({ q: name, node });
+    case "storage_volume":
+      return inventoryLinks.storageVolumes({ q: name, node });
+    case "network":
+      return inventoryLinks.networkDetail(name, node, project);
+    case "network_acl":
+      return inventoryLinks.networkAcls({ q: name, node });
+    default:
+      return null;
+  }
+}
+
+/** The first `NN%` in a progress string, clamped to 0..100. Mirrors vocabulary.progress_percent. */
+export function progressPercent(progress: string | null | undefined): number | null {
+  if (!progress) return null;
+  const match = /(\d{1,3})%/.exec(progress);
+  if (!match) return null;
+  return Math.max(0, Math.min(100, Number(match[1])));
+}
+
+/** "Instance web-01 on nuc1", or just the node when the task names no resource. */
+export function taskSubtitle(
+  task: Pick<TaskRecord, "resource_type" | "resource_name" | "cluster_id">,
+): string {
+  const type = task.resource_type ? formatLabel(task.resource_type) : null;
+  if (type && task.resource_name) return `${type} ${task.resource_name} on ${task.cluster_id}`;
+  return `On ${task.cluster_id}`;
+}
+
+/** Why the cancel action is unavailable, or null when it can run. */
+export function cancelUnavailableReason(
+  task: Pick<TaskRecord, "status" | "may_cancel" | "operation_class">,
+  readOnly: boolean,
+): string | null {
+  if (readOnly) return "Read-only mode is on";
+  if (isTerminal(task.status)) return "Already finished";
+  if (!task.may_cancel || isWebsocketClass(task)) return "Cannot be cancelled";
+  return null;
+}

@@ -374,7 +374,19 @@ class ActivityLogger:
             f"AUDIT: {action} on {target_type}/{target_id} - {result}",
             extra={"audit_log_data": audit_log}
         )
-        
+
+        # The task journal keeps a copy of this record in Postgres for the bottom panel. The
+        # stdout line above stays the audit of record, so the copy must never cost a request:
+        # the sink never raises, and neither may reaching it.
+        try:
+            from app.services.task_journal.sink import get_journal_sink
+
+            get_journal_sink().offer(
+                dict(audit_log, actor_extra=dict(ctx.extra) if ctx else {})
+            )
+        except Exception:  # noqa: BLE001 - the journal is a copy; the stdout record is the audit
+            pass
+
         return event_id
     
     def _sanitize_details(self, details: Dict[str, Any]) -> Dict[str, Any]:

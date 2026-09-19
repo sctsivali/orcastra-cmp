@@ -438,6 +438,7 @@ async def start_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="success"
         )
         
@@ -465,6 +466,7 @@ async def start_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e),
         )
@@ -478,6 +480,7 @@ async def start_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -523,6 +526,7 @@ async def stop_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="success",
             details={"force": request.force, "timeout": request.timeout}
         )
@@ -549,6 +553,7 @@ async def stop_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_code="GRACEFUL_TIMEOUT",
             error_message=str(e),
@@ -563,6 +568,7 @@ async def stop_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -608,6 +614,7 @@ async def restart_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="success",
             details={"force": request.force, "timeout": request.timeout}
         )
@@ -634,6 +641,7 @@ async def restart_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_code="GRACEFUL_TIMEOUT",
             error_message=str(e),
@@ -648,6 +656,7 @@ async def restart_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=request.host,
+            target_project=project,
             result="failure",
             error_message=str(e)
         )
@@ -714,6 +723,7 @@ async def delete_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=host,
+            target_project=deleted_project,
             result="success",
             details={"force": force, "project": deleted_project},
         )
@@ -745,6 +755,7 @@ async def delete_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=host,
+            target_project=project or "default",
             result="failure",
             error_message=msg,
         )
@@ -758,6 +769,7 @@ async def delete_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=host,
+            target_project=project or "default",
             result="failure",
             error_message=str(e)
         )

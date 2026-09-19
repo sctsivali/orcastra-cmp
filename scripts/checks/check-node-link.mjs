@@ -32,7 +32,9 @@ import { fileURLToPath } from 'node:url';
 const root = process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const src = join(root, 'frontend', 'src');
 const COMPONENT = 'components/ui/node-link.tsx';
-const MIN_DECLARED = 18;
+// 18 -> 26 when the task dock landed its Tasks and Cluster Log tables, each with a Node column,
+// on top of the 24 the tree already declared.
+const MIN_DECLARED = 26;
 
 // A Clusters link that is a page-level action, not a cell. Each entry needs a reason.
 const ALLOWED_CLUSTERS_CALLERS = new Map([

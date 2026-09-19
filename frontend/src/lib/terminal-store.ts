@@ -101,6 +101,15 @@ interface TerminalState {
   ensureWithinViewport: () => void;
 }
 
+// The task dock reserves the bottom of the viewport. TaskPanel writes its measured height to
+// --dock-height on the root element, so the usable height here is the viewport minus that.
+function readDockHeight(): number {
+  if (typeof document === 'undefined') return 0;
+  const raw = getComputedStyle(document.documentElement).getPropertyValue('--dock-height');
+  const parsed = parseFloat(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
 // Generate unique terminal ID
 function generateTerminalId(): string {
   return `term_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -512,7 +521,7 @@ export const useTerminalStore = create<TerminalState>()(
       ensureWithinViewport: () => {
         // Called when viewport changes (resize/rotation) to ensure terminals are visible
         const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
-        const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+        const viewportHeight = (typeof window !== 'undefined' ? window.innerHeight : 800) - readDockHeight();
         const padding = 20;
         const minVisible = 100; // Minimum pixels that must be visible
 

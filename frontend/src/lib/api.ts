@@ -1987,6 +1987,7 @@ export const integrationsAPI = {
 
 // Regions API
 import { RegionsOverviewResponse, RegionSummary } from "@/types/api";
+import { tasksAPI } from "./tasks-api";
 
 const regionsAPI = {
   getOverview: async (opts: ReadOptions = {}) => {
@@ -2233,6 +2234,9 @@ export const api = {
   snapshots: snapshotAPI,
   snapshotSchedules: snapshotScheduleAPI,
   mobility: mobilityAPI,
+  // note: a getter, because tasks-api.ts imports fetchAPI from this file. Read lazily, the
+  // registration is correct whichever side of that cycle a bundle evaluates first.
+  get tasks() { return tasksAPI; },
   clusterMembers: {
     list: async (node: string, opts: ReadOptions = {}) => {
       return fetchRead<ClusterMembersResponse>(`/cluster-members?node=${encodeURIComponent(node)}`, opts);

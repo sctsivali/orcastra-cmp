@@ -11,6 +11,7 @@ import {
   PERSONALIZATION_COOKIE,
   parsePersonalizationHint,
 } from "@/lib/personalization-cookie";
+import { DOCK_COOKIE, parseDockCookie } from "@/lib/dock-cookie";
 
 export const metadata: Metadata = {
   title: "Orcastra CMP",
@@ -131,6 +132,8 @@ export default async function RootLayout({
   // margin are correct in the first byte of HTML. Absent cookie means expanded.
   const cookieStore = await cookies();
   const sidebarCollapsed = cookieStore.get("orcastra-sidebar-collapsed")?.value === "true";
+  // The task panel's open state and height, for the same first-byte reason.
+  const initialDock = parseDockCookie(cookieStore.get(DOCK_COOKIE)?.value);
   // Same reasoning one property further: the sidebar's colour has to be right in the first
   // byte too. The pre-paint script below can set the CSS variables from this cookie, but it
   // cannot decide whether the aside carries `sidebar-custom-bg` at all, because that is a
@@ -156,7 +159,7 @@ export default async function RootLayout({
         className={`${GeistSans.variable} ${GeistMono.variable} font-sans antialiased min-h-screen bg-background`}
       >
         <Providers initialPersonalization={initialPersonalization}>
-          <LayoutProvider initialCollapsed={sidebarCollapsed}>
+          <LayoutProvider initialCollapsed={sidebarCollapsed} initialDock={initialDock}>
             <MainLayout>{children}</MainLayout>
             <Toaster />
           </LayoutProvider>

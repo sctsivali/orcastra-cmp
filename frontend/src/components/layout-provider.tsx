@@ -1,6 +1,14 @@
 "use client";
 
 import * as React from "react";
+import {
+  DOCK_COOKIE,
+  DOCK_DEFAULT_STATE,
+  clampDockHeight,
+  serialiseDockCookie,
+  type DockState,
+  type DockTab,
+} from "@/lib/dock-cookie";
 
 // Collapse state lives in a cookie rather than localStorage so app/layout.tsx can read it
 // on the server and the very first paint already has the right sidebar width and content
@@ -18,12 +26,29 @@ function writeSidebarCookie(collapsed: boolean): void {
   }
 }
 
+// The task panel's open/height/tab state persists the same way and for the same reason: the
+// server reads the cookie so the strip is open at the right height before hydration.
+function persistDock(next: DockState): void {
+  try {
+    document.cookie = `${DOCK_COOKIE}=${serialiseDockCookie(next)}; path=/; max-age=${ONE_YEAR_SECONDS}; SameSite=Lax`;
+  } catch {
+    // Same as the sidebar: a blocked cookie only loses the first-paint state.
+  }
+}
+
 interface LayoutContextType {
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebarCollapsed: () => void;
   sidebarOpen: boolean;
   setSidebarOpen: (open: boolean) => void;
+  dockOpen: boolean;
+  dockHeight: number;
+  dockTab: DockTab;
+  setDockOpen: (open: boolean) => void;
+  toggleDock: () => void;
+  setDockHeight: (px: number) => void;
+  setDockTab: (tab: DockTab) => void;
 }
 
 const LayoutContext = React.createContext<LayoutContextType>({
@@ -32,17 +57,60 @@ const LayoutContext = React.createContext<LayoutContextType>({
   toggleSidebarCollapsed: () => {},
   sidebarOpen: false,
   setSidebarOpen: () => {},
+  dockOpen: DOCK_DEFAULT_STATE.open,
+  dockHeight: DOCK_DEFAULT_STATE.height,
+  dockTab: DOCK_DEFAULT_STATE.tab,
+  setDockOpen: () => {},
+  toggleDock: () => {},
+  setDockHeight: () => {},
+  setDockTab: () => {},
 });
 
 export function LayoutProvider({
   children,
   initialCollapsed = false,
+  initialDock = DOCK_DEFAULT_STATE,
 }: {
   children: React.ReactNode;
   initialCollapsed?: boolean;
+  initialDock?: DockState;
 }) {
   const [sidebarCollapsed, setCollapsedState] = React.useState(initialCollapsed);
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const [dock, setDock] = React.useState<DockState>(initialDock);
+
+  // One updater shape for every dock write: compute the next state, persist it, return it.
+  const updateDock = React.useCallback((patch: (prev: DockState) => DockState) => {
+    setDock((prev) => {
+      const next = patch(prev);
+      if (
+        next.open === prev.open &&
+        next.height === prev.height &&
+        next.tab === prev.tab
+      ) {
+        return prev;
+      }
+      persistDock(next);
+      return next;
+    });
+  }, []);
+
+  const setDockOpen = React.useCallback(
+    (open: boolean) => updateDock((prev) => ({ ...prev, open })),
+    [updateDock],
+  );
+  const toggleDock = React.useCallback(
+    () => updateDock((prev) => ({ ...prev, open: !prev.open })),
+    [updateDock],
+  );
+  const setDockHeight = React.useCallback(
+    (px: number) => updateDock((prev) => ({ ...prev, height: clampDockHeight(px) })),
+    [updateDock],
+  );
+  const setDockTab = React.useCallback(
+    (tab: DockTab) => updateDock((prev) => ({ ...prev, tab })),
+    [updateDock],
+  );
 
   const setSidebarCollapsed = React.useCallback((collapsed: boolean) => {
     setCollapsedState(collapsed);
@@ -82,8 +150,25 @@ export function LayoutProvider({
       toggleSidebarCollapsed,
       sidebarOpen,
       setSidebarOpen,
+      dockOpen: dock.open,
+      dockHeight: dock.height,
+      dockTab: dock.tab,
+      setDockOpen,
+      toggleDock,
+      setDockHeight,
+      setDockTab,
     }),
-    [sidebarCollapsed, setSidebarCollapsed, toggleSidebarCollapsed, sidebarOpen]
+    [
+      sidebarCollapsed,
+      setSidebarCollapsed,
+      toggleSidebarCollapsed,
+      sidebarOpen,
+      dock,
+      setDockOpen,
+      toggleDock,
+      setDockHeight,
+      setDockTab,
+    ]
   );
 
   return <LayoutContext.Provider value={value}>{children}</LayoutContext.Provider>;

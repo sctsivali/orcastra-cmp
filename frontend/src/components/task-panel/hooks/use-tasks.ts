@@ -1,0 +1,303 @@
+"use client";
+
+/**
+ * React Query hooks for the task panel and the Operations page.
+ *
+ * Every key nests under one of two prefixes, `["tasks"]` and `["cluster-log"]`, so a single
+ * invalidateQueries per prefix reaches everything (the feed does that on a late `hello` and on
+ * `resync`). Polling is a fallback: each list polls at its POLL_MS tier only while the feed is
+ * not connected, and never in a background tab.
+ */
+
+import { useState } from "react";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
+import { toast } from "@/hooks/use-toast";
+import { usePermissions } from "@/hooks/use-permissions";
+import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
+import { tasksAPI } from "@/lib/tasks-api";
+import { DYNAMIC_DATA_CONFIG, POLL_MS, jitter } from "@/lib/query-config";
+import type {
+  CancelResponse,
+  ClusterLogEntry,
+  ClusterLogResponse,
+  TaskDetailResponse,
+  TaskListResponse,
+  TaskRecord,
+} from "@/types/tasks";
+
+export const taskKeys = {
+  all: ["tasks"] as const,
+  summary: ["tasks", "summary"] as const,
+  list: (limit: number) => ["tasks", "list", { limit }] as const,
+  window: (since: string) => ["tasks", "window", { since }] as const,
+  queue: ["tasks", "queue"] as const,
+  detail: (id: string) => ["tasks", "detail", id] as const,
+};
+
+export const logKeys = {
+  all: ["cluster-log"] as const,
+  list: (limit: number) => ["cluster-log", "list", { limit }] as const,
+};
+
+/** The Operations page window is bounded by the server's page cap. */
+const WINDOW_LIMIT = 500;
+const LOG_CAP = 500;
+const INVALIDATE_DEBOUNCE_MS = 1000;
+
+const isOpen = (status: TaskRecord["status"]): boolean =>
+  status === "pending" || status === "running";
+
+/** The +/-10% spread, resolved once per hook instance (query-config.ts explains why). */
+function usePollInterval(base: number, live: boolean): number | false {
+  const [interval] = useState(() => jitter(base));
+  return live ? false : interval;
+}
+
+export function useTaskSummary(feedConnected: boolean) {
+  const { isAuthenticated } = usePermissions();
+  const refetchInterval = usePollInterval(POLL_MS.active, feedConnected);
+  return useRefreshableQuery<TaskListResponse>({
+    queryKey: taskKeys.summary,
+    queryFn: ({ fresh }) => tasksAPI.summary({ fresh }),
+    ...DYNAMIC_DATA_CONFIG,
+    enabled: isAuthenticated,
+    refetchInterval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useTaskList(feedConnected: boolean, limit: number) {
+  const { isAuthenticated } = usePermissions();
+  const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
+  return useRefreshableQuery<TaskListResponse>({
+    queryKey: taskKeys.list(limit),
+    queryFn: ({ fresh }) => tasksAPI.list({ limit }, { fresh }),
+    ...DYNAMIC_DATA_CONFIG,
+    enabled: isAuthenticated,
+    refetchInterval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useTaskWindow(since: string, feedConnected: boolean) {
+  const { isAuthenticated } = usePermissions();
+  const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
+  return useRefreshableQuery<TaskListResponse>({
+    queryKey: taskKeys.window(since),
+    queryFn: ({ fresh }) => tasksAPI.list({ since, limit: WINDOW_LIMIT }, { fresh }),
+    ...DYNAMIC_DATA_CONFIG,
+    enabled: isAuthenticated && since !== "",
+    refetchInterval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+/** A grouped view derived server side, so it polls at the watched tier whatever the feed does. */
+export function useTaskQueue(enabled: boolean) {
+  const { isAuthenticated } = usePermissions();
+  const [refetchInterval] = useState(() => jitter(POLL_MS.watched));
+  return useRefreshableQuery({
+    queryKey: taskKeys.queue,
+    queryFn: ({ fresh }) => tasksAPI.queue({ fresh }),
+    ...DYNAMIC_DATA_CONFIG,
+    enabled: isAuthenticated && enabled,
+    refetchInterval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+/** Patched by `task` and `log` frames for its id, so it tracks status without a poll. */
+export function useTaskDetail(id: string | null) {
+  const { isAuthenticated } = usePermissions();
+  return useQuery<TaskDetailResponse>({
+    queryKey: taskKeys.detail(id ?? ""),
+    queryFn: () => tasksAPI.get(id ?? ""),
+    ...DYNAMIC_DATA_CONFIG,
+    staleTime: 0,
+    enabled: isAuthenticated && id !== null && id !== "",
+  });
+}
+
+export function useClusterLog(enabled: boolean, feedConnected: boolean, limit: number) {
+  const { isAuthenticated } = usePermissions();
+  const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
+  return useRefreshableQuery<ClusterLogResponse>({
+    queryKey: logKeys.list(limit),
+    queryFn: ({ fresh }) => tasksAPI.log({ limit }, { fresh }),
+    ...DYNAMIC_DATA_CONFIG,
+    enabled: isAuthenticated && enabled,
+    refetchInterval,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useCancelTask() {
+  const queryClient = useQueryClient();
+  return useMutation<CancelResponse, Error, string>({
+    mutationFn: (id) => tasksAPI.cancel(id),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Could not cancel task",
+        description: error.message,
+      });
+    },
+  });
+}
+
+export interface KillConsoleSessionInput {
+  instanceName: string;
+  operationId: string;
+  host: string;
+}
+
+export function useKillConsoleSession() {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, Error, KillConsoleSessionInput>({
+    mutationFn: ({ instanceName, operationId, host }) =>
+      tasksAPI.killConsoleSession(instanceName, operationId, host),
+    onSuccess: (_data, { instanceName }) => {
+      toast({
+        title: "Session killed",
+        description: `Console session for ${instanceName} has been terminated`,
+      });
+      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+    },
+    onError: (error) => {
+      toast({
+        variant: "destructive",
+        title: "Could not kill session",
+        description: error.message,
+      });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cache patching from feed frames
+// ---------------------------------------------------------------------------------------------
+
+const pendingInvalidations = new Map<string, ReturnType<typeof setTimeout>>();
+
+/** One invalidation per key per second, however many frames land in between. */
+function invalidateDebounced(queryClient: QueryClient, queryKey: readonly unknown[]): void {
+  const id = JSON.stringify(queryKey);
+  if (pendingInvalidations.has(id)) return;
+  pendingInvalidations.set(
+    id,
+    setTimeout(() => {
+      pendingInvalidations.delete(id);
+      void queryClient.invalidateQueries({ queryKey });
+    }, INVALIDATE_DEBOUNCE_MS),
+  );
+}
+
+/**
+ * Replace a row in a list-shaped cache when the frame's `seq` is higher, insert it at the top
+ * when it is new, and drop past the cache's own limit. Returns the row it replaced, if any.
+ */
+function upsertInList(
+  data: TaskListResponse,
+  task: TaskRecord,
+): { next: TaskListResponse; previous: TaskRecord | null } {
+  const index = data.tasks.findIndex((row) => row.id === task.id);
+  if (index === -1) {
+    const tasks = [task, ...data.tasks];
+    const capped = data.limit > 0 ? tasks.slice(0, data.limit) : tasks;
+    return {
+      next: {
+        ...data,
+        tasks: capped,
+        total: data.total + 1,
+        has_more: data.has_more || capped.length < tasks.length,
+      },
+      previous: null,
+    };
+  }
+  const previous = data.tasks[index];
+  if (previous.seq >= task.seq) return { next: data, previous };
+  const tasks = data.tasks.slice();
+  tasks[index] = task;
+  return { next: { ...data, tasks }, previous };
+}
+
+export function upsertTaskInCaches(queryClient: QueryClient, task: TaskRecord): void {
+  let previous: TaskRecord | null = null;
+  let seen = false;
+
+  for (const prefix of [["tasks", "list"], ["tasks", "window"]] as const) {
+    for (const [key, data] of queryClient.getQueriesData<TaskListResponse>({ queryKey: prefix })) {
+      if (!data) continue;
+      const result = upsertInList(data, task);
+      if (result.previous) {
+        seen = true;
+        previous = previous ?? result.previous;
+      }
+      if (result.next !== data) queryClient.setQueryData(key, result.next);
+    }
+  }
+
+  const detailKey = taskKeys.detail(task.id);
+  const detail = queryClient.getQueryData<TaskDetailResponse>(detailKey);
+  if (detail) {
+    if (!seen) {
+      seen = true;
+      previous = detail.task;
+    }
+    if (detail.task.seq < task.seq) {
+      queryClient.setQueryData<TaskDetailResponse>(detailKey, { ...detail, task });
+    }
+  }
+
+  // The summary is counts only. With the old row in hand the running delta is exact; without
+  // it the count could be anything, so a debounced refetch is the honest move.
+  const summary = queryClient.getQueryData<TaskListResponse>(taskKeys.summary);
+  if (summary && previous !== null) {
+    const delta = (isOpen(task.status) ? 1 : 0) - (isOpen(previous.status) ? 1 : 0);
+    const failed = task.status === "failure" && previous.status !== "failure" ? 1 : 0;
+    if (delta !== 0 || failed !== 0) {
+      queryClient.setQueryData<TaskListResponse>(taskKeys.summary, {
+        ...summary,
+        running: Math.max(0, summary.running + delta),
+        failed_recent: summary.failed_recent + failed,
+      });
+    }
+  } else if (summary) {
+    invalidateDebounced(queryClient, taskKeys.summary);
+  }
+
+  if (queryClient.getQueryData(taskKeys.queue) !== undefined) {
+    invalidateDebounced(queryClient, taskKeys.queue);
+  }
+}
+
+export function appendLogInCaches(queryClient: QueryClient, entry: ClusterLogEntry): void {
+  const lists = queryClient.getQueriesData<ClusterLogResponse>({ queryKey: ["cluster-log", "list"] });
+  for (const [key, data] of lists) {
+    if (!data || data.entries.some((row) => row.id === entry.id)) continue;
+    const entries = [entry, ...data.entries].slice(0, LOG_CAP);
+    queryClient.setQueryData<ClusterLogResponse>(key, {
+      ...data,
+      entries,
+      total: data.total + 1,
+    });
+  }
+
+  if (!entry.task_id) return;
+  const detailKey = taskKeys.detail(entry.task_id);
+  const detail = queryClient.getQueryData<TaskDetailResponse>(detailKey);
+  if (!detail || detail.log.some((row) => row.id === entry.id)) return;
+  // The detail log is oldest first (the server orders by ts), so a new line goes at the end.
+  queryClient.setQueryData<TaskDetailResponse>(detailKey, {
+    ...detail,
+    log: [...detail.log, entry].slice(-LOG_CAP),
+  });
+}

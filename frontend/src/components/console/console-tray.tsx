@@ -39,7 +39,7 @@ export function ConsoleTray({
     <TooltipProvider>
       <div
         className={cn(
-          "fixed bottom-4 left-1/2 -translate-x-1/2 z-[99999]",
+          "fixed bottom-[calc(1rem+var(--dock-height,0px))] left-1/2 -translate-x-1/2 z-[99999]",
           "flex items-center gap-2 p-2 rounded-lg",
           "bg-background/95 backdrop-blur-sm border shadow-lg",
           "pointer-events-auto",

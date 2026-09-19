@@ -26,7 +26,7 @@ export const LINK_TARGETS = {
   warnings: { path: "/inventory/warnings", search: false, facets: ["all.severity", "all.node", "certificates.cluster", "nodes.cluster"], reserved: ["tab"] },
   images: { path: "/inventory/images", search: true, facets: ["node", "project"] },
   profiles: { path: "/inventory/profiles", search: true, facets: ["node", "project"] },
-  operations: { path: "/inventory/operations", search: true, facets: ["node"] },
+  operations: { path: "/inventory/operations", search: true, facets: ["node"], reserved: ["task", "since"] },
   networkAcls: { path: "/inventory/network-acls", search: true, facets: ["node"] },
   storagePools: { path: "/inventory/storage-pools", search: true, facets: ["node"] },
   storageVolumes: { path: "/inventory/storage-volumes", search: true, facets: ["node"] },
@@ -133,8 +133,14 @@ export const inventoryLinks = {
   profiles: (link: NodeSearchLink & { project?: string | null }) =>
     build("profiles", { q: link.q, facets: { node: link.node, project: link.project } }),
 
-  operations: (link: NodeSearchLink) =>
-    build("operations", { q: link.q, facets: { node: link.node } }),
+  // `task` opens that task's detail dialog on load; `since` is the page's time range
+  // (`1h|24h|7d|30d`). Both are read raw by the page, so they are reserved, not facets.
+  operations: (link: NodeSearchLink & { task?: string | null; since?: string | null }) =>
+    build("operations", {
+      q: link.q,
+      facets: { node: link.node },
+      reserved: { task: link.task, since: link.since },
+    }),
 
   networkAcls: (link: NodeSearchLink) =>
     build("networkAcls", { q: link.q, facets: { node: link.node } }),

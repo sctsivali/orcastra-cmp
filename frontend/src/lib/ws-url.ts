@@ -101,6 +101,18 @@ export function getEventsWsUrl(host: string, includeToken = true): string {
 }
 
 /**
+ * Build WebSocket URL for the **task feed** (journal deltas, fleet scope, one per tab).
+ *
+ * @param includeToken  Append Bearer token as query param (default: true)
+ */
+export function getTasksWsUrl(includeToken = true): string {
+  const { protocol, host: wsHost } = getWsBase();
+  // The token is the only parameter here, so it leads with `?` rather than `&`.
+  const tokenParam = includeToken ? getTokenParam().replace(/^&/, "?") : "";
+  return `${protocol}//${wsHost}/api/v1/tasks/ws${tokenParam}`;
+}
+
+/**
  * Build WebSocket URL for **graphics console** (SPICE).
  *
  * @param instanceName  LXD instance name

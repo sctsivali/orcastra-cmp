@@ -23,7 +23,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import get_cache_manager
-from app.core.database import get_db
+from app.core.database import get_db, async_session_maker
 from app.core.upload_stream import UploadStagingUnavailable, append_request_body
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import org_scope_dependency, verify_cluster_access
@@ -48,9 +48,11 @@ from app.routers.iso_uploads import (
     TUS_VERSION,
     UPLOAD_DIR,
 )
+from app.services.activity_logger import get_activity_logger
 import logging
 
 logger = logging.getLogger(__name__)
+activity_logger = get_activity_logger()
 
 # A browser upload that is abandoned mid-flight (tab closed, page reloaded, network
 # dropped) leaves its session in an in-progress state, which counts against the
@@ -107,11 +109,41 @@ async def _run_import_and_refresh(session_id: str) -> None:
     here (rather than in the OrcaHub-shared ``_run_import``) keeps this a
     dashboard concern and leaves the OrcaHub path untouched.
     """
-    await _run_import(session_id)
+    try:
+        await _run_import(session_id)
+    finally:
+        await _audit_import_outcome(session_id)
     try:
         get_cache_manager().delete_pattern("api_responses", "storage_volumes:list:*")
     except Exception:  # noqa: BLE001 - cache invalidation is best-effort
         logger.warning("Failed to invalidate storage_volumes cache after ISO import", exc_info=True)
+
+
+async def _audit_import_outcome(session_id: str) -> None:
+    """The terminal audit record for an upload, read back off the row the import wrote.
+
+    The shared import records its outcome on the session row and never raises, so the row is
+    the truth and this record mirrors it; the task journal closes the upload task it opened
+    at finalize on the same session id. Best-effort: a failure here is logged, never raised,
+    so the cache refresh that follows still runs.
+    """
+    try:
+        async with async_session_maker() as db:
+            row = await _get_session(db, session_id)
+    except Exception:  # noqa: BLE001 - the row is the record of truth; this only mirrors it
+        logger.warning("Could not read upload session %s for its audit record", session_id, exc_info=True)
+        return
+    ready = row.status == "ready"
+    activity_logger.log_activity(
+        action="storage.iso.upload.import",
+        target_type="storage_volume",
+        target_id=row.volume_name,
+        target_host=row.cluster_id,
+        target_project=row.project,
+        result="success" if ready else "failure",
+        error_message=None if ready else (row.error or f"import ended with status {row.status}"),
+        details={"session_id": session_id, "pool": row.pool},
+    )
 
 
 async def _authz_session(db: AsyncSession, session_id: str) -> IsoUploadSession:
@@ -277,6 +309,15 @@ async def finalize_upload(
 
     row.status = "importing"
     await db.commit()
+    activity_logger.log_activity(
+        action="storage.iso.upload.import",
+        target_type="storage_volume",
+        target_id=row.volume_name,
+        target_host=row.cluster_id,
+        target_project=row.project,
+        result="accepted",
+        details={"session_id": session_id, "pool": row.pool},
+    )
     asyncio.create_task(_run_import_and_refresh(session_id))
     return _status_payload(row)
 

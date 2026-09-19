@@ -237,7 +237,7 @@ export function TerminalTray() {
   if (terminals.length === 0) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[99999] flex flex-col items-end gap-2 pointer-events-auto">
+    <div className="fixed bottom-[calc(1rem+var(--dock-height,0px))] right-4 z-[99999] flex flex-col items-end gap-2 pointer-events-auto">
       {/* Minimized terminals list */}
       {trayExpanded && minimizedTerminals.length > 0 && (
         <div 

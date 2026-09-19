@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { usePathname } from "next/navigation";
 import { BreakGlassModal } from "@/components/break-glass/break-glass-modal";
 import { useNavigationProgress } from "./navigation/navigation-progress";
+import { TaskPanel } from "@/components/task-panel";
 
 // Dynamically import TerminalManager to avoid SSR issues with xterm
 const TerminalManager = dynamic(
@@ -69,8 +70,10 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
           // Scope the transition to margin. transition-all lerps every animatable property,
           // which makes a personalization sidebar background fade on every collapse.
           "flex flex-1 flex-col transition-[margin] duration-200 ease-out motion-reduce:transition-none",
-          // Prevent content from affecting sidebar positioning
-          "overflow-x-hidden",
+          // Prevent content from affecting sidebar positioning.
+          // note: clip, not hidden. `overflow-x-hidden` makes this column a scroll container,
+          // and the sticky task panel would then pin to the column instead of the viewport.
+          "overflow-x-clip",
           // On full-page views, no margin. Otherwise apply sidebar margins
           // Use clean conditional to avoid tailwind-merge breakpoint conflicts
           !isFullPageTerminalOrConsole && (sidebarCollapsed ? "md:ml-16" : "md:ml-64")
@@ -108,6 +111,8 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
             </div>
           </footer>
         )}
+        {/* Bottom task dock: sticky in flow after the footer so the footer stays reachable */}
+        {!isFullPageTerminalOrConsole && <TaskPanel />}
       </div>
       
       {/* Terminal/Console Managers - only render when NOT on full-page views */}

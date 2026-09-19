@@ -1225,6 +1225,8 @@ export interface SystemSettings {
    * disabled on an explicit `false`.
    */
   snapshot_schedules_enabled?: boolean;
+  /** Whether this deployment mounted the task journal routes. Same three-state rule. */
+  task_journal_enabled?: boolean;
 }
 
 // My Keys
