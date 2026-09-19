@@ -397,10 +397,10 @@ async def recover_stranded_rebuilds() -> int:
     instance may be stopped with a half-written root disk, and deciding what to do with it is an
     operator's call, not a sweep's.
     """
-    from app.core.database import AsyncSessionLocal
+    from app.core.database import async_session_maker
 
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=_REBUILD_STRANDED_AFTER_SECONDS)
-    async with AsyncSessionLocal() as db:
+    async with async_session_maker() as db:
         rows = (
             await db.execute(
                 select(RebuildJob).where(
