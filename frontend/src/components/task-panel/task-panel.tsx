@@ -14,7 +14,7 @@ import { Role } from "@/types/rbac";
 import type { TaskRecord } from "@/types/tasks";
 import { DockResizeHandle, useDesktopViewport, useMaxDockHeight } from "./dock-resize-handle";
 import { DockStrip } from "./dock-strip";
-import { useTaskQueue, useTaskSummary } from "./hooks/use-tasks";
+import { useTaskSummary } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
 import { TaskCancelDialog } from "./task-cancel-dialog";
 import { TaskDetailDialog } from "./task-detail-dialog";
@@ -62,7 +62,6 @@ function TaskPanelInner() {
   const feed = useTaskFeed(true);
   const feedConnected = feed.state === "connected";
   const summary = useTaskSummary(feedConnected);
-  const queue = useTaskQueue(dockOpen && dockTab === "queue");
 
   const [detailTaskId, setDetailTaskId] = React.useState<string | null>(null);
   const [cancelTask, setCancelTask] = React.useState<TaskRecord | null>(null);
@@ -125,7 +124,11 @@ function TaskPanelInner() {
   const { refreshNow: refreshSummary } = summary;
   const refreshNow = React.useCallback(() => (tabRefresh.current ?? refreshSummary)(), [refreshSummary]);
 
-  const openTask = React.useCallback(
+  // A link inside the dock opens the dialog over the tab the operator is on; only the toast,
+  // which arrives while the panel may be closed, brings the Tasks tab forward. Found live: the
+  // log tab's search landed on the Tasks tab after a detail link.
+  const openTask = React.useCallback((id: string) => setDetailTaskId(id), []);
+  const showTaskFromToast = React.useCallback(
     (id: string) => {
       setDockTab("tasks");
       setDockOpen(true);
@@ -169,21 +172,21 @@ function TaskPanelInner() {
           title: "Task failed",
           description: `${task.description} on ${task.cluster_id}: ${task.error ?? "no error was reported"}`,
           action: (
-            <ToastAction altText="Show the failed task" onClick={() => openTask(task.id)}>
+            <ToastAction altText="Show the failed task" onClick={() => showTaskFromToast(task.id)}>
               Show
             </ToastAction>
           ),
         });
       }),
-    [email, openTask],
+    [email, showTaskFromToast],
   );
 
   const running = summary.data?.running ?? 0;
   const failedRecent = summary.data?.failed_recent ?? 0;
   const disconnected = summary.data?.disconnected_clusters ?? [];
-  const queued = queue.data
-    ? queue.data.clusters.reduce((sum, c) => sum + c.running.length + c.pending.length, 0)
-    : null;
+  // The queue holds every open row in the caller's scope, which is the summary's `running`
+  // count, so the badge is live on the collapsed strip without reading the queue itself.
+  const queued = summary.data ? summary.data.running : null;
   const apiDown = summary.isError && !summary.data;
 
   const tabProps = { feed, height, onOpenTask: openTask, registerRefresh };

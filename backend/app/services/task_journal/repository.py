@@ -131,7 +131,21 @@ _OPERATION_GUARD = (
     "OR task_journal.error IS DISTINCT FROM NULLIF(:error, ''))"
 )
 
+# important: LXD names no resource on some operations ("Creating instance", "Deleting project"
+# arrive with `resources: {}`), so the stream row has no key of its own. The audit record is
+# the one writer that knows the name; it fills whatever the row lacks and never overwrites
+# what the daemon did report. Found live: a create with no instance name and a project
+# delete listed twice.
+_KEY_BACKFILL = (
+    "resource_type = COALESCE(task_journal.resource_type, :resource_type), "
+    "resource_name = COALESCE(task_journal.resource_name, :resource_name), "
+    "action = COALESCE(task_journal.action, :action), "
+    "project = COALESCE(NULLIF(CASE WHEN task_journal.project = 'default' "
+    "THEN CAST(:project AS varchar) END, ''), task_journal.project), "
+)
+
 _ACTOR_SET = (
+    f"{_KEY_BACKFILL}"
     "actor_email = :actor_email, actor_role = :actor_role, actor_kind = :actor_kind, "
     "api_key_id = :api_key_id, source = :source, request_id = :request_id, "
     "target_organization_id = COALESCE(CAST(:target_organization_id AS integer), "
@@ -400,12 +414,33 @@ async def claim_operation_for_audit(
         "audit_error": clean_message(audit_error) or "",
         "extra": json_param(extra),
     }
-    return returned_id(
+    claimed = returned_id(
         await db.execute(
             text(
                 f"UPDATE task_journal SET {_ACTOR_SET} "
                 "WHERE id = (SELECT id FROM task_journal WHERE "
                 f"{_KEY_MATCH} AND actor_email IS NULL AND api_key_id IS NULL "
+                "AND source IN ('events', 'cli') "
+                "AND created_at >= now() - interval '15 minutes' "
+                "ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"
+            ),
+            params,
+        )
+    )
+    if claimed:
+        return claimed
+    # The daemon named no resource on the operation: the newest unnamed stream row for the
+    # same action on the same cluster inside the window is this action, and the key it
+    # lacked is written now. Two operators running the same unnamed action on one cluster
+    # inside fifteen minutes can be attached to the wrong actor; the stdout audit stays the
+    # authority for that question, as with the key match above.
+    return returned_id(
+        await db.execute(
+            text(
+                f"UPDATE task_journal SET {_ACTOR_SET} "
+                "WHERE id = (SELECT id FROM task_journal WHERE "
+                "cluster_id = :cluster_id AND action = :action AND resource_name IS NULL "
+                "AND operation_id IS NOT NULL AND actor_email IS NULL AND api_key_id IS NULL "
                 "AND source IN ('events', 'cli') "
                 "AND created_at >= now() - interval '15 minutes' "
                 "ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING id"

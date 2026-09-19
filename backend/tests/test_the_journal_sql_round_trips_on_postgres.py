@@ -237,6 +237,48 @@ def test_the_stream_first_then_the_audit_with_the_operation_id(loop, db):
     assert done.status == "failure" and done.error == "disk full" and done.finished_at is not None
 
 
+def test_an_operation_the_daemon_did_not_name_takes_its_key_from_the_audit(loop, db):
+    """Live: "Creating instance" and "Deleting project" arrive with `resources: {}`."""
+    from app.services.task_journal.follower_writer import JournalWriter
+    from app.services.task_journal.sink import JournalSink
+
+    sink = JournalSink()
+    sink._session_maker = db
+    writer = JournalWriter(db, identities=_Identities())
+    t0 = datetime.now(timezone.utc)
+
+    # Attach by id: the create op has no resources; the router audit names the instance.
+    op = str(uuid.uuid4())
+    frame = _operation(op, status="Failure", code=400, name="unused", description="Creating instance",
+                       project="qa-p", created=t0, updated=t0, err="Image not provided")
+    frame["resources"] = {}
+    _run(loop, writer.write_batch([frame]))
+    bare = _run(loop, _one(db, "SELECT resource_name, action FROM task_journal WHERE operation_id = :op", op=op))
+    assert bare.resource_name is None and bare.action == "instance.create"
+    audit = _audit("instance.create", target_type="instance", target_id="web-07", result="failure",
+                   project="qa-p", details={"operation_id": op})
+    _run(loop, sink._write_batch([audit]))
+    named = _run(loop, _one(db, "SELECT resource_type, resource_name, project, status, actor_email, kind "
+                                "FROM task_journal WHERE operation_id = :op", op=op))
+    assert (named.resource_type, named.resource_name, named.project) == ("instance", "web-07", "qa-p")
+    assert named.status == "failure" and named.actor_email == "ops@example.test"
+    assert _run(loop, _one(db, "SELECT count(*) AS n FROM task_journal WHERE resource_name = 'web-07'")).n == 1
+
+    # Claim by action: the project delete op has no resources and the router knows no id.
+    op2 = str(uuid.uuid4())
+    frame2 = _operation(op2, status="Success", code=200, name="unused", description="Deleting project",
+                        project="default", created=t0, updated=t0 + timedelta(seconds=1))
+    frame2["resources"] = {}
+    _run(loop, writer.write_batch([frame2]))
+    audit2 = _audit("project.delete", target_type="project", target_id="qa-p")
+    _run(loop, sink._write_batch([audit2]))
+    rows = _run(loop, _rows(db, "SELECT operation_id, resource_type, resource_name, actor_email, kind "
+                                "FROM task_journal WHERE action = 'project.delete'"))
+    assert len(rows) == 1, rows
+    assert rows[0]["operation_id"] == op2 and rows[0]["resource_name"] == "qa-p"
+    assert rows[0]["actor_email"] == "ops@example.test" and rows[0]["kind"] == "lxd_operation"
+
+
 def test_uploads_open_and_close_on_their_session(loop, db):
     from app.services.task_journal.sink import JournalSink
 

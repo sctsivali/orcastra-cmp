@@ -31,7 +31,15 @@ async def test_the_claim_takes_the_newest_unclaimed_stream_row_under_skip_locked
     )
     assert claimed == ROW
     sql, params = db.calls[0]
-    assert sql.startswith("UPDATE task_journal SET actor_email = :actor_email")
+    # The audit is the one writer that knows the resource when LXD reported none ("Creating
+    # instance" and "Deleting project" arrive with `resources: {}`): it fills what the row
+    # lacks and never overwrites what the daemon said.
+    assert sql.startswith(
+        "UPDATE task_journal SET resource_type = COALESCE(task_journal.resource_type, :resource_type), "
+        "resource_name = COALESCE(task_journal.resource_name, :resource_name), "
+        "action = COALESCE(task_journal.action, :action), "
+    )
+    assert "actor_email = :actor_email" in sql
     subquery = sql[sql.index("WHERE id = (SELECT") :]
     for clause in (
         "actor_email IS NULL",
@@ -59,6 +67,27 @@ async def test_an_accepted_record_claims_as_running_and_nothing_found_is_none():
         db, key=key(), actor=actor(), result="accepted", audit_error=None, extra={}
     ) is None
     assert db.calls[0][1]["new_status"] == "running"
+    # With no key match, the newest unnamed stream row for the same action on the same
+    # cluster is tried once, and only a row LXD left unnamed qualifies.
+    assert len(db.calls) == 2
+    second = db.calls[1][0][db.calls[1][0].index("WHERE id = (SELECT") :]
+    for clause in (
+        "cluster_id = :cluster_id AND action = :action AND resource_name IS NULL",
+        "operation_id IS NOT NULL",
+        "actor_email IS NULL",
+        "created_at >= now() - interval '15 minutes'",
+        "ORDER BY created_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED",
+    ):
+        assert clause in second, clause
+
+
+@pytest.mark.asyncio
+async def test_a_key_match_never_reaches_the_unnamed_claim():
+    db = FakeDB(lambda sql, p: FakeResult(rows=[(ROW,)]) if sql.startswith("UPDATE") else None)
+    await claim_operation_for_audit(
+        db, key=key(), actor=actor(), result="success", audit_error=None, extra={}
+    )
+    assert len(db.calls) == 1
 
 
 def test_a_record_with_an_operation_id_takes_the_attach_by_id_path():
@@ -83,7 +112,7 @@ async def test_attach_by_id_updates_a_row_the_stream_already_wrote():
     )
     assert task_id == ROW
     assert db.statements[0].endswith("FOR UPDATE")
-    assert db.statements[1].startswith("UPDATE task_journal SET actor_email = :actor_email")
+    assert db.statements[1].startswith("UPDATE task_journal SET resource_type = COALESCE(task_journal.resource_type")
     assert "WHERE id = CAST(:id AS uuid)" in db.statements[1]
     assert not any(sql.startswith("INSERT") for sql in db.statements)
 
