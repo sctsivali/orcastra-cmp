@@ -94,6 +94,14 @@ _TERMINAL_FINISH = (
     "THEN COALESCE(task_journal.finished_at, now()) ELSE task_journal.finished_at END"
 )
 
+# A stream frame's finish time is the daemon's last update, not the moment the journal saw it:
+# a seeded operation that finished days ago would otherwise read as a days-long task.
+_STREAM_FINISH = (
+    f"CASE WHEN {_NEW} IN {_TERMINAL_3} "
+    "THEN COALESCE(task_journal.finished_at, CAST(:lxd_updated_at AS timestamptz), now()) "
+    "ELSE task_journal.finished_at END"
+)
+
 _OPERATION_SET = (
     f"status = {STREAM_STATUS}, "
     "status_code = COALESCE(CAST(:status_code AS integer), task_journal.status_code), "
@@ -108,7 +116,7 @@ _OPERATION_SET = (
     "lxd_updated_at = GREATEST("
     "COALESCE(task_journal.lxd_updated_at, CAST(:lxd_updated_at AS timestamptz)), "
     "CAST(:lxd_updated_at AS timestamptz)), "
-    f"finished_at = {_TERMINAL_FINISH}, "
+    f"finished_at = {_STREAM_FINISH}, "
     "updated_at = now(), seq = nextval('task_journal_seq')"
 )
 
@@ -289,7 +297,8 @@ async def upsert_operation(db: AsyncSession, frame: OperationFrame) -> UpsertRes
                 ":actor_kind, :source, :actor_email, CAST(:metadata AS jsonb), "
                 "CAST(:lxd_created_at AS timestamptz), CAST(:lxd_updated_at AS timestamptz), "
                 "COALESCE(CAST(:lxd_created_at AS timestamptz), now()), "
-                "CASE WHEN CAST(:new_status AS varchar) IN ('success', 'failure', 'cancelled') THEN now() END) "
+                "CASE WHEN CAST(:new_status AS varchar) IN ('success', 'failure', 'cancelled') "
+                "THEN COALESCE(CAST(:lxd_updated_at AS timestamptz), now()) END) "
                 f"{_ON_CONFLICT} DO UPDATE SET {_OPERATION_SET} WHERE {_OPERATION_GUARD} "
                 "RETURNING id, (xmax = 0) AS inserted"
             ),

@@ -229,8 +229,15 @@ function TaskPanelInner() {
           showOperator={isPartner}
           caretRef={caretRef}
         />
+        {/* note: the body is flex-none on a phone. With flex-1 (basis 0%) inside a column whose
+            height is its content, the 50dvh height is ignored and the body shrinks to its rows;
+            the desktop section has an explicit height, so flex-1 fills it there. */}
         {dockOpen ? (
-          <div id="task-panel-body" ref={bodyRef} className="flex h-[50dvh] min-h-0 flex-1 flex-col md:h-auto">
+          <div
+            id="task-panel-body"
+            ref={bodyRef}
+            className="flex h-[50dvh] min-h-0 flex-none flex-col md:h-auto md:flex-1"
+          >
             <TabsContent value={dockTab} className="mt-0 flex min-h-0 flex-1 flex-col">
               <React.Suspense fallback={<PanelSkeleton rows={skeletonRowsFor(height)} />}>
                 {dockTab === "tasks" ? (

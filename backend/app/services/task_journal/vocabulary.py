@@ -148,6 +148,30 @@ SUPPRESSED_ACTIONS = frozenset(
     }
 )
 
+# important: machine-driven reads never reach the cluster log. Forty minutes of the first live
+# journal held 3,829 rows, 3,355 of them `vault.secret.read` (the cert read behind every dial
+# of a dead cluster) and 367 `integration.proxy.request` (the hub's polling). Those stay on
+# stdout, the audit of record; the log keeps what changed, what was denied and who signed in.
+LOG_SUPPRESSED_ACTIONS = frozenset(
+    {
+        "vault.secret.read",
+        "vault.kv.list",
+        "vault.cert.list",
+        "vault.health.check",
+        "cluster.auth_check",
+        "integration.proxy.request",
+        "auth.token.refresh",
+    }
+)
+
+
+def humanise_action(action: str) -> str:
+    """`vault.kv.put` -> `Vault kv put`, for an action the description table does not name."""
+    words = [w for w in action.replace("_", " ").replace(".", " ").split(" ") if w]
+    if not words:
+        return action
+    return " ".join([words[0].capitalize(), *words[1:]])
+
 # Audit target types -> the journal's resource vocabulary.
 TARGET_TYPE_TO_RESOURCE: Dict[str, str] = {
     "instance": "instance",

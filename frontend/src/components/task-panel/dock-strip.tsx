@@ -79,7 +79,7 @@ export function DockStrip({
           Tasks
           {running > 0 && (
             <Badge variant="caution" asChild className={COUNT_CLASS}>
-              <span aria-label={`${running} running`}>{running}</span>
+              <span aria-label={`${running} in progress`}>{running}</span>
             </Badge>
           )}
           {failedRecent > 0 && (

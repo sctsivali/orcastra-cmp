@@ -252,6 +252,19 @@ class LXDEventsHub:
             # cluster, and on a fleet where most of them are dead the backoff alone would keep
             # re-dialing each one every 30 s for as long as the process lives.
             if health.is_tripped(host):
+                # The follower learns a cluster is down only from this frame; a cluster whose
+                # breaker was already open when it subscribed would otherwise never be marked
+                # disconnected. The follower writes the state once per change, so one frame
+                # per sleep costs one idempotent UPDATE.
+                self._notify_firehose(
+                    host,
+                    {
+                        "type": "hub",
+                        "host": host,
+                        "state": "disconnected",
+                        "error": health.get_reason(host) or "circuit breaker open",
+                    },
+                )
                 await asyncio.sleep(_TRIPPED_SLEEP_S)
                 continue
             try:

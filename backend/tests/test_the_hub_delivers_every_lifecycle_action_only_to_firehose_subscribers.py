@@ -187,8 +187,14 @@ def test_run_node_emits_state_frames_and_honours_the_breaker():
     assert tripped < dial, "the breaker is consulted before dialing"
     assert "_TRIPPED_SLEEP_S" in source[tripped:dial]
     assert events_hub._TRIPPED_SLEEP_S == 60
+    # Live: blitz001 and central1-argon had tripped before the follower subscribed and were
+    # never marked disconnected, because the tripped branch slept without saying so.
+    tripped_frame = source.index('"state": "disconnected"', tripped)
+    assert tripped < tripped_frame < source.index("_TRIPPED_SLEEP_S", tripped), (
+        "a tripped host is reported disconnected before the sleep"
+    )
     connected = source.index('"state": "connected"')
-    disconnected = source.index('"state": "disconnected"')
+    disconnected = source.index('"state": "disconnected"', connected)
     assert dial < connected < disconnected
     assert source.index("backoff = 1", dial) < connected, "connected is emitted once the socket is up"
     assert health.is_tripped("never-registered") is False

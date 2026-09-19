@@ -16,7 +16,9 @@ from app.services.activity_logger import HIGH_SEVERITY_ACTIONS
 from app.services.task_journal.repository_types import ActorFields, CorrelationKey
 from app.services.task_journal.vocabulary import (
     ACTION_DESCRIPTIONS,
+    LOG_SUPPRESSED_ACTIONS,
     SUPPRESSED_ACTIONS,
+    humanise_action,
     TARGET_TYPE_TO_RESOURCE,
     TASK_ACTIONS,
     allowlisted_metadata,
@@ -141,7 +143,7 @@ def _resource_type(target: Mapping[str, Any]) -> Optional[str]:
 
 
 def _message(record: Mapping[str, Any], action: str, target: Mapping[str, Any]) -> str:
-    verb = ACTION_DESCRIPTIONS.get(action, action)
+    verb = ACTION_DESCRIPTIONS.get(action) or humanise_action(action)
     subject = _text(target.get("id"))
     message = f"{verb} {subject}" if subject else verb
     if record.get("result") == "failure":
@@ -157,7 +159,7 @@ def record_to_log_row(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     if not isinstance(record, Mapping):
         return None
     action = _text(record.get("action"))
-    if action is None or action in SUPPRESSED_ACTIONS:
+    if action is None or action in SUPPRESSED_ACTIONS or action in LOG_SUPPRESSED_ACTIONS:
         return None
     target = _mapping(record.get("target"))
     details = _mapping(record.get("details"))
