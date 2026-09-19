@@ -14,7 +14,7 @@ ratcheted against naming any of these helpers. Only this module and the routers 
 
 from typing import Any, Iterable, List, Literal, Mapping, Optional
 
-from sqlalchemy import and_, case, false, func, or_
+from sqlalchemy import and_, case, func, or_
 
 from app.core.org_scope import (
     apply_cluster_filter,
@@ -104,10 +104,10 @@ def _acl_condition(model: Any, acl: Mapping[str, Any]) -> Any:
             project_terms.append(_named_project(model) == project_rule)
         branches.append(and_(*project_terms))
 
-    if not branches:
-        return false()
-    # `default` stays visible unconditionally for a tenant that holds any grant at all, as
-    # tenant_may_see_project reads it; the cluster set predicate bounds which clusters.
+    # `default` stays visible unconditionally while a tenant ACL is in force, with or without a
+    # `view` rule, exactly as tenant_may_see_project reads it (the review found the SQL side
+    # answering false() for a tenant whose grants carry no view while the Python twin admitted
+    # the row); the cluster set predicate bounds which clusters.
     branches.append(and_(model.resource_type == "project", _named_project(model) == "default"))
     return or_(*branches)
 

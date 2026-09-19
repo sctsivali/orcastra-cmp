@@ -27,6 +27,11 @@ from sqlalchemy.pool import NullPool
 URL = os.environ.get("JOURNAL_TEST_DATABASE_URL")
 pytestmark = pytest.mark.skipif(not URL, reason="JOURNAL_TEST_DATABASE_URL is not set")
 
+# important: the fixture TRUNCATEs the three journal tables. The database it names must say
+# it is a scratch one, or a mistyped URL empties the dev journal (a review finding).
+if URL and not any(word in URL.rsplit("/", 1)[-1].lower() for word in ("scratch", "test")):
+    raise RuntimeError("JOURNAL_TEST_DATABASE_URL must name a scratch or test database")
+
 HOST = "rt-host"
 
 

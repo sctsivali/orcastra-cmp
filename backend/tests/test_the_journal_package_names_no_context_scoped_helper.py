@@ -26,6 +26,9 @@ FORBIDDEN = {
     "tenant_acl_active",
     "project_is_visible",
     "get_tenant_acl",
+    # The remaining readers of the scope ContextVars (a review found them missing).
+    "tenant_may_see_project",
+    "visible_projects_for",
 }
 
 

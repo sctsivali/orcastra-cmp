@@ -89,13 +89,22 @@ function TaskPanelInner() {
     const el = sectionRef.current;
     const root = document.documentElement;
     if (!el) return;
-    const apply = () => root.style.setProperty("--dock-height", `${el.offsetHeight}px`);
+    let last = -1;
+    const apply = () => {
+      const height = el.offsetHeight;
+      root.style.setProperty("--dock-height", `${height}px`);
+      // The floating terminal and console windows clamp themselves into the viewport on a
+      // window resize; a taller dock is the same event for them, or a window sits under it.
+      if (last !== -1 && height !== last) window.dispatchEvent(new Event("resize"));
+      last = height;
+    };
     apply();
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(apply);
     observer?.observe(el);
     return () => {
       observer?.disconnect();
       root.style.removeProperty("--dock-height");
+      window.dispatchEvent(new Event("resize"));
     };
   }, []);
 
