@@ -17,7 +17,11 @@ from app.services.activity_logger import get_activity_logger
 from app.services.session_tracker import get_session_tracker, SessionProtocol
 from app.services.session_models import new_session_id
 from app.core.dependencies import AuthenticatedUser, get_ws_user
-from app.core.org_scope import set_org_scope_for_ws
+from app.core.org_scope import (
+    set_org_scope_for_ws,
+    verify_project_access,
+    verify_tenant_permission,
+)
 
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
@@ -455,12 +459,11 @@ async def terminal_websocket(
     # since HTTPException is meaningless once the socket is being negotiated.
     from fastapi import HTTPException as _HTTPExc
     try:
-        from app.core.org_scope import verify_cluster_access, verify_tenant_permission
-
-        verify_cluster_access(host)
+        project = verify_project_access(host, project)
+        verify_tenant_permission(host, project, instance_name, "view")
         # Per-project enforcement (flag-gated). No-op for admin/partner (acl is None); for a
         # tenant a missing or insufficient 'console' rule closes the socket rather than raising.
-        if _settings.tenant_perm_enforcement_enabled and user is not None:
+        if _settings.tenant_perm_enforcement_enabled:
             verify_tenant_permission(host, project, instance_name, "console")
     except _HTTPExc as exc:
         await websocket.close(code=1008, reason="forbidden")

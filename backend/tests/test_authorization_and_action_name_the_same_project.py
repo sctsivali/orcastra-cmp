@@ -52,7 +52,13 @@ class _Recorder:
         return stub, (project or "default")
 
 
-def _app(acl, flag_on: bool, recorder: _Recorder, module_name: str = "instances") -> TestClient:
+def _app(
+    acl,
+    flag_on: bool,
+    recorder: _Recorder,
+    module_name: str = "instances",
+    visible_projects=None,
+) -> TestClient:
     from app.core import org_scope
     from app.core.config import get_settings
     from app.core.org_scope import org_scope_dependency
@@ -91,10 +97,12 @@ def _app(acl, flag_on: bool, recorder: _Recorder, module_name: str = "instances"
     original = settings.tenant_perm_enforcement_enabled
     object.__setattr__(settings, "tenant_perm_enforcement_enabled", flag_on)
     token = org_scope._tenant_acl_var.set(acl)
+    project_token = org_scope._visible_projects_var.set(visible_projects)
 
     client = TestClient(app, raise_server_exceptions=False)
     client._cleanup = lambda: (
         org_scope._tenant_acl_var.reset(token),
+        org_scope._visible_projects_var.reset(project_token),
         object.__setattr__(settings, "tenant_perm_enforcement_enabled", original),
     )
     return client
@@ -181,6 +189,83 @@ def test_an_operator_is_unaffected(recorder):
     assert recorder.projects[0] == "acme"
 
 
+@pytest.mark.parametrize("module_name", ["instances", "vms"])
+@pytest.mark.parametrize("action", ["start", "stop", "restart"])
+def test_a_partner_cannot_operate_on_another_organizations_same_named_instance(
+    module_name, action, recorder
+):
+    client = _app(
+        None,
+        False,
+        recorder,
+        module_name=module_name,
+        visible_projects={HOST: {"default", "partner-owned"}},
+    )
+    try:
+        response = client.post(
+            f"/{module_name}/{NAME}/{action}",
+            json={"host": HOST, "project": "other-org"},
+        )
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 403, response.text
+    assert recorder.projects == [], "a refused Partner action reached the instance resolver"
+
+
+@pytest.mark.parametrize("module_name", ["instances", "vms"])
+@pytest.mark.parametrize("project", [None, "", "   "])
+def test_power_actions_normalize_omitted_and_blank_projects_once(
+    module_name, project, recorder
+):
+    client = _app(TENANT_ACL, True, recorder, module_name=module_name)
+    body = {"host": HOST}
+    if project is not None:
+        body["project"] = project
+    try:
+        response = client.post(f"/{module_name}/{NAME}/start", json=body)
+    finally:
+        client._cleanup()
+
+    assert response.status_code < 400, response.text
+    assert recorder.projects[0] == "default"
+
+
+@pytest.mark.parametrize("module_name", ["instances", "vms"])
+def test_disabling_tenant_operation_enforcement_never_disables_view(
+    module_name, recorder
+):
+    operate_without_view = {HOST: {("default", "*"): {"operate"}}}
+    client = _app(operate_without_view, False, recorder, module_name=module_name)
+    try:
+        response = client.post(f"/{module_name}/{NAME}/start", json={"host": HOST})
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 403, response.text
+    assert recorder.projects == []
+
+
+@pytest.mark.parametrize("module_name", ["instances", "vms"])
+def test_partner_delete_is_project_bound_before_the_service(module_name, recorder):
+    client = _app(
+        None,
+        False,
+        recorder,
+        module_name=module_name,
+        visible_projects={HOST: {"default"}},
+    )
+    try:
+        response = client.delete(
+            f"/{module_name}/{NAME}?host={HOST}&project=other-org"
+        )
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 403, response.text
+    assert recorder.projects == [], "a refused deletion reached the instance resolver"
+
+
 # ── the same rule, on every surface that addresses one instance ────────────────────────────
 
 
@@ -231,6 +316,7 @@ def _guarded_routes():
                 continue
             guarded = (
                 "_verify_instance_access" in body
+                or "verify_instance_view_access" in body
                 or "verify_tenant_permission" in body
                 or "_enforce_snapshot_access" in body
             )

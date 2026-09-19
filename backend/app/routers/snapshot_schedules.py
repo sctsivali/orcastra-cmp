@@ -19,7 +19,12 @@ from app.core.auth import AuthenticatedUser
 from app.core.database import get_db
 from app.core.dependencies import check_read_only_mode, require_partner
 from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import (
+    org_scope_dependency,
+    project_is_visible,
+    verify_cluster_access,
+    verify_project_access,
+)
 from app.models.snapshot_schedule_schemas import (
     SnapshotScheduleActionResponse,
     SnapshotScheduleCreateRequest,
@@ -30,7 +35,7 @@ from app.services.activity_logger import get_activity_logger
 from app.services.lxd.availability import require_client
 from app.services.lxd.lazy_client import client_for
 from app.services.lxd.lxd_service import LXDService, get_lxd_service
-from app.services.snapshots import schedule_service as svc
+from app.services.snapshots import schedule_authority, schedule_service as svc
 from app.services.snapshots.schedule_runner import RunOutcome, run_one
 
 logger = logging.getLogger(__name__)
@@ -79,9 +84,12 @@ async def list_schedules(
     """
     if host is not None:
         verify_cluster_access(host)
+        if project is not None:
+            project = verify_project_access(host, project)
     rows = await svc.list_for_actor(
         db, user.email, host=host, project=project, instance=instance
     )
+    rows = [row for row in rows if project_is_visible(row.cluster_id, row.project)]
     return SnapshotScheduleListResponse(
         total=len(rows), items=[svc.to_info(row) for row in rows]
     )
@@ -97,12 +105,17 @@ async def create_schedule(
 ):
     """Create a schedule, refusing anything the cluster's own state contradicts.
 
-    important: `verify_cluster_access` runs BEFORE the try, like every handler on the sibling
-    router. A 403 raised inside would be swallowed by the generic except and re-raised as a 500,
-    which turns a refusal into an outage.
+    important: the cluster and normalized project gates run before any database or LXD read. A
+    Partner on a shared cluster must not be able to use an instance name as a probe into another
+    organization's project.
     """
-    verify_cluster_access(body.host)
-    await svc.assert_actor_owns_cluster(db, user.email, body.host)
+    body.project = verify_project_access(body.host, body.project)
+    organization_id = await svc.assert_actor_can_schedule_target(
+        db,
+        user=user,
+        host=body.host,
+        project=body.project,
+    )
 
     client = await _client(lxd_service, body.host)
     from app.services.lxd import snapshots as snapshots_service
@@ -136,7 +149,7 @@ async def create_schedule(
         db,
         body=body,
         owner_email=user.email,
-        organization_id=await svc.resolve_owning_org(db, user, body.host),
+        organization_id=organization_id,
         instance_uuid=config.get("volatile.uuid"),
         cluster_fingerprint=await cluster_fingerprint(body.host),
         now=_now(),
@@ -163,7 +176,7 @@ async def update_schedule(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     schedule = await svc.get_owned(db, schedule_id, user.email)
-    verify_cluster_access(schedule.cluster_id)
+    schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
 
     # Re-read the policy: an instance can acquire an upstream schedule between the create and the
     # edit, and an edit that ignored that would quietly re-arm a schedule the runner must refuse.
@@ -202,7 +215,7 @@ async def pause_schedule(
 ):
     """Idempotent. Pausing a paused schedule is not an error, it is the state being asked for."""
     schedule = await svc.get_owned(db, schedule_id, user.email)
-    verify_cluster_access(schedule.cluster_id)
+    schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
     schedule.state = "paused"
     schedule.paused_reason = f"Paused by {user.email}."
     schedule.due_slot = None
@@ -225,7 +238,24 @@ async def resume_schedule(
 ):
     """Resuming re-asks the question that paused it, rather than trusting that it went away."""
     schedule = await svc.get_owned(db, schedule_id, user.email)
-    verify_cluster_access(schedule.cluster_id)
+    schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
+
+    # The caller's current affiliation authorizes management of the row. The original owner's
+    # persisted affiliation authorizes its unattended writes. Resume needs both: otherwise a
+    # colleague could re-arm a schedule whose durable actor has left, only for the next tick to
+    # pause it again.
+    refusal = await schedule_authority.standing_authority_refusal(
+        db,
+        actor_email=schedule.owner_email,
+        organization_id=schedule.organization_id,
+        cluster_id=schedule.cluster_id,
+        project=schedule.project,
+    )
+    if refusal is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": refusal.code, "message": refusal.message},
+        )
 
     client = await _client(lxd_service, schedule.cluster_id)
     from app.services.lxd import snapshots as snapshots_service
@@ -278,7 +308,7 @@ async def delete_schedule(
     is gated on its own.
     """
     schedule = await svc.get_owned(db, schedule_id, user.email)
-    verify_cluster_access(schedule.cluster_id)
+    schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
     _audit("instance.snapshot.schedule.delete", schedule)
     await db.delete(schedule)
     await db.commit()
@@ -303,7 +333,7 @@ async def run_schedule_now(
     moment rather than for a slot that has not come round.
     """
     schedule = await svc.get_owned(db, schedule_id, user.email)
-    verify_cluster_access(schedule.cluster_id)
+    schedule.project = verify_project_access(schedule.cluster_id, schedule.project)
     if schedule.state != "active":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

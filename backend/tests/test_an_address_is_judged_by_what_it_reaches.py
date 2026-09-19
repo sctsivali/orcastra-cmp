@@ -26,6 +26,7 @@ does not count as private and which is the Tailscale range this deployment's own
 """
 
 import ast
+import socket
 from pathlib import Path
 
 import httpx
@@ -41,6 +42,27 @@ from app.core.url_safety import (
 
 # A host that resolves to real public addresses, so the DNS half of the check runs for real.
 PUBLIC = "https://example.com"
+
+
+@pytest.fixture(autouse=True)
+def _documented_public_host_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the SSRF suite hermetic while still exercising DNS address classification."""
+    real_getaddrinfo = socket.getaddrinfo
+
+    def resolve(host, port, *args, **kwargs):
+        if host == "example.com":
+            return [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    ("93.184.216.34", port or 443),
+                )
+            ]
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr("app.core.url_safety.socket.getaddrinfo", resolve)
 
 
 # ── the spelling that walked through ───────────────────────────────────────────────────────────

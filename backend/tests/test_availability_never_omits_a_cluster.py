@@ -81,6 +81,7 @@ class _Cache:
 @pytest.fixture
 def client(monkeypatch):
     from app.routers import nodes as nodes_module
+    from app.core.auth import AuthenticatedUser
     from app.services.lxd import status as lxd_status
     from app.services.lxd_service import get_lxd_service
     from app.core.rbac import get_current_user
@@ -98,7 +99,13 @@ def client(monkeypatch):
     app = FastAPI()
     app.include_router(nodes_module.router)
     app.dependency_overrides[get_lxd_service] = _Service
-    app.dependency_overrides[get_current_user] = lambda: None
+    tenant = AuthenticatedUser(
+        user_id="availability-tenant",
+        email="tenant@example.test",
+        groups=["role_tenant"],
+        roles=["role_tenant"],
+    )
+    app.dependency_overrides[get_current_user] = lambda: tenant
     app.dependency_overrides[org_scope_dependency] = lambda: None
     yield TestClient(app, raise_server_exceptions=False), cache
     for name in ALL:
@@ -139,15 +146,14 @@ def test_it_never_answers_503_for_a_dead_fleet(client):
     assert response.status_code == 200, response.text
 
 
-def test_offline_rows_carry_a_short_operator_safe_reason(client):
+def test_offline_rows_carry_a_machine_safe_reason_code(client):
     tc, _ = client
     body = tc.get("/nodes/availability").json()
     for row in body["clusters"]:
         if row["status"] == ClusterStatus.ONLINE.value:
             continue
-        assert row["reason"], f"{row['name']} is not online and must say why"
-        assert len(row["reason"]) <= 200
-        assert "Traceback" not in row["reason"]
+        assert row["reason_code"], f"{row['name']} is not online and must say why"
+        assert "reason" not in row, "Tenant availability must omit operator-facing detail"
 
 
 def test_the_name_is_the_id_a_create_request_sends(client):
@@ -182,7 +188,7 @@ def test_an_all_offline_result_is_still_cached(client):
     assert any(NODES_AVAILABILITY_CACHE_KEY in k for k in cache.writes)
 
 
-def test_a_reason_never_carries_infrastructure_detail(client):
+def test_tenant_availability_omits_human_and_infrastructure_detail(client):
     """The picker is reachable by every role down to tenant.
 
     Raw exception text from this layer carries the Vault base URL, the KV path to a cluster's
@@ -192,7 +198,10 @@ def test_a_reason_never_carries_infrastructure_detail(client):
     tc, _ = client
     body = tc.get("/nodes/availability").json()
     for row in body["clusters"]:
-        reason = row["reason"] or ""
+        assert "endpoint" not in row
+        assert "node_type" not in row
+        assert "reason" not in row
+        reason = row.get("reason") or ""
         for leak in ("secret/data", "vault", "client.key", "client.crt", "/tmp/",
                      "Traceback", "HTTPSConnectionPool", "http://", "https://"):
             assert leak.lower() not in reason.lower(), f"{row['name']} leaked {leak!r}: {reason}"
@@ -214,4 +223,5 @@ def test_a_probe_exception_does_not_become_the_reason(client, monkeypatch):
     body = tc.get("/nodes/availability").json()
     assert body["total_count"] == len(ALL), "a raising probe must still name every cluster"
     for row in body["clusters"]:
-        assert "vault" not in (row["reason"] or "").lower(), row
+        assert "reason" not in row
+        assert "vault" not in (row.get("reason") or "").lower(), row

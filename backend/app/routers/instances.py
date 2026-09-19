@@ -8,6 +8,7 @@ from typing import Optional
 from urllib.parse import urlparse
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
@@ -21,6 +22,10 @@ from app.models.schemas import (
     VMActionResponse,
     VMStatus,
     InstanceMetrics,
+    InstanceLimitSpecification,
+    InstanceRootDiskSpecification,
+    InstanceSpecification,
+    InstanceSpecificationsResponse,
 )
 from app.services.lxd_service import (
     LXDService,
@@ -31,15 +36,19 @@ from app.services.lxd_service import (
 )
 from app.services.lxd.exceptions import LXDProjectLimitError
 from app.core.single_flight import single_flight
+from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.api_key_capabilities import is_valid_project_name
 from app.core.org_scope import (
-    org_scope_dependency,
-    verify_cluster_access,
-    get_scope_cache_key,
+    can_view_instance,
     check_tenant_permission,
-    verify_tenant_permission,
+    get_scope_cache_key,
+    org_scope_dependency,
     project_is_visible,
+    verify_cluster_access,
+    verify_instance_view_access,
+    verify_project_access,
+    verify_tenant_permission,
 )
 from app.core.config import get_settings
 from app.services.orcahub_webhook import schedule_orcahub_event
@@ -66,6 +75,84 @@ router = APIRouter(
     tags=["Instances"],
     dependencies=[Depends(require_tenant()), Depends(org_scope_dependency)],
 )
+
+
+def _limit_specification(
+    vm: VMInfo,
+    config_key: str,
+    effective_value: Optional[str],
+) -> InstanceLimitSpecification:
+    configured = (vm.config or {}).get(config_key) if isinstance(vm.config, dict) else None
+    if configured not in (None, ""):
+        return InstanceLimitSpecification(value=str(configured), source="explicit")
+    if vm.effective_limits_known:
+        if effective_value not in (None, ""):
+            return InstanceLimitSpecification(value=str(effective_value), source="inherited")
+        # LXD VMs have daemon defaults even when neither the instance nor a profile names a
+        # limit. Containers do not. Keep that provenance distinct from both "unlimited" and
+        # an inherited value so the UI does not invent host capacity or misstate the purchase.
+        if vm.type == "virtual-machine":
+            defaults = {"limits.cpu": "1", "limits.memory": "1GiB"}
+            if config_key in defaults:
+                return InstanceLimitSpecification(
+                    value=defaults[config_key], source="default"
+                )
+        return InstanceLimitSpecification(value=None, source="unlimited")
+    return InstanceLimitSpecification(value=None, source="unknown")
+
+
+def _root_device(devices: Optional[dict]) -> Optional[dict]:
+    if not isinstance(devices, dict):
+        return None
+    for device in devices.values():
+        if not isinstance(device, dict) or device.get("type") != "disk":
+            continue
+        # Device names are operator-controlled. A data disk can legitimately be named "root";
+        # only the mount path identifies the instance root disk.
+        if device.get("path") == "/":
+            return device
+    return None
+
+
+def _root_disk_specification(vm: VMInfo) -> InstanceRootDiskSpecification:
+    explicit = _root_device(vm.devices)
+    effective = _root_device(vm.expanded_devices)
+    pool = (effective or explicit or {}).get("pool")
+    explicit_size = (explicit or {}).get("size")
+    effective_size = (effective or {}).get("size")
+    if explicit_size not in (None, ""):
+        return InstanceRootDiskSpecification(
+            value=str(explicit_size), pool=pool, source="explicit"
+        )
+    if effective_size not in (None, ""):
+        return InstanceRootDiskSpecification(
+            value=str(effective_size), pool=pool, source="inherited"
+        )
+    if vm.expanded_devices_known and effective is not None:
+        return InstanceRootDiskSpecification(value=None, pool=pool, source="pool_default")
+    return InstanceRootDiskSpecification(value=None, pool=pool, source="unknown")
+
+
+def _instance_specification(vm: VMInfo) -> InstanceSpecification:
+    expanded = vm.expanded_devices if isinstance(vm.expanded_devices, dict) else {}
+    gpu_devices = sorted(
+        name
+        for name, device in expanded.items()
+        if isinstance(device, dict) and device.get("type") == "gpu"
+    )
+    return InstanceSpecification(
+        name=vm.name,
+        host=vm.host,
+        project=vm.project or "default",
+        status=vm.status,
+        type=vm.type,
+        architecture=vm.architecture or None,
+        cpu=_limit_specification(vm, "limits.cpu", vm.effective_cpu_limit),
+        memory=_limit_specification(vm, "limits.memory", vm.effective_memory_limit),
+        root_disk=_root_disk_specification(vm),
+        gpu_count=len(gpu_devices),
+        gpu_devices=gpu_devices,
+    )
 
 
 def _validate_image_server(image_server: Optional[str]) -> None:
@@ -214,6 +301,76 @@ async def list_instances(
 
 
 @router.get(
+    "/specifications",
+    response_model=InstanceSpecificationsResponse,
+    summary="List visible instance specifications",
+    description=(
+        "Return a safe projection of the effective CPU, memory, root disk, and GPU "
+        "configuration for every instance the caller may view."
+    ),
+)
+@single_flight("instances:specifications")
+async def list_instance_specifications(
+    lxd_service: LXDService = Depends(get_lxd_service),
+    fresh: bool = False,
+):
+    """List actual LXD specifications without exposing raw instance configuration."""
+    cache = get_cache_manager()
+    cache_key = get_scope_cache_key("instances:specifications")
+    cached = None if fresh else cache.get("api_responses", cache_key)
+    if cached is not None:
+        return InstanceSpecificationsResponse(**cached)
+
+    try:
+        generation = cache.instance_list_generation()
+        all_vms, connected_nodes, incomplete_nodes = (
+            await lxd_service.list_all_vms_with_failures()
+        )
+        visible = [
+            vm
+            for vm in all_vms
+            if can_view_instance(vm.host, vm.project or "default", vm.name)
+        ]
+        specifications = sorted(
+            (_instance_specification(vm) for vm in visible),
+            key=lambda item: (item.host, item.project, item.name),
+        )
+        # The bounded inventory fan-out already names every registered cluster that failed or
+        # answered partially. Reading get_node_names() here repeated a synchronous Vault call on
+        # the event loop after all LXD work had been offloaded.
+        unreachable = sorted(set(incomplete_nodes))
+        response = InstanceSpecificationsResponse(
+            total=len(specifications),
+            instances=specifications,
+            unreachable_nodes=unreachable,
+            collected_at=datetime.now(timezone.utc),
+        )
+
+        # No cluster answer is an outage report, not a stable empty inventory. A partial answer
+        # is cacheable because `unreachable_nodes` preserves exactly what was missing.
+        if connected_nodes:
+            if cache.instance_list_generation() != generation:
+                logger.info(
+                    "Not caching instance specifications: an instance changed during the read"
+                )
+            else:
+                cache.set(
+                    "api_responses",
+                    cache_key,
+                    response.model_dump(mode="json"),
+                    ttl=30,
+                )
+        return response
+    except LXDConnectionError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Error listing instance specifications: %s", exc)
+        raise HTTPException(status_code=500, detail="Could not read instance specifications")
+
+
+@router.get(
     "/{instance_name}",
     response_model=VMInfo,
     summary="Get instance details",
@@ -226,19 +383,34 @@ async def get_instance(
         None,
         description=(
             "LXD project the instance belongs to. A name is unique per project, not per host, "
-            "so omitting this searches every project and returns the first match."
+            "so omitting this searches only projects visible to the caller."
         ),
     ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Get details for a specific instance."""
-    verify_cluster_access(host)
+    """Get one visible instance, searching only authorized projects when omitted."""
+    scoped_project: Optional[str] = None
+    project_filter = None
+    if project is None:
+        verify_cluster_access(host)
+        project_filter = lambda candidate: can_view_instance(  # noqa: E731
+            host, candidate, instance_name
+        )
+    else:
+        scoped_project = verify_instance_view_access(host, project, instance_name)
     try:
-        vm = await lxd_service.get_vm(instance_name, host, project)
+        if project_filter is None:
+            vm = await lxd_service.get_vm(instance_name, host, scoped_project)
+        else:
+            vm = await lxd_service.get_vm(
+                instance_name,
+                host,
+                scoped_project,
+                project_filter=project_filter,
+            )
         if not vm:
             raise HTTPException(status_code=404, detail=f"Instance {instance_name} not found on {host}")
-        # enforce tenant ACL on individual instance access
-        verify_tenant_permission(host, vm.project or "default", vm.name, "view")
+        verify_instance_view_access(host, vm.project or "default", vm.name)
         return vm
     except HTTPException:
         # 404 (not found) / 403 (ACL). Don't let the generic handler mask these.
@@ -268,12 +440,11 @@ async def create_instance(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new instance."""
-    verify_cluster_access(request.host)
     # important: bound the project before anything reads it. The NIC pre-flight's refusal
     # names the networks available in the target project, which without this gate turns a
     # deliberately bad create into an enumeration oracle for another organization's networks.
-    if not project_is_visible(request.host, request.project or "default"):
-        raise HTTPException(status_code=403, detail="Access denied to this project")
+    project = verify_project_access(request.host, request.project)
+    request = request.model_copy(update={"project": project})
     _validate_image_server(request.image_server)
     try:
         result = await lxd_service.create_instance(
@@ -417,13 +588,12 @@ async def start_instance(
     _: None = Depends(check_read_only_mode),
 ):
     """Start an instance."""
-    verify_cluster_access(request.host)
     # important: ONE project value is authorized and acted on. This checked the ACL against
     # `request.project or "default"` and then handed `request.project` to the service, which
     # searches EVERY project when it is None and returns the first hit. A caller holding
     # `operate` on `default` was therefore authorized there while the action ran against
     # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
-    project = request.project or "default"
+    project = verify_instance_view_access(request.host, request.project, instance_name)
     # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
@@ -505,13 +675,12 @@ async def stop_instance(
     _: None = Depends(check_read_only_mode),
 ):
     """Stop an instance."""
-    verify_cluster_access(request.host)
     # important: ONE project value is authorized and acted on. This checked the ACL against
     # `request.project or "default"` and then handed `request.project` to the service, which
     # searches EVERY project when it is None and returns the first hit. A caller holding
     # `operate` on `default` was therefore authorized there while the action ran against
     # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
-    project = request.project or "default"
+    project = verify_instance_view_access(request.host, request.project, instance_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
@@ -593,13 +762,12 @@ async def restart_instance(
     _: None = Depends(check_read_only_mode),
 ):
     """Restart an instance."""
-    verify_cluster_access(request.host)
     # important: ONE project value is authorized and acted on. This checked the ACL against
     # `request.project or "default"` and then handed `request.project` to the service, which
     # searches EVERY project when it is None and returns the first hit. A caller holding
     # `operate` on `default` was therefore authorized there while the action ran against
     # whichever project LXD listed first, which on a shared cluster is another tenant's instance.
-    project = request.project or "default"
+    project = verify_instance_view_access(request.host, request.project, instance_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, instance_name, "operate")
     try:
@@ -685,7 +853,7 @@ async def delete_instance(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete an instance."""
-    verify_cluster_access(host)
+    project = verify_project_access(host, project)
     try:
         # important: everything below is stamped with the project the deletion ACTUALLY used.
         # A caller that named none was resolved across projects and then had its tags, webhook,
@@ -800,15 +968,7 @@ async def get_instance_metrics(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get metrics for a specific instance."""
-    verify_cluster_access(host)
-    # important: this route had no tenant check at all, and the reader behind it discarded the
-    # project and searched every one of them. A tenant scoped to a single instance on a shared
-    # cluster could therefore read any other tenant's live CPU, memory, disk and network by
-    # asking for their instance by name. Authorized and read on ONE project value, like the
-    # power routes above.
-    scoped_project = project or "default"
-    if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(host, scoped_project, instance_name, "view")
+    scoped_project = verify_instance_view_access(host, project, instance_name)
     try:
         metrics = await lxd_service.get_instance_metrics(host, instance_name, scoped_project)
         if not metrics:
@@ -819,8 +979,15 @@ async def get_instance_metrics(
         # `except Exception` below and answers 500, which pages an engineer for an
         # offline cluster.
         raise HTTPException(status_code=503, detail=str(e))
+    except (BlockingTimeout, BlockingPoolFull) as e:
+        logger.warning("Instance metrics temporarily unavailable: %s", e)
+        raise HTTPException(status_code=503, detail="Instance metrics are temporarily unavailable")
     except HTTPException:
         raise
+    except LXDOperationError as e:
+        if "not found" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error getting metrics for {instance_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))

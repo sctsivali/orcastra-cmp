@@ -33,7 +33,7 @@ from app.core.cache import get_cache_manager
 from app.core.lxd_errors import lxd_http_error
 from app.core.org_scope import (
     org_scope_dependency,
-    verify_cluster_access,
+    verify_project_access,
     verify_tenant_permission,
 )
 from app.core.single_flight import rebuild_lock, release_lock
@@ -104,11 +104,11 @@ def _assert_snapshot_surface_enabled() -> None:
 
 def _enforce_snapshot_access(
     host: str,
-    project: str,
+    project: Optional[str],
     instance_name: Optional[str],
     *,
     need_operate: bool = False,
-) -> None:
+) -> str:
     """Authorize a snapshot action for the current caller.
 
     A no-op for Admin and Partner, who carry no tenant ACL. For a tenant the `snapshot`
@@ -120,12 +120,15 @@ def _enforce_snapshot_access(
     by the generic except and re-raised as a 500, which reads as a broken server rather than a
     refusal.
     """
+    scoped_project = verify_project_access(host, project)
+    verify_tenant_permission(host, scoped_project, instance_name, "view")
     _assert_snapshot_surface_enabled()
-    verify_tenant_permission(host, project, instance_name, "snapshot")
+    verify_tenant_permission(host, scoped_project, instance_name, "snapshot")
     if need_operate:
         # Restore stops the instance and discards everything written since the snapshot. That is
         # a lifecycle action, so it needs the lifecycle permission on top of the snapshot one.
-        verify_tenant_permission(host, project, instance_name, "operate")
+        verify_tenant_permission(host, scoped_project, instance_name, "operate")
+    return scoped_project
 
 
 def _validated_target(snapshot_name: str) -> str:
@@ -294,8 +297,7 @@ async def list_snapshots(
     project: str = Query("default", description="LXD project the instance lives in"),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    verify_cluster_access(host)
-    _enforce_snapshot_access(host, project, instance_name)
+    project = _enforce_snapshot_access(host, project, instance_name)
 
     client = await _client(lxd_service, host)
     try:
@@ -332,8 +334,8 @@ async def create_snapshot(
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_tenant()),
 ):
-    verify_cluster_access(body.host)
-    _enforce_snapshot_access(body.host, body.project, instance_name)
+    project = _enforce_snapshot_access(body.host, body.project, instance_name)
+    body = body.model_copy(update={"project": project})
 
     client = await _client(lxd_service, body.host)
     policy = await _read_policy(client, instance_name, body.project)
@@ -490,8 +492,7 @@ async def delete_snapshot(
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_tenant()),
 ):
-    verify_cluster_access(host)
-    _enforce_snapshot_access(host, project, instance_name)
+    project = _enforce_snapshot_access(host, project, instance_name)
 
     # important: name safety, then ownership, both before a client is opened. Everything
     # decidable from the request alone is decided before anything touches the cluster, which is
@@ -606,8 +607,10 @@ async def restore_snapshot(
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_tenant()),
 ):
-    verify_cluster_access(body.host)
-    _enforce_snapshot_access(body.host, body.project, instance_name, need_operate=True)
+    project = _enforce_snapshot_access(
+        body.host, body.project, instance_name, need_operate=True
+    )
+    body = body.model_copy(update={"project": project})
 
     if body.confirm_name != instance_name:
         raise HTTPException(

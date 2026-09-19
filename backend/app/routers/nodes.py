@@ -15,6 +15,7 @@ from app.models.schemas import (
     NodeResources,
     NodeUpdateRequest,
     NodeUpdateResponse,
+    GPUCardInfo,
     GpuCardListResponse,
 )
 from app.services.lxd import status as lxd_status
@@ -27,7 +28,13 @@ from app.services.lxd_service import (
 from app.core.single_flight import single_flight
 from app.core.config import get_settings
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, get_scope_cache_key
+from app.core.org_scope import (
+    get_scope_cache_key,
+    org_scope_dependency,
+    verify_cluster_access,
+    visible_projects_for,
+)
+from app.core.rbac import Role, get_highest_role, resolve_roles
 from app.core.vault_client import get_vault_client
 from app.core import vault_status
 from app.core.org_scope import apply_cluster_filter
@@ -93,6 +100,81 @@ async def _read_registry(lxd_service: LXDService) -> RegistryRead:
         cluster_ids=apply_cluster_filter(read.cluster_ids), source=read.source, readable=read.readable
     )
 
+def _availability_for_user(
+    response: ClusterAvailabilityResponse,
+    user: AuthenticatedUser,
+) -> ClusterAvailabilityResponse:
+    """Remove control-plane metadata from the Tenant availability projection.
+
+    Build new models rather than mutating rows returned from Redis. The same cached body may be
+    served to a Partner later in the process and must retain its endpoint, hypervisor type, and
+    curated operator-facing reason.
+    """
+    if get_highest_role(resolve_roles(user)) in (Role.ADMIN, Role.PARTNER):
+        return response
+    return response.model_copy(
+        update={
+            "clusters": [
+                row.model_copy(
+                    update={"endpoint": None, "node_type": None, "reason": None}
+                )
+                for row in response.clusters
+            ]
+        }
+    )
+
+
+def _resources_for_project_scope(
+    node_name: str,
+    resources: NodeResources | None,
+) -> NodeResources | None:
+    """Redact GPU owners when a Partner is project-bound on a shared cluster.
+
+    GPU discovery records only an instance name. Without its project, the server cannot prove
+    that name belongs to a project this Partner may inspect. Return fresh models so neither a
+    cached node response nor the shared LXD inventory is mutated for the next request.
+    """
+    if resources is None or visible_projects_for(node_name) is None:
+        return resources
+    return resources.model_copy(
+        update={
+            "gpu_cards": _gpu_cards_for_project_scope(
+                node_name,
+                resources.gpu_cards,
+            )
+        }
+    )
+
+
+def _gpu_cards_for_project_scope(
+    node_name: str,
+    cards: list[GPUCardInfo],
+) -> list[GPUCardInfo]:
+    """Return project-safe GPU card copies without rebuilding NodeResources."""
+    if visible_projects_for(node_name) is None:
+        return cards
+    return [card.model_copy(update={"used_by": None}) for card in cards]
+
+
+def _nodes_for_project_scope(response: NodesStatusResponse) -> NodesStatusResponse:
+    """Apply project-safe resource projection to every node, including cached bodies."""
+    return response.model_copy(
+        update={
+            "nodes": [
+                node.model_copy(
+                    update={
+                        "resources": _resources_for_project_scope(
+                            node.name,
+                            node.resources,
+                        )
+                    }
+                )
+                for node in response.nodes
+            ]
+        }
+    )
+
+
 
 @router.get(
     "",
@@ -107,6 +189,7 @@ async def _read_registry(lxd_service: LXDService) -> RegistryRead:
 async def get_nodes_status(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get status of all LXD nodes including Vault-registered clusters."""
     
@@ -118,7 +201,7 @@ async def get_nodes_status(
     cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
         logger.debug("Returning cached nodes status")
-        return NodesStatusResponse(**cached_response)
+        return _nodes_for_project_scope(NodesStatusResponse(**cached_response))
     
     # Not in cache - fetch fresh data using ASYNC PARALLEL version
     statuses = await lxd_service.check_nodes_status_async()
@@ -142,7 +225,7 @@ async def get_nodes_status(
     cache.set("api_responses", cache_key, response.model_dump(), ttl=180)
     logger.debug("Cached nodes status for 180 seconds")
     
-    return response
+    return _nodes_for_project_scope(response)
 
 
 
@@ -159,6 +242,7 @@ async def get_nodes_status(
 async def get_node_names(
     response: Response,
     lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get list of configured node names.
 
@@ -186,6 +270,7 @@ async def get_node_names(
 @router.get(
     "/availability",
     response_model=ClusterAvailabilityResponse,
+    response_model_exclude_none=True,
     summary="Get cluster availability",
     description=(
         "Per-cluster reachability for node pickers. Cheap by construction: it rides the cached "
@@ -196,6 +281,7 @@ async def get_node_names(
 async def get_nodes_availability(
     lxd_service: LXDService = Depends(get_lxd_service),
     fresh: bool = False,
+    _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Availability of every cluster in the caller's org scope.
 
@@ -203,7 +289,8 @@ async def get_nodes_availability(
     endpoint's payload, not its failure, and a picker that 503s tells an operator nothing.
     """
     try:
-        return await lxd_status.resolve_availability(lxd_service, fresh=fresh)
+        response = await lxd_status.resolve_availability(lxd_service, fresh=fresh)
+        return _availability_for_user(response, _rbac)
     except lxd_status.RegistryUnavailable:
         # A lost registry with nothing known: the probe would read an empty fleet and report
         # it as "no clusters". While the last known registry is served the probe runs over it.
@@ -226,11 +313,13 @@ async def get_nodes_availability(
 async def get_node_resources(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Get available resources for a specific node."""
     verify_cluster_access(node_name)
     try:
-        return await asyncio.to_thread(lxd_service.get_node_resources_detail, node_name)
+        resources = await asyncio.to_thread(lxd_service.get_node_resources_detail, node_name)
+        return _resources_for_project_scope(node_name, resources)
     except HTTPException:
         raise
     except LXDOperationError as e:
@@ -246,6 +335,7 @@ async def get_node_resources(
 async def get_node_gpus(
     node_name: str,
     lxd_service: LXDService = Depends(get_lxd_service),
+    _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """List the GPUs on a specific node, classified for the passthrough picker."""
     verify_cluster_access(node_name)
@@ -255,9 +345,10 @@ async def get_node_gpus(
         # note: every detected card is returned, display controllers included. Each carries
         # its class and an `attachable` flag so the picker can rank and mark them rather than
         # hide hardware the operator can see in LXD.
+        cards = _gpu_cards_for_project_scope(node_name, inventory.cards)
         return GpuCardListResponse(
             host=node_name,
-            gpus=inventory.cards,
+            gpus=cards,
             total=inventory.gpu_cards_total,
             compute_total=inventory.gpu_total,
         )

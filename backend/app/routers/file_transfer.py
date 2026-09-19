@@ -5,16 +5,16 @@ Provides an endpoint to push files into LXD instances via the LXD Files API.
 Used by the terminal window's drag-and-drop file upload feature.
 """
 
+from concurrent.futures import ThreadPoolExecutor
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
-from concurrent.futures import ThreadPoolExecutor
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
-from app.services.lxd_service import get_lxd_service, LXDService, LXDConnectionError
 from app.core.dependencies import check_read_only_mode, require_partner
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
-from app.services.activity_logger import get_activity_logger
 from app.core.lxd_path import safe_segment
+from app.core.org_scope import org_scope_dependency, verify_instance_view_access
+from app.services.activity_logger import get_activity_logger
+from app.services.lxd_service import LXDConnectionError, LXDService, get_lxd_service
 
 logger = logging.getLogger(__name__)
 
@@ -117,9 +117,12 @@ async def push_file_to_instance(
     - Max file size: 100 MB
     - Instance must be running
     """
-    verify_cluster_access(host)
-    # Read file content with size check
-    file_data = await file.read()
+    project = verify_instance_view_access(host, project, instance_name)
+
+    # Read one byte beyond the limit so a refused upload cannot allocate an arbitrarily large
+    # body in memory. Authorization deliberately runs first: a caller must not make the server
+    # consume an upload for an instance it cannot see.
+    file_data = await file.read(MAX_UPLOAD_SIZE + 1)
     if len(file_data) > MAX_UPLOAD_SIZE:
         raise HTTPException(
             status_code=413,
@@ -154,6 +157,7 @@ async def push_file_to_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=host,
+            target_project=project,
             result="success",
             details={
                 "filename": file.filename,
@@ -177,6 +181,7 @@ async def push_file_to_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=host,
+            target_project=project,
             result="failure",
             error_message=str(e),
         )
@@ -192,6 +197,7 @@ async def push_file_to_instance(
             target_type="instance",
             target_id=instance_name,
             target_host=host,
+            target_project=project,
             result="failure",
             error_message=str(e),
         )

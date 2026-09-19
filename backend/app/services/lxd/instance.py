@@ -5,7 +5,7 @@ Handles create, start, stop, restart, delete, and list operations for instances.
 
 import logging
 import asyncio
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Callable, List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 from pylxd.exceptions import LXDAPIException, ClientConnectionFailed
 from requests import exceptions as requests_exc
@@ -91,6 +91,18 @@ _DELETE_WAIT_SECONDS = 300
 _rebuild_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lxd_rebuild")
 _REBUILD_MAX_IN_FLIGHT = 8
 
+# POST /vms is intentionally synchronous from the caller's perspective, but pylxd's
+# connect/create(wait=True)/start/readback sequence is blocking. Keep it off the event loop and
+# refuse excess work instead of building an unbounded 30-minute queue behind a slow image pull.
+_CREATE_LXD_READ_TIMEOUT_SECONDS = 1800
+_CREATE_WALL_TIMEOUT_SECONDS = (
+    _CREATE_LXD_READ_TIMEOUT_SECONDS
+    + _START_WAIT_SECONDS
+    + _GRACEFUL_READ_MARGIN_SECONDS
+)
+_create_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="lxd_create")
+_CREATE_MAX_IN_FLIGHT = 4
+
 
 def _is_graceful_timeout(exc: Exception) -> bool:
     """True if `exc` means the guest never completed a graceful shutdown.
@@ -126,10 +138,26 @@ def _lxd_snapshot_names(client, name: str, project: str) -> List[str]:
         logger.warning("Could not list snapshots for %s: %s", name, e)
         return []
 
-# Thread pool for the per-node instance fan-out. Sized when it also carried one /state call
-# per running instance; the state now arrives inline with the list, so the pool only carries
-# one read per node.
-_instance_executor = ThreadPoolExecutor(max_workers=50, thread_name_prefix="instance_state_")
+# Instance inventory and detail reads are synchronous all the way down: the cold path reads
+# Vault, reconnects and validates a pylxd client, and the detail projection may call /state.
+# Keep those paths off the event loop and give each one an explicit wall-clock and concurrency
+# budget. The underlying transports already carry their socket bounds: Vault point reads use
+# (2s, 3s), its registry LIST uses (3s, 10s), pooled LXD reads use (3s, 8s), and connection
+# validation uses (3s, 5s). The wall budgets below outlive those sockets while still refusing a
+# stalled or overloaded upstream promptly.
+_INSTANCE_REGISTRY_TIMEOUT_SECONDS = 15.0
+_INSTANCE_NODE_TIMEOUT_SECONDS = 30.0
+_INSTANCE_DETAIL_TIMEOUT_SECONDS = 30.0
+_INSTANCE_INVENTORY_WORKERS = 20
+_INSTANCE_DETAIL_WORKERS = 8
+_instance_inventory_executor = ThreadPoolExecutor(
+    max_workers=_INSTANCE_INVENTORY_WORKERS,
+    thread_name_prefix="instance_inventory_",
+)
+_instance_detail_executor = ThreadPoolExecutor(
+    max_workers=_INSTANCE_DETAIL_WORKERS,
+    thread_name_prefix="instance_detail_",
+)
 
 # Failed-node skip is delegated to the shared circuit breaker
 # (app.services.lxd.health) so every connection path skips the same dead cluster.
@@ -151,6 +179,8 @@ def _vm_info_from_row(row: Dict[str, Any], node_name: str, node_endpoint: str) -
     a stopped instance's empty state yields none. `resources` stays unset on the list path.
     """
     config_data = row.get("config") or {}
+    expanded_config = row.get("expanded_config")
+    expanded_devices = row.get("expanded_devices")
     tags_str = config_data.get("user.tags", "")
     tags = [t.strip() for t in tags_str.split(",") if t.strip()] if tags_str else []
     return VMInfo(
@@ -168,7 +198,19 @@ def _vm_info_from_row(row: Dict[str, Any], node_name: str, node_endpoint: str) -
         resources=None,
         config=config_data,
         devices=row.get("devices") or {},
-        expanded_devices=row.get("expanded_devices") or {},
+        expanded_devices=expanded_devices or {},
+        effective_cpu_limit=(
+            expanded_config.get("limits.cpu")
+            if isinstance(expanded_config, dict)
+            else None
+        ),
+        effective_memory_limit=(
+            expanded_config.get("limits.memory")
+            if isinstance(expanded_config, dict)
+            else None
+        ),
+        effective_limits_known=isinstance(expanded_config, dict),
+        expanded_devices_known=isinstance(expanded_devices, dict),
         profiles=row.get("profiles", []),
         tags=tags,
         project=row.get("project") or "default",
@@ -294,26 +336,6 @@ class InstanceManager:
             logger.warning(f"Failed to get endpoint for {node_name} from Vault: {e}")
         return "unknown"
     
-    def _get_all_node_endpoints(self, node_names: list) -> dict:
-        """Batch fetch all node endpoints to reduce Vault calls."""
-        endpoints = {}
-        try:
-            settings = get_settings()
-            if self.cert_manager and self.cert_manager.vault:
-                for node_name in node_names:
-                    try:
-                        metadata = self.cert_manager.vault.vault_read(
-                            f"{settings.vault_clusters_path}/{node_name}/metadata",
-                            use_cache=True
-                        )
-                        endpoints[node_name] = metadata.get("endpoint", "unknown")
-                    except Exception as e:
-                        logger.debug(f"Could not get endpoint for {node_name}: {e}")
-                        endpoints[node_name] = "unknown"
-        except Exception as e:
-            logger.warning(f"Failed to batch fetch endpoints: {e}")
-        return endpoints
-    
     def _instance_to_vm_info(
         self, 
         instance, 
@@ -342,70 +364,130 @@ class InstanceManager:
             config=dict(instance.config) if instance.config else None,
             devices=jsonable_lxd(getattr(instance, "devices", None)) or {},
             expanded_devices=jsonable_lxd(getattr(instance, "expanded_devices", None)) or {},
+            effective_cpu_limit=(
+                (getattr(instance, "expanded_config", None) or {}).get("limits.cpu")
+            ),
+            effective_memory_limit=(
+                (getattr(instance, "expanded_config", None) or {}).get("limits.memory")
+            ),
+            effective_limits_known=isinstance(
+                getattr(instance, "expanded_config", None), dict
+            ),
+            expanded_devices_known=isinstance(
+                getattr(instance, "expanded_devices", None), dict
+            ),
             profiles=list(instance.profiles) if instance.profiles else [],
             tags=tags,
             location=_cluster_member(getattr(instance, "location", None)),
         )
     
     async def list_all_vms(self) -> Tuple[List[VMInfo], List[str]]:
-        """
-        List all VMs across all configured LXD nodes and all projects.
-        Returns tuple of (vm_list, connected_nodes).
-        Uses PARALLEL fetching across nodes for better performance.
-        """
-        # Get nodes from Vault (source of truth)
-        node_names = []
+        """List all instances while preserving the established two-value contract."""
+        vms, connected, _incomplete = await self.list_all_vms_with_failures()
+        return vms, connected
+
+    def _inventory_node_names_blocking(self) -> List[str]:
+        """Read the fleet registry from Vault, with the process registry as fallback."""
         if self.cert_manager:
             try:
                 node_names = self.cert_manager.list_clusters()
-                logger.debug(f"Found {len(node_names)} clusters in Vault: {node_names}")
-            except Exception as e:
-                logger.warning(f"Could not list Vault clusters: {e}")
-                node_names = self.connection_manager.get_node_names()
-        else:
-            node_names = self.connection_manager.get_node_names()
+                logger.debug("Found %s clusters in Vault: %s", len(node_names), node_names)
+                return node_names
+            except Exception as exc:
+                logger.warning("Could not list Vault clusters: %s", exc)
+        return self.connection_manager.get_node_names()
+
+    def _fetch_inventory_node(
+        self,
+        node_name: str,
+    ) -> Tuple[List[VMInfo], bool, bool]:
+        """Read endpoint metadata and instance state in the same bounded worker."""
+        endpoint = self._get_node_endpoint(node_name)
+        return self._fetch_vms_from_node_detailed(node_name, endpoint)
+
+    async def _fetch_inventory_node_bounded(
+        self,
+        node_name: str,
+    ) -> Tuple[List[VMInfo], bool, bool]:
+        return await run_blocking(
+            self._fetch_inventory_node,
+            node_name,
+            timeout=_INSTANCE_NODE_TIMEOUT_SECONDS,
+            label=f"instance.inventory[{node_name}]",
+            executor=_instance_inventory_executor,
+            max_in_flight=_INSTANCE_INVENTORY_WORKERS,
+        )
+
+    async def list_all_vms_with_failures(
+        self,
+    ) -> Tuple[List[VMInfo], List[str], List[str]]:
+        """
+        List all VMs across all configured LXD nodes and all projects.
+        Returns (vm_list, connected_nodes, incomplete_nodes). ``incomplete_nodes`` names every
+        registered cluster that did not produce a complete upstream answer, including
+        unreachable clusters, so callers do not need a second synchronous Vault read. Local
+        executor timeout or saturation is raised as service unavailability instead.
+        """
+        try:
+            node_names = await run_blocking(
+                self._inventory_node_names_blocking,
+                timeout=_INSTANCE_REGISTRY_TIMEOUT_SECONDS,
+                label="instance.inventory.registry",
+                executor=_instance_inventory_executor,
+                max_in_flight=_INSTANCE_INVENTORY_WORKERS,
+            )
+        except (BlockingTimeout, BlockingPoolFull) as exc:
+            raise LXDConnectionError(
+                "Instance inventory is temporarily unavailable"
+            ) from exc
 
         from app.core.org_scope import apply_cluster_filter
         node_names = apply_cluster_filter(node_names)
         
         if not node_names:
             logger.warning("No nodes found in Vault or connection manager")
-            return [], []
-        
-        # Batch fetch all endpoints upfront to reduce Vault calls
-        node_endpoints = self._get_all_node_endpoints(node_names)
-        
-        # Fetch from all nodes in PARALLEL using thread pool
-        loop = asyncio.get_event_loop()
-        tasks = [
-            loop.run_in_executor(
-                _instance_executor,
-                self._fetch_vms_from_node,
-                node_name,
-                node_endpoints.get(node_name, "unknown")
-            )
-            for node_name in node_names
-        ]
-        
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
+            return [], [], []
+
         # Aggregate results
         all_vms: List[VMInfo] = []
         connected_nodes: List[str] = []
-        
-        for i, result in enumerate(results):
-            node_name = node_names[i]
-            if isinstance(result, Exception):
-                logger.warning(f"Error fetching VMs from {node_name}: {result}")
-                continue
-            
-            vms, connected = result
-            if connected:
-                connected_nodes.append(node_name)
-                all_vms.extend(vms)
-        
+        incomplete_nodes: List[str] = []
+        capacity_errors: List[Exception] = []
+
+        # One request must not saturate its own executor when the fleet has more clusters than
+        # workers. Batches retain parallel fan-out while leaving the global in-flight cap honest
+        # across concurrent organization scopes.
+        for start in range(0, len(node_names), _INSTANCE_INVENTORY_WORKERS):
+            batch = node_names[start : start + _INSTANCE_INVENTORY_WORKERS]
+            results = await asyncio.gather(
+                *(self._fetch_inventory_node_bounded(node_name) for node_name in batch),
+                return_exceptions=True,
+            )
+            for node_name, result in zip(batch, results):
+                if isinstance(result, Exception):
+                    logger.warning("Error fetching VMs from %s: %s", node_name, result)
+                    incomplete_nodes.append(node_name)
+                    if isinstance(result, (BlockingTimeout, BlockingPoolFull)):
+                        capacity_errors.append(result)
+                    continue
+
+                vms, connected, complete = result
+                if connected:
+                    connected_nodes.append(node_name)
+                    all_vms.extend(vms)
+                if not connected or not complete:
+                    incomplete_nodes.append(node_name)
+
+        # Ordinary cluster failures return (connected=False) and remain a useful partial answer.
+        # A wall timeout or saturated executor means this backend could not finish the bounded
+        # read at all; do not cache that capacity incident as if the named cluster were offline.
+        if capacity_errors:
+            raise LXDConnectionError(
+                "Instance inventory is temporarily unavailable"
+            ) from capacity_errors[0]
+
         logger.info(f"Fetched {len(all_vms)} VMs from {len(connected_nodes)} nodes")
-        return all_vms, connected_nodes
+        return all_vms, connected_nodes, incomplete_nodes
     
     def fetch_node_instances(
         self, node_name: str, node_endpoint: str = ""
@@ -421,24 +503,41 @@ class InstanceManager:
 
         ``node_endpoint`` only fills ``VMInfo.host_endpoint``; it has no effect on the fetch.
         """
-        return self._fetch_vms_from_node(node_name, node_endpoint)
+        vms, connected, _complete = self._fetch_vms_from_node_detailed(
+            node_name,
+            node_endpoint,
+        )
+        return vms, connected
 
     def _fetch_vms_from_node(
-        self, 
-        node_name: str, 
-        node_endpoint: str
+        self,
+        node_name: str,
+        node_endpoint: str,
     ) -> Tuple[List[VMInfo], bool]:
+        """Compatibility wrapper for callers that do not consume partial-read detail."""
+        vms, connected, _complete = self._fetch_vms_from_node_detailed(
+            node_name,
+            node_endpoint,
+        )
+        return vms, connected
+
+    def _fetch_vms_from_node_detailed(
+        self,
+        node_name: str,
+        node_endpoint: str,
+    ) -> Tuple[List[VMInfo], bool, bool]:
         """
         Fetch all VMs from a single node (synchronous, for thread pool execution).
-        Returns tuple of (vm_list, is_connected).
+        Returns (vm_list, is_connected, is_complete).
         """
         from app.services.lxd import health
         vms: List[VMInfo] = []
+        complete = True
 
         # Skip clusters the shared breaker marked as recently failed.
         if health.is_tripped(node_name):
             logger.debug(f"Skipping {node_name} - recently failed (cached)")
-            return [], False
+            return [], False, False
 
         try:
             # Try to get or reconnect client
@@ -468,7 +567,7 @@ class InstanceManager:
                     # overwrite here would make it read as powered off everywhere.
                     if health.get_kind(node_name) is None:
                         health.record_failure(node_name, str(e))
-                    return [], False
+                    return [], False, False
             
             if client is None:
                 # important: do NOT trip the breaker on a missing client. connection.py's
@@ -484,7 +583,7 @@ class InstanceManager:
                     "No client for %s in this worker; reporting unreachable without tripping "
                     "the breaker", node_name
                 )
-                return [], False
+                return [], False, False
             
             # One request for every project's instances, state included (recursion=2), on a
             # daemon that advertises instance_all_projects; list_across_projects walks the
@@ -512,30 +611,67 @@ class InstanceManager:
                         "Error processing instance %s/%s on %s: %s",
                         row.get("project"), row.get("name"), node_name, e,
                     )
-            return vms, True
+                    complete = False
+            return vms, True, complete
             
         except Exception as e:
             logger.warning(f"Error fetching VMs from {node_name}: {e}")
-            return [], False
+            return [], False, False
     
     async def get_vm(
-        self, name: str, host: str, project: Optional[str] = None
+        self,
+        name: str,
+        host: str,
+        project: Optional[str] = None,
+        project_filter: Optional[Callable[[str], bool]] = None,
     ) -> Optional[VMInfo]:
         """Get a specific VM by name and host.
 
-        important: an instance name is unique per project, not per host. Without `project` this
-        searches every project and returns the first hit, so a name that exists twice on one
-        host resolves to whichever project LXD lists first. Callers that know the project must
-        pass it; it stays optional so the cross-project search remains the fallback for callers
-        that genuinely only have a name.
+        important: an instance name is unique per project, not per host. Without `project`,
+        callers at an authorization boundary must pass `project_filter` so only visible projects
+        are searched. Internal trusted callers may omit the filter when they intentionally need
+        the legacy cross-project lookup.
         """
+        try:
+            return await run_blocking(
+                self._get_vm_blocking,
+                name,
+                host,
+                project,
+                project_filter,
+                timeout=_INSTANCE_DETAIL_TIMEOUT_SECONDS,
+                label=f"instance.detail[{host}/{project or '*'}]",
+                executor=_instance_detail_executor,
+                max_in_flight=_INSTANCE_DETAIL_WORKERS,
+            )
+        except (BlockingTimeout, BlockingPoolFull) as exc:
+            raise LXDConnectionError(
+                "Instance detail is temporarily unavailable"
+            ) from exc
+
+    def _get_vm_blocking(
+        self,
+        name: str,
+        host: str,
+        project: Optional[str] = None,
+        project_filter: Optional[Callable[[str], bool]] = None,
+    ) -> Optional[VMInfo]:
+        """Run reconnect, project lookup, state reads, and projection in one worker."""
         try:
             client = self._get_client_with_reconnect(host)
             if client is None:
                 raise LXDConnectionError(f"Could not connect to {host}")
             endpoint = self._get_node_endpoint(host)
 
-            instance, project_name = find_instance_in_projects(client, name, project)
+            if project_filter is None:
+                instance, project_name = find_instance_in_projects(client, name, project)
+            else:
+                instance, project_name = find_instance_in_projects(
+                    client,
+                    name,
+                    project,
+                    project_filter=project_filter,
+                )
             
             if instance is None:
                 return None
@@ -554,6 +690,10 @@ class InstanceManager:
             
         except LXDConnectionError:
             raise
+        except (requests_exc.RequestException, ClientConnectionFailed) as exc:
+            raise LXDConnectionError(
+                f"Could not read instance {name} from {host}"
+            ) from exc
         except Exception as e:
             logger.error(f"Error getting VM {name} from {host}: {e}")
             raise LXDOperationError(f"Failed to get VM: {str(e)}")
@@ -980,6 +1120,7 @@ class InstanceManager:
             "image": kwargs.get("image"),
             "instance_type": kwargs.get("instance_type", "virtual-machine"),
             "profiles": kwargs.get("profiles"),
+            "project": kwargs.get("project", "default"),
         }
     )
     async def create_vm(
@@ -993,27 +1134,89 @@ class InstanceManager:
         cloud_init: Optional[str] = None,
         devices: Optional[Dict[str, Dict[str, str]]] = None,
         start_on_create: bool = True,
+        project: str = "default",
     ) -> VMInfo:
-        """Create a new VM."""
+        """Create a VM without running pylxd's blocking workflow on the event loop."""
         try:
-            client = self._get_client_with_reconnect(host)
-            if client is None:
+            return await run_blocking(
+                self._create_vm_blocking,
+                name,
+                host,
+                image,
+                instance_type,
+                profiles,
+                config,
+                cloud_init,
+                devices,
+                start_on_create,
+                project,
+                timeout=_CREATE_WALL_TIMEOUT_SECONDS,
+                label=f"create-vm[{host}/{project}/{name}]",
+                executor=_create_executor,
+                max_in_flight=_CREATE_MAX_IN_FLIGHT,
+            )
+        except BlockingTimeout as exc:
+            raise LXDOperationError(
+                f"VM creation on {host} timed out; it may still complete, so check the "
+                "instance list before retrying"
+            ) from exc
+        except BlockingPoolFull as exc:
+            raise LXDOperationError(
+                "Too many VM creations are already in progress on this backend; retry shortly"
+            ) from exc
+
+    def _create_vm_blocking(
+        self,
+        name: str,
+        host: str,
+        image: str,
+        instance_type: str,
+        profiles: Optional[List[str]],
+        config: Optional[Dict[str, str]],
+        cloud_init: Optional[str],
+        devices: Optional[Dict[str, Dict[str, str]]],
+        start_on_create: bool,
+        project: str,
+    ) -> VMInfo:
+        """Run the complete blocking create/start/readback transaction in one worker."""
+        try:
+            # Keep connection lookup and possible certificate reconnect in this worker too.
+            pooled_client = self._get_client_with_reconnect(host)
+            if pooled_client is None:
                 raise LXDConnectionError(f"Could not connect to {host}")
+
+            project = (project or "default").strip() or "default"
+            # pylxd binds a project to the client. Creating through the pooled client would
+            # silently place an authorized non-default request in `default`, then stamp the
+            # audit trail with the requested project. Build the scoped client before issuing
+            # any create call. The fallback preserves legacy default-project deployments whose
+            # connection manager predates short-lived project clients.
+            client = self.connection_manager.get_project_client(
+                host,
+                project,
+                (5, _CREATE_LXD_READ_TIMEOUT_SECONDS),
+            )
+            if client is None:
+                if project != "default":
+                    raise LXDOperationError(
+                        f"Could not open project '{project}' on {host}"
+                    )
+                client = pooled_client
             endpoint = self._get_node_endpoint(host)
-            
+
             # Build instance configuration
             instance_config = config or {}
-            
+
             # Add cloud-init if provided
             if cloud_init:
                 instance_config["user.user-data"] = cloud_init
-            
+
             # Determine source configuration
             source = {"type": "image"}
-            
+
             # A full fingerprint or the prefix `lxc image list` prints; anything else an alias
             source[image_source_key(image)] = image
-            
+
             # Create instance definition
             instance_def = {
                 "name": name,
@@ -1025,7 +1228,7 @@ class InstanceManager:
             
             if devices:
                 instance_def["devices"] = devices
-            
+
             # Create the instance
             if instance_type == "virtual-machine":
                 instance = client.virtual_machines.create(
@@ -1037,18 +1240,20 @@ class InstanceManager:
                     instance_def, 
                     wait=True
                 )
-            
+
             logger.info(f"Created {instance_type} {name} on {host}")
-            
+
             # Start if requested
             if start_on_create:
-                # create_vm is the blocking POST /vms contract and takes no project, so
-                # its client is the pooled default-project one.
-                instance = self._start_and_wait(instance, host, "default")
+                instance = self._start_and_wait(instance, host, project)
                 logger.info(f"Started {name} on {host}")
-            
-            return self._instance_to_vm_info(instance, host, endpoint)
-            
+
+            vm_info = self._instance_to_vm_info(instance, host, endpoint)
+            # Some pylxd versions omit `project` on a freshly-created wrapper. The project
+            # selected above is authoritative and must match the response and audit record.
+            vm_info.project = project
+            return vm_info
+
         except LXDAPIException as e:
             raise LXDOperationError(f"Failed to create VM: {str(e)}")
 

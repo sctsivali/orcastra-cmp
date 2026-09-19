@@ -377,8 +377,8 @@ class MetricsCollector:
     async def _fetch_availability(self):
         """Fetch cluster availability for cache warming."""
         try:
-            from app.routers.nodes import get_nodes_availability
-            result = await get_nodes_availability(lxd_service=self._lxd_service)
+            from app.services.lxd import status as lxd_status
+            result = await lxd_status.resolve_availability(self._lxd_service)
             return result.model_dump(mode="json") if hasattr(result, "model_dump") else result
         except Exception as e:
             logger.debug(f"Availability pre-warm fetch failed: {e}")

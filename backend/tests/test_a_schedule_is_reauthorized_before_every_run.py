@@ -16,6 +16,8 @@ import asyncio
 from datetime import datetime, timezone
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
 
 from app.services.snapshots import schedule_authority as authority
 from app.services.snapshots.schedule_runner import run_one
@@ -35,6 +37,101 @@ def _run(schedule, node=None, db=None, **kwargs):
     return outcome, node
 
 
+class _AsyncSessionAdapter:
+    def __init__(self, session):
+        self.session = session
+
+    async def execute(self, statement):
+        return self.session.execute(statement)
+
+    async def commit(self):
+        return None
+
+
+def _run_with_database_authority(
+    *,
+    organization_active=True,
+    owner_affiliated=True,
+    organization_bound=True,
+    shared=True,
+    policy_present=True,
+    rule_present=True,
+):
+    """Execute production authority joins against a real relational engine."""
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE TABLE organizations "
+            "(id INTEGER PRIMARY KEY, created_by TEXT NOT NULL, is_active BOOLEAN NOT NULL)"
+        ))
+        connection.execute(text(
+            "CREATE TABLE organization_members "
+            "(id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, user_email TEXT NOT NULL)"
+        ))
+        connection.execute(text(
+            "CREATE TABLE organization_clusters "
+            "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL, "
+            "registered_by TEXT)"
+        ))
+        connection.execute(text(
+            "CREATE TABLE tenant_access_policies "
+            "(id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL)"
+        ))
+        connection.execute(text(
+            "CREATE TABLE tenant_policy_rules "
+            "(id INTEGER PRIMARY KEY, policy_id INTEGER NOT NULL, cluster_id TEXT NOT NULL, "
+            "project_name TEXT NOT NULL)"
+        ))
+        connection.execute(
+            text("INSERT INTO organizations VALUES (:id, :owner, :active)"),
+            [
+                {"id": 6, "owner": "other@example.test", "active": organization_active},
+                {"id": 7, "owner": "other-b@example.test", "active": True},
+            ],
+        )
+        if owner_affiliated:
+            connection.execute(
+                text("INSERT INTO organization_members VALUES (1, 6, :email)"),
+                {"email": "ops@sivali.co.id"},
+            )
+        bindings = []
+        if organization_bound:
+            bindings.append({"id": 1, "org": 6, "cluster": "nuc2", "registered": None})
+        if shared:
+            bindings.append({"id": 2, "org": 7, "cluster": "nuc2", "registered": None})
+        if bindings:
+            connection.execute(
+                text(
+                    "INSERT INTO organization_clusters "
+                    "(id, organization_id, cluster_id, registered_by) "
+                    "VALUES (:id, :org, :cluster, :registered)"
+                ),
+                bindings,
+            )
+        if policy_present:
+            connection.execute(text("INSERT INTO tenant_access_policies VALUES (11, 6)"))
+        if rule_present:
+            connection.execute(
+                text(
+                    "INSERT INTO tenant_policy_rules VALUES "
+                    "(21, 11, 'nuc2', 'cust-qa-abcdef01')"
+                )
+            )
+
+    session = Session(engine)
+    node = FakeInstanceNode(snapshots=ops_rows(12, 1))
+    try:
+        outcome, node = _run(
+            FakeSchedule(due_slot=SLOT),
+            node=node,
+            db=_AsyncSessionAdapter(session),
+        )
+    finally:
+        session.close()
+        engine.dispose()
+    return outcome, node
+
+
 def test_the_gate_is_a_gate_and_not_a_wall():
     """The control. Every refusal below is only meaningful because this one passes."""
     outcome, node = _run(FakeSchedule(due_slot=SLOT))
@@ -48,6 +145,43 @@ def test_a_cluster_that_left_the_organization_stops_the_schedule():
     assert outcome.refusal.code == "cluster_left_the_organization"
     assert outcome.terminal is True
     assert node.recorded == [], "the cluster was contacted after the grant was gone"
+
+
+@pytest.mark.parametrize(
+    "state,code",
+    [
+        ({"organization_active": False}, "cluster_left_the_organization"),
+        ({"organization_bound": False}, "cluster_left_the_organization"),
+        ({"owner_affiliated": False}, "schedule_owner_left_the_organization"),
+        ({"rule_present": False}, "project_left_the_organization"),
+        ({"policy_present": False}, "project_left_the_organization"),
+    ],
+)
+def test_database_revocation_stops_a_background_run_before_lxd(state, code):
+    outcome, node = _run_with_database_authority(**state)
+
+    assert outcome.result == "refused"
+    assert outcome.refusal.code == code
+    assert outcome.terminal is True
+    assert node.recorded == [], "a revoked standing grant reached LXD"
+
+
+def test_a_current_named_project_grant_allows_the_background_run():
+    outcome, node = _run_with_database_authority()
+
+    assert outcome.result == "success", outcome.error
+    assert any(call[0] == "create_snapshot" for call in node.recorded)
+
+
+def test_an_unshared_cluster_does_not_invent_a_project_policy_requirement():
+    outcome, node = _run_with_database_authority(
+        shared=False,
+        policy_present=False,
+        rule_present=False,
+    )
+
+    assert outcome.result == "success", outcome.error
+    assert any(call[0] == "create_snapshot" for call in node.recorded)
 
 
 def test_a_schedule_whose_organization_is_gone_stops():

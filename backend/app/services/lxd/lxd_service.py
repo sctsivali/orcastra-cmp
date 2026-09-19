@@ -5,7 +5,7 @@ Provides unified interface for all LXD operations.
 
 import asyncio
 import logging
-from typing import List, Tuple, Optional, Dict, Any
+from typing import Callable, List, Tuple, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
 from app.models.schemas import (
@@ -15,6 +15,7 @@ from app.models.schemas import (
     NodeStatus,
     InstanceMetrics,
 )
+from app.core.blocking import run_blocking
 from .availability import require_client
 from .connection import LXDConnectionManager
 from .gpu import GpuInventory, build_gpu_inventory
@@ -37,6 +38,8 @@ logger = logging.getLogger(__name__)
 
 # Shared thread pool for blocking operations
 _blocking_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="lxd_blocking")
+_INSTANCE_METRICS_TIMEOUT_SECONDS = 12.0
+_INSTANCE_METRICS_MAX_IN_FLIGHT = 10
 
 # Failed-node skip is delegated to the shared circuit breaker
 # (app.services.lxd.health) so every connection path - status checks, instance
@@ -399,12 +402,26 @@ class LXDService:
         Returns tuple of (vm_list, connected_nodes).
         """
         return await self.instance_manager.list_all_vms()
+
+    async def list_all_vms_with_failures(
+        self,
+    ) -> Tuple[List[VMInfo], List[str], List[str]]:
+        """List instances and identify clusters whose project inventory was incomplete."""
+        return await self.instance_manager.list_all_vms_with_failures()
     
     async def get_vm(
-        self, name: str, host: str, project: Optional[str] = None
+        self,
+        name: str,
+        host: str,
+        project: Optional[str] = None,
+        project_filter: Optional[Callable[[str], bool]] = None,
     ) -> Optional[VMInfo]:
         """Get a specific VM by name and host, narrowed to a project when one is known."""
-        return await self.instance_manager.get_vm(name, host, project)
+        if project_filter is None:
+            return await self.instance_manager.get_vm(name, host, project)
+        return await self.instance_manager.get_vm(
+            name, host, project, project_filter=project_filter
+        )
     
     async def start_vm(
         self,
@@ -477,11 +494,20 @@ class LXDService:
         cloud_init: Optional[str] = None,
         devices: Optional[Dict[str, Dict[str, str]]] = None,
         start_on_create: bool = True,
+        project: str = "default",
     ) -> VMInfo:
         """Create a new VM (blocking). Stable contract for `POST /vms` (Orcahub)."""
         return await self.instance_manager.create_vm(
-            name, host, image, instance_type, profiles, config,
-            cloud_init, devices, start_on_create
+            name=name,
+            host=host,
+            image=image,
+            instance_type=instance_type,
+            profiles=profiles,
+            config=config,
+            cloud_init=cloud_init,
+            devices=devices,
+            start_on_create=start_on_create,
+            project=project,
         )
 
     async def create_instance(
@@ -591,13 +617,13 @@ class LXDService:
         return await self.project_manager.delete_project(host, name)
     
     # Metrics operations
-    async def get_instance_metrics(
+    def _get_instance_metrics_blocking(
         self, 
         host: str, 
         instance_name: str,
         project: str = "default"
     ) -> InstanceMetrics:
-        """Get real-time metrics for a specific instance."""
+        """Read one metrics sample. Must run on the bounded LXD executor."""
         client = self.connection_manager.get_client(host)
         # important: without this, a None client reaches find_instance_in_projects, which
         # swallows the AttributeError in both of its loops and returns (None, None). The
@@ -607,6 +633,29 @@ class LXDService:
         if client is None:
             raise LXDConnectionError(f"Could not connect to {host}")
         return self.resource_manager.get_instance_metrics(client, host, instance_name, project)
+
+    async def get_instance_metrics(
+        self,
+        host: str,
+        instance_name: str,
+        project: str = "default",
+    ) -> InstanceMetrics:
+        """Get real-time metrics without blocking the API event loop.
+
+        The pooled pylxd client has its own connect/read socket timeouts. ``run_blocking`` adds
+        the wall-clock budget and an in-flight cap so five-second UI polling cannot build an
+        unbounded queue when a cluster is degraded.
+        """
+        return await run_blocking(
+            self._get_instance_metrics_blocking,
+            host,
+            instance_name,
+            project,
+            timeout=_INSTANCE_METRICS_TIMEOUT_SECONDS,
+            label=f"instance.metrics:{host}",
+            executor=_blocking_executor,
+            max_in_flight=_INSTANCE_METRICS_MAX_IN_FLIGHT,
+        )
 
 
 # Singleton instance

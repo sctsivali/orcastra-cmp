@@ -19,7 +19,10 @@ Endpoints:
 
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from typing import Callable, Dict, List, Optional, TypeVar
+from urllib.parse import parse_qs, unquote, urlsplit
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query, HTTPException, Depends, Response
 from pydantic import BaseModel, Field
 import websockets
@@ -28,11 +31,14 @@ from websockets.exceptions import ConnectionClosed
 
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser, get_ws_user
 from app.core.config import get_settings
+from app.core.blocking import BlockingPoolFull, BlockingTimeout, run_blocking
 from app.core.org_scope import (
     check_tenant_permission,
     org_scope_dependency,
+    project_is_visible,
     set_org_scope_for_ws,
     verify_cluster_access,
+    verify_project_access,
     verify_tenant_permission,
 )
 from app.services.console_service import get_console_service, public_session_info
@@ -47,7 +53,151 @@ from app.core.lxd_path import safe_segment
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
-def _verify_instance_access(host: str, project: str, instance_name: str, permission: str = "view") -> None:
+_ConsoleResult = TypeVar("_ConsoleResult")
+_console_operation_executor = ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="console_operation",
+)
+_CONSOLE_OPERATION_MAX_IN_FLIGHT = 8
+_CONSOLE_OPERATION_TIMEOUT_SECONDS = 35.0
+
+
+async def _console_io(call: Callable[[], _ConsoleResult], *, label: str) -> _ConsoleResult:
+    """Run one synchronous pylxd/requests operation without parking the API event loop."""
+    return await run_blocking(
+        call,
+        timeout=_CONSOLE_OPERATION_TIMEOUT_SECONDS,
+        label=label,
+        executor=_console_operation_executor,
+        max_in_flight=_CONSOLE_OPERATION_MAX_IN_FLIGHT,
+    )
+
+
+def _operation_targets_instance(
+    operation: object,
+    *,
+    instance_name: str,
+    project: str,
+) -> bool:
+    """Return whether one websocket operation belongs to exactly this instance and project.
+
+    LXD reports operation resources as URLs such as
+    ``/1.0/instances/web-01?project=customer-a``. Instance names are only unique inside a
+    project, so substring matching either the description or the URL can cancel a neighbour's
+    console. A missing project is LXD's default project; a non-default target must be named by
+    the operation metadata or resource URL and therefore fails closed when ownership is unknown.
+    """
+    if not isinstance(operation, dict) or operation.get("class") != "websocket":
+        return False
+
+    resources = operation.get("resources")
+    if not isinstance(resources, dict):
+        return False
+
+    operation_project = operation.get("project")
+    for key in ("instances", "containers"):
+        references = resources.get(key)
+        if not isinstance(references, list):
+            continue
+        for raw_reference in references:
+            parsed = urlsplit(str(raw_reference))
+            segments = [unquote(part) for part in parsed.path.split("/") if part]
+            if len(segments) >= 3 and segments[-2] in {"instances", "containers"}:
+                resource_name = segments[-1]
+            elif len(segments) == 1:
+                # Some older daemons return only the resource name in this field.
+                resource_name = segments[0]
+            else:
+                continue
+            if resource_name != instance_name:
+                continue
+
+            query_project = parse_qs(parsed.query, keep_blank_values=False).get("project", [])
+            resource_project = query_project[-1] if query_project else None
+            if resource_project and operation_project and resource_project != operation_project:
+                continue
+            effective_project = resource_project or operation_project or "default"
+            if effective_project == project:
+                return True
+    return False
+
+
+def _operation_metadata(response: object) -> Optional[dict]:
+    """Read one operation metadata object without accepting malformed daemon responses."""
+    if getattr(response, "status_code", None) != 200:
+        return None
+    try:
+        payload = response.json()
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    metadata = payload.get("metadata")
+    return metadata if isinstance(metadata, dict) else None
+
+
+def _operation_lookup_says_gone(exc: Exception) -> bool:
+    """Return true only when LXD explicitly reports that an operation is absent."""
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None) == 404 or type(exc).__name__ == "NotFound"
+
+
+def _session_audit_org_conditions() -> List[object]:
+    """Build SQL boundaries for the organization-wide session audit view.
+
+    The returned expressions are shared verbatim by the count and page statements. Filtering
+    after pagination would leak the pre-filter total and make short pages appear before the end
+    of the result set.
+    """
+    from sqlalchemy import and_, false, or_
+    from app.core.org_scope import (
+        get_current_allowed_clusters,
+        get_current_visible_projects,
+        get_tenant_acl,
+    )
+
+    conditions: List[object] = []
+    allowed = get_current_allowed_clusters()
+    if allowed is not None:
+        conditions.append(SessionAuditLog.host.in_(allowed or {"__none__"}))
+
+    visible_projects = get_current_visible_projects()
+    if visible_projects:
+        restricted_hosts = tuple(visible_projects)
+        project_clauses = [SessionAuditLog.host.not_in(restricted_hosts)]
+        project_clauses.extend(
+            and_(
+                SessionAuditLog.host == host,
+                SessionAuditLog.project.in_(projects or {"__none__"}),
+            )
+            for host, projects in visible_projects.items()
+        )
+        conditions.append(or_(*project_clauses))
+
+    acl = get_tenant_acl()
+    if acl is not None:
+        instance_clauses = []
+        for host, rules in acl.items():
+            for (project, instance), permissions in rules.items():
+                if "view" not in permissions:
+                    continue
+                parts = [SessionAuditLog.host == host]
+                if project != "*":
+                    parts.append(SessionAuditLog.project == project)
+                if instance != "*":
+                    parts.append(SessionAuditLog.instance_name == instance)
+                instance_clauses.append(and_(*parts))
+        conditions.append(or_(*instance_clauses) if instance_clauses else false())
+
+    return conditions
+
+
+def _verify_instance_access(
+    host: str,
+    project: Optional[str],
+    instance_name: str,
+    permission: str = "view",
+) -> str:
     """Authorize a console action on ONE instance, not merely on its cluster.
 
     important: `verify_cluster_access` answers "may this caller reach this cluster", which for a
@@ -66,8 +216,14 @@ def _verify_instance_access(host: str, project: str, instance_name: str, permiss
     normalises once and passes the same value to the action, so there is exactly one project in
     play per request.
     """
-    if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(host, project, instance_name, permission)
+    scoped_project = verify_project_access(host, project)
+    # Viewing the instance is the invariant beneath every console action. Operation-specific
+    # grants retain their rollout flag, but disabling it must never make an unviewable instance
+    # observable or addressable.
+    verify_tenant_permission(host, scoped_project, instance_name, "view")
+    if permission != "view" and get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(host, scoped_project, instance_name, permission)
+    return scoped_project
 
 
 router = APIRouter(
@@ -332,6 +488,21 @@ async def list_active_tracked_sessions(
         # the shared view is unavailable, so this is one worker's slice of the truth.
         # Say so rather than let the UI present a short list as the whole picture.
         response.headers[SESSION_REGISTRY_DEGRADED_HEADER] = "1"
+    if scope == "org":
+        # Cluster membership alone is too broad on a cluster shared by organizations. The
+        # session row carries its concrete project and instance, so apply the same two gates
+        # as the instance detail route before serializing operation ids or actor metadata.
+        sessions = [
+            session
+            for session in sessions
+            if project_is_visible(session.host, session.project)
+            and check_tenant_permission(
+                session.host,
+                session.project,
+                session.instance_name,
+                "view",
+            )
+        ]
     return [s.to_dict() for s in sessions]
 
 
@@ -355,8 +526,8 @@ async def query_session_audit_logs(
     scope=self (default): the caller's own sessions only (data minimization).
     scope=org: every session on clusters in the caller's organization scope, including
     a platform admin's break-glass console/terminal access - the tenant-visible
-    accountability trail. Isolation is the caller's own get_user_allowed_clusters set,
-    so no other organization's sessions leak.
+    accountability trail. Cluster, Partner project, and Tenant instance boundaries are
+    applied to both the count and page query, so no other organization's sessions leak.
 
     important: `limit` used to truncate with no way past it. The trail held 660 rows while the
     page asked for 500, so the oldest 160 were unreachable and the pager in the UI was paging a
@@ -365,7 +536,9 @@ async def query_session_audit_logs(
     the same filters as the page, so a caller can tell a short last page from a lost one.
     """
     from sqlalchemy import select, desc, func
-    from app.core.org_scope import get_current_allowed_clusters
+
+    if not _rbac.email:
+        raise HTTPException(status_code=403, detail="Token carries no email claim")
 
     async with async_session_maker() as db:
         # Built as a list so the count and the page cannot drift onto different filters, which
@@ -373,17 +546,7 @@ async def query_session_audit_logs(
         conditions = []
 
         if scope == "org":
-            # important: the request-scoped set, which org_scope_dependency has already
-            # narrowed by the tenant ACL. This previously called get_user_allowed_clusters
-            # directly, which returns the org-derived clusters WITHOUT that narrowing, so a
-            # tenant scoped off a cluster by ACL could still read its audit trail. Nothing
-            # in the UI sent scope=org before, so it was unreachable; the Sessions page now
-            # does. Same set verify_cluster_access enforces, computed once.
-            allowed = get_current_allowed_clusters()
-            if allowed is not None:
-                # restrict to the caller's own clusters (host == cluster_id); empty -> nothing
-                conditions.append(SessionAuditLog.host.in_(allowed or {"__none__"}))
-            # admin (allowed is None): no cluster filter
+            conditions.extend(_session_audit_org_conditions())
         else:
             # default: own sessions only (data minimization / GDPR)
             conditions.append(SessionAuditLog.user_email == _rbac.email)
@@ -456,8 +619,7 @@ async def get_capabilities(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get console capabilities for an instance."""
-    verify_cluster_access(host)
-    _verify_instance_access(host, project or "default", instance_name, "view")
+    project = _verify_instance_access(host, project, instance_name, "view")
     console_service = get_console_service()
     
     caps, error = await console_service.get_instance_capabilities(
@@ -489,17 +651,7 @@ async def create_console_session(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Create a graphics console session."""
-    # Per-project enforcement. Before this, console had no cluster or ACL check at all beyond
-    # break-glass. verify_cluster_access and verify_tenant_permission are no-ops for admin and
-    # partner (allowed=None / acl=None) and enforce for tenants.
-    from app.core.org_scope import verify_cluster_access, verify_tenant_permission
-    from app.core.config import get_settings
-    # important: cluster membership is the organisation boundary and is enforced unconditionally,
-    # as it is on every other router. Only the per-project ACL sits behind the flag, and that flag
-    # now defaults to on: an install that wants the old behaviour has to ask for it by name.
-    verify_cluster_access(host)
-    if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(host, project, instance_name, "console")
+    project = _verify_instance_access(host, project, instance_name, "console")
     # Break-glass gate: an admin reaching a tenant cluster they do not own must hold an
     # active grant (raises 403 break_glass_required otherwise). In-scope self-service and
     # local dev are unaffected.
@@ -565,7 +717,7 @@ async def get_startup_order(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get startup order for instances."""
-    verify_cluster_access(host)
+    project = verify_project_access(host, project)
     console_service = get_console_service()
     
     entries, error = await console_service.get_startup_order(
@@ -586,7 +738,7 @@ async def get_startup_order(
     # same question the per-instance routes ask is what makes the two agree. Admin and Partner
     # carry no ACL and check_tenant_permission answers True for them, so an operator read is
     # unfiltered.
-    scoped = project or "default"
+    scoped = project
     rows = [StartupOrderEntry(**e.to_dict()) for e in entries]
     seen: Dict[str, bool] = {}
     visible = []
@@ -614,7 +766,7 @@ async def update_startup_order(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update startup order for instances."""
-    verify_cluster_access(host)
+    project = verify_project_access(host, project)
     console_service = get_console_service()
     
     updates = [u.model_dump(exclude_none=True) for u in request.updates]
@@ -671,8 +823,7 @@ async def get_attached_iso(
     _rbac: AuthenticatedUser = Depends(require_tenant()),
 ):
     """Get attached ISO for an instance."""
-    verify_cluster_access(host)
-    _verify_instance_access(host, project or "default", instance_name, "view")
+    project = _verify_instance_access(host, project, instance_name, "view")
     console_service = get_console_service()
     
     attached, error = await console_service.get_instance_iso(
@@ -713,8 +864,7 @@ async def attach_iso(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Attach an ISO to an instance."""
-    verify_cluster_access(host)
-    _verify_instance_access(host, project or "default", instance_name, "operate")
+    project = _verify_instance_access(host, project, instance_name, "operate")
     console_service = get_console_service()
     
     success, message = await console_service.attach_iso(
@@ -749,8 +899,7 @@ async def eject_iso(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Eject an ISO from an instance."""
-    verify_cluster_access(host)
-    _verify_instance_access(host, project or "default", instance_name, "operate")
+    project = _verify_instance_access(host, project, instance_name, "operate")
     console_service = get_console_service()
     
     success, message = await console_service.eject_iso(
@@ -787,48 +936,43 @@ async def check_active_sessions(
     Returns list of active console sessions that might conflict.
     Useful for warning users before opening a new console.
     """
-    verify_cluster_access(host)
-    _verify_instance_access(host, project or "default", instance_name, "view")
+    project = _verify_instance_access(host, project, instance_name, "view")
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
     active_sessions: List[ActiveConsoleSession] = []
     
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = await _console_io(
+            partial(lxd_service.connection_manager.get_client, host),
+            label=f"console.operations.connect:{host}",
+        )
         if not client:
-            return ActiveConsoleCheckResponse(has_active_session=False, sessions=[])
+            raise HTTPException(status_code=503, detail="The cluster did not answer")
         
         # Get running operations
-        response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
+        response = await _console_io(
+            partial(
+                client.api.operations.get,
+                params={"recursion": "1", "project": project},
+                timeout=(5, 30),
+            ),
+            label=f"console.operations.list:{host}",
+        )
         if response.status_code == 200:
             operations_data = response.json().get('metadata', {})
             running_ops = operations_data.get('running', [])
             
             for op in running_ops:
-                description = op.get('description', '')
-                op_class = op.get('class', '')
-                
-                # Check if this is a console operation for our instance
-                # Console operations typically have "Console" or "exec" in description
-                # and are of class "websocket" or "task"
-                is_console_op = (
-                    ('console' in description.lower() or 
-                     'exec' in description.lower() or
-                     'Executing command' in description) and
-                    instance_name in description
-                )
-                
-                # Also check resources for instance match
-                resources = op.get('resources', {})
-                instances = resources.get('instances', [])
-                instance_match = any(instance_name in inst for inst in instances)
-                
-                if is_console_op or (op_class == 'websocket' and instance_match):
+                if _operation_targets_instance(
+                    op,
+                    instance_name=instance_name,
+                    project=project,
+                ):
                     active_sessions.append(ActiveConsoleSession(
                         operation_id=op.get('id', ''),
                         instance_name=instance_name,
-                        description=description,
+                        description=op.get('description', ''),
                         created_at=op.get('created_at', ''),
                         may_cancel=op.get('may_cancel', True),
                     ))
@@ -838,9 +982,17 @@ async def check_active_sessions(
             sessions=active_sessions
         )
         
-    except Exception as e:
-        logger.error(f"Error checking active sessions: {e}")
-        return ActiveConsoleCheckResponse(has_active_session=False, sessions=[])
+    except HTTPException:
+        raise
+    except (BlockingTimeout, BlockingPoolFull) as exc:
+        logger.warning("Console session lookup temporarily unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Console session lookup is temporarily unavailable",
+        )
+    except Exception as exc:
+        logger.error("Error checking active sessions: %s", exc)
+        raise HTTPException(status_code=503, detail="Could not read console sessions")
 
 
 @router.post(
@@ -853,50 +1005,87 @@ async def check_active_sessions(
 async def kill_all_sessions(
     instance_name: str,
     host: str = Query(..., description="Target host node"),
+    project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill all active console sessions for an instance."""
-    verify_cluster_access(host)
-    # note: no per-instance check. This route is require_partner(), and a Partner or Admin
-    # carries no tenant ACL, so the check would be inert. It also takes no project, and an
-    # instance name is unique per project: adding one would be an API change, not a guard.
+    project = verify_project_access(host, project)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
     killed_count = 0
     
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = await _console_io(
+            partial(lxd_service.connection_manager.get_client, host),
+            label=f"console.operations.connect:{host}",
+        )
         if not client:
             return ActionResponse(success=False, error=f"Cannot connect to host: {host}")
         
         # Get running operations
-        response = client.api.operations.get(params={'recursion': '1'}, timeout=(5, 30))
+        response = await _console_io(
+            partial(
+                client.api.operations.get,
+                params={"recursion": "1", "project": project},
+                timeout=(5, 30),
+            ),
+            label=f"console.operations.list:{host}",
+        )
+        failed_count = 0
         if response.status_code == 200:
             operations_data = response.json().get('metadata', {})
             running_ops = operations_data.get('running', [])
             
             for op in running_ops:
-                _description = op.get('description', '')
-                op_class = op.get('class', '')
-                resources = op.get('resources', {})
-                instances = resources.get('instances', [])
-                
-                # Check if this is a console operation for our instance
-                instance_match = any(instance_name in inst for inst in instances)
-                is_console_op = op_class == 'websocket' and instance_match
-                
-                if is_console_op:
+                if _operation_targets_instance(
+                    op,
+                    instance_name=instance_name,
+                    project=project,
+                ):
                     op_id = op.get('id', '')
+                    if not op_id:
+                        continue
                     try:
                         # Try to delete/cancel the operation
-                        client.api.operations[safe_segment(op_id)].delete()
-                        killed_count += 1
-                        logger.info(f"Killed console operation {op_id} for {instance_name}@{host}")
+                        deleted = await _console_io(
+                            partial(
+                                client.api.operations[safe_segment(op_id)].delete,
+                                params={"project": project},
+                                timeout=(5, 30),
+                            ),
+                            label=f"console.operations.cancel:{host}",
+                        )
+                        if deleted.status_code in (200, 202):
+                            killed_count += 1
+                            logger.info(
+                                f"Killed console operation {op_id} for {instance_name}@{host}"
+                            )
+                        else:
+                            failed_count += 1
+                            logger.warning(
+                                "Console operation %s refused cancellation with HTTP %s",
+                                op_id,
+                                deleted.status_code,
+                            )
                     except Exception as e:
+                        failed_count += 1
                         logger.warning(f"Failed to kill operation {op_id}: {e}")
-        
+
+        if response.status_code != 200:
+            return ActionResponse(
+                success=False,
+                error=f"Could not list console sessions (HTTP {response.status_code})",
+            )
+        if failed_count:
+            return ActionResponse(
+                success=False,
+                error=(
+                    f"Killed {killed_count} console session(s), but {failed_count} "
+                    "session(s) could not be terminated"
+                ),
+            )
         return ActionResponse(
             success=True, 
             message=f"Killed {killed_count} console session(s) for {instance_name}"
@@ -918,27 +1107,61 @@ async def kill_active_session(
     instance_name: str,
     operation_id: str,
     host: str = Query(..., description="Target host node"),
+    project: str = Query("default", description="LXD project name"),
     _: None = Depends(check_read_only_mode),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Kill an active console session by cancelling the operation."""
-    verify_cluster_access(host)
-    # note: no per-instance check. This route is require_partner(), and a Partner or Admin
-    # carries no tenant ACL, so the check would be inert. It also takes no project, and an
-    # instance name is unique per project: adding one would be an API change, not a guard.
+    project = verify_project_access(host, project)
     from app.services.lxd_service import get_lxd_service
     
     lxd_service = get_lxd_service()
     
     try:
-        client = lxd_service.connection_manager.get_client(host)
+        client = await _console_io(
+            partial(lxd_service.connection_manager.get_client, host),
+            label=f"console.operations.connect:{host}",
+        )
         if not client:
             return ActionResponse(success=False, error=f"Cannot connect to host: {host}")
         
-        # For websocket operations, use direct API DELETE
-        # operation.cancel() doesn't work for websocket class operations
+        # An operation id is opaque and cluster-wide. Read and verify its metadata before
+        # cancellation so a caller cannot pair an allowed instance name with another project's
+        # operation id. The DELETE repeats the project scope as defence in depth.
+        endpoint = client.api.operations[safe_segment(operation_id)]
+        metadata = _operation_metadata(
+            await _console_io(
+                partial(
+                    endpoint.get,
+                    params={"project": project},
+                    timeout=(5, 30),
+                ),
+                label=f"console.operations.get:{host}",
+            )
+        )
+        metadata_id = metadata.get("id") if metadata else None
+        if (
+            not metadata
+            or (metadata_id and metadata_id != operation_id)
+            or not _operation_targets_instance(
+                metadata,
+                instance_name=instance_name,
+                project=project,
+            )
+        ):
+            raise HTTPException(status_code=404, detail="Console session not found")
+
+        # For websocket operations, use direct API DELETE. operation.cancel() does not work
+        # for websocket-class operations.
         try:
-            response = client.api.operations[safe_segment(operation_id)].delete()
+            response = await _console_io(
+                partial(
+                    endpoint.delete,
+                    params={"project": project},
+                    timeout=(5, 30),
+                ),
+                label=f"console.operations.cancel:{host}",
+            )
             if response.status_code in (200, 202):
                 logger.info(f"Deleted console operation {operation_id} for {instance_name}@{host}")
                 return ActionResponse(success=True, message=f"Session {operation_id[:8]}... terminated")
@@ -948,13 +1171,40 @@ async def kill_active_session(
         # Check if the operation still exists
         await asyncio.sleep(0.3)  # Small delay for operation cleanup
         try:
-            client.operations.get(safe_segment(operation_id))
-            # Operation still exists
-            return ActionResponse(success=False, error="Failed to terminate session - operation still exists")
-        except Exception:
-            # Operation no longer exists - success!
+            remaining = await _console_io(
+                partial(
+                    endpoint.get,
+                    params={"project": project},
+                    timeout=(5, 30),
+                ),
+                label=f"console.operations.verify:{host}",
+            )
+            if remaining.status_code != 404:
+                return ActionResponse(
+                    success=False,
+                    error="Failed to terminate session - operation still exists",
+                )
             return ActionResponse(success=True, message=f"Session {operation_id[:8]}... terminated")
+        except Exception as verify_err:
+            if _operation_lookup_says_gone(verify_err):
+                return ActionResponse(
+                    success=True,
+                    message=f"Session {operation_id[:8]}... terminated",
+                )
+            # A timeout or broken connection proves nothing about the operation's state. Do not
+            # tell the operator it was terminated when the verification itself never answered.
+            logger.warning(
+                "Could not verify console operation %s after cancellation: %s",
+                operation_id,
+                verify_err,
+            )
+            return ActionResponse(
+                success=False,
+                error="Could not verify whether the session was terminated",
+            )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error killing session: {e}")
         return ActionResponse(success=False, error=str(e))
@@ -1339,12 +1589,7 @@ async def console_websocket(
     # session opened over a socket skipped the organisation boundary entirely. Closing rather
     # than raising, since HTTPException is meaningless once the socket is being negotiated.
     try:
-        from app.core.org_scope import verify_cluster_access, verify_tenant_permission
-        from app.core.config import get_settings
-
-        verify_cluster_access(host)
-        if get_settings().tenant_perm_enforcement_enabled:
-            verify_tenant_permission(host, project, instance_name, "console")
+        project = _verify_instance_access(host, project, instance_name, "console")
     except HTTPException as exc:
         await websocket.close(code=1008, reason="forbidden")
         logger.warning(

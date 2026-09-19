@@ -5,10 +5,13 @@ Handles resource usage tracking, node resources, and instance metrics.
 
 import logging
 from collections import OrderedDict
+import threading
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import time
 import pylxd
+from pylxd.exceptions import ClientConnectionFailed
+from requests import exceptions as requests_exc
 
 from app.models.schemas import (
     ResourceUsage,
@@ -26,13 +29,23 @@ from .gpu import GpuInventory, build_gpu_inventory
 from .storage_model import PoolReading, summarise_cluster_storage
 from .hardware import build_hardware_profile
 from .node_resources import aggregate_microcloud_resources, build_node_resources
-from .exceptions import LXDOperationError
+from .exceptions import LXDConnectionError, LXDOperationError
 from .freshness import LiveRead, read_resources
 from app.services.lxd.project_scope import list_instance_records
 from app.services.lxd.cpu_allocation import allocated_cpu, allocation_ratio, clamp_available
 from app.core.lxd_path import safe_segment
 
 logger = logging.getLogger(__name__)
+
+INSTANCE_METRIC_SECTIONS = ("cpu", "memory", "disk", "network", "processes")
+
+
+def _state_has_field(state: Any, name: str) -> bool:
+    """Keep raw state presence when a wrapper exposes it, with a pylxd-compatible fallback."""
+    has_field = getattr(state, "has_field", None)
+    if callable(has_field):
+        return bool(has_field(name))
+    return getattr(state, name, None) is not None
 
 
 # Keys of the LXD environment block that may reach a client.
@@ -95,6 +108,7 @@ class ResourceManager:
         # CPU usage tracking: {"host:instance": {"usage_ns": int, "timestamp": float}}
         # LRU by insertion order: every sample re-inserts, so the coldest key falls out first.
         self._cpu_history: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+        self._cpu_history_lock = threading.Lock()
     
     def get_resource_usage(self, instance) -> Optional[ResourceUsage]:
         """Get resource usage for a running instance."""
@@ -482,87 +496,145 @@ class ResourceManager:
             if not instance:
                 raise LXDOperationError(f"Instance '{instance_name}' not found on {host}")
             
-            # Get current state
-            state = instance.state()
-            
             # Parse status
             status = parse_vm_status(instance.status, instance.status_code)
-            
+
             # Initialize metrics
             metrics = InstanceMetrics(
                 instance_name=instance_name,
                 host=host,
                 status=status,
+                cpu_sample_status=(
+                    "unavailable" if instance.status == "Running" else "not_applicable"
+                ),
             )
-            
+
             # Only get metrics for running instances
-            if instance.status != "Running" or not state:
+            if instance.status != "Running":
                 return metrics
-            
+
+            # One state object is the source of every section in this sample. A stopped instance
+            # does not need this call at all; for a running instance, an absent body means every
+            # section is unavailable rather than a confident set of zeroes.
+            state = instance.state()
+            if not state:
+                metrics.unavailable_sections = list(INSTANCE_METRIC_SECTIONS)
+                return metrics
+
+            cpu_state = getattr(state, "cpu", None)
+            memory_state = getattr(state, "memory", None)
+            disk_state = getattr(state, "disk", None)
+            network_state = getattr(state, "network", None)
+            processes_state = getattr(state, "processes", None)
+
             # CPU usage - calculate from cumulative nanoseconds delta
             # important: `is not None`, not truthiness. A cumulative usage of exactly 0 is
             # falsy, which skipped the whole block: no percentage, and no baseline sample stored,
             # so an instance idling at zero never began accumulating history at all.
-            if state.cpu and state.cpu.get("usage") is not None:
-                current_usage_ns = state.cpu.get("usage")
-                current_time = time.time()
+            if (
+                _state_has_field(state, "cpu")
+                and cpu_state is not None
+                and cpu_state.get("usage") is not None
+            ):
+                current_usage_ns = cpu_state.get("usage")
+                metrics.cpu_sample_status = "calculating"
                 
                 # note: the project belongs in the key. A name is unique per project, not per
                 # host, so two instances of the same name on one host shared a cumulative counter
                 # and each poll subtracted the other's reading.
                 cache_key = f"{host}:{found_project or project}:{instance_name}"
                 
-                if cache_key in self._cpu_history:
-                    # Calculate delta
-                    prev_data = self._cpu_history[cache_key]
-                    prev_usage_ns = prev_data["usage_ns"]
-                    prev_time = prev_data["timestamp"]
-                    
-                    time_delta = current_time - prev_time
-                    usage_delta_ns = current_usage_ns - prev_usage_ns
-                    
-                    # Calculate percentage
-                    if time_delta > 0:
-                        cpu_percent = (usage_delta_ns / (time_delta * 1e9)) * 100
-                        metrics.cpu_usage_percent = round(min(cpu_percent, 800.0), 2)
-                
-                # Store current values for next calculation
-                self._cpu_history.pop(cache_key, None)
-                self._cpu_history[cache_key] = {
-                    "usage_ns": current_usage_ns,
-                    "timestamp": current_time
-                }
-                while len(self._cpu_history) > self._CPU_HISTORY_MAX:
-                    self._cpu_history.popitem(last=False)
-            
+                # One ResourceManager is shared by every metrics worker. Keep the read, delta,
+                # replacement and LRU eviction atomic so concurrent five-second polls cannot
+                # subtract a half-updated sample or mutate OrderedDict during eviction.
+                with self._cpu_history_lock:
+                    # Stamp the sample after taking the lock. Two workers can finish their LXD
+                    # reads in one order and acquire this lock in the other; stamping earlier
+                    # would let the later lock holder overwrite history with an older clock
+                    # value and force the next percentage calculation backwards.
+                    current_time = time.time()
+                    if cache_key in self._cpu_history:
+                        # Calculate delta
+                        prev_data = self._cpu_history[cache_key]
+                        prev_usage_ns = prev_data["usage_ns"]
+                        prev_time = prev_data["timestamp"]
+
+                        time_delta = current_time - prev_time
+                        usage_delta_ns = current_usage_ns - prev_usage_ns
+
+                        # Calculate percentage
+                        if time_delta > 0 and usage_delta_ns >= 0:
+                            cpu_percent = (usage_delta_ns / (time_delta * 1e9)) * 100
+                            metrics.cpu_usage_percent = round(min(cpu_percent, 800.0), 2)
+                            metrics.cpu_sample_status = "ready"
+
+                    # Store current values for next calculation
+                    self._cpu_history.pop(cache_key, None)
+                    self._cpu_history[cache_key] = {
+                        "usage_ns": current_usage_ns,
+                        "timestamp": current_time,
+                    }
+                    while len(self._cpu_history) > self._CPU_HISTORY_MAX:
+                        self._cpu_history.popitem(last=False)
+            else:
+                metrics.unavailable_sections.append("cpu")
+
             # Memory usage
-            if state.memory:
-                metrics.memory_used_bytes = state.memory.get("usage", 0)
-                metrics.memory_total_bytes = state.memory.get("total", 0)
+            if not _state_has_field(state, "memory") or memory_state is None:
+                metrics.unavailable_sections.append("memory")
+            else:
+                memory_used = memory_state.get("usage")
+                memory_total = memory_state.get("total")
+                if memory_used is None or memory_total is None:
+                    metrics.unavailable_sections.append("memory")
+                if memory_used is not None:
+                    metrics.memory_used_bytes = memory_used
+                if memory_total is not None:
+                    metrics.memory_total_bytes = memory_total
                 if metrics.memory_total_bytes > 0:
                     metrics.memory_usage_percent = round(
                         (metrics.memory_used_bytes / metrics.memory_total_bytes) * 100, 2
                     )
-            
+
             # Disk usage
-            if state.disk:
-                metrics.disk_usage_bytes = {
-                    device: data.get("usage", 0)
-                    for device, data in state.disk.items()
-                }
-            
+            if not _state_has_field(state, "disk") or disk_state is None:
+                metrics.unavailable_sections.append("disk")
+            else:
+                disk_incomplete = False
+                for device, data in disk_state.items():
+                    usage = data.get("usage")
+                    if usage is None:
+                        disk_incomplete = True
+                        continue
+                    metrics.disk_usage_bytes[device] = usage
+                if disk_incomplete:
+                    metrics.unavailable_sections.append("disk")
+
             # Network counters
-            if state.network:
-                for iface_name, iface_data in state.network.items():
+            if not _state_has_field(state, "network") or network_state is None:
+                metrics.unavailable_sections.append("network")
+            else:
+                network_incomplete = False
+                for iface_name, iface_data in network_state.items():
                     if iface_name == "lo":
                         continue
                     counters = iface_data.get("counters", {})
-                    metrics.network_rx_bytes[iface_name] = counters.get("bytes_received", 0)
-                    metrics.network_tx_bytes[iface_name] = counters.get("bytes_sent", 0)
-            
+                    received = counters.get("bytes_received")
+                    sent = counters.get("bytes_sent")
+                    if received is None or sent is None:
+                        network_incomplete = True
+                    if received is not None:
+                        metrics.network_rx_bytes[iface_name] = received
+                    if sent is not None:
+                        metrics.network_tx_bytes[iface_name] = sent
+                if network_incomplete:
+                    metrics.unavailable_sections.append("network")
+
             # Process count
-            if state.processes:
-                metrics.processes = state.processes
+            if not _state_has_field(state, "processes") or processes_state is None:
+                metrics.unavailable_sections.append("processes")
+            else:
+                metrics.processes = processes_state
             
             # PID
             if hasattr(state, 'pid') and state.pid:
@@ -597,8 +669,8 @@ class ResourceManager:
                 metrics.base_image = instance.config.get('volatile.base_image')
             
             # IP addresses
-            if state.network:
-                for iface_name, iface_data in state.network.items():
+            if network_state is not None:
+                for iface_name, iface_data in network_state.items():
                     if iface_name == "lo":
                         continue
                     for addr in iface_data.get("addresses", []):
@@ -613,6 +685,9 @@ class ResourceManager:
             
         except LXDOperationError:
             raise
+        except (ClientConnectionFailed, requests_exc.ConnectionError, requests_exc.Timeout) as e:
+            logger.warning("Connection failed while reading metrics for %s on %s: %s", instance_name, host, e)
+            raise LXDConnectionError(f"Could not read metrics from {host}") from e
         except Exception as e:
             logger.error(f"Error getting metrics for '{instance_name}' on {host}: {e}")
             raise LXDOperationError(f"Failed to get metrics: {str(e)}")

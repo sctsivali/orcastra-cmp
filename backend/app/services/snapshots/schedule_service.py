@@ -1,11 +1,12 @@
 """Creating, editing and reading a schedule. The router stays thin so the rules stay readable.
 
 The ownership rule is the load-bearing part, and it is the same for Admin as for Partner: a
-schedule may only be created against a cluster the actor personally reaches. Admin here is
-least-privilege plus break-glass rather than a god view, and a schedule is not a momentary act. One
-manual snapshot on a partner's cluster is a single attributable thing that expires in seven days; a
-schedule is an indefinite unattended write into someone else's hardware with no grant and no notice
-to its owner. Momentary actions may cross clusters. Standing commitments may not.
+schedule may only be created against a cluster and project the actor's active organization still
+holds. Admin here is least-privilege plus break-glass rather than a god view, and a schedule is not
+a momentary act. One manual snapshot on a partner's cluster is a single attributable thing that
+expires in seven days; a schedule is an indefinite unattended write into someone else's hardware
+with no grant and no notice to its owner. Momentary actions may cross clusters. Standing
+commitments may not.
 """
 
 import logging
@@ -16,10 +17,9 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.core.org_scope import _query_owned_clusters, get_user_org_ids, resolve_cluster_orgs
 from app.models.snapshot_schedule_models import SnapshotSchedule
 from app.models.snapshot_schedule_schemas import SnapshotScheduleInfo
-from app.services.snapshots import recurrence
+from app.services.snapshots import recurrence, schedule_authority
 
 logger = logging.getLogger(__name__)
 
@@ -66,34 +66,38 @@ def to_info(schedule: SnapshotSchedule) -> SnapshotScheduleInfo:
     )
 
 
-async def assert_actor_owns_cluster(db: Any, actor_email: Optional[str], host: str) -> None:
-    """A schedule may only be aimed at a cluster the actor personally reaches.
+async def assert_actor_can_schedule_target(
+    db: Any,
+    *,
+    user: Any,
+    host: str,
+    project: str,
+) -> int:
+    """Authorize the durable organization/project target before any LXD read.
 
-    important: `_query_owned_clusters` rather than `get_user_allowed_clusters`, deliberately. The
-    latter short-circuits to None for an Admin, which means "everything" and would let an Admin
-    place an indefinite unattended write on any partner's hardware. It is also role-derived, and
-    the role lives only in a JWT, so a rule written in terms of it could not be re-checked at fire
-    time. This one is a plain database question and reads the same from a request and from the loop.
+    Request-scoped ContextVars stop a Partner crossing a shared-cluster project boundary today.
+    This second, database-only proof is what the background worker can repeat months later. Admin
+    follows the same standing-commitment rule intentionally; the scheduler process never inherits
+    an Admin session's global visibility.
     """
-    if not actor_email:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="A schedule needs an identifiable owner, and this session has no email.",
-        )
-    owned = await _query_owned_clusters(actor_email, db)
-    if host not in owned:
+    organization_id = await schedule_authority.authorizing_organization_id(
+        db,
+        actor_email=user.email,
+        cluster_id=host,
+        project=project,
+    )
+    if organization_id is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
-                "error": "cluster_is_not_yours_to_schedule",
+                "error": "schedule_target_is_not_owned",
                 "message": (
-                    f"A recurring snapshot on '{host}' can only be created by someone whose "
-                    "organization holds that cluster. Taking a single snapshot there is a "
-                    "momentary act and is unaffected."
+                    f"No active organization for this operator owns project '{project}' "
+                    f"on cluster '{host}'."
                 ),
-                "host": host,
             },
         )
+    return organization_id
 
 
 def upstream_conflict(host: str, project: str, instance_name: str, policy: Dict[str, Any]):
@@ -155,26 +159,6 @@ def capacity_conflict(instance_name: str, rows: List[Dict[str, Any]], keep_last:
             "limit": MAX_OPS_SNAPSHOTS_PER_INSTANCE,
         },
     )
-
-
-async def resolve_owning_org(db: Any, user: Any, host: str) -> Optional[int]:
-    """The organization this schedule belongs to for the rest of its life.
-
-    `resolve_cluster_orgs`, the plural one: the singular takes the lowest id, which its own comment
-    calls fine for a label and wrong for a permission, and a cluster on this deployment already
-    carries more than one binding.
-    """
-    bindings = await resolve_cluster_orgs(host, db)
-    if not bindings:
-        return None
-    mine = set(await get_user_org_ids(user, db))
-    for org_id, _slug in bindings:
-        if org_id in mine:
-            return org_id
-    # An Admin may hold the cluster through a registration rather than a membership. Falling back
-    # to the first binding keeps the schedule attributable to the organization that owns the
-    # hardware rather than leaving it ownerless, which fire-time authorization treats as terminal.
-    return bindings[0][0]
 
 
 async def insert_schedule(
@@ -247,18 +231,26 @@ async def find_for_instance(
 
 
 async def get_owned(db: Any, schedule_id: int, actor_email: Optional[str]) -> SnapshotSchedule:
-    """One schedule, refusing anything the actor's own clusters do not include.
+    """One schedule the current caller may manage.
 
     An unknown id and an unauthorised one answer the same 404 on purpose, so the endpoint cannot be
-    used to learn which instances elsewhere on the fleet carry a schedule.
+    used to learn which instances elsewhere on the fleet carry a schedule. This check uses the
+    current caller so an authorized colleague can pause, edit, or remove a schedule after its
+    creator leaves. The background runner separately rechecks the original owner before writing.
     """
     schedule = (
         await db.execute(select(SnapshotSchedule).where(SnapshotSchedule.id == schedule_id))
     ).scalar_one_or_none()
     if schedule is None:
         raise HTTPException(status_code=404, detail="No such snapshot schedule.")
-    owned = await _query_owned_clusters(actor_email or "", db)
-    if schedule.cluster_id not in owned:
+    refusal = await schedule_authority.standing_authority_refusal(
+        db,
+        actor_email=actor_email,
+        organization_id=schedule.organization_id,
+        cluster_id=schedule.cluster_id,
+        project=schedule.project,
+    )
+    if refusal is not None:
         raise HTTPException(status_code=404, detail="No such snapshot schedule.")
     return schedule
 
@@ -271,10 +263,8 @@ async def list_for_actor(
     project: Optional[str] = None,
     instance: Optional[str] = None,
 ) -> List[SnapshotSchedule]:
-    owned = await _query_owned_clusters(actor_email or "", db)
-    if not owned:
-        return []
-    stmt = select(SnapshotSchedule).where(SnapshotSchedule.cluster_id.in_(owned))
+    """Schedules the current caller may manage, never the original owner's stale visibility."""
+    stmt = select(SnapshotSchedule)
     if host:
         stmt = stmt.where(SnapshotSchedule.cluster_id == host)
     if project:
@@ -282,7 +272,18 @@ async def list_for_actor(
     if instance:
         stmt = stmt.where(SnapshotSchedule.instance_name == instance)
     rows = (await db.execute(stmt.order_by(SnapshotSchedule.next_run_at))).scalars().all()
-    return list(rows)
+    visible: List[SnapshotSchedule] = []
+    for row in rows:
+        refusal = await schedule_authority.standing_authority_refusal(
+            db,
+            actor_email=actor_email,
+            organization_id=row.organization_id,
+            cluster_id=row.cluster_id,
+            project=row.project,
+        )
+        if refusal is None:
+            visible.append(row)
+    return visible
 
 
 def apply_update(schedule: SnapshotSchedule, body: Any, now: datetime) -> None:

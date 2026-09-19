@@ -30,6 +30,8 @@ from app.core.dependencies import require_partner, require_tenant, check_read_on
 from app.core.org_scope import (
     org_scope_dependency,
     get_current_allowed_clusters,
+    get_current_resolved_tenant_grants,
+    get_tenant_scope,
     project_is_visible,
 )
 from app.core.rbac import resolve_roles, get_highest_role, Role
@@ -72,7 +74,13 @@ def _invalidate_acl_caches():
 class PolicyRuleCreate(BaseModel):
     """Request schema for creating a rule within a policy."""
     cluster_id: str = Field(..., min_length=1, max_length=255, description="Target cluster ID")
-    project_name: str = Field(default="*", max_length=255, description="Project name or '*' for all")
+    project_name: str = Field(
+        default="*",
+        max_length=255,
+        description=(
+            "Project name or '*' for projects attributed to this policy's organization"
+        ),
+    )
     instance_name: str = Field(default="*", max_length=255, description="Instance name or '*' for all")
     permissions: List[str] = Field(
         default=["view"],
@@ -800,6 +808,38 @@ async def get_my_access(
     db: AsyncSession = Depends(get_db),
 ):
     """Resolve all access rules for the current user across all assigned policies."""
+    highest = get_highest_role(resolve_roles(user))
+    if highest == Role.TENANT:
+        # Use the same active, organization-matched, cluster-bound grants as enforcement. The
+        # former self-view independently loaded memberships and assignments, so it could show
+        # an expired, inactive, cross-organization, or unbound rule that authorization had
+        # already revoked. On shared clusters a wildcard is expanded to the concrete project
+        # bound so the response never claims access to a neighbour's project.
+        grants = get_current_resolved_tenant_grants()
+        if grants is None:
+            # Direct function calls in tests and internal tools do not necessarily execute the
+            # router dependency. Production requests reuse its exact authorization snapshot so
+            # a concurrent revoke cannot make enforcement and this self-view disagree.
+            _acl, resolved_grants, _visible_projects = await get_tenant_scope(user, db)
+            grants = tuple(resolved_grants or [])
+        access_entries: List[ResolvedAccess] = []
+        for grant in grants:
+            access_entries.append(
+                ResolvedAccess(
+                    cluster_id=grant.cluster_id,
+                    project_name=grant.project_name,
+                    instance_name=grant.instance_name,
+                    permissions=sorted(grant.permissions),
+                    policy_name=grant.policy_name,
+                )
+            )
+
+        return MyAccessResponse(
+            access=access_entries,
+            total_clusters=len({entry.cluster_id for entry in access_entries}),
+            total_rules=len(access_entries),
+        )
+
     now = datetime.now(timezone.utc)
 
     # find all org memberships

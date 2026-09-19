@@ -60,6 +60,12 @@ class _Rows:
     def all(self):
         return list(self._rows)
 
+    def scalars(self):
+        # Match SQLAlchemy's ScalarResult: selecting one column returns the value,
+        # not the one-element Row tuple. The standing-authority check compares the
+        # resulting organization ids with ``schedule.organization_id``.
+        return _Rows([row[0] if isinstance(row, tuple) and len(row) == 1 else row for row in self._rows])
+
     def scalar_one_or_none(self):
         return self._rows[0] if self._rows else None
 
@@ -77,7 +83,12 @@ class FakeDB:
 
     async def execute(self, _stmt, *args, **kwargs):
         self.queries += 1
-        return _Rows([(HOST,)] if self.bound else [])
+        if not self.bound:
+            return _Rows([])
+        sql = str(_stmt)
+        if "organization_clusters.organization_id, organization_clusters.id" in sql:
+            return _Rows([(6, 1)])
+        return _Rows([(6,)])
 
     async def commit(self):
         return None

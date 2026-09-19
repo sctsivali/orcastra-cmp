@@ -26,12 +26,16 @@ from app.services.lxd_service import (
     get_lxd_service,
 )
 from app.core.single_flight import single_flight
+from app.core.blocking import BlockingPoolFull, BlockingTimeout
 from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, AuthenticatedUser
 from app.core.org_scope import (
+    can_view_instance,
     org_scope_dependency,
     verify_cluster_access,
     get_scope_cache_key,
     check_tenant_permission,
+    verify_instance_view_access,
+    verify_project_access,
     verify_tenant_permission,
 )
 from app.core.config import get_settings
@@ -212,22 +216,38 @@ async def get_vm(
         None,
         description=(
             "LXD project the VM belongs to. A name is unique per project, not per host, so "
-            "omitting this searches every project and returns the first match."
+            "omitting this searches only projects visible to the caller."
         ),
     ),
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
-    """Get detailed information about a specific VM."""
-    verify_cluster_access(host)
+    """Get one visible VM, searching only authorized projects when omitted."""
+    scoped_project: Optional[str] = None
+    project_filter = None
+    if project is None:
+        verify_cluster_access(host)
+        project_filter = lambda candidate: can_view_instance(  # noqa: E731
+            host, candidate, vm_name
+        )
+    else:
+        scoped_project = verify_instance_view_access(host, project, vm_name)
     try:
-        vm = await lxd_service.get_vm(vm_name, host, project)
+        if project_filter is None:
+            vm = await lxd_service.get_vm(vm_name, host, scoped_project)
+        else:
+            vm = await lxd_service.get_vm(
+                vm_name,
+                host,
+                scoped_project,
+                project_filter=project_filter,
+            )
         
         if not vm:
             raise HTTPException(
                 status_code=404, 
                 detail=f"VM '{vm_name}' not found on host '{host}'"
             )
-        verify_tenant_permission(host, vm.project or "default", vm.name, "view")
+        verify_instance_view_access(host, vm.project or "default", vm.name)
         
         return vm
         
@@ -254,6 +274,7 @@ async def get_vm(
     responses={
         201: {"description": "VM created successfully"},
         400: {"model": ErrorResponse, "description": "Invalid request"},
+        503: {"model": ErrorResponse, "description": "Create capacity temporarily unavailable"},
         500: {"model": ErrorResponse, "description": "Server error"},
     }
 )
@@ -264,7 +285,8 @@ async def create_vm(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Create a new VM on the specified host."""
-    verify_cluster_access(request.host)
+    project = verify_project_access(request.host, request.project)
+    request = request.model_copy(update={"project": project})
     try:
         # Validate host
         valid_nodes = lxd_service.get_node_names()
@@ -284,6 +306,7 @@ async def create_vm(
             cloud_init=request.cloud_init,
             devices=request.devices,
             start_on_create=request.start_on_create,
+            project=request.project,
         )
         
         # Log activity: VM creation success
@@ -311,6 +334,9 @@ async def create_vm(
         )
         
     except LXDOperationError as e:
+        temporarily_unavailable = isinstance(
+            e.__cause__, (BlockingTimeout, BlockingPoolFull)
+        )
         # Log activity: VM creation failure
         activity_logger.log_activity(
             action="vm.create",
@@ -319,11 +345,18 @@ async def create_vm(
             target_host=request.host,
             target_project=request.project,
             result="failure",
-            error_code="LXD_OPERATION_ERROR",
+            error_code=(
+                "LXD_CREATE_TEMPORARILY_UNAVAILABLE"
+                if temporarily_unavailable
+                else "LXD_OPERATION_ERROR"
+            ),
             error_message=str(e),
             details={"image": request.image, "instance_type": request.instance_type}
         )
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=503 if temporarily_unavailable else 400,
+            detail=str(e),
+        )
     except LXDConnectionError as e:
         # Log activity: VM creation failure
         activity_logger.log_activity(
@@ -377,7 +410,6 @@ async def start_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Start a VM."""
-    verify_cluster_access(request.host)
     # important: ONE project value is authorized and acted on. This checked the ACL against
     # `request.project or "default"` and then handed `request.project` to the service, which
     # searches EVERY project when it is None and returns the first hit. A caller holding
@@ -386,7 +418,7 @@ async def start_vm(
     #
     # note: this router is the one the console actually drives. The identical routes under
     # /instances carry the same fix, and fixing only those would have left the live path open.
-    project = request.project or "default"
+    project = verify_instance_view_access(request.host, request.project, vm_name)
     # important: enforce BEFORE the try - a 403 raised inside it would be swallowed and re-raised 500.
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, vm_name, "operate")
@@ -469,7 +501,6 @@ async def stop_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Stop a VM."""
-    verify_cluster_access(request.host)
     # important: ONE project value is authorized and acted on. This checked the ACL against
     # `request.project or "default"` and then handed `request.project` to the service, which
     # searches EVERY project when it is None and returns the first hit. A caller holding
@@ -478,7 +509,7 @@ async def stop_vm(
     #
     # note: this router is the one the console actually drives. The identical routes under
     # /instances carry the same fix, and fixing only those would have left the live path open.
-    project = request.project or "default"
+    project = verify_instance_view_access(request.host, request.project, vm_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
@@ -579,7 +610,6 @@ async def restart_vm(
     _: None = Depends(check_read_only_mode),
 ):
     """Restart a VM."""
-    verify_cluster_access(request.host)
     # important: ONE project value is authorized and acted on. This checked the ACL against
     # `request.project or "default"` and then handed `request.project` to the service, which
     # searches EVERY project when it is None and returns the first hit. A caller holding
@@ -588,7 +618,7 @@ async def restart_vm(
     #
     # note: this router is the one the console actually drives. The identical routes under
     # /instances carry the same fix, and fixing only those would have left the live path open.
-    project = request.project or "default"
+    project = verify_instance_view_access(request.host, request.project, vm_name)
     if get_settings().tenant_perm_enforcement_enabled:
         verify_tenant_permission(request.host, project, vm_name, "operate")
     try:
@@ -692,7 +722,7 @@ async def delete_vm(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Delete a VM."""
-    verify_cluster_access(host)
+    project = verify_project_access(host, project)
     try:
         await lxd_service.delete_vm(
             name=vm_name,
@@ -784,17 +814,12 @@ async def get_instance_metrics(
     lxd_service: LXDService = Depends(get_lxd_service),
 ):
     """Get real-time metrics for an instance."""
-    verify_cluster_access(host)
-    # important: this route had no tenant check at all, and it is the one the console calls. A
-    # cluster check says the caller may reach the host, which for a tenant scoped to one instance
-    # is true of every instance their neighbours run on it, so any of them could be read by name.
-    if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(host, project or "default", instance_name, "view")
+    scoped_project = verify_instance_view_access(host, project, instance_name)
     try:
         metrics = await lxd_service.get_instance_metrics(
             host=host,
             instance_name=instance_name,
-            project=project,
+            project=scoped_project,
         )
         
         return metrics
@@ -804,6 +829,9 @@ async def get_instance_metrics(
         # a missing resource. Without this clause the retyped exception
         # falls to `except Exception` below and answers 500.
         raise HTTPException(status_code=503, detail=str(e))
+    except (BlockingTimeout, BlockingPoolFull) as e:
+        logger.warning("Instance metrics temporarily unavailable: %s", e)
+        raise HTTPException(status_code=503, detail="Instance metrics are temporarily unavailable")
     except LXDOperationError as e:
         if "not found" in str(e).lower():
             raise HTTPException(status_code=404, detail=str(e))

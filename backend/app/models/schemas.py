@@ -6,7 +6,7 @@ Defines request/response schemas for VMs and operations.
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 from typing import Optional, Dict, Any, List, Literal
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 import re
 from urllib.parse import urlparse
 
@@ -69,7 +69,71 @@ class InstanceMetrics(BaseModel):
     ipv4_addresses: List[str] = Field(default_factory=list, description="IPv4 addresses")
     ipv6_addresses: List[str] = Field(default_factory=list, description="IPv6 addresses")
     pid: Optional[int] = Field(None, description="Process ID of the instance")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Metrics collection timestamp")
+    cpu_sample_status: Literal[
+        "ready", "calculating", "unavailable", "not_applicable"
+    ] = Field(
+        "unavailable",
+        description=(
+            "Whether CPU percentage has two usable samples, is waiting for its second sample, "
+            "was not reported, or does not apply while the instance is stopped"
+        ),
+    )
+    unavailable_sections: List[
+        Literal["cpu", "memory", "disk", "network", "processes"]
+    ] = Field(
+        default_factory=list,
+        description=(
+            "Metric sections omitted or incomplete in the LXD state response. An empty section "
+            "or an explicit numeric zero is still an available reading"
+        ),
+    )
+    timestamp: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="UTC metrics collection timestamp",
+    )
+
+
+class InstanceLimitSpecification(BaseModel):
+    """One effective LXD instance limit and where it came from."""
+
+    value: Optional[str] = Field(None, description="Effective LXD limit value")
+    source: Literal["explicit", "inherited", "default", "unlimited", "unknown"]
+
+
+class InstanceRootDiskSpecification(BaseModel):
+    """Effective root disk allocation without exposing the full device configuration."""
+
+    value: Optional[str] = Field(None, description="Effective root disk size")
+    pool: Optional[str] = Field(None, description="Effective storage pool")
+    source: Literal["explicit", "inherited", "pool_default", "unknown"]
+
+
+class InstanceSpecification(BaseModel):
+    """Tenant-safe projection of the resources assigned to one visible instance."""
+
+    name: str
+    host: str
+    project: str
+    status: VMStatus
+    type: str
+    architecture: Optional[str] = None
+    cpu: InstanceLimitSpecification
+    memory: InstanceLimitSpecification
+    root_disk: InstanceRootDiskSpecification
+    gpu_count: int = 0
+    gpu_devices: List[str] = Field(default_factory=list)
+
+
+class InstanceSpecificationsResponse(BaseModel):
+    """Visible instance specifications plus clusters that could not be read."""
+
+    total: int
+    instances: List[InstanceSpecification]
+    unreachable_nodes: List[str] = Field(default_factory=list)
+    collected_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="UTC time when this projection was assembled",
+    )
 
 
 class VMInfo(BaseModel):
@@ -109,6 +173,13 @@ class VMInfo(BaseModel):
             "root disk from here, since an instance that overrides nothing still has one."
         ),
     )
+    # Internal-only effective values used by the tenant-safe specifications projection. They are
+    # excluded from VMInfo responses so the general instance list does not grow a second wire
+    # contract or expose the rest of expanded_config.
+    effective_cpu_limit: Optional[str] = Field(None, exclude=True)
+    effective_memory_limit: Optional[str] = Field(None, exclude=True)
+    effective_limits_known: bool = Field(False, exclude=True)
+    expanded_devices_known: bool = Field(False, exclude=True)
     profiles: List[str] = Field(default_factory=list, description="Applied profiles")
     tags: List[str] = Field(default_factory=list, description="Instance tags for organization and filtering")
     
@@ -844,7 +915,10 @@ class ClusterAvailability(BaseModel):
     """
     name: str = Field(..., description="Cluster id. The exact value a create request sends as its node")
     display_name: str = Field(..., description="Label to show; falls back to the id")
-    endpoint: str = Field(..., description="Hypervisor API endpoint")
+    endpoint: Optional[str] = Field(
+        None,
+        description="Hypervisor API endpoint; omitted from the Tenant projection",
+    )
     status: ClusterStatus = Field(..., description="Current connection status")
     reason_code: AvailabilityReason = Field(
         AvailabilityReason.UNKNOWN,

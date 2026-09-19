@@ -64,12 +64,19 @@ def test_every_build_path_carries_devices() -> None:
     )
     # The list builder constructs VMInfo from the raw all-projects payload and must carry both.
     row = {
-        "name": "web", "status": "Running", "status_code": 103, "project": "p",
-        "devices": {"root": {"type": "disk"}}, "expanded_devices": {"root": {"type": "disk"}, "eth0": {"type": "nic"}},
+        "name": "web",
+        "status": "Running",
+        "status_code": 103,
+        "project": "p",
+        "devices": {"root": {"type": "disk"}},
+        "expanded_devices": {
+            "root": {"type": "disk"},
+            "eth0": {"type": "nic"},
+        },
+        "expanded_config": {},
     }
     built = instance_module._vm_info_from_row(row, "nuc2", "")
     assert built.devices == row["devices"] and built.expanded_devices == row["expanded_devices"]
-
     wrapper_src = inspect.getsource(utils_module.InstanceWrapper.__init__)
     assert "self.devices" in wrapper_src, (
         "InstanceWrapper copies a fixed field list; devices must be on it or the detail "
@@ -78,3 +85,36 @@ def test_every_build_path_carries_devices() -> None:
     assert "self.expanded_devices" in wrapper_src, (
         "InstanceWrapper must carry expanded_devices as well"
     )
+
+
+def test_the_raw_list_builder_preserves_effective_limit_evidence() -> None:
+    """The projection needs explicit proof that expanded config and devices were read."""
+    from app.services.lxd.instance import _vm_info_from_row
+
+    payload = {
+        "name": "vm-1",
+        "project": "default",
+        "status": "Stopped",
+        "status_code": 102,
+        "type": "virtual-machine",
+        "devices": {
+            "root": {"type": "disk", "path": "/", "size": "20GiB"},
+        },
+        "expanded_devices": {
+            "root": {
+                "type": "disk",
+                "path": "/",
+                "pool": "default",
+                "size": "20GiB",
+            },
+        },
+        "expanded_config": {"limits.cpu": "4", "limits.memory": "8GiB"},
+    }
+    vm = _vm_info_from_row(payload, "device-builder-test", "https://node")
+
+    assert vm.devices == payload["devices"]
+    assert vm.expanded_devices == payload["expanded_devices"]
+    assert vm.expanded_devices_known is True
+    assert vm.effective_limits_known is True
+    assert vm.effective_cpu_limit == "4"
+    assert vm.effective_memory_limit == "8GiB"

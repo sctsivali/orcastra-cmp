@@ -1,13 +1,12 @@
 # Continuous integration.
 #
-# The repo had no CI at all, so 104 backend tests including five structural guards ran only when
-# somebody remembered. Every job here is green on the commit that introduced this file, which is
-# the point: a gate that starts red is a gate people learn to skip.
+# Hosted runners cover the hermetic suites plus the boundaries the local sandbox cannot exercise:
+# real PostgreSQL/asyncpg, loopback sockets, and a browser driven against a production frontend
+# build. Every external API is fixture-backed; these jobs never receive deployment credentials.
 #
 # What is deliberately NOT here, because it needs the dev VM and cannot work on a hosted runner:
-# make test-backend-docker (inspects a running container), make test-frontend (calls an npm
-# script that does not exist), and the Playwright harness in /root/qa-orcastra, which drives real
-# Authentik SSO against a Tailscale address.
+# make test-backend-docker (inspects a running container) and the credentialed Playwright harness
+# in /root/qa-orcastra, which drives real Authentik SSO against a private address.
 
 name: CI
 
@@ -27,6 +26,20 @@ jobs:
   backend:
     name: Backend tests and lint
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: orcastra_test
+          POSTGRES_PASSWORD: orcastra_test
+          POSTGRES_DB: orcastra_journal_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U orcastra_test -d orcastra_journal_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -48,10 +61,22 @@ jobs:
         working-directory: backend
         run: ruff check app/
 
-      # The suite is hermetic. Proven by running it with DATABASE_URL and REDIS_URL pointed at a
-      # closed port: same 104 passed, same runtime. No service containers needed.
+      # Journal contracts intentionally use asyncpg against a database migrated to the exact
+      # application head. The database name contains "test", which is required by the fixture's
+      # destructive-operation guard before it can truncate its three journal-only tables.
+      - name: Migrate journal test database
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql+asyncpg://orcastra_test:orcastra_test@127.0.0.1:5432/orcastra_journal_test
+        run: alembic upgrade head
+
+      # Most tests stay hermetic. JOURNAL_TEST_DATABASE_URL opts only the explicit PostgreSQL
+      # contract module into the disposable service. The hosted runner also supplies the loopback
+      # socket capability needed by the delivery-signature and retry-amplification contracts.
       - name: Tests
         working-directory: backend
+        env:
+          JOURNAL_TEST_DATABASE_URL: postgresql+asyncpg://orcastra_test:orcastra_test@127.0.0.1:5432/orcastra_journal_test
         run: python -m pytest -q
 
   frontend:

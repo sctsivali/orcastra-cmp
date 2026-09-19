@@ -13,17 +13,27 @@ Provides comprehensive REST API for tag operations:
 API Prefix: /api/v1/tags
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends, Header, Query
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional
 import logging
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.core.dependencies import check_read_only_mode, require_tenant, require_partner, require_admin, AuthenticatedUser
-from app.core.config import get_settings
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, verify_tenant_permission
-from app.services.tag_service import TagService
-from app.services.lxd_service import get_lxd_service
+from app.core.dependencies import (
+    AuthenticatedUser,
+    check_read_only_mode,
+    require_admin,
+    require_partner,
+    require_tenant,
+)
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_cluster_access,
+    verify_instance_view_access,
+    verify_project_access,
+    verify_tenant_permission,
+)
 from app.models.schemas import (
     # Tag schemas
     TagCreate, TagUpdate, TagResponse,
@@ -35,24 +45,67 @@ from app.models.schemas import (
     # User visibility
     UserTagVisibilitySettings, UserTagVisibilityResponse,
 )
+from app.services.lxd_service import get_lxd_service
+from app.services.tag_service import TagService
 
 logger = logging.getLogger(__name__)
 
-def _verify_instance_access(host: str, project: str, instance_name: str, permission: str = "view") -> None:
-    """Authorize an action on ONE instance, not merely on its cluster.
+_RESOURCE_TYPES = {"node", "project", "instance"}
 
-    `verify_cluster_access` answers "may this caller reach this cluster", which for a tenant
-    scoped to a single instance is true of every instance their neighbours run on the same one.
-    Behind the same flag as the rest of the tenant ACL.
 
-    important: `project` is used AS GIVEN. The helper used to normalise it with `or "default"`,
-    which reintroduced the very split it exists to close: an empty `?project=` authorized
-    `default` here while the service saw a falsy value and searched every project. The caller
-    normalises once and passes the same value to the action, so there is exactly one project in
-    play per request.
+def _validate_resource_type(resource_type: str) -> None:
+    if resource_type not in _RESOURCE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="resource_type must be 'node', 'project', or 'instance'",
+        )
+
+
+def _required_host(resource_type: str, host: Optional[str]) -> str:
+    if not (host or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"host is required for {resource_type} tag operations",
+        )
+    return host.strip()
+
+
+def _target_cluster_id(
+    resource_type: str,
+    resource_id: str,
+    host: Optional[str],
+) -> str:
+    return resource_id if resource_type == "node" else _required_host(resource_type, host)
+
+
+def _authorize_resource_target(
+    resource_type: str,
+    resource_id: str,
+    *,
+    host: Optional[str],
+    project: Optional[str],
+) -> tuple[Optional[str], Optional[str], str]:
+    """Authorize one tag target and return the exact values the service must use.
+
+    `host` and `project` may originate from query parameters or a bulk request body. Resolving
+    them before this helper and carrying these returned values into TagService prevents a body
+    target from bypassing a query-only check. Project tags use `resource_id` as their LXD
+    project; instance tags use `project` and always include it in the database lookup, so two
+    same-named instances in different projects cannot share assignments.
     """
-    if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(host, project, instance_name, permission)
+    if resource_type == "node":
+        # Node tags use resource_id as the cluster connection key in TagService. Authorizing an
+        # optional, unrelated `host` would check one cluster and mutate another.
+        return None, None, resource_id
+
+    cluster_id = _required_host(resource_type, host)
+    if resource_type == "project":
+        scoped_project = verify_project_access(cluster_id, resource_id)
+        verify_tenant_permission(cluster_id, scoped_project, None, "view")
+        return cluster_id, None, scoped_project
+
+    scoped_project = verify_instance_view_access(cluster_id, project, resource_id)
+    return cluster_id, scoped_project, resource_id
 
 
 router = APIRouter(
@@ -259,22 +312,20 @@ async def get_resource_tags(
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
     """Get tags for a resource."""
-    if host:
-        verify_cluster_access(host)
-    # important: an instance's tags are its owner's metadata: cost centre, environment, owner,
-    # whatever a partner attached. A cluster check alone let a tenant read them for any instance
-    # on a cluster they can reach, including their neighbours'.
-    if resource_type == "instance" and host:
-        # note: normalised for the CHECK only. The reader below matches on the stored
-        # resource_project, and a row written without one is matched by None rather than by
-        # "default", so the two are deliberately not the same value here. That asymmetry is a
-        # pre-existing property of the tag store, recorded in the rbac document.
-        _verify_instance_access(host, project or "default", resource_id, "view")
-    if resource_type not in ["node", "project", "instance"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="resource_type must be 'node', 'project', or 'instance'"
-        )
+    _validate_resource_type(resource_type)
+    verify_cluster_access(_target_cluster_id(resource_type, resource_id, host))
+    if resource_type == "instance":
+        # Keep the tenant-instance boundary visible in this tenant-reachable handler. The
+        # shared target resolver below also uses this helper, but an indirect-only gate is easy
+        # to remove accidentally while refactoring another resource type.
+        host = _required_host(resource_type, host)
+        project = verify_instance_view_access(host, project, resource_id)
+    host, project, resource_id = _authorize_resource_target(
+        resource_type,
+        resource_id,
+        host=host,
+        project=project,
+    )
     
     return await tag_service.get_resource_tags(
         resource_type=resource_type,
@@ -302,20 +353,25 @@ async def set_resource_tags(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Set (replace) all tags for a resource."""
-    if host:
-        verify_cluster_access(host)
-    if resource_type not in ["node", "project", "instance"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="resource_type must be 'node', 'project', or 'instance'"
-        )
+    effective_host = host if host is not None else request.resource_host
+    effective_project = project if project is not None else request.resource_project
+    _validate_resource_type(resource_type)
+    verify_cluster_access(
+        _target_cluster_id(resource_type, resource_id, effective_host)
+    )
+    effective_host, effective_project, resource_id = _authorize_resource_target(
+        resource_type,
+        resource_id,
+        host=effective_host,
+        project=effective_project,
+    )
     
     return await tag_service.set_resource_tags(
         resource_type=resource_type,
         resource_id=resource_id,
         tags=request.tags,
-        resource_host=host or request.resource_host,
-        resource_project=project or request.resource_project,
+        resource_host=effective_host,
+        resource_project=effective_project,
         user_id=user_id,
     )
 
@@ -338,21 +394,26 @@ async def add_resource_tags(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Add tags to a resource."""
-    if host:
-        verify_cluster_access(host)
-    if resource_type not in ["node", "project", "instance"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="resource_type must be 'node', 'project', or 'instance'"
-        )
+    effective_host = host if host is not None else request.resource_host
+    effective_project = project if project is not None else request.resource_project
+    _validate_resource_type(resource_type)
+    verify_cluster_access(
+        _target_cluster_id(resource_type, resource_id, effective_host)
+    )
+    effective_host, effective_project, resource_id = _authorize_resource_target(
+        resource_type,
+        resource_id,
+        host=effective_host,
+        project=effective_project,
+    )
     
     return await tag_service.assign_tags_to_resource(
         BulkTagAssignRequest(
             tags=request.tags,
             resource_type=resource_type,
             resource_id=resource_id,
-            resource_host=host or request.resource_host,
-            resource_project=project or request.resource_project,
+            resource_host=effective_host,
+            resource_project=effective_project,
         ),
         user_id=user_id,
     )
@@ -374,13 +435,14 @@ async def remove_resource_tag(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Remove a single tag from a resource."""
-    if host:
-        verify_cluster_access(host)
-    if resource_type not in ["node", "project", "instance"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="resource_type must be 'node', 'project', or 'instance'"
-        )
+    _validate_resource_type(resource_type)
+    verify_cluster_access(_target_cluster_id(resource_type, resource_id, host))
+    host, project, resource_id = _authorize_resource_target(
+        resource_type,
+        resource_id,
+        host=host,
+        project=project,
+    )
     
     await tag_service.remove_tag_from_resource(
         tag_name=tag_name,
@@ -412,7 +474,7 @@ async def update_instance_tags_legacy(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for an instance (legacy endpoint)."""
-    verify_cluster_access(host)
+    project = verify_instance_view_access(host, project, instance_name)
     return await tag_service.set_resource_tags(
         resource_type="instance",
         resource_id=instance_name,
@@ -438,7 +500,7 @@ async def update_project_tags_legacy(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Update tags for a project (legacy endpoint)."""
-    verify_cluster_access(host)
+    project_name = verify_project_access(host, project_name)
     return await tag_service.set_resource_tags(
         resource_type="project",
         resource_id=project_name,
@@ -483,8 +545,7 @@ async def get_instance_tags_legacy(
     tag_service: TagService = Depends(get_tag_service_dep),
 ):
     """Get tags for an instance (legacy endpoint)."""
-    verify_cluster_access(host)
-    _verify_instance_access(host, project or "default", instance_name, "view")
+    project = verify_instance_view_access(host, project, instance_name)
     return await tag_service.get_resource_tags(
         resource_type="instance",
         resource_id=instance_name,
@@ -558,13 +619,14 @@ async def import_from_lxd(
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
     """Import tags from LXD."""
-    if host:
-        verify_cluster_access(host)
-    if resource_type not in ["node", "project", "instance"]:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="resource_type must be 'node', 'project', or 'instance'"
-        )
+    _validate_resource_type(resource_type)
+    verify_cluster_access(_target_cluster_id(resource_type, resource_id, host))
+    host, project, resource_id = _authorize_resource_target(
+        resource_type,
+        resource_id,
+        host=host,
+        project=project,
+    )
     
     return await tag_service.import_tags_from_lxd(
         resource_type=resource_type,

@@ -66,7 +66,8 @@ def _offending_calls(tree: ast.AST) -> List[int]:
     return offenders
 
 
-# Sites that still call get_client inline, recorded as of 1.0.0-RC6 (2026-08-17).
+# Inline-call ceilings recorded as of 1.0.0-RC6 (2026-08-17). An explicit zero keeps a
+# previously improved file visible in the ratchet and rejects reintroduction there.
 #
 # This is a ratchet, not an allowlist: the numbers may only go DOWN. A new inline call fails
 # the guard, and converting one without updating the count fails it too, so the debt cannot be
@@ -84,9 +85,9 @@ BASELINE = {
     # `def`s that already run in a thread, so they never appeared here and are not the debt
     # this tracks. What is left below is genuine: a blocking revalidation on the event loop.
     "app/routers/cluster_registration.py": 1,
-    "app/routers/console.py": 3,
+    "app/routers/console.py": 0,
     "app/routers/my_keys.py": 3,
-    "app/services/lxd/lxd_service.py": 1,
+    "app/services/lxd/lxd_service.py": 0,
     "app/services/tag_service.py": 6,
 }
 

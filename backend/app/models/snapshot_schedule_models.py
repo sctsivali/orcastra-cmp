@@ -3,13 +3,14 @@
 Two decisions are visible in the columns and are worth stating here, because both were taken
 against a plausible alternative.
 
-**The owner is an organization, not a person.** Roles reach this process only in a JWT and there is
-no users table, so a background pass cannot learn that the operator who made a schedule has been
-demoted or deactivated. What it can ask Postgres, on every fire, is whether the owning organization
-still holds the cluster. Binding to the org makes that question answerable and makes the schedule
-visible to colleagues who can stop it. `owner_email` is kept for attribution, never for
-authorization. The residual is real and documented: deactivating an account does not stop a
-schedule until the organization loses the cluster.
+**The durable grant is an organization and its identifiable operator.** Roles reach this process
+only in a JWT, so a background pass cannot replay an Admin or Partner role. It can ask Postgres on
+every fire whether the organization is active, still holds the cluster and project, and whether
+the operator created the organization or still belongs to it. Historical `registered_by` metadata
+does not substitute for current affiliation after a rebind. Binding to the org makes the project
+question answerable and makes the schedule visible to authorized colleagues who can stop it.
+`owner_email` is both attribution and the actor whose database-backed affiliation is rechecked;
+the scheduler process never supplies authority of its own.
 
 **`next_run_at` and `due_slot` are two columns because they answer two questions.** `next_run_at` is
 when to try, and backoff moves it. `due_slot` is what the snapshot will be called, and only a
@@ -83,7 +84,12 @@ class SnapshotSchedule(Base):
     keep_last = Column(Integer, nullable=False, server_default="3")
     expiry_days = Column(Integer, nullable=False, server_default="7")
 
-    owner_email = Column(String(255), nullable=False, index=True, comment="attribution, not authority")
+    owner_email = Column(
+        String(255),
+        nullable=False,
+        index=True,
+        comment="attribution and durable actor affiliation",
+    )
     # important: SET NULL, never CASCADE. Deleting an organization must make this schedule fail
     # re-authorization and pause loudly, not erase the evidence that something was still writing
     # snapshots onto a live cluster.

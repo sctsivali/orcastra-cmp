@@ -67,6 +67,12 @@ def manager(monkeypatch):
         "find_instance_in_projects",
         lambda client, name, project=None: (_instance_stub(), REAL_PROJECT),
     )
+
+    async def _run_inline(fn, *args, **_kwargs):
+        return fn(*args)
+
+    # Executor semantics are covered separately; these assertions isolate project projection.
+    monkeypatch.setattr(instance_module, "run_blocking", _run_inline)
     return mgr
 
 

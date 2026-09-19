@@ -12,6 +12,7 @@ Tenant:  sees clusters bound to assigned access policies (ACL)
 import contextvars
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -68,6 +69,14 @@ def apply_cluster_filter(cluster_ids: list[str]) -> list[str]:
 def get_current_allowed_clusters() -> Optional[set[str]]:
     """Return the current request's allowed clusters (None = all)."""
     return _allowed_clusters_var.get(None)
+
+
+def get_current_visible_projects() -> Optional[dict[str, set[str]]]:
+    """Return a defensive copy of the request's shared-cluster project bounds."""
+    mapping = _visible_projects_var.get(None)
+    if mapping is None:
+        return None
+    return {cluster_id: set(projects) for cluster_id, projects in mapping.items()}
 
 
 def get_scope_cache_key(base_key: str) -> str:
@@ -173,6 +182,12 @@ def check_tenant_permission(
     """
     Check if the current tenant has a specific permission for a resource.
     """
+    # A wildcard tenant grant is still subordinate to the project bound. On a cluster shared
+    # by two organizations, ``*`` means every project attributable to the policy's
+    # organization, not every physical LXD project on that cluster.
+    if not project_is_visible(cluster_id, project_name):
+        return False
+
     acl = _tenant_acl_var.get(None)
     if acl is None:
         return True  # no ACL = full access (admin/partner)
@@ -227,9 +242,13 @@ def filter_projects_by_acl(cluster_id: str, project_names: list[str]) -> list[st
     Filter a list of project names by the current tenant ACL.
     Returns all projects if no ACL is active.
     """
+    # Apply the organization project bound before interpreting an ACL wildcard. Returning the
+    # original list for ``*`` used to undo the bound and expose a neighbour's projects.
+    visible_names = [name for name in project_names if project_is_visible(cluster_id, name)]
+
     acl = _tenant_acl_var.get(None)
     if acl is None:
-        return project_names
+        return visible_names
 
     cluster_rules = acl.get(cluster_id)
     if not cluster_rules:
@@ -238,11 +257,11 @@ def filter_projects_by_acl(cluster_id: str, project_names: list[str]) -> list[st
     # check if wildcard project exists
     for (proj, _inst), _perms in cluster_rules.items():
         if proj == "*":
-            return project_names  # wildcard = all projects
+            return visible_names
 
     # filter to allowed projects
     allowed_projects = {proj for (proj, _inst), _perms in cluster_rules.items()}
-    return [p for p in project_names if p in allowed_projects]
+    return [p for p in visible_names if p in allowed_projects]
 
 
 def visible_projects_for(cluster_id: str) -> Optional[set[str]]:
@@ -261,6 +280,62 @@ def project_is_visible(cluster_id: str, project: Optional[str]) -> bool:
     return (project or "default") in allowed
 
 
+def verify_project_access(cluster_id: str, project_name: Optional[str]) -> str:
+    """Authorize one concrete project and return its normalized name.
+
+    A missing or whitespace-only project means LXD's ``default`` project. The returned value
+    must be carried through to the service call: several LXD helpers interpret a falsy project
+    as "search every project", which can select another organization's same-named instance.
+
+    This gate is independent of the tenant-operation feature flag. Partner isolation on a
+    shared cluster is a project boundary, not a tenant ACL feature, and must always run before
+    any LXD client or service lookup.
+    """
+    project = (project_name or "default").strip() or "default"
+    verify_cluster_access(cluster_id)
+    if not project_is_visible(cluster_id, project):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied to this project",
+        )
+    return project
+
+
+def can_view_instance(
+    cluster_id: str,
+    project_name: Optional[str],
+    instance_name: str,
+) -> bool:
+    """Whether this request may read one instance in one concrete project.
+
+    This deliberately combines the Partner project bound and the Tenant instance ACL. Calling
+    only ``check_tenant_permission`` is insufficient because Admin and Partner carry no tenant
+    ACL, while calling only ``project_is_visible`` is insufficient for a Tenant.
+    """
+    project = (project_name or "default").strip() or "default"
+    return project_is_visible(cluster_id, project) and check_tenant_permission(
+        cluster_id,
+        project,
+        instance_name,
+        "view",
+    )
+
+
+def verify_instance_view_access(
+    cluster_id: str,
+    project_name: Optional[str],
+    instance_name: str,
+) -> str:
+    """Authorize one instance read and return its normalized project.
+
+    The cluster and project gates run before the LXD lookup, so a deliberately invalid request
+    cannot use response timing or errors to enumerate another organization's projects.
+    """
+    project = verify_project_access(cluster_id, project_name)
+    verify_tenant_permission(cluster_id, project, instance_name, "view")
+    return project
+
+
 def filter_instances_by_acl(
     cluster_id: str,
     project_name: str,
@@ -270,6 +345,9 @@ def filter_instances_by_acl(
     Filter a list of instance names by the current tenant ACL.
     Returns all instances if no ACL is active.
     """
+    if not project_is_visible(cluster_id, project_name):
+        return []
+
     acl = _tenant_acl_var.get(None)
     if acl is None:
         return instance_names
@@ -297,6 +375,126 @@ def filter_instances_by_acl(
 # ---------------------------------------------------------------------------
 # DB query
 # ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class TenantPolicyGrant:
+    """One active tenant grant with the policy organization kept attached.
+
+    The public ACL map deliberately stays compact, but it cannot answer which organization a
+    wildcard came from. This provenanced form is used while deriving shared-cluster project
+    bounds and by the tenant self-view, then flattened only after those boundaries are known.
+    """
+
+    organization_id: int
+    policy_name: str
+    cluster_id: str
+    project_name: str
+    instance_name: str
+    permissions: frozenset[str]
+
+
+_resolved_tenant_grants_var: contextvars.ContextVar[
+    Optional[tuple[TenantPolicyGrant, ...]]
+] = contextvars.ContextVar("resolved_tenant_grants", default=None)
+
+
+def get_current_resolved_tenant_grants() -> Optional[tuple[TenantPolicyGrant, ...]]:
+    """Resolved grants from the same authorization snapshot as the request ACL."""
+    return _resolved_tenant_grants_var.get(None)
+
+
+async def get_tenant_policy_grants(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> Optional[list[TenantPolicyGrant]]:
+    """Return active Tenant grants without discarding their policy organization.
+
+    ``None`` means ACL filtering does not apply to this role. An empty list is a real Tenant
+    result and means no active access.
+    """
+    from app.core.rbac import resolve_roles, get_highest_role, Role
+    from app.models.db_models import (
+        Organization,
+        OrganizationCluster,
+        OrganizationMember,
+        TenantAccessPolicy,
+        TenantPolicyAssignment,
+        TenantPolicyRule,
+    )
+
+    highest = get_highest_role(resolve_roles(user))
+    if highest in (Role.ADMIN, Role.PARTNER):
+        return None
+
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(
+            TenantPolicyRule,
+            TenantAccessPolicy.organization_id,
+            TenantAccessPolicy.name,
+        )
+        .join(
+            TenantAccessPolicy,
+            TenantAccessPolicy.id == TenantPolicyRule.policy_id,
+        )
+        .join(
+            TenantPolicyAssignment,
+            TenantPolicyAssignment.policy_id == TenantAccessPolicy.id,
+        )
+        .join(
+            OrganizationMember,
+            OrganizationMember.id == TenantPolicyAssignment.org_member_id,
+        )
+        .join(
+            Organization,
+            and_(
+                Organization.id == OrganizationMember.organization_id,
+                Organization.id == TenantAccessPolicy.organization_id,
+            ),
+        )
+        .join(
+            OrganizationCluster,
+            and_(
+                OrganizationCluster.organization_id == Organization.id,
+                OrganizationCluster.cluster_id == TenantPolicyRule.cluster_id,
+            ),
+        )
+        .where(
+            and_(
+                OrganizationMember.user_email == user.email,
+                Organization.is_active == True,  # noqa: E712 - SQLAlchemy comparison
+                or_(
+                    TenantPolicyAssignment.expires_at.is_(None),
+                    TenantPolicyAssignment.expires_at > now,
+                ),
+            )
+        )
+        .order_by(
+            TenantAccessPolicy.organization_id,
+            TenantAccessPolicy.name,
+            TenantPolicyRule.id,
+        )
+    )
+    rows = (await db.execute(stmt)).unique().all()
+    grants = [
+        TenantPolicyGrant(
+            organization_id=organization_id,
+            policy_name=policy_name,
+            cluster_id=rule.cluster_id,
+            project_name=rule.project_name,
+            instance_name=rule.instance_name,
+            permissions=frozenset(
+                rule.permissions if isinstance(rule.permissions, list) else []
+            ),
+        )
+        for rule, organization_id, policy_name in rows
+    ]
+    logger.debug(
+        "Tenant grants for %s: %d active provenanced rules",
+        user.email,
+        len(grants),
+    )
+    return grants
 
 async def _resolve_user_org_names(
     user: AuthenticatedUser,
@@ -577,30 +775,154 @@ async def _clusters_with_several_orgs(db: AsyncSession) -> set[str]:
     return set((await db.execute(stmt)).scalars().all())
 
 
+async def _resolve_tenant_grants(
+    grants: list[TenantPolicyGrant],
+    shared_clusters: set[str],
+    db: AsyncSession,
+) -> tuple[list[TenantPolicyGrant], dict[str, set[str]]]:
+    """Expand shared-cluster wildcards before grants from different orgs are merged.
+
+    A project has no first-class owner record in the current schema. The established ownership
+    evidence is therefore the same conservative evidence used for Partners: ``default`` plus
+    concrete project names in policies from that organization while it remains bound to the
+    cluster. Expansion happens per ``(organization_id, cluster_id)`` while policy provenance is
+    still attached. This ordering is the security boundary: computing one global project union
+    first would let organization A's wildcard consume a narrow project grant from organization
+    B when the same Tenant legitimately belongs to both.
+    """
+    from app.models.db_models import (
+        Organization,
+        OrganizationCluster,
+        TenantAccessPolicy,
+        TenantPolicyRule,
+    )
+
+    allowed_clusters = _allowed_clusters_var.get(None)
+    bounded_clusters = (
+        shared_clusters
+        if allowed_clusters is None
+        else shared_clusters.intersection(allowed_clusters)
+    )
+    visible_projects = {cluster_id: set() for cluster_id in bounded_clusters}
+    projects_by_owner: dict[tuple[int, str], set[str]] = {}
+    wildcard_owners: set[tuple[int, str]] = set()
+
+    for grant in grants:
+        if grant.cluster_id not in shared_clusters:
+            continue
+        owner = (grant.organization_id, grant.cluster_id)
+        owner_projects = projects_by_owner.setdefault(owner, set())
+        if grant.project_name == "*":
+            wildcard_owners.add(owner)
+            owner_projects.add("default")
+        elif grant.project_name:
+            owner_projects.add(grant.project_name)
+
+    if wildcard_owners:
+        organization_ids = {organization_id for organization_id, _cluster in wildcard_owners}
+        cluster_ids = {cluster_id for _organization_id, cluster_id in wildcard_owners}
+        stmt = (
+            select(
+                TenantAccessPolicy.organization_id,
+                TenantPolicyRule.cluster_id,
+                TenantPolicyRule.project_name,
+            )
+            .join(
+                TenantAccessPolicy,
+                TenantAccessPolicy.id == TenantPolicyRule.policy_id,
+            )
+            .join(
+                Organization,
+                Organization.id == TenantAccessPolicy.organization_id,
+            )
+            .join(
+                OrganizationCluster,
+                and_(
+                    OrganizationCluster.organization_id
+                    == TenantAccessPolicy.organization_id,
+                    OrganizationCluster.cluster_id == TenantPolicyRule.cluster_id,
+                ),
+            )
+            .where(
+                and_(
+                    TenantAccessPolicy.organization_id.in_(organization_ids),
+                    TenantPolicyRule.cluster_id.in_(cluster_ids),
+                    TenantPolicyRule.project_name != "*",
+                    Organization.is_active == True,  # noqa: E712 - SQLAlchemy comparison
+                )
+            )
+            .distinct()
+        )
+        for organization_id, cluster_id, project_name in (await db.execute(stmt)).all():
+            owner = (organization_id, cluster_id)
+            if owner in wildcard_owners and project_name:
+                projects_by_owner[owner].add(project_name)
+
+    resolved: list[TenantPolicyGrant] = []
+    for grant in grants:
+        if grant.cluster_id in shared_clusters and grant.project_name == "*":
+            owner = (grant.organization_id, grant.cluster_id)
+            for project_name in sorted(projects_by_owner.get(owner, set())):
+                resolved.append(
+                    TenantPolicyGrant(
+                        organization_id=grant.organization_id,
+                        policy_name=grant.policy_name,
+                        cluster_id=grant.cluster_id,
+                        project_name=project_name,
+                        instance_name=grant.instance_name,
+                        permissions=grant.permissions,
+                    )
+                )
+        else:
+            resolved.append(grant)
+
+    for grant in resolved:
+        if grant.cluster_id in visible_projects and grant.project_name != "*":
+            visible_projects[grant.cluster_id].add(grant.project_name)
+    return resolved, visible_projects
+
+
 async def get_visible_projects(
     user: AuthenticatedUser,
     db: AsyncSession,
+    tenant_grants: Optional[list[TenantPolicyGrant]] = None,
 ) -> Optional[dict[str, set[str]]]:
     """Which LXD projects this user may see, on clusters that carry more than one org.
 
     Returns None when nothing needs restricting, and otherwise a map of cluster to the set of
     project names that may be shown. A cluster absent from the map is unrestricted.
 
-    Only Partners need this. A Tenant is already filtered by their ACL on every one of these
-    lists, and an Admin reaching a cluster they do not own is gated by break-glass at the
-    cluster level. A Partner, though, is scoped by cluster alone, so on a cluster shared with
-    another organization the only safe default is the behaviour they have today: the default
-    project, widened by whatever their own policies name.
+    Admin is unrestricted here. A Partner is scoped by cluster alone, so the safe default on a
+    shared cluster is ``default`` widened by concrete projects their own policies name. A
+    Tenant also needs a project bound: their ACL can contain ``project_name='*'``, which must
+    mean the policy organization's projects rather than every project another organization
+    happens to run on the same cluster.
     """
     from app.core.rbac import resolve_roles, get_highest_role, Role
-    from app.models.db_models import TenantAccessPolicy, TenantPolicyRule
+    from app.models.db_models import (
+        OrganizationCluster,
+        TenantAccessPolicy,
+        TenantPolicyRule,
+    )
 
-    if get_highest_role(resolve_roles(user)) != Role.PARTNER:
+    highest = get_highest_role(resolve_roles(user))
+    if highest == Role.ADMIN:
         return None
 
     shared = await _clusters_with_several_orgs(db)
     if not shared:
         return None
+
+    if highest == Role.TENANT:
+        grants = (
+            tenant_grants
+            if tenant_grants is not None
+            else await get_tenant_policy_grants(user, db)
+        )
+        # get_tenant_policy_grants returns a list for Tenant. Keep the fallback fail-closed if a
+        # future role resolution changes that contract.
+        _resolved, mapping = await _resolve_tenant_grants(grants or [], shared, db)
+        return mapping or None
 
     org_ids = await _query_user_org_ids(user.email, db)
     mapping: dict[str, set[str]] = {}
@@ -612,6 +934,14 @@ async def get_visible_projects(
                 .join(
                     TenantAccessPolicy,
                     TenantAccessPolicy.id == TenantPolicyRule.policy_id,
+                )
+                .join(
+                    OrganizationCluster,
+                    and_(
+                        OrganizationCluster.organization_id
+                        == TenantAccessPolicy.organization_id,
+                        OrganizationCluster.cluster_id == TenantPolicyRule.cluster_id,
+                    ),
                 )
                 .where(
                     and_(
@@ -696,74 +1026,59 @@ async def get_tenant_acl_rules(
     """
     Build the resolved ACL map for a tenant user.
     """
-    from app.core.rbac import resolve_roles, get_highest_role, Role
-    from app.models.db_models import (
-        OrganizationMember,
-        TenantPolicyAssignment,
-        TenantPolicyRule,
-    )
+    acl, _grants, _visible_projects = await get_tenant_scope(user, db)
+    return acl
 
-    roles = resolve_roles(user)
-    highest = get_highest_role(roles)
 
-    # admin/partner: no ACL filtering
-    if highest in (Role.ADMIN, Role.PARTNER):
+def _tenant_acl_from_grants(
+    grants: Optional[list[TenantPolicyGrant]],
+) -> Optional[dict[str, dict[tuple[str, str], set[str]]]]:
+    """Flatten provenanced grants only after the project-bound inputs are retained."""
+    if grants is None:
         return None
-
-    now = datetime.now(timezone.utc)
-
-    # find all org memberships for this user
-    member_stmt = select(OrganizationMember.id).where(
-        OrganizationMember.user_email == user.email
-    )
-    result = await db.execute(member_stmt)
-    member_ids = list(result.scalars().all())
-
-    if not member_ids:
-        return {}  # no memberships = no access
-
-    # fetch all active assignments
-    assign_stmt = (
-        select(TenantPolicyAssignment)
-        .where(TenantPolicyAssignment.org_member_id.in_(member_ids))
-    )
-    result = await db.execute(assign_stmt)
-    assignments = result.scalars().all()
-
-    # filter expired
-    active_policy_ids = list({
-        a.policy_id for a in assignments
-        if a.expires_at is None or a.expires_at > now
-    })
-
-    if not active_policy_ids:
-        return {}  # no active policies = no access
-
-    # load policy rules
-    rules_stmt = (
-        select(TenantPolicyRule)
-        .where(TenantPolicyRule.policy_id.in_(active_policy_ids))
-    )
-    result = await db.execute(rules_stmt)
-    rules = result.scalars().all()
 
     # build ACL map: merge permissions across policies
     acl: dict[str, dict[tuple[str, str], set[str]]] = {}
-    for rule in rules:
-        cluster_id = rule.cluster_id
+    for grant in grants:
+        cluster_id = grant.cluster_id
         if cluster_id not in acl:
             acl[cluster_id] = {}
-        key = (rule.project_name, rule.instance_name)
-        perms = rule.permissions if isinstance(rule.permissions, list) else []
+        key = (grant.project_name, grant.instance_name)
         if key not in acl[cluster_id]:
             acl[cluster_id][key] = set()
-        acl[cluster_id][key].update(perms)
+        acl[cluster_id][key].update(grant.permissions)
 
-    logger.debug(
-        f"Tenant ACL for {user.email}: {len(acl)} clusters, "
-        f"{sum(len(v) for v in acl.values())} rules"
-    )
     return acl
+
+
+async def get_tenant_scope(
+    user: AuthenticatedUser,
+    db: AsyncSession,
+) -> tuple[
+    Optional[dict[str, dict[tuple[str, str], set[str]]]],
+    Optional[list[TenantPolicyGrant]],
+    Optional[dict[str, set[str]]],
+]:
+    """Resolve ACL, per-org-expanded grants, and the shared-cluster project bound."""
+    grants = await get_tenant_policy_grants(user, db)
+    if grants is None:
+        return None, None, None
+
+    shared = await _clusters_with_several_orgs(db)
+    resolved_grants, visible_projects = await _resolve_tenant_grants(
+        grants,
+        shared,
+        db,
+    )
+    acl = _tenant_acl_from_grants(resolved_grants)
+    if acl is not None:
+        logger.debug(
+            "Tenant ACL for %s: %d clusters, %d rules",
+            user.email,
+            len(acl),
+            sum(len(rules) for rules in acl.values()),
+        )
+    return acl, resolved_grants, visible_projects or None
 
 
 # ---------------------------------------------------------------------------
@@ -812,18 +1127,26 @@ async def org_scope_dependency(
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
         _visible_projects_var.set(None)
+        _resolved_tenant_grants_var.set(None)
         return
 
     allowed = await get_user_allowed_clusters(user, db)
     _allowed_clusters_var.set(allowed)
 
-    # set tenant ACL (None for admin/partner, dict for tenant)
-    acl = await get_tenant_acl_rules(user, db)
+    # Resolve once so the compact ACL and the project bound are derived from exactly the same
+    # provenanced grant rows. Querying the assignment join twice costs every API request and can
+    # also observe two sides of a concurrent revoke.
+    acl, tenant_grants, tenant_visible_projects = await get_tenant_scope(user, db)
     _tenant_acl_var.set(acl)
+    _resolved_tenant_grants_var.set(
+        None if tenant_grants is None else tuple(tenant_grants)
+    )
 
-    # a Partner is scoped by cluster alone, so a cluster shared with another organization
-    # needs a project bound as well. See get_visible_projects.
-    _visible_projects_var.set(await get_visible_projects(user, db))
+    if tenant_grants is None:
+        # A Partner is scoped by cluster alone, so a cluster shared with another organization
+        # needs a project bound as well. Admin remains unrestricted.
+        tenant_visible_projects = await get_visible_projects(user, db)
+    _visible_projects_var.set(tenant_visible_projects)
 
     # for tenants: restrict to the clusters their ACL grants (empty ACL means empty scope)
     _allowed_clusters_var.set(_narrow_by_tenant_acl(allowed, acl))
@@ -844,6 +1167,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
         _visible_projects_var.set(None)
+        _resolved_tenant_grants_var.set(None)
         return
 
     from app.core.rbac import resolve_roles, get_highest_role, Role
@@ -854,6 +1178,7 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
         _allowed_clusters_var.set(None)
         _tenant_acl_var.set(None)
         _visible_projects_var.set(None)
+        _resolved_tenant_grants_var.set(None)
         return
 
     from app.core.database import async_session_maker
@@ -862,10 +1187,15 @@ async def set_org_scope_for_ws(user: Optional["AuthenticatedUser"]) -> None:
         allowed = await get_user_allowed_clusters(user, db)
         _allowed_clusters_var.set(allowed)
 
-        acl = await get_tenant_acl_rules(user, db)
+        acl, tenant_grants, tenant_visible_projects = await get_tenant_scope(user, db)
         _tenant_acl_var.set(acl)
+        _resolved_tenant_grants_var.set(
+            None if tenant_grants is None else tuple(tenant_grants)
+        )
 
-        _visible_projects_var.set(await get_visible_projects(user, db))
+        if tenant_grants is None:
+            tenant_visible_projects = await get_visible_projects(user, db)
+        _visible_projects_var.set(tenant_visible_projects)
 
         # important: the same narrowing as the HTTP dependency, through the same helper. These
         # were two duplicated blocks, which is how the empty-ACL fallback survived: fixing one

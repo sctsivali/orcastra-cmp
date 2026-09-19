@@ -5,9 +5,10 @@ Includes helpers for parsing status, extracting IPs, and finding instances.
 
 import ipaddress
 import logging
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Callable, Dict, List, Tuple, Optional
 import pylxd
 from pylxd import exceptions as pylxd_exceptions
+from requests import exceptions as requests_exceptions
 
 from app.models.schemas import VMStatus
 from app.core.lxd_path import safe_segment
@@ -111,6 +112,8 @@ def find_instance_in_projects(
     client: pylxd.Client,
     name: str,
     project: Optional[str] = None,
+    *,
+    project_filter: Optional[Callable[[str], bool]] = None,
 ) -> Tuple[Optional[object], Optional[str]]:
     """
     Find an instance by name across all projects.
@@ -126,6 +129,12 @@ def find_instance_in_projects(
             logger.warning(f"Could not list projects, using default: {e}")
             project_names = ["default"]
     
+    # Search only projects the caller authorized. This predicate is evaluated before the HTTP
+    # GET, not after a match, so a detail request without `project` cannot probe a neighbour's
+    # project and then attempt to hide the result after it has already been read.
+    if project_filter is not None:
+        project_names = [name for name in project_names if project_filter(name)]
+
     # Search in each project
     for project_name in project_names:
         try:
@@ -140,10 +149,27 @@ def find_instance_in_projects(
             logger.debug(f"Found instance '{name}' in project '{project_name}'")
             return instance, project_name
             
-        except Exception as e:
-            # Instance not found in this project or other error
-            logger.debug(f"Instance '{name}' not in project '{project_name}': {e}")
+        except pylxd_exceptions.NotFound:
+            logger.debug("Instance '%s' not in project '%s'", name, project_name)
             continue
+        except pylxd_exceptions.LXDAPIException as exc:
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                logger.debug("Instance '%s' not in project '%s'", name, project_name)
+                continue
+            raise
+        except requests_exceptions.HTTPError as exc:
+            if getattr(getattr(exc, "response", None), "status_code", None) == 404:
+                logger.debug("Instance '%s' not in project '%s'", name, project_name)
+                continue
+            raise
+        except RuntimeError as exc:
+            # Some pylxd-compatible adapters expose an absent record as a bare runtime
+            # ``not found``. Keep that legacy shape searchable without restoring the old broad
+            # catch that swallowed socket timeouts and misreported an outage as a missing VM.
+            if str(exc).strip().lower() == "not found":
+                logger.debug("Instance '%s' not in project '%s'", name, project_name)
+                continue
+            raise
     
     return None, None
 
@@ -295,6 +321,7 @@ class InstanceWrapper:
         self.description = data.get('description', '')
         self.type = data.get('type', 'container')
         self.config = data.get('config', {})
+        self.expanded_config = data.get('expanded_config')
         # note: carried through so a root disk size chosen at create time is readable back.
         # The LXD instance payload always includes both; missing means an older LXD.
         self.devices = data.get('devices', {})
@@ -362,6 +389,10 @@ class StateWrapper:
     """
     
     def __init__(self, data):
+        # Preserve which keys LXD actually sent while keeping the legacy fallback attributes
+        # below. Resource and address consumers historically expect `{}` and `0`; metrics also
+        # needs to know that an omitted field is unavailable rather than a real empty/zero value.
+        self._present_fields = frozenset(data)
         self.cpu = data.get('cpu', {})
         self.memory = data.get('memory', {})
         self.disk = data.get('disk', {})
@@ -370,6 +401,10 @@ class StateWrapper:
         self.pid = data.get('pid', 0)
         self.status = data.get('status', 'Unknown')
         self.started_at = data.get('started_at')
+
+    def has_field(self, name: str) -> bool:
+        """Return whether the raw LXD state payload carried `name`."""
+        return name in self._present_fields
 
 
 def jsonable_lxd(value: Any) -> Any:

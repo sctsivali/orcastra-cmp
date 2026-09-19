@@ -15,6 +15,8 @@ network with its own credentials.
      project allow-list did not touch it and any read grant enumerated the cluster's trust store.
 """
 
+import socket
+
 import pytest
 from fastapi import HTTPException
 
@@ -62,12 +64,18 @@ def test_plain_http_is_refused_for_a_credential_bearing_callback() -> None:
     assert describe_url_risk("http://example.com/", require_https=True) == "must use https"
 
 
-def test_a_public_https_callback_is_accepted() -> None:
+def test_a_public_https_callback_is_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
     """The guard must not be so blunt that no integration can register a callback at all.
 
-    Uses the documented example domain rather than the live one, so the test does not depend on
-    a particular deployment's DNS.
+    The documented example domain is resolved to a deterministic public address so this test
+    does not depend on external DNS being available in CI.
     """
+    monkeypatch.setattr(
+        "app.core.url_safety.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))
+        ],
+    )
     assert is_url_safe("https://example.com/hooks", require_https=True)
 
 

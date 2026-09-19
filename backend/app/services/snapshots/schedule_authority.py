@@ -9,7 +9,8 @@ fails OPEN". None of them is called from this package, and a ratchet holds that.
 
 The shape is deliberately `dispatcher._still_authorised`: reload rather than trust the row, return a
 REASON rather than raise, and record the reason rather than discard it. An operator asking why their
-nightly snapshot stopped gets an answer instead of silence.
+nightly snapshot stopped gets an answer instead of silence. Unlike a request dependency, the proof
+comes entirely from current database rows and cannot fail open because a ContextVar is absent.
 
 Two differences from that precedent, both chosen rather than inherited:
 
@@ -25,9 +26,15 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
-from app.models.db_models import OrganizationCluster
+from app.models.db_models import (
+    Organization,
+    OrganizationCluster,
+    OrganizationMember,
+    TenantAccessPolicy,
+    TenantPolicyRule,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,24 +57,131 @@ class Refusal:
     terminal: bool
 
 
-async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
-    """The refusals answerable from Postgres alone. Cheap, so it runs before any cluster call.
+async def _affiliated_organizations(
+    db: Any,
+    *,
+    actor_email: str,
+    cluster_id: str,
+) -> List[int]:
+    """Active organizations the actor currently belongs to and that bind the cluster.
 
-    important: the question is whether the OWNING ORGANIZATION still holds this cluster, not
-    whether the person who created the schedule can still see it. Roles arrive only in a JWT and
-    there is no users table, so "is this operator still a Partner" is not answerable here at all.
-    Pretending otherwise by consulting `registered_by` would be worse than admitting it: that
-    column keeps a cluster reachable by whoever first registered it even after it has been rebound
-    to a different organization, which is exactly the grant a months-old schedule must not inherit.
+    ``registered_by`` is deliberately insufficient here. It is a historical registration fact
+    and can survive a rebind; using it as current organization affiliation would let a former
+    registrant keep an unattended write after leaving the organization.
     """
-    if schedule.state != "active":
-        return Refusal(
-            code="schedule_not_active",
-            message="This schedule is paused.",
-            terminal=True,
+    rows = await db.execute(
+        select(Organization.id)
+        .join(OrganizationCluster, OrganizationCluster.organization_id == Organization.id)
+        .outerjoin(
+            OrganizationMember,
+            and_(
+                OrganizationMember.organization_id == Organization.id,
+                OrganizationMember.user_email == actor_email,
+            ),
         )
+        .where(
+            Organization.is_active == True,  # noqa: E712 - SQLAlchemy expression
+            OrganizationCluster.cluster_id == cluster_id,
+            or_(
+                Organization.created_by == actor_email,
+                OrganizationMember.id.is_not(None),
+            ),
+        )
+        .order_by(Organization.id)
+        .distinct()
+    )
+    return list(rows.scalars().all())
 
-    if schedule.organization_id is None:
+
+async def _cluster_owner_keys(db: Any, cluster_id: str) -> set[tuple[str, int]]:
+    owners = await db.execute(
+        select(OrganizationCluster.organization_id, OrganizationCluster.id).where(
+            OrganizationCluster.cluster_id == cluster_id
+        )
+    )
+    return {
+        ("org", org_id) if org_id is not None else ("unbound", row_id)
+        for org_id, row_id in owners.all()
+    }
+
+
+async def authorizing_organization_id(
+    db: Any,
+    *,
+    actor_email: Optional[str],
+    cluster_id: str,
+    project: str,
+) -> Optional[int]:
+    """Pick the actor's organization that currently authorizes this exact target.
+
+    Selection happens after project authority, not before it. An operator may belong to two
+    organizations on one shared cluster, while only the second owns the requested project. Picking
+    the first cluster binding would turn that valid target into a false 403 and persist the wrong
+    organization on the schedule.
+    """
+    if not actor_email:
+        return None
+    candidates = await _affiliated_organizations(
+        db,
+        actor_email=actor_email,
+        cluster_id=cluster_id,
+    )
+    if not candidates:
+        return None
+    if len(await _cluster_owner_keys(db, cluster_id)) <= 1 or project == "default":
+        return candidates[0]
+
+    grant = await db.execute(
+        select(TenantAccessPolicy.organization_id)
+        .join(TenantPolicyRule, TenantPolicyRule.policy_id == TenantAccessPolicy.id)
+        .join(Organization, Organization.id == TenantAccessPolicy.organization_id)
+        .join(
+            OrganizationCluster,
+            and_(
+                OrganizationCluster.organization_id == TenantAccessPolicy.organization_id,
+                OrganizationCluster.cluster_id == TenantPolicyRule.cluster_id,
+            ),
+        )
+        .where(
+            TenantAccessPolicy.organization_id.in_(candidates),
+            Organization.is_active == True,  # noqa: E712 - SQLAlchemy expression
+            TenantPolicyRule.cluster_id == cluster_id,
+            TenantPolicyRule.project_name == project,
+        )
+        .order_by(TenantAccessPolicy.organization_id)
+        .limit(1)
+    )
+    row = grant.first()
+    return row[0] if row is not None else None
+
+
+async def standing_authority_refusal(
+    db: Any,
+    *,
+    actor_email: Optional[str],
+    organization_id: Optional[int],
+    cluster_id: str,
+    project: str,
+) -> Optional[Refusal]:
+    """Rebuild a schedule's durable authorization from current database state.
+
+    The HTTP request stores no authorization snapshot that a worker may trust later. This query
+    therefore proves three independent facts on every use: the organization is still active and
+    bound to the cluster, the named actor still creates or belongs to that organization, and a
+    named project on a shared cluster is still recorded by that organization's policy.
+
+    ``default`` remains visible on a shared cluster, matching the Partner request bound. A cluster
+    with one owner remains unrestricted by project, also matching that bound. Admin does not get a
+    background exemption: this product intentionally treats a recurring schedule as an
+    organization-owned standing commitment, not as a continuation of an Admin session. The
+    scheduler process itself is never an actor and cannot authorize a row merely by running it.
+
+    note: project-ownership rules deliberately do not require a tenant assignment. Dashboard-made
+    projects are recorded in an unassigned ``dashboard:<cluster>`` policy, because the rule owns
+    the Partner boundary without granting a Tenant access. Assignment expiry remains a Tenant ACL
+    concern and cannot be used as schedule authority without breaking that contract.
+    """
+    if organization_id is None:
         return Refusal(
             code="schedule_has_no_organization",
             message=(
@@ -76,24 +190,103 @@ async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
             ),
             terminal=True,
         )
+    if not actor_email:
+        return Refusal(
+            code="schedule_owner_is_not_identifiable",
+            message="The operator who authorized this schedule is no longer identifiable.",
+            terminal=True,
+        )
 
-    bound = await db.execute(
-        select(OrganizationCluster.cluster_id).where(
-            OrganizationCluster.organization_id == schedule.organization_id,
-            OrganizationCluster.cluster_id == schedule.cluster_id,
+    binding = await db.execute(
+        select(OrganizationCluster.id)
+        .join(Organization, Organization.id == OrganizationCluster.organization_id)
+        .where(
+            Organization.id == organization_id,
+            Organization.is_active == True,  # noqa: E712 - SQLAlchemy expression
+            OrganizationCluster.cluster_id == cluster_id,
         )
     )
-    if bound.first() is None:
+    if binding.first() is None:
         return Refusal(
             code="cluster_left_the_organization",
             message=(
-                f"Cluster '{schedule.cluster_id}' is no longer bound to the organization that "
+                f"Cluster '{cluster_id}' is no longer bound to the active organization that "
                 "created this schedule."
             ),
             terminal=True,
         )
 
+    affiliated = await _affiliated_organizations(
+        db,
+        actor_email=actor_email,
+        cluster_id=cluster_id,
+    )
+    if organization_id not in affiliated:
+        return Refusal(
+            code="schedule_owner_left_the_organization",
+            message=(
+                "The operator who authorized this schedule no longer belongs to the owning "
+                "organization."
+            ),
+            terminal=True,
+        )
+
+    owner_keys = await _cluster_owner_keys(db, cluster_id)
+    if len(owner_keys) <= 1 or project == "default":
+        return None
+
+    project_grant = await db.execute(
+        select(TenantPolicyRule.id)
+        .join(TenantAccessPolicy, TenantAccessPolicy.id == TenantPolicyRule.policy_id)
+        .join(Organization, Organization.id == TenantAccessPolicy.organization_id)
+        .join(
+            OrganizationCluster,
+            and_(
+                OrganizationCluster.organization_id == TenantAccessPolicy.organization_id,
+                OrganizationCluster.cluster_id == TenantPolicyRule.cluster_id,
+            ),
+        )
+        .where(
+            TenantAccessPolicy.organization_id == organization_id,
+            Organization.is_active == True,  # noqa: E712 - SQLAlchemy expression
+            TenantPolicyRule.cluster_id == cluster_id,
+            TenantPolicyRule.project_name == project,
+        )
+    )
+    if project_grant.first() is None:
+        return Refusal(
+            code="project_left_the_organization",
+            message=(
+                f"Project '{project}' on shared cluster '{cluster_id}' is no longer recorded "
+                "by the organization that owns this schedule."
+            ),
+            terminal=True,
+        )
     return None
+
+
+async def db_refusal_for(db: Any, schedule: Any) -> Optional[Refusal]:
+    """The refusals answerable from Postgres alone. Cheap, so it runs before any cluster call.
+
+    Roles arrive only in a JWT, so the worker does not attempt to reconstruct one. It instead
+    requires the persisted organization, the exact cluster/project ownership evidence, and the
+    creator's current database-backed affiliation. Historical ``registered_by`` metadata is not
+    current organization affiliation and cannot lend authority to this schedule after a rebind.
+    """
+    if schedule.state != "active":
+        return Refusal(
+            code="schedule_not_active",
+            message="This schedule is paused.",
+            terminal=True,
+        )
+
+    return await standing_authority_refusal(
+        db,
+        actor_email=schedule.owner_email,
+        organization_id=schedule.organization_id,
+        cluster_id=schedule.cluster_id,
+        project=schedule.project,
+    )
 
 
 def fingerprint_refusal(stored: Optional[str], current: Optional[str]) -> Optional[Refusal]:

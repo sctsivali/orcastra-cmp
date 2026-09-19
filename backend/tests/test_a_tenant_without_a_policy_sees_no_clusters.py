@@ -42,16 +42,26 @@ def _run(allowed: Optional[set], acl: Optional[dict], groups: list[str]) -> Opti
     async def fake_acl(_user, _db):
         return acl
 
+    async def fake_tenant_scope(_user, _db):
+        return acl, None, None
+
     async def fake_org_names(_user, _db):
         return []
+
+    async def fake_visible_projects(_user, _db, tenant_grants=None):
+        return None
 
     real = (
         org_scope.get_user_allowed_clusters,
         org_scope.get_tenant_acl_rules,
+        org_scope.get_tenant_scope,
+        org_scope.get_visible_projects,
         org_scope._resolve_user_org_names,
     )
     org_scope.get_user_allowed_clusters = fake_allowed
     org_scope.get_tenant_acl_rules = fake_acl
+    org_scope.get_tenant_scope = fake_tenant_scope
+    org_scope.get_visible_projects = fake_visible_projects
     org_scope._resolve_user_org_names = fake_org_names
 
     # important: read the scope from INSIDE the coroutine. asyncio.run executes in a copied
@@ -68,6 +78,8 @@ def _run(allowed: Optional[set], acl: Optional[dict], groups: list[str]) -> Opti
         (
             org_scope.get_user_allowed_clusters,
             org_scope.get_tenant_acl_rules,
+            org_scope.get_tenant_scope,
+            org_scope.get_visible_projects,
             org_scope._resolve_user_org_names,
         ) = real
 

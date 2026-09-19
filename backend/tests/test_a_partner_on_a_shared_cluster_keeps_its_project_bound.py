@@ -19,6 +19,8 @@ import contextvars
 from typing import Any, List
 
 import pytest
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session
 
 from app.core import org_scope
 from app.core.org_scope import (
@@ -42,6 +44,12 @@ class _Result:
 
     def scalars(self) -> _Scalars:
         return _Scalars(self._rows)
+
+    def unique(self):
+        return self
+
+    def all(self) -> List[Any]:
+        return list(self._rows)
 
 
 class FakeSession:
@@ -90,9 +98,9 @@ def test_an_admin_is_not_project_restricted_because_break_glass_gates_the_cluste
     assert _run(get_visible_projects(_as("admin"), session)) is None
 
 
-def test_a_tenant_is_not_project_restricted_here_because_their_acl_already_filters():
+def test_a_tenant_without_a_grant_is_fail_closed_on_a_shared_cluster():
     session = FakeSession(shared_clusters=["nuc2"])
-    assert _run(get_visible_projects(_as("tenant"), session)) is None
+    assert _run(get_visible_projects(_as("tenant"), session)) == {"nuc2": set()}
 
 
 def test_a_partner_is_unrestricted_when_no_cluster_is_shared():
@@ -108,6 +116,143 @@ def test_a_partner_on_a_shared_cluster_is_held_to_default_plus_their_own_policie
     )
     mapping = _run(get_visible_projects(_as("partner"), session))
     assert mapping == {"nuc2": {"default", "sivali-prod", "sivali-uat"}}
+
+
+def test_policy_projects_require_the_policy_org_to_still_bind_the_shared_cluster():
+    """An active membership in another org must not keep a removed binding alive.
+
+    The fake session returns the rows a database would return after applying the join. The SQL
+    assertion is the authorization invariant: the policy organization, not merely any one of
+    the Partner's organizations, must still own the rule's requested cluster.
+    """
+    session = FakeSession(
+        shared_clusters=["nuc2"],
+        org_ids=[6, 7],
+        rules_by_cluster={"nuc2": ["org-b-project"]},
+    )
+
+    mapping = _run(get_visible_projects(_as("partner"), session))
+    policy_sql = " ".join(
+        next(sql for sql in session.queries if "tenant_policy_rules" in sql).split()
+    )
+
+    assert mapping == {"nuc2": {"default", "org-b-project"}}
+    assert (
+        "JOIN organization_clusters ON organization_clusters.organization_id = "
+        "tenant_access_policies.organization_id AND organization_clusters.cluster_id = "
+        "tenant_policy_rules.cluster_id"
+    ) in policy_sql
+
+
+def test_removed_org_binding_semantically_revokes_its_partner_project():
+    """Execute the production joins against SQLite without a live database dependency."""
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE organizations "
+                "(id INTEGER PRIMARY KEY, created_by TEXT NOT NULL, is_active BOOLEAN NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE organization_members "
+                "(id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, "
+                "user_email TEXT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE organization_clusters "
+                "(id INTEGER PRIMARY KEY, organization_id INTEGER, cluster_id TEXT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE tenant_access_policies "
+                "(id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE TABLE tenant_policy_rules "
+                "(id INTEGER PRIMARY KEY, policy_id INTEGER NOT NULL, "
+                "cluster_id TEXT NOT NULL, project_name TEXT NOT NULL)"
+            )
+        )
+        connection.execute(
+            text("INSERT INTO organizations VALUES (:id, :owner, :active)"),
+            [
+                {"id": 1, "owner": "owner-a", "active": True},
+                {"id": 2, "owner": "owner-b", "active": True},
+                {"id": 3, "owner": "owner-d", "active": True},
+            ],
+        )
+        connection.execute(
+            text("INSERT INTO organization_members VALUES (:id, :org, :email)"),
+            [
+                {"id": 11, "org": 1, "email": "partner@example.test"},
+                {"id": 12, "org": 2, "email": "partner@example.test"},
+            ],
+        )
+        # Org A no longer binds shared-c. B and unrelated D keep it shared.
+        connection.execute(
+            text("INSERT INTO organization_clusters VALUES (:id, :org, :cluster)"),
+            [
+                {"id": 21, "org": 2, "cluster": "shared-c"},
+                {"id": 22, "org": 3, "cluster": "shared-c"},
+            ],
+        )
+        connection.execute(
+            text("INSERT INTO tenant_access_policies VALUES (:id, :org)"),
+            [{"id": 31, "org": 1}, {"id": 32, "org": 2}],
+        )
+        connection.execute(
+            text("INSERT INTO tenant_policy_rules VALUES (:id, :policy, :cluster, :project)"),
+            [
+                {"id": 41, "policy": 31, "cluster": "shared-c", "project": "stale-a"},
+                {"id": 42, "policy": 32, "cluster": "shared-c", "project": "bound-b"},
+            ],
+        )
+
+    session = Session(engine)
+
+    class AsyncSessionAdapter:
+        async def execute(self, statement):
+            return session.execute(statement)
+
+    try:
+        mapping = _run(
+            get_visible_projects(
+                FakeUser(email="partner@example.test"),
+                AsyncSessionAdapter(),
+            )
+        )
+    finally:
+        session.close()
+        engine.dispose()
+
+    assert mapping == {"shared-c": {"default", "bound-b"}}
+
+
+def test_revoking_a_partner_project_changes_the_response_cache_scope():
+    org_scope.set_allowed_clusters({"nuc2"})
+    token = org_scope._visible_projects_var.set(
+        {"nuc2": {"default", "removed-org-project"}}
+    )
+    try:
+        before = org_scope.get_scope_cache_key("instances:specifications")
+    finally:
+        org_scope._visible_projects_var.reset(token)
+
+    token = org_scope._visible_projects_var.set({"nuc2": {"default"}})
+    try:
+        after = org_scope.get_scope_cache_key("instances:specifications")
+    finally:
+        org_scope._visible_projects_var.reset(token)
+        org_scope.set_allowed_clusters(None)
+
+    assert before != after
 
 
 def test_a_partner_with_no_policies_on_a_shared_cluster_sees_only_default():

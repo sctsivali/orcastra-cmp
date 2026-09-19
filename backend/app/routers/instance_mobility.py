@@ -33,7 +33,12 @@ from app.core.dependencies import (
 )
 from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.lxd_errors import lxd_http_error
-from app.core.org_scope import org_scope_dependency, verify_cluster_access
+from app.core.org_scope import (
+    org_scope_dependency,
+    project_is_visible,
+    verify_cluster_access,
+    verify_project_access,
+)
 from app.services.activity_logger import get_activity_logger
 from app.core.snapshot_billing_gate import audit_billing_override
 from app.services.lxd import mobility
@@ -184,7 +189,7 @@ async def move_preflight(
     lxd_service: LXDService = Depends(get_lxd_service),
     _rbac: AuthenticatedUser = Depends(require_partner()),
 ):
-    verify_cluster_access(host)
+    project = verify_project_access(host, project)
 
     source = await _client(lxd_service, host)
     blockers: List[str] = []
@@ -242,6 +247,11 @@ async def move_preflight(
                 client,
                 label="mobility.projects",
             )
+            projects = [
+                candidate_project
+                for candidate_project in projects
+                if project_is_visible(candidate, candidate_project)
+            ]
             pools = await _blocking(
                 lambda c: [
                     p.rsplit("/", 1)[-1]
@@ -296,8 +306,11 @@ async def copy_instance(
 ):
     # Both ends are authorized. Checking only the source would let a partner read out of a
     # cluster they own and write into one they do not, which is the whole boundary.
-    verify_cluster_access(body.host)
-    verify_cluster_access(body.target_host)
+    source_project = verify_project_access(body.host, body.project)
+    target_project = verify_project_access(body.target_host, body.target_project)
+    body = body.model_copy(
+        update={"project": source_project, "target_project": target_project}
+    )
 
     source = await _client(lxd_service, body.host)
     target = await _client(lxd_service, body.target_host)

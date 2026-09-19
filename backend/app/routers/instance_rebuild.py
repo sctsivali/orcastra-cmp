@@ -33,7 +33,11 @@ from app.core.dependencies import (
     AuthenticatedUser,
 )
 from app.core.config import get_settings
-from app.core.org_scope import org_scope_dependency, verify_cluster_access, verify_tenant_permission
+from app.core.org_scope import (
+    org_scope_dependency,
+    verify_project_access,
+    verify_tenant_permission,
+)
 from app.models.db_models import RebuildJob
 from app.services.lxd_service import (
     LXDService,
@@ -48,7 +52,12 @@ import logging
 logger = logging.getLogger(__name__)
 activity_logger = get_activity_logger()
 
-def _verify_instance_access(host: str, project: str, instance_name: str, permission: str = "view") -> None:
+def _verify_instance_access(
+    host: str,
+    project: Optional[str],
+    instance_name: str,
+    permission: str = "view",
+) -> str:
     """Authorize an action on ONE instance, not merely on its cluster.
 
     `verify_cluster_access` answers "may this caller reach this cluster", which for a tenant
@@ -61,8 +70,11 @@ def _verify_instance_access(host: str, project: str, instance_name: str, permiss
     normalises once and passes the same value to the action, so there is exactly one project in
     play per request.
     """
-    if get_settings().tenant_perm_enforcement_enabled:
-        verify_tenant_permission(host, project, instance_name, permission)
+    scoped_project = verify_project_access(host, project)
+    verify_tenant_permission(host, scoped_project, instance_name, "view")
+    if permission != "view" and get_settings().tenant_perm_enforcement_enabled:
+        verify_tenant_permission(host, scoped_project, instance_name, permission)
+    return scoped_project
 
 
 router = APIRouter(
@@ -238,7 +250,7 @@ async def rebuild_instance(
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_partner()),
 ):
-    verify_cluster_access(body.host)
+    project = _verify_instance_access(body.host, body.project, instance_name, "view")
 
     # Destructive-action confirmation: the client must echo the instance name.
     if body.confirm_name != instance_name:
@@ -252,7 +264,7 @@ async def rebuild_instance(
     # Preflight: status + snapshots + config/volume snapshot. Snapshots block the
     # rebuild (LXD rejects it), so surface a clear 409 before doing anything.
     try:
-        pf = await lxd_service.get_rebuild_preflight(instance_name, body.host, body.project)
+        pf = await lxd_service.get_rebuild_preflight(instance_name, body.host, project)
     except LXDConnectionError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except LXDOperationError as e:
@@ -274,7 +286,7 @@ async def rebuild_instance(
     row = RebuildJob(
         job_id=job_id,
         cluster_id=body.host,
-        project=pf.get("project") or body.project or "default",
+        project=pf.get("project") or project,
         instance_name=instance_name,
         mode=body.mode,
         requested_image=(body.image if body.mode != "empty" else None),
@@ -306,15 +318,13 @@ async def rebuild_preflight(
 ):
     """Read-only pre-check for the rebuild dialog: current status, snapshots (the
     block condition), the custom volumes that will survive, and the base image."""
-    verify_cluster_access(host)
     # The preflight returns the instance's snapshot names, its custom volumes, its base image and
     # its status. A cluster check alone handed all of that to any tenant who could reach the host.
     #
     # important: normalised once, here, and the SAME value goes to the resolver. `?project=` is
     # falsy, and the service reads a falsy project as "search every project", so authorizing the
     # raw value and resolving the raw value are only the same thing once it is normalised.
-    scoped_project = project or "default"
-    _verify_instance_access(host, scoped_project, instance_name, "view")
+    scoped_project = _verify_instance_access(host, project, instance_name, "view")
     try:
         pf = await lxd_service.get_rebuild_preflight(instance_name, host, scoped_project)
     except LXDConnectionError as e:
@@ -345,10 +355,9 @@ async def get_rebuild_job(
     ).scalar_one_or_none()
     if row is None or row.instance_name != instance_name:
         raise HTTPException(status_code=404, detail="Rebuild job not found")
-    verify_cluster_access(row.cluster_id)
     # The row records which project the instance was in, so the check is against the instance
     # rather than against the cluster it happens to live on.
-    _verify_instance_access(row.cluster_id, row.project or "default", row.instance_name, "view")
+    _verify_instance_access(row.cluster_id, row.project, row.instance_name, "view")
     return _job_payload(row)
 
 
@@ -356,22 +365,24 @@ async def get_rebuild_job(
 async def get_latest_rebuild_job(
     instance_name: str,
     host: str,
+    project: str = "default",
     db: AsyncSession = Depends(get_db),
 ):
-    verify_cluster_access(host)
+    project = _verify_instance_access(host, project, instance_name, "view")
     row = (
         await db.execute(
             select(RebuildJob)
-            .where(RebuildJob.instance_name == instance_name, RebuildJob.cluster_id == host)
+            .where(
+                RebuildJob.instance_name == instance_name,
+                RebuildJob.cluster_id == host,
+                RebuildJob.project == project,
+            )
             .order_by(RebuildJob.created_at.desc())
             .limit(1)
         )
     ).scalar_one_or_none()
     if row is None:
         return {"job": None}
-    # Checked after the read, because the project the instance lived in is on the row rather than
-    # in the request. A rebuild job carries the instance's status, its error and its timings.
-    _verify_instance_access(row.cluster_id, row.project or "default", row.instance_name, "view")
     return {"job": _job_payload(row)}
 
 
