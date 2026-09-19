@@ -29,6 +29,20 @@ interface SessionMenuProps {
   indent?: boolean;
 }
 
+type SessionWindowStatus = "open" | "minimized";
+
+const SESSION_WINDOW_STATUS: Record<
+  SessionWindowStatus,
+  { label: string; tone: "secondary" | "outline" }
+> = {
+  open: { label: "Open", tone: "secondary" },
+  minimized: { label: "Minimized", tone: "outline" },
+};
+
+function sessionWindowStatus(minimized: boolean) {
+  return SESSION_WINDOW_STATUS[minimized ? "minimized" : "open"];
+}
+
 function rowClass(indent: boolean | undefined, muted: boolean) {
   return cn(
     "w-full justify-start text-sm relative",
@@ -66,43 +80,42 @@ export function TerminalMenuItem({ indent }: SessionMenuProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        {terminals.map((terminal) => (
-          <DropdownMenuItem
-            key={terminal.id}
-            className="flex items-center justify-between gap-2"
-            onClick={() => {
-              if (terminal.minimized) {
-                store.restoreTerminal(terminal.id);
-              } else {
-                store.focusTerminal(terminal.id);
-              }
-            }}
-          >
-            <div className="flex items-center gap-2 flex-1 truncate">
-              <Terminal className="h-4 w-4 shrink-0" />
-              <span className="truncate">{terminal.instanceName}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              {terminal.minimized ? (
-                <Badge variant="outline" className="text-xs">minimized</Badge>
-              ) : (
-                <Badge variant="secondary" className="text-xs">open</Badge>
-              )}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-5 w-5"
-                aria-label={`Close terminal for ${terminal.instanceName}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  store.closeTerminal(terminal.id);
-                }}
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          </DropdownMenuItem>
-        ))}
+        {terminals.map((terminal) => {
+          const status = sessionWindowStatus(terminal.minimized);
+          return (
+            <DropdownMenuItem
+              key={terminal.id}
+              className="flex items-center justify-between gap-2"
+              onClick={() => {
+                if (terminal.minimized) {
+                  store.restoreTerminal(terminal.id);
+                } else {
+                  store.focusTerminal(terminal.id);
+                }
+              }}
+            >
+              <div className="flex items-center gap-2 flex-1 truncate">
+                <Terminal className="h-4 w-4 shrink-0" />
+                <span className="truncate">{terminal.instanceName}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Badge variant={status.tone} className="text-xs">{status.label}</Badge>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5"
+                  aria-label={`Close terminal for ${terminal.instanceName}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    store.closeTerminal(terminal.id);
+                  }}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -137,47 +150,46 @@ export function ConsoleMenuItem({ indent }: SessionMenuProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64">
-        {consoles.map((console) => (
-          <DropdownMenuItem
-            key={console.id}
-            className="flex items-center justify-between gap-2"
-            onClick={() => {
-              if (console.minimized) {
-                store.restoreConsole(console.id);
-              } else {
-                store.focusConsole(console.id);
-              }
-            }}
-          >
-            <div className="flex items-center gap-2 flex-1 truncate">
-              {console.instanceType === "virtual-machine" ? (
-                <Monitor className="h-4 w-4 shrink-0" />
-              ) : (
-                <Box className="h-4 w-4 shrink-0" />
-              )}
-              <span className="truncate">{console.instanceName}</span>
-            </div>
-            <div className="flex items-center gap-1">
-              {console.minimized ? (
-                <Badge variant="outline" className="text-xs">minimized</Badge>
-              ) : (
-                <Badge variant="secondary" className="text-xs">open</Badge>
-              )}
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-5 w-5"
-                aria-label={`Close console for ${console.instanceName}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  store.closeConsole(console.id);
-                }}
-              >
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          </DropdownMenuItem>
-        ))}
+        {consoles.map((console) => {
+          const status = sessionWindowStatus(console.minimized);
+          return (
+            <DropdownMenuItem
+              key={console.id}
+              className="flex items-center justify-between gap-2"
+              onClick={() => {
+                if (console.minimized) {
+                  store.restoreConsole(console.id);
+                } else {
+                  store.focusConsole(console.id);
+                }
+              }}
+            >
+              <div className="flex items-center gap-2 flex-1 truncate">
+                {console.instanceType === "virtual-machine" ? (
+                  <Monitor className="h-4 w-4 shrink-0" />
+                ) : (
+                  <Box className="h-4 w-4 shrink-0" />
+                )}
+                <span className="truncate">{console.instanceName}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <Badge variant={status.tone} className="text-xs">{status.label}</Badge>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-5 w-5"
+                  aria-label={`Close console for ${console.instanceName}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    store.closeConsole(console.id);
+                  }}
+                >
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );

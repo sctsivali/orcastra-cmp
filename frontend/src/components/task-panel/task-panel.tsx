@@ -6,6 +6,7 @@ import { useLayout } from "@/components/layout-provider";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import { ToastAction } from "@/components/ui/toast";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useReadOnlyMode, useTaskJournalEnabled } from "@/hooks/use-read-only-mode";
 import { toast } from "@/hooks/use-toast";
 import { DOCK_MIN, type DockTab } from "@/lib/dock-cookie";
@@ -58,6 +59,7 @@ function TaskPanelInner() {
   const { hasRole } = usePermissions();
   const { isReadOnly } = useReadOnlyMode();
   const { data: session } = useSession();
+  const { scopeKey } = useActorQueryScope();
   const email = session?.user?.email ?? null;
   const isPartner = hasRole(Role.PARTNER);
 
@@ -69,6 +71,7 @@ function TaskPanelInner() {
   const [cancelTask, setCancelTask] = React.useState<TaskRecord | null>(null);
   const [announcement, setAnnouncement] = React.useState("");
   const [dragHeight, setDragHeight] = React.useState<number | null>(null);
+  const [taskPanelUiActorScope, setTaskPanelUiActorScope] = React.useState(scopeKey);
 
   const sectionRef = React.useRef<HTMLElement>(null);
   const bodyRef = React.useRef<HTMLDivElement>(null);
@@ -77,6 +80,24 @@ function TaskPanelInner() {
   const tabRefresh = React.useRef<Refresh | null>(null);
   const mountedAt = React.useRef(Date.now());
   const seenOutcomes = React.useRef(new Set<string>());
+  const previousTaskPanelActorScopeRef = React.useRef(scopeKey);
+
+  const taskPanelUiIsCurrent = taskPanelUiActorScope === scopeKey;
+  const currentDetailTaskId = taskPanelUiIsCurrent ? detailTaskId : null;
+  const currentCancelTask = taskPanelUiIsCurrent ? cancelTask : null;
+  const currentAnnouncement = taskPanelUiIsCurrent ? announcement : "";
+
+  // The shell survives sign-out/sign-in. Hide actor-owned task ids immediately, then discard
+  // dialogs and announcements before the next actor can interact with this persistent panel.
+  React.useEffect(() => {
+    if (previousTaskPanelActorScopeRef.current === scopeKey) return;
+    previousTaskPanelActorScopeRef.current = scopeKey;
+    setTaskPanelUiActorScope(scopeKey);
+    setDetailTaskId(null);
+    setCancelTask(null);
+    setAnnouncement("");
+    seenOutcomes.current.clear();
+  }, [scopeKey]);
 
   const desktop = useDesktopViewport();
   const maxHeight = useMaxDockHeight();
@@ -269,19 +290,19 @@ function TaskPanelInner() {
       {/* note: a div, not a p. The harness reads the first `p[role=status]` on a page as the
           table's row count, and this region must never be that element. */}
       <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
-        {announcement}
+        {currentAnnouncement}
       </div>
       <TaskDetailDialog
-        taskId={detailTaskId}
-        open={detailTaskId !== null}
+        taskId={currentDetailTaskId}
+        open={taskPanelUiIsCurrent && currentDetailTaskId !== null}
         onOpenChange={(next) => {
           if (!next) setDetailTaskId(null);
         }}
         onCancel={setCancelTask}
       />
       <TaskCancelDialog
-        task={cancelTask}
-        open={cancelTask !== null}
+        task={currentCancelTask}
+        open={taskPanelUiIsCurrent && currentCancelTask !== null}
         onOpenChange={(next) => {
           if (!next) setCancelTask(null);
         }}

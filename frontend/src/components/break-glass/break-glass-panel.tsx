@@ -1,14 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldAlert, Loader2 } from "lucide-react";
-import { api, type BreakGlassGrant } from "@/lib/api";
+import { api, type BreakGlassGrant, type BreakGlassGrantStatus } from "@/lib/api";
 import { toast } from "@/hooks/use-toast";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { Badge, type BadgeTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { OverflowText } from "@/components/ui/overflow-text";
 import { TableEmptyValue } from "@/components/ui/table-text";
@@ -16,10 +17,15 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { NodeLink } from "@/components/ui/node-link";
 
-function StatusBadge({ status }: { status: string }) {
-  if (status === "active") return <Badge className="bg-emerald-500/15 text-emerald-600 hover:bg-emerald-500/15">active</Badge>;
-  if (status === "revoked") return <Badge variant="destructive">revoked</Badge>;
-  return <Badge variant="secondary">{status}</Badge>;
+const BREAK_GLASS_STATUS: Record<BreakGlassGrantStatus, { label: string; tone: BadgeTone }> = {
+  active: { label: "Active", tone: "positive" },
+  expired: { label: "Expired", tone: "neutral" },
+  revoked: { label: "Revoked", tone: "negative" },
+};
+
+function StatusBadge({ status }: { status: BreakGlassGrantStatus }) {
+  const meta = BREAK_GLASS_STATUS[status];
+  return <Badge variant={meta.tone}>{meta.label}</Badge>;
 }
 
 /**
@@ -28,10 +34,14 @@ function StatusBadge({ status }: { status: string }) {
  */
 export function BreakGlassPanel() {
   const { isAdmin } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const queryClient = useQueryClient();
+  const grantsQueryKey = ["break-glass-grants", scopeKey] as const;
   const [revoking, setRevoking] = useState<number | null>(null);
-  const { data: grants = [], isLoading, refetch } = useQuery<BreakGlassGrant[]>({
-    queryKey: ["break-glass-grants"],
+  const { data: grants = [], isLoading } = useQuery<BreakGlassGrant[]>({
+    queryKey: grantsQueryKey,
     queryFn: () => api.breakGlass.listGrants(),
+    enabled: isAuthenticated,
     refetchInterval: 15000,
   });
 
@@ -47,7 +57,19 @@ export function BreakGlassPanel() {
     setRevoking(id);
     try {
       await api.breakGlass.revokeGrant(id);
-      await refetch();
+      // Update the actor that issued this revoke without another network read. The component can
+      // survive a sign-in change while the request is in flight, so refetching here could send the
+      // new session's response into this old callback's key. Retained actor caches are only marked
+      // stale; their own observer or interval performs the next read under the matching session.
+      queryClient.setQueryData<BreakGlassGrant[]>(grantsQueryKey, (current) =>
+        current?.map((grant) =>
+          grant.id === id ? { ...grant, status: "revoked" } : grant,
+        ),
+      );
+      await queryClient.invalidateQueries({
+        queryKey: ["break-glass-grants"],
+        refetchType: "none",
+      });
       toast({
         title: "Grant revoked",
         description: "Access ended immediately. The grant stays on the audit trail.",

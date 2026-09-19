@@ -12,6 +12,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -59,6 +60,7 @@ function eq(name, got, want) {
 // guard with the same major the product compiles with, or the guard is testing a different
 // compiler than the one that ships the code.
 const localTsc = resolve(frontend, 'node_modules', '.bin', 'tsc');
+const localTypeScript = resolve(frontend, 'node_modules', 'typescript', 'lib', 'typescript.js');
 const [cmd, leadingArgs] = existsSync(localTsc)
   ? [localTsc, []]
   : ['npx', ['-p', 'typescript@5', 'tsc']];
@@ -72,15 +74,41 @@ const [cmd, leadingArgs] = existsSync(localTsc)
 copyFileSync(resolve(frontend, 'src', 'lib', 'filter-url.ts'), join(out, 'filter-url.ts'));
 
 try {
-  execFileSync(
-    cmd,
-    [...leadingArgs, 'filter-url.ts', '--outDir', '.', '--module', 'esnext', '--target', 'es2020',
-     '--moduleResolution', 'bundler', '--strict'],
-    { cwd: out, stdio: 'pipe' },
-  );
+  if (existsSync(localTypeScript)) {
+    // Some hardened runners allow the current Node process but deny child-process creation.
+    // Use the same installed compiler in-process so the guard still performs a real strict
+    // typecheck and emit. CI checkouts without dependencies retain the pinned npx fallback.
+    const require = createRequire(import.meta.url);
+    const ts = require(localTypeScript);
+    const source = join(out, 'filter-url.ts');
+    const options = {
+      module: ts.ModuleKind.ESNext,
+      target: ts.ScriptTarget.ES2020,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      strict: true,
+      outDir: out,
+    };
+    const program = ts.createProgram([source], options);
+    const emit = program.emit();
+    const diagnostics = [...ts.getPreEmitDiagnostics(program), ...emit.diagnostics];
+    if (diagnostics.length > 0) {
+      throw new Error(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+        getCanonicalFileName: (file) => file,
+        getCurrentDirectory: () => out,
+        getNewLine: () => '\n',
+      }));
+    }
+  } else {
+    execFileSync(
+      cmd,
+      [...leadingArgs, 'filter-url.ts', '--outDir', '.', '--module', 'esnext', '--target', 'es2020',
+       '--moduleResolution', 'bundler', '--strict'],
+      { cwd: out, stdio: 'pipe' },
+    );
+  }
 } catch (error) {
   console.error('filter-url codec failed to compile standalone:');
-  console.error(error.stdout?.toString() ?? error.message);
+  console.error(error.stdout?.toString() || error.message);
   console.error('\nThe codec must stay alias-free with no runtime imports so this guard can run it.');
   rmSync(out, { recursive: true, force: true });
   process.exit(1);

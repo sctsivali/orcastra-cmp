@@ -28,9 +28,10 @@ import {
   isTerminal,
   isWebsocketClass,
   kindLabel,
+  logSeverityLabel,
   progressPercent,
   resourceHref,
-  taskStatusTone,
+  taskStatusDisplay,
   taskSubtitle,
 } from "./task-format";
 
@@ -43,7 +44,9 @@ export interface TaskDetailDialogProps {
 }
 
 function logLines(entries: ClusterLogEntry[]): string {
-  return entries.map((entry) => `${formatDateTime(entry.ts)} [${entry.severity}] ${entry.message}`).join("\n");
+  return entries
+    .map((entry) => `${formatDateTime(entry.ts)} [${logSeverityLabel(entry.severity)}] ${entry.message}`)
+    .join("\n");
 }
 
 function metadataEntries(metadata: Record<string, unknown>): Record<string, string> {
@@ -165,6 +168,7 @@ export function TaskDetailDialog({ taskId, open, onOpenChange, onCancel }: TaskD
   const [tab, setTab] = React.useState("overview");
 
   const task = data?.task ?? null;
+  const status = task ? taskStatusDisplay(task.status) : null;
   const isPartner = hasRole(Role.PARTNER);
   const finished = task ? isTerminal(task.status) : true;
   const websocket = task ? isWebsocketClass(task) : false;
@@ -176,6 +180,7 @@ export function TaskDetailDialog({ taskId, open, onOpenChange, onCancel }: TaskD
       instanceName: task.resource_name,
       operationId: task.operation_id,
       host: task.cluster_id,
+      project: task.project || "default",
     });
   };
 
@@ -216,7 +221,7 @@ export function TaskDetailDialog({ taskId, open, onOpenChange, onCancel }: TaskD
       recordId={task?.id ?? taskId ?? ""}
       recordIdLabel="Task"
       subtitle={task ? taskSubtitle(task) : undefined}
-      status={task ? <Badge variant={taskStatusTone(task.status)}>{formatLabel(task.status)}</Badge> : null}
+      status={status ? <Badge variant={status.tone}>{status.label}</Badge> : null}
       error={task?.status === "failure" ? task.error : null}
       isLoading={!task && !isError}
       size="lg"

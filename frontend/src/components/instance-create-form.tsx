@@ -104,6 +104,7 @@ import {
   useNodeGpus,
 } from "@/hooks/use-lxd";
 import { useNodePickerOptions } from "@/hooks/use-node-picker-options";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { NodeStatusNotice } from "@/components/ui/node-status-notice";
 import { useToast } from "@/hooks/use-toast";
 import { addPendingCreate } from "@/lib/pending-creates";
@@ -220,6 +221,7 @@ function InstanceCreateFormContent() {
   // global progress bar. These hops follow a mutation and are the slowest in the app.
   const { navigate } = useNavigationProgress();
   const { toast } = useToast();
+  const { scopeKey } = useActorQueryScope();
   const createInstance = useCreateInstance();
   const isSubmitting = createInstance.isPending;
   // important: `isSubmitting` is derived from the mutation's isPending, which only flips
@@ -1239,7 +1241,7 @@ function InstanceCreateFormContent() {
       }
       // Seed a pending-create entry so the instances list shows a live
       // "Creating… <progress>" row driven by the operation-events stream.
-      addPendingCreate({
+      addPendingCreate(scopeKey, {
         name: form.name,
         host: form.selectedNode,
         project: form.selectedProject || "default",

@@ -9,7 +9,7 @@
  * not connected, and never in a background tab.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   useMutation,
   useQuery,
@@ -17,7 +17,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { toast } from "@/hooks/use-toast";
-import { usePermissions } from "@/hooks/use-permissions";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useRefreshableQuery } from "@/hooks/use-refreshable-query";
 import { tasksAPI } from "@/lib/tasks-api";
 import { DYNAMIC_DATA_CONFIG, POLL_MS, jitter } from "@/lib/query-config";
@@ -31,17 +31,18 @@ import type {
 } from "@/types/tasks";
 
 export const taskKeys = {
-  all: ["tasks"] as const,
-  summary: ["tasks", "summary"] as const,
-  list: (limit: number) => ["tasks", "list", { limit }] as const,
-  window: (since: string) => ["tasks", "window", { since }] as const,
-  queue: ["tasks", "queue"] as const,
-  detail: (id: string) => ["tasks", "detail", id] as const,
+  all: (scopeKey: string) => ["tasks", scopeKey] as const,
+  summary: (scopeKey: string) => ["tasks", scopeKey, "summary"] as const,
+  list: (scopeKey: string, limit: number) => ["tasks", scopeKey, "list", { limit }] as const,
+  window: (scopeKey: string, since: string) => ["tasks", scopeKey, "window", { since }] as const,
+  queue: (scopeKey: string) => ["tasks", scopeKey, "queue"] as const,
+  detail: (scopeKey: string, id: string) => ["tasks", scopeKey, "detail", id] as const,
 };
 
 export const logKeys = {
-  all: ["cluster-log"] as const,
-  list: (limit: number) => ["cluster-log", "list", { limit }] as const,
+  all: (scopeKey: string) => ["cluster-log", scopeKey] as const,
+  list: (scopeKey: string, limit: number) =>
+    ["cluster-log", scopeKey, "list", { limit }] as const,
 };
 
 /** The Operations page window is bounded by the server's page cap. */
@@ -52,6 +53,33 @@ const INVALIDATE_DEBOUNCE_MS = 1000;
 const isOpen = (status: TaskRecord["status"]): boolean =>
   status === "pending" || status === "running";
 
+export interface ActorMutationGuard {
+  readonly scopeKey: string | null;
+}
+
+/**
+ * Identity guard for a mutation started by the current authenticated actor.
+ *
+ * The object is replaced for every auth or role scope transition, rather than comparing only
+ * the scope string. That also rejects a late response across an A -> B -> A transition. The
+ * request already sent is deliberately left alone; only browser-side effects are suppressed.
+ */
+export function useActorMutationGuard(): MutableRefObject<ActorMutationGuard> {
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
+  const currentScopeKey = isAuthenticated ? scopeKey : null;
+  const activeGuardRef = useRef<ActorMutationGuard>({ scopeKey: currentScopeKey });
+  if (activeGuardRef.current.scopeKey !== currentScopeKey) {
+    activeGuardRef.current = { scopeKey: currentScopeKey };
+  }
+  useEffect(
+    () => () => {
+      activeGuardRef.current = { scopeKey: null };
+    },
+    [],
+  );
+  return activeGuardRef;
+}
+
 /** The +/-10% spread, resolved once per hook instance (query-config.ts explains why). */
 function usePollInterval(base: number, live: boolean): number | false {
   const [interval] = useState(() => jitter(base));
@@ -59,10 +87,10 @@ function usePollInterval(base: number, live: boolean): number | false {
 }
 
 export function useTaskSummary(feedConnected: boolean) {
-  const { isAuthenticated } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   const refetchInterval = usePollInterval(POLL_MS.active, feedConnected);
   return useRefreshableQuery<TaskListResponse>({
-    queryKey: taskKeys.summary,
+    queryKey: taskKeys.summary(scopeKey),
     queryFn: ({ fresh }) => tasksAPI.summary({ fresh }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated,
@@ -72,10 +100,10 @@ export function useTaskSummary(feedConnected: boolean) {
 }
 
 export function useTaskList(feedConnected: boolean, limit: number) {
-  const { isAuthenticated } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
   return useRefreshableQuery<TaskListResponse>({
-    queryKey: taskKeys.list(limit),
+    queryKey: taskKeys.list(scopeKey, limit),
     queryFn: ({ fresh }) => tasksAPI.list({ limit }, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated,
@@ -83,15 +111,16 @@ export function useTaskList(feedConnected: boolean, limit: number) {
     refetchIntervalInBackground: false,
     // Show More changes the key; the rows in hand stay up until the larger page lands, so the
     // toolbar, the search text and the scroll position survive the click.
-    placeholderData: (previous) => previous,
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === scopeKey ? previous : undefined,
   });
 }
 
 export function useTaskWindow(since: string, feedConnected: boolean) {
-  const { isAuthenticated } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
   return useRefreshableQuery<TaskListResponse>({
-    queryKey: taskKeys.window(since),
+    queryKey: taskKeys.window(scopeKey, since),
     queryFn: ({ fresh }) => tasksAPI.list({ since, limit: WINDOW_LIMIT }, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && since !== "",
@@ -102,10 +131,10 @@ export function useTaskWindow(since: string, feedConnected: boolean) {
 
 /** A grouped view derived server side, so it polls at the watched tier whatever the feed does. */
 export function useTaskQueue(enabled: boolean) {
-  const { isAuthenticated } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   const [refetchInterval] = useState(() => jitter(POLL_MS.watched));
   return useRefreshableQuery({
-    queryKey: taskKeys.queue,
+    queryKey: taskKeys.queue(scopeKey),
     queryFn: ({ fresh }) => tasksAPI.queue({ fresh }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && enabled,
@@ -116,9 +145,9 @@ export function useTaskQueue(enabled: boolean) {
 
 /** Patched by `task` and `log` frames for its id, so it tracks status without a poll. */
 export function useTaskDetail(id: string | null) {
-  const { isAuthenticated } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery<TaskDetailResponse>({
-    queryKey: taskKeys.detail(id ?? ""),
+    queryKey: taskKeys.detail(scopeKey, id ?? ""),
     queryFn: () => tasksAPI.get(id ?? ""),
     ...DYNAMIC_DATA_CONFIG,
     staleTime: 0,
@@ -127,27 +156,42 @@ export function useTaskDetail(id: string | null) {
 }
 
 export function useClusterLog(enabled: boolean, feedConnected: boolean, limit: number) {
-  const { isAuthenticated } = usePermissions();
+  const { scopeKey, isAuthenticated } = useActorQueryScope();
   const refetchInterval = usePollInterval(POLL_MS.watched, feedConnected);
   return useRefreshableQuery<ClusterLogResponse>({
-    queryKey: logKeys.list(limit),
+    queryKey: logKeys.list(scopeKey, limit),
     queryFn: ({ fresh }) => tasksAPI.log({ limit }, { fresh }),
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && enabled,
     refetchInterval,
     refetchIntervalInBackground: false,
-    placeholderData: (previous) => previous,
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === scopeKey ? previous : undefined,
   });
 }
 
 export function useCancelTask() {
   const queryClient = useQueryClient();
-  return useMutation<CancelResponse, Error, string>({
-    mutationFn: (id) => tasksAPI.cancel(id),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+  const activeActorGuardRef = useActorMutationGuard();
+  const mutation = useMutation<
+    CancelResponse,
+    Error,
+    { id: string; requestActorGuard: ActorMutationGuard }
+  >({
+    mutationFn: ({ id }) => tasksAPI.cancel(id),
+    onSuccess: (_response, { requestActorGuard }) => {
+      if (
+        activeActorGuardRef.current !== requestActorGuard ||
+        requestActorGuard.scopeKey === null
+      ) {
+        return;
+      }
+      void queryClient.invalidateQueries({
+        queryKey: taskKeys.all(requestActorGuard.scopeKey),
+      });
     },
-    onError: (error) => {
+    onError: (error, { requestActorGuard }) => {
+      if (activeActorGuardRef.current !== requestActorGuard) return;
       toast({
         variant: "destructive",
         title: "Could not cancel task",
@@ -155,27 +199,60 @@ export function useCancelTask() {
       });
     },
   });
+
+  return {
+    isPending:
+      mutation.isPending &&
+      mutation.variables?.requestActorGuard === activeActorGuardRef.current,
+    /** Resolves false when the request completed after its actor scope was retired. */
+    mutateAsync: async (id: string): Promise<boolean> => {
+      const requestActorGuard = activeActorGuardRef.current;
+      if (requestActorGuard.scopeKey === null) return false;
+      try {
+        await mutation.mutateAsync({ id, requestActorGuard });
+        return activeActorGuardRef.current === requestActorGuard;
+      } catch (error) {
+        if (activeActorGuardRef.current !== requestActorGuard) return false;
+        throw error;
+      }
+    },
+  };
 }
 
 export interface KillConsoleSessionInput {
   instanceName: string;
   operationId: string;
   host: string;
+  project: string;
 }
 
 export function useKillConsoleSession() {
   const queryClient = useQueryClient();
-  return useMutation<void, Error, KillConsoleSessionInput>({
-    mutationFn: ({ instanceName, operationId, host }) =>
-      tasksAPI.killConsoleSession(instanceName, operationId, host),
-    onSuccess: (_data, { instanceName }) => {
+  const activeActorGuardRef = useActorMutationGuard();
+  const mutation = useMutation<
+    void,
+    Error,
+    KillConsoleSessionInput & { requestActorGuard: ActorMutationGuard }
+  >({
+    mutationFn: ({ instanceName, operationId, host, project }) =>
+      tasksAPI.killConsoleSession(instanceName, operationId, host, project),
+    onSuccess: (_data, { instanceName, requestActorGuard }) => {
+      if (
+        activeActorGuardRef.current !== requestActorGuard ||
+        requestActorGuard.scopeKey === null
+      ) {
+        return;
+      }
       toast({
         title: "Session killed",
         description: `Console session for ${instanceName} has been terminated`,
       });
-      void queryClient.invalidateQueries({ queryKey: taskKeys.all });
+      void queryClient.invalidateQueries({
+        queryKey: taskKeys.all(requestActorGuard.scopeKey),
+      });
     },
-    onError: (error) => {
+    onError: (error, { requestActorGuard }) => {
+      if (activeActorGuardRef.current !== requestActorGuard) return;
       toast({
         variant: "destructive",
         title: "Could not kill session",
@@ -183,6 +260,17 @@ export function useKillConsoleSession() {
       });
     },
   });
+
+  return {
+    isPending:
+      mutation.isPending &&
+      mutation.variables?.requestActorGuard === activeActorGuardRef.current,
+    mutate: (input: KillConsoleSessionInput): void => {
+      const requestActorGuard = activeActorGuardRef.current;
+      if (requestActorGuard.scopeKey === null) return;
+      mutation.mutate({ ...input, requestActorGuard });
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -234,12 +322,19 @@ function upsertInList(
   return { next: { ...data, tasks }, previous };
 }
 
-export function upsertTaskInCaches(queryClient: QueryClient, task: TaskRecord): void {
+export function upsertTaskInCaches(
+  queryClient: QueryClient,
+  scopeKey: string,
+  task: TaskRecord,
+): void {
   let previous: TaskRecord | null = null;
   let seen = false;
   let stale = false;
 
-  for (const prefix of [["tasks", "list"], ["tasks", "window"]] as const) {
+  for (const prefix of [
+    ["tasks", scopeKey, "list"],
+    ["tasks", scopeKey, "window"],
+  ] as const) {
     for (const [key, data] of queryClient.getQueriesData<TaskListResponse>({ queryKey: prefix })) {
       if (!data) continue;
       const result = upsertInList(data, task);
@@ -254,7 +349,7 @@ export function upsertTaskInCaches(queryClient: QueryClient, task: TaskRecord): 
   // Rejected as older than what a list already holds: the row and the counts stay as they are.
   if (stale) return;
 
-  const detailKey = taskKeys.detail(task.id);
+  const detailKey = taskKeys.detail(scopeKey, task.id);
   const detail = queryClient.getQueryData<TaskDetailResponse>(detailKey);
   if (detail) {
     if (!seen) {
@@ -272,28 +367,36 @@ export function upsertTaskInCaches(queryClient: QueryClient, task: TaskRecord): 
 
   // The summary is counts only. With the old row in hand the running delta is exact; without
   // it the count could be anything, so a debounced refetch is the honest move.
-  const summary = queryClient.getQueryData<TaskListResponse>(taskKeys.summary);
+  const summaryKey = taskKeys.summary(scopeKey);
+  const summary = queryClient.getQueryData<TaskListResponse>(summaryKey);
   if (summary && previous !== null) {
     const delta = (isOpen(task.status) ? 1 : 0) - (isOpen(previous.status) ? 1 : 0);
     const failed = task.status === "failure" && previous.status !== "failure" ? 1 : 0;
     if (delta !== 0 || failed !== 0) {
-      queryClient.setQueryData<TaskListResponse>(taskKeys.summary, {
+      queryClient.setQueryData<TaskListResponse>(summaryKey, {
         ...summary,
         running: Math.max(0, summary.running + delta),
         failed_recent: summary.failed_recent + failed,
       });
     }
   } else if (summary) {
-    invalidateDebounced(queryClient, taskKeys.summary);
+    invalidateDebounced(queryClient, summaryKey);
   }
 
-  if (queryClient.getQueryData(taskKeys.queue) !== undefined) {
-    invalidateDebounced(queryClient, taskKeys.queue);
+  const queueKey = taskKeys.queue(scopeKey);
+  if (queryClient.getQueryData(queueKey) !== undefined) {
+    invalidateDebounced(queryClient, queueKey);
   }
 }
 
-export function appendLogInCaches(queryClient: QueryClient, entry: ClusterLogEntry): void {
-  const lists = queryClient.getQueriesData<ClusterLogResponse>({ queryKey: ["cluster-log", "list"] });
+export function appendLogInCaches(
+  queryClient: QueryClient,
+  scopeKey: string,
+  entry: ClusterLogEntry,
+): void {
+  const lists = queryClient.getQueriesData<ClusterLogResponse>({
+    queryKey: ["cluster-log", scopeKey, "list"],
+  });
   for (const [key, data] of lists) {
     if (!data || data.entries.some((row) => row.id === entry.id)) continue;
     const entries = [entry, ...data.entries].slice(0, LOG_CAP);
@@ -305,7 +408,7 @@ export function appendLogInCaches(queryClient: QueryClient, entry: ClusterLogEnt
   }
 
   if (!entry.task_id) return;
-  const detailKey = taskKeys.detail(entry.task_id);
+  const detailKey = taskKeys.detail(scopeKey, entry.task_id);
   const detail = queryClient.getQueryData<TaskDetailResponse>(detailKey);
   if (!detail || detail.log.some((row) => row.id === entry.id)) return;
   // The detail log is oldest first (the server orders by ts), so a new line goes at the end.

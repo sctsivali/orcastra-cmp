@@ -13,7 +13,6 @@ import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { defineTable, fromSort } from "@/lib/table-filter";
-import { formatLabel } from "@/lib/utils";
 import type { TaskRecord } from "@/types/tasks";
 import { useTaskList } from "./hooks/use-tasks";
 import { PanelSkeleton, skeletonRowsFor } from "./panel-skeleton";
@@ -29,7 +28,14 @@ import {
   StatusCell,
   TaskIdCell,
 } from "./task-cells";
-import { STATUS_ORDER, actorLabel, durationMs, kindLabel, startedMs } from "./task-format";
+import {
+  STATUS_ORDER,
+  actorLabel,
+  durationMs,
+  kindLabel,
+  startedMs,
+  taskStatusLabel,
+} from "./task-format";
 import { useClock } from "./hooks/use-clock";
 import { TaskRowActions } from "./task-row-actions";
 import type { TaskFeedSnapshot } from "./use-task-feed";
@@ -54,7 +60,7 @@ const TASKS = defineTable<TaskRecord>()({
       label: "Status",
       sort: (t) => t.status,
       facet: (t) => t.status,
-      facetSpec: { primary: true, format: formatLabel, order: STATUS_ORDER },
+      facetSpec: { primary: true, format: taskStatusLabel, order: STATUS_ORDER },
     },
     { field: "actor", label: "Actor", sort: (t) => actorLabel(t), search: (t) => actorLabel(t), filter: fromSort("text") },
     { field: "kind", label: "Kind", sort: (t) => t.kind, facet: (t) => t.kind, facetSpec: { format: kindLabel } },

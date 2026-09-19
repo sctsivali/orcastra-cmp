@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback, Suspense } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Suspense } from "react";
 import { usePathname, useSearchParams, useRouter } from "next/navigation";
 import { currentQuery, replaceQuery } from "@/lib/url-state";
 import { IntentLink } from "@/components/navigation/route-intent";
@@ -28,7 +28,10 @@ import {
   type WarningKind,
   type WarningRecord,
 } from "./components/warning-detail-dialog";
-import { warningSeverityTone } from "./components/warning-severity";
+import {
+  warningSeverityDisplay,
+  warningSeverityLabel,
+} from "./components/warning-severity";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { OverflowText } from "@/components/ui/overflow-text";
 import {
@@ -38,6 +41,7 @@ import {
   TabsTrigger } from "@/components/ui/tabs";
 import { AlertTriangle, Info, Flame, HelpCircle, Server, FolderOpen, Shield, Wifi, WifiOff } from "lucide-react";
 import { useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { LoadingLottiePage } from "@/components/loading-lottie";
 import {
   Tooltip,
@@ -98,7 +102,7 @@ const PLATFORM_WARNINGS = defineTable<WarningInfo>()({
       label: "Severity",
       sort: (w) => SEVERITY_RANK[warningSeverityValue(w.severity)] ?? 99,
       facet: (w) => warningSeverityValue(w.severity),
-      facetSpec: { primary: true, format: formatLabel, order: [...WARNING_SEVERITY_ORDER] } },
+      facetSpec: { primary: true, format: warningSeverityLabel, order: [...WARNING_SEVERITY_ORDER] } },
     {
       field: "node",
       label: "Node",
@@ -144,7 +148,7 @@ const CERT_WARNINGS = defineTable<CertificateWarning>()({
       label: "Severity",
       sort: (w) => SEVERITY_RANK[warningSeverityValue(w.severity)] ?? 99,
       facet: (w) => warningSeverityValue(w.severity),
-      facetSpec: { primary: true, format: formatLabel } },
+      facetSpec: { primary: true, format: warningSeverityLabel } },
     { field: "days", label: "Days Until Expiry", sort: (w) => w.days_until_expiry, filter: fromSort("number", { unit: "days" }) },
     { field: "expires", label: "Expires At", sort: (w) => toTime(w.expires_at), filter: fromSort("date", { horizon: "future" }) },
   ] });
@@ -173,7 +177,7 @@ const NODE_WARNINGS = defineTable<CertificateWarning>()({
       label: "Severity",
       sort: (w) => SEVERITY_RANK[warningSeverityValue(w.severity || "critical")] ?? 99,
       facet: (w) => warningSeverityValue(w.severity || "critical"),
-      facetSpec: { primary: true, format: formatLabel } },
+      facetSpec: { primary: true, format: warningSeverityLabel } },
     // note: `message` is what CertificateWarning actually carries. The columns here used to
     // read `error` and `checked_at`, which the model has never had, so every row rendered the
     // same "Connection failed" fallback and an empty date while the populated message went
@@ -185,6 +189,7 @@ function WarningsContent() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { scopeKey } = useActorQueryScope();
   const { data, isLoading, isError, error, refetch, refreshNow, dataUpdatedAt } = useWarnings();
   const {
     data: systemWarnings,
@@ -333,10 +338,27 @@ function WarningsContent() {
   
   // State for warning detail modal. The kind travels with the record, because the three tabs
   // carry three different shapes and the dialog renders each one differently.
+  const [warningUiActorScope, setWarningUiActorScope] = useState(scopeKey);
+  const previousWarningActorScopeRef = useRef(scopeKey);
   const [selectedWarning, setSelectedWarning] = useState<WarningRecord | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const warningUiIsCurrent = warningUiActorScope === scopeKey;
+  const currentSelectedWarning = warningUiIsCurrent ? selectedWarning : null;
+
+  // The page can remain mounted while the session changes. Render-gate the selected record
+  // immediately, then clear it after commit so a new operator never sees the prior actor's
+  // warning message, cluster id, endpoint, project, or raw connection detail.
+  useEffect(() => {
+    if (previousWarningActorScopeRef.current === scopeKey) return;
+    previousWarningActorScopeRef.current = scopeKey;
+    setWarningUiActorScope(scopeKey);
+    setSelectedWarning(null);
+    setDetailModalOpen(false);
+  }, [scopeKey]);
 
   const handleShowWarningDetail = (kind: WarningKind, record: any) => {
+    if (!warningUiIsCurrent) return;
+    setWarningUiActorScope(scopeKey);
     setSelectedWarning({ kind, record });
     setDetailModalOpen(true);
   };
@@ -540,9 +562,9 @@ function WarningsContent() {
                       />
                     </TableCell>
                     <TableCell>
-                      <Badge variant={warningSeverityTone(warning.severity)} className="flex items-center gap-1 w-fit">
+                      <Badge variant={warningSeverityDisplay(warning.severity).tone} className="flex items-center gap-1 w-fit">
                         {getSeverityIcon(warning.severity)}
-                        {warning.severity}
+                        {warningSeverityDisplay(warning.severity).label}
                       </Badge>
                     </TableCell>
                     <TableCell>
@@ -667,11 +689,11 @@ function WarningsContent() {
                         </TableCell>
                         <TableCell>
                           <Badge
-                            variant={warningSeverityTone(warning.severity)}
+                            variant={warningSeverityDisplay(warning.severity).tone}
                             className="flex items-center gap-1 w-fit"
                           >
                             {warning.severity === "critical" && <Flame className="h-3 w-3" />}
-                            {warning.severity}
+                            {warningSeverityDisplay(warning.severity).label}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -785,9 +807,9 @@ function WarningsContent() {
                           )}
                         </TableCell>
                         <TableCell className="whitespace-nowrap">
-                          <Badge variant="negative" className="flex items-center gap-1 w-fit">
+                          <Badge variant={warningSeverityDisplay(warning.severity || "critical").tone} className="flex items-center gap-1 w-fit">
                             <Flame className="h-3 w-3" />
-                            {warning.severity || "critical"}
+                            {warningSeverityDisplay(warning.severity || "critical").label}
                           </Badge>
                         </TableCell>
                         {/* important: this was a tooltip on a bare span, so it opened for a mouse
@@ -831,9 +853,10 @@ function WarningsContent() {
           each dropped the field that matters most: a full cluster id, and the connection
           error the table clips to two lines behind a tooltip. */}
       <WarningDetailDialog
-        selected={selectedWarning}
-        open={detailModalOpen}
+        selected={currentSelectedWarning}
+        open={warningUiIsCurrent && detailModalOpen}
         onOpenChange={(next) => {
+          if (!warningUiIsCurrent) return;
           setDetailModalOpen(next);
           if (!next) setSelectedWarning(null);
         }}

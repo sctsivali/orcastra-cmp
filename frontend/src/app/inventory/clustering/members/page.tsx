@@ -21,6 +21,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { clusterStatusMeta, clusterSublabel } from "@/lib/cluster-status";
+import { memberStatusDisplay } from "@/lib/instance-status";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { defineTable, fromSort } from "@/lib/table-filter";
@@ -69,7 +70,7 @@ const MEMBERS = defineTable<any>()({
       label: "Status",
       sort: (m) => m.status,
       facet: (m) => m.status,
-      facetSpec: { primary: true } },
+      facetSpec: { primary: true, format: (value) => memberStatusDisplay(value).label } },
     {
       field: "architecture",
       label: "Architecture",
@@ -370,8 +371,10 @@ function ClusterMembersContent() {
                       }
                     />
                   ) : (
-                    pagedMembers.map((member: any) => (
-                    <TableRow key={member.server_name}>
+                    pagedMembers.map((member: any) => {
+                      const status = memberStatusDisplay(member.status);
+                      return (
+                        <TableRow key={member.server_name}>
                       <TableCell className="font-medium">
                         <span className="flex items-center gap-2">
                           <Server className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
@@ -396,16 +399,13 @@ function ClusterMembersContent() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge 
-                          variant={member.status === "Online" ? "positive" : "negative"}
-                          className="gap-1"
-                        >
-                          {member.status === "Online" ? (
+                        <Badge variant={status.tone} className="gap-1">
+                          {status.online ? (
                             <CheckCircle className="h-3 w-3" />
                           ) : (
                             <XCircle className="h-3 w-3" />
                           )}
-                          {member.status}
+                          {status.label}
                         </Badge>
                       </TableCell>
                       <TableCell>
@@ -421,8 +421,9 @@ function ClusterMembersContent() {
                           </span>
                         </div>
                       </TableCell>
-                    </TableRow>
-                  ))
+                        </TableRow>
+                      );
+                    })
                 )}
                 </TableBody>
               </Table>

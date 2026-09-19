@@ -47,17 +47,19 @@ import {
   durationMs,
   startedMs,
   kindLabel,
+  taskStatusLabel,
 } from "@/components/task-panel";
 import { useTaskWindow } from "@/components/task-panel/hooks/use-tasks";
 import { useTaskFeedState } from "@/components/task-panel/use-task-feed";
 import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
 import { TABLE_PAGE_SIZE, TABLE_PAGE_SIZES } from "@/lib/pagination";
 import { defineTable, fromSort } from "@/lib/table-filter";
 import { currentQuery, replaceQuery } from "@/lib/url-state";
-import { formatDateTime, formatLabel, formatRelativeTime, toMillis } from "@/lib/utils";
+import { formatDateTime, formatRelativeTime, toMillis } from "@/lib/utils";
 import { Role } from "@/types/rbac";
 import type { TaskRecord } from "@/types/tasks";
 
@@ -115,7 +117,7 @@ const OPERATIONS = defineTable<TaskRecord>()({
       label: "Status",
       sort: (t) => t.status,
       facet: (t) => t.status,
-      facetSpec: { primary: true, format: formatLabel, order: STATUS_ORDER },
+      facetSpec: { primary: true, format: taskStatusLabel, order: STATUS_ORDER },
     },
     { field: "actor", label: "Actor", sort: (t) => actorLabel(t), search: (t) => actorLabel(t), filter: fromSort("text") },
     { field: "kind", label: "Kind", sort: (t) => t.kind, facet: (t) => t.kind, facetSpec: { format: kindLabel } },
@@ -212,6 +214,7 @@ function OperationsContent() {
   const searchParams = useSearchParams();
   const feed = useTaskFeedState();
   const { isReadOnly } = useReadOnlyMode();
+  const { scopeKey } = useActorQueryScope();
 
   // important: both keys are URL state, read on every render and written on change through
   // lib/url-state, never a navigation. The default range is left out of the URL so a plain
@@ -251,6 +254,21 @@ function OperationsContent() {
     }
   }, [pathname]);
   const [cancelTask, setCancelTask] = useState<TaskRecord | null>(null);
+  const [taskJournalUiActorScope, setTaskJournalUiActorScope] = useState(scopeKey);
+  const previousTaskJournalActorScopeRef = useRef(scopeKey);
+  const taskJournalUiIsCurrent = taskJournalUiActorScope === scopeKey;
+  const currentDetailTaskId = taskJournalUiIsCurrent ? detailTaskId : null;
+  const currentCancelTask = taskJournalUiIsCurrent ? cancelTask : null;
+
+  // This route can remain mounted through sign-out/sign-in. Hide actor-owned task ids during
+  // the render before effects run, then discard both detail and destructive confirmation state.
+  useEffect(() => {
+    if (previousTaskJournalActorScopeRef.current === scopeKey) return;
+    previousTaskJournalActorScopeRef.current = scopeKey;
+    setTaskJournalUiActorScope(scopeKey);
+    setDetailTaskId(null);
+    setCancelTask(null);
+  }, [scopeKey]);
 
   const query = useTaskWindow(since, feed.state === "connected");
   const rows = useMemo(() => query.data?.tasks ?? [], [query.data]);
@@ -422,16 +440,16 @@ function OperationsContent() {
       </Card>
 
       <TaskDetailDialog
-        taskId={detailTaskId}
-        open={detailTaskId !== null}
+        taskId={currentDetailTaskId}
+        open={taskJournalUiIsCurrent && currentDetailTaskId !== null}
         onOpenChange={(next) => {
           if (!next) closeTask();
         }}
         onCancel={setCancelTask}
       />
       <TaskCancelDialog
-        task={cancelTask}
-        open={cancelTask !== null}
+        task={currentCancelTask}
+        open={taskJournalUiIsCurrent && currentCancelTask !== null}
         onOpenChange={(next) => {
           if (!next) setCancelTask(null);
         }}

@@ -22,10 +22,12 @@
  * Watches the union of the hosts that currently have instances plus the hosts of
  * any pending creates. Returns the live pending-create list for rendering.
  */
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { api } from "@/lib/api";
+import { queryKeys } from "@/hooks/use-lxd";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { getEventsWsUrl } from "@/lib/ws-url";
 import { toast } from "@/hooks/use-toast";
 import {
@@ -51,58 +53,90 @@ const sameInstance = (a: any, host: string, name: string, project?: string) =>
   (project ? (a.project || "default") === (project || "default") : true);
 
 export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
+  const { scopeKey } = useActorQueryScope();
+  const subscribe = useCallback(
+    (listener: () => void) => subscribePending(scopeKey, listener),
+    [scopeKey],
+  );
+  const getSnapshot = useCallback(
+    () => getPendingSnapshot(scopeKey),
+    [scopeKey],
+  );
   const pending = useSyncExternalStore(
-    subscribePending,
-    getPendingSnapshot,
-    getPendingSnapshot,
+    subscribe,
+    getSnapshot,
+    getSnapshot,
   );
   const queryClient = useQueryClient();
-  const connsRef = useRef<Map<string, Conn>>(new Map());
 
   const hosts = Array.from(
     new Set([...instanceHosts, ...pending.map((p) => p.host)]),
   ).filter(Boolean);
   const hostsKey = hosts.slice().sort().join(",");
-  // Live view of wanted hosts for the reconnect closure (avoids stale capture).
-  const hostsRef = useRef<string[]>(hosts);
-  hostsRef.current = hosts;
 
   useEffect(() => {
-    const conns = connsRef.current;
-
-    // A list is keyed ["instances", host, project] with "*" for "every" (queryKeys.instances);
-    // a row only belongs in the lists whose scope contains it, or a project-scoped list would
-    // gain every other project's creates.
+    let active = true;
+    const conns = new Map<string, Conn>();
+    const reconnectTimers = new Set<ReturnType<typeof setTimeout>>();
+    const ipRetryTimers = new Set<ReturnType<typeof setTimeout>>();
+    // A list is keyed ["instances", actor, host, project], with "*" for every host or
+    // project. A row only belongs in the current actor's lists whose scope contains it.
     const scopeHolds = (key: readonly unknown[], vm: any) => {
-      const [, host, project] = key as [string, string | undefined, string | undefined];
-      const hostOk = host === undefined || host === "*" || host === vm.host;
-      const projectOk = project === undefined || project === "*" || project === (vm.project || "default");
-      return hostOk && projectOk;
+      const [kind, actor, host, project] = key as [string, string, string, string];
+      return (
+        kind === "instances" &&
+        actor === scopeKey &&
+        (host === "*" || host === vm.host) &&
+        (project === "*" || project === (vm.project || "default"))
+      );
     };
 
     const upsertInstance = (vm: any) => {
-      queryClient.setQueriesData({ queryKey: ["instances"], predicate: (q) => scopeHolds(q.queryKey, vm) }, (old: any) => {
-        if (!old || !Array.isArray(old.vms)) return old;
-        const idx = old.vms.findIndex((i: any) =>
-          sameInstance(i, vm.host, vm.name, vm.project),
-        );
-        const vms =
-          idx >= 0
-            ? old.vms.map((i: any, k: number) => (k === idx ? vm : i))
-            : [vm, ...old.vms];
-        return { ...old, vms, total: vms.length };
-      });
+      if (!active) return;
+      queryClient.setQueriesData(
+        { queryKey: ["instances", scopeKey], predicate: (q) => scopeHolds(q.queryKey, vm) },
+        (old: any) => {
+          if (!old || !Array.isArray(old.vms)) return old;
+          const idx = old.vms.findIndex((i: any) =>
+            sameInstance(i, vm.host, vm.name, vm.project),
+          );
+          const vms =
+            idx >= 0
+              ? old.vms.map((i: any, k: number) => (k === idx ? vm : i))
+              : [vm, ...old.vms];
+          return { ...old, vms, total: vms.length };
+        },
+      );
     };
 
     const removeInstance = (host: string, name: string, project?: string) => {
-      queryClient.setQueriesData({ queryKey: ["instances"] }, (old: any) => {
-        if (!old || !Array.isArray(old.vms)) return old;
-        const vms = old.vms.filter(
-          (i: any) => !sameInstance(i, host, name, project),
-        );
-        if (vms.length === old.vms.length) return old;
-        return { ...old, vms, total: vms.length };
-      });
+      if (!active) return;
+      queryClient.setQueriesData(
+        {
+          queryKey: ["instances", scopeKey],
+          predicate: (q) => {
+            const [, actor, scopedHost, scopedProject] = q.queryKey as [
+              string,
+              string,
+              string,
+              string,
+            ];
+            return (
+              actor === scopeKey &&
+              (scopedHost === "*" || scopedHost === host) &&
+              (!project || scopedProject === "*" || scopedProject === project)
+            );
+          },
+        },
+        (old: any) => {
+          if (!old || !Array.isArray(old.vms)) return old;
+          const vms = old.vms.filter(
+            (i: any) => !sameInstance(i, host, name, project),
+          );
+          if (vms.length === old.vms.length) return old;
+          return { ...old, vms, total: vms.length };
+        },
+      );
     };
 
     // Fetch one instance and upsert it. A just-started instance is "Running"
@@ -119,21 +153,27 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     ): Promise<boolean> => {
       try {
         const vm: any = await api.instances.get(name, host, project);
+        if (!active) return false;
         upsertInstance(vm);
         const needsIp =
           vm.status === "Running" &&
           (!Array.isArray(vm.ip_addresses) || vm.ip_addresses.length === 0);
         if (needsIp && ipRetries > 0) {
-          setTimeout(() => {
+          const timer = setTimeout(() => {
+            ipRetryTimers.delete(timer);
+            if (!active) return;
             // Only keep retrying while the row is still present.
             void fetchAndUpsert(host, name, project, ipRetries - 1);
           }, 4000);
+          ipRetryTimers.add(timer);
         }
         return true;
       } catch {
         // Instance gone, or a transient race. The list never polls in realtime mode, so a
         // refetch is the one thing that can still carry the row in.
-        void queryClient.invalidateQueries({ queryKey: ["instances"] });
+        if (active) {
+          void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
+        }
         return false;
       }
     };
@@ -141,7 +181,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     // The placeholder a frame is about. A frame that names its project matches on it too; a
     // frame without one (older daemons) matches on host and name as before.
     const findPending = (host: string, name: string, project?: string | null) =>
-      getPendingSnapshot().find(
+      getPendingSnapshot(scopeKey).find(
         (x) =>
           x.host === host &&
           x.name === name &&
@@ -150,7 +190,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
 
     const dropPending = (host: string, name: string, project?: string | null) => {
       const p = findPending(host, name, project);
-      if (p) removePendingCreate(p.id);
+      if (p) removePendingCreate(scopeKey, p.id);
     };
 
     // A placeholder retires only once the real row is in the cache. It used to be dropped in a
@@ -159,10 +199,11 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     const settle = (host: string, name: string, project: string | null | undefined, ok: boolean) => {
       if (!ok) return;
       const p = findPending(host, name, project);
-      if (p) resolvePendingCreate(p.id);
+      if (p) resolvePendingCreate(scopeKey, p.id);
     };
 
     const handleOperation = (host: string, msg: any) => {
+      if (!active) return;
       const names: string[] = Array.isArray(msg.instances)
         ? msg.instances
         : msg.instance
@@ -170,7 +211,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
           : [];
       if (names.length === 0) return;
       const project: string | undefined = msg.project || undefined;
-      for (const p of getPendingSnapshot()) {
+      for (const p of getPendingSnapshot(scopeKey)) {
         if (p.host !== host || !names.includes(p.name)) continue;
         if (project && (p.project || "default") !== project) continue;
         const code: number | undefined =
@@ -187,7 +228,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
             // transition into Error raises a toast. Without this the operator gets the same
             // destructive toast several times for one create.
             const alreadyFailed = p.status === "Error";
-            updatePendingCreate(p.id, {
+            updatePendingCreate(scopeKey, p.id, {
               status: "Error",
               statusCode: code,
               error: reason,
@@ -211,7 +252,7 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
             }
           }
         } else {
-          updatePendingCreate(p.id, {
+          updatePendingCreate(scopeKey, p.id, {
             status: msg.status || "Running",
             statusCode: code,
             progress: msg.progress || undefined,
@@ -223,25 +264,40 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     };
 
     const handleLifecycle = (host: string, msg: any) => {
+      if (!active) return;
       const name: string | undefined = msg.instance;
       if (!name) return;
       const action: string = msg.action || "";
       if (action === "instance-deleted") {
-        removeInstance(host, name, msg.project);
-        dropPending(host, name, msg.project);
+        const project: string | undefined = msg.project || undefined;
+        if (project) {
+          removeInstance(host, name, project);
+          dropPending(host, name, project);
+        } else {
+          // A name is only unique inside a project. Without one, refetch instead of removing
+          // every same-named instance from this actor's visible cache.
+          void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
+        }
         return;
       }
       if (action === "instance-renamed") {
         // Name changed. The cheapest correct move is a single refetch.
-        queryClient.invalidateQueries({ queryKey: ["instances"] });
+        void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
         return;
       }
       // created / started / stopped / restarted / updated / paused / resumed …
       const project: string | undefined = msg.project || undefined;
-      void fetchAndUpsert(host, name, project).then((ok) => settle(host, name, project, ok));
+      if (!project) {
+        void queryClient.invalidateQueries({ queryKey: ["instances", scopeKey] });
+        return;
+      }
+      void fetchAndUpsert(host, name, project).then((ok) =>
+        settle(host, name, project, ok),
+      );
     };
 
     const handleMessage = (host: string, raw: string) => {
+      if (!active) return;
       let msg: any;
       try {
         msg = JSON.parse(raw);
@@ -254,14 +310,18 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
 
     const connect = (host: string) => {
       const conn = conns.get(host);
-      if (!conn || conn.stop) return;
+      if (!active || !conn || conn.stop) return;
       const ws = new WebSocket(getEventsWsUrl(host));
       conn.ws = ws;
       ws.onmessage = (ev) => handleMessage(host, ev.data as string);
       ws.onclose = () => {
         conn.ws = null;
-        if (!conn.stop && hostsRef.current.includes(host)) {
-          setTimeout(() => connect(host), 2000);
+        if (active && !conn.stop) {
+          const timer = setTimeout(() => {
+            reconnectTimers.delete(timer);
+            if (active) connect(host);
+          }, 2000);
+          reconnectTimers.add(timer);
         }
       };
       ws.onerror = () => {
@@ -277,6 +337,11 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
       const conn = conns.get(host);
       if (!conn) return;
       conn.stop = true;
+      if (conn.ws) {
+        conn.ws.onmessage = null;
+        conn.ws.onclose = null;
+        conn.ws.onerror = null;
+      }
       try {
         conn.ws?.close();
       } catch {
@@ -294,23 +359,14 @@ export function useInstanceStream(instanceHosts: string[]): PendingCreate[] {
     for (const host of Array.from(conns.keys())) {
       if (!hosts.includes(host)) closeHost(host);
     }
-  }, [hostsKey, queryClient]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Close everything on unmount.
-  useEffect(() => {
-    const conns = connsRef.current;
     return () => {
-      for (const conn of conns.values()) {
-        conn.stop = true;
-        try {
-          conn.ws?.close();
-        } catch {
-          /* ignore */
-        }
-      }
-      conns.clear();
+      active = false;
+      reconnectTimers.forEach(clearTimeout);
+      ipRetryTimers.forEach(clearTimeout);
+      for (const host of Array.from(conns.keys())) closeHost(host);
     };
-  }, []);
+  }, [hostsKey, queryClient, scopeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return pending;
 }

@@ -144,18 +144,26 @@ export function filterGroups(groups: NavGroup[], perms: PermissionFlags): NavGro
 
 // route -> prefetch: warm the React Query cache on sidebar hover. Co-located with the
 // config so prefetchKey values stay in sync with the routes they warm.
-export function buildPrefetchMap(queryClient: QueryClient): Record<string, () => void> {
+export function buildPrefetchMap(
+  queryClient: QueryClient,
+  actorScope: string,
+  canViewNodeInventory: boolean,
+): Record<string, () => void> {
   return {
     "/inventory": () => {
-      queryClient.prefetchQuery({ queryKey: queryKeys.instances(), queryFn: () => api.instances.list(), staleTime: 30_000 });
-      queryClient.prefetchQuery({ queryKey: queryKeys.allProjects, queryFn: () => api.projects.listAll(), staleTime: 180_000 });
-      queryClient.prefetchQuery({ queryKey: ["clusters", { fresh: false }], queryFn: () => api.clusters.list(false), staleTime: 120_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.allProjectsFor(actorScope), queryFn: () => api.projects.listAll(), staleTime: 180_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.clustersFor(actorScope, false), queryFn: () => api.clusters.list(false), staleTime: 120_000 });
     },
     "/inventory/instances": () => {
-      queryClient.prefetchQuery({ queryKey: queryKeys.instances(), queryFn: () => api.instances.list(), staleTime: 30_000 });
+      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: () => api.instances.list(), staleTime: 30_000 });
     },
     "/inventory/monitoring": () => {
-      queryClient.prefetchQuery({ queryKey: ["monitoring", "dashboard"], queryFn: () => api.monitoring.getDashboard(), staleTime: 0 });
+      queryClient.prefetchQuery({
+        queryKey: ["monitoring", "dashboard", actorScope],
+        queryFn: () => api.monitoring.getDashboard(),
+        staleTime: 0,
+      });
     },
     "/inventory/networks": () => {
       queryClient.prefetchQuery({ queryKey: ["networks", undefined], queryFn: () => api.networks.list(), staleTime: 120_000 });
@@ -185,8 +193,20 @@ export function buildPrefetchMap(queryClient: QueryClient): Record<string, () =>
       queryClient.prefetchQuery({ queryKey: ["regions", "overview"], queryFn: () => api.regions.getOverview(), staleTime: 60_000 });
     },
     "/": () => {
-      queryClient.prefetchQuery({ queryKey: queryKeys.nodes, queryFn: () => api.nodes.status(), staleTime: 10_000 });
-      queryClient.prefetchQuery({ queryKey: queryKeys.instances(), queryFn: () => api.instances.list(), staleTime: 30_000 });
+      if (canViewNodeInventory) {
+        queryClient.prefetchQuery({
+          queryKey: queryKeys.nodesFor(actorScope),
+          queryFn: () => api.nodes.status(),
+          staleTime: 30_000,
+        });
+      } else {
+        queryClient.prefetchQuery({
+          queryKey: queryKeys.nodeAvailabilityFor(actorScope),
+          queryFn: () => api.nodes.availability(),
+          staleTime: 30_000,
+        });
+      }
+      queryClient.prefetchQuery({ queryKey: queryKeys.instancesFor(actorScope, undefined), queryFn: () => api.instances.list(), staleTime: 30_000 });
     },
   };
 }

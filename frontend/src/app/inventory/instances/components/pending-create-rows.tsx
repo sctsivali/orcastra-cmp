@@ -7,10 +7,12 @@ import { TableCell, TableRow } from "@/components/ui/table";
 import { TableEmptyValue, TableSubText } from "@/components/ui/table-text";
 import { formatInstanceType } from "@/lib/utils";
 import { isStalePending, removePendingCreate, type PendingCreate } from "@/lib/pending-creates";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 
 // The "Creating..." placeholder rows, rendered above the real rows and outside the filters,
 // the sort and the pager: a create in flight is always visible, whatever the list is showing.
 export function PendingCreateRows({ pending }: { pending: readonly PendingCreate[] }) {
+  const { scopeKey } = useActorQueryScope();
   return (
     <>
       {pending.map((p) => (
@@ -65,7 +67,7 @@ export function PendingCreateRows({ pending }: { pending: readonly PendingCreate
                 variant="ghost"
                 size="sm"
                 aria-label={`Dismiss the failed create for ${p.name}`}
-                onClick={() => removePendingCreate(p.id)}
+                onClick={() => removePendingCreate(scopeKey, p.id)}
               >
                 Dismiss
               </Button>

@@ -12,7 +12,7 @@ import { NavigationProgressProvider } from "./navigation/navigation-progress";
 import { RouteIntentProvider } from "./navigation/route-intent";
 import { APIError } from "@/types";
 import { POLL_MS } from "@/lib/query-config";
-import { onTokenRefreshed } from "@/lib/api";
+import { onAuthActorChanged, onTokenRefreshed } from "@/lib/api";
 import type { PersonalizationSettings } from "@/types/personalization";
 
 /**
@@ -106,7 +106,24 @@ export function Providers({
   // pass. See the note on PersonalizationProvider's initialSettings prop.
   initialPersonalization?: PersonalizationSettings | null;
 }) {
-  const queryClient = getQueryClient();
+  const [queryClient, setQueryClient] = React.useState(getQueryClient);
+  const queryClientRef = React.useRef(queryClient);
+
+  React.useEffect(
+    () =>
+      onAuthActorChanged(() => {
+        // TokenSync is withholding the descendant tree while this callback runs. Retire the
+        // complete client, not a hand-maintained list of sensitive keys: one overlooked query
+        // would otherwise let B render A's last-good body from the singleton browser cache.
+        const previous = queryClientRef.current;
+        const next = makeQueryClient();
+        if (typeof window !== "undefined") browserQueryClient = next;
+        queryClientRef.current = next;
+        previous.clear();
+        setQueryClient(next);
+      }),
+    [],
+  );
 
   return (
     <AuthProvider>
@@ -128,4 +145,3 @@ export function Providers({
     </AuthProvider>
   );
 }
-

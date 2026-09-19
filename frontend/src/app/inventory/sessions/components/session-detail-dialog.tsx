@@ -12,6 +12,7 @@ import { Role } from "@/types/rbac";
 import { formatBytes, formatDateTime, formatLabel } from "@/lib/utils";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { NodeLink } from "@/components/ui/node-link";
+import { sessionConnectionStatusDisplay } from "./session-connection-status";
 
 // Neither sessions table had anything clickable, so a session id, the one value that correlates
 // a row with the console audit log, was unreachable from the UI entirely.
@@ -48,6 +49,9 @@ export function SessionDetailDialog({
   const started = isActive
     ? new Date((record.started_at ?? 0) * 1000).toISOString()
     : record.created_at;
+  const status = isActive
+    ? sessionConnectionStatusDisplay(record.connection_status)
+    : { label: formatLabel(record.event_type ?? ""), tone: "secondary" as const };
 
   return (
     <RecordDetailDialog
@@ -57,7 +61,7 @@ export function SessionDetailDialog({
       recordId={record.session_id ?? String(record.id ?? "")}
       recordIdLabel="Session"
       subtitle={<><NodeLink clusterId={record.host} /> / {record.project}</>}
-      status={<Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : formatLabel(record.event_type ?? "")}</Badge>}
+      status={<Badge variant={status.tone}>{status.label}</Badge>}
       size="md"
       footer={
         isPartner ? (

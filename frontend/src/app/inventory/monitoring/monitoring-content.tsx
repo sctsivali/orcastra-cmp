@@ -8,7 +8,7 @@ import dynamic from "next/dynamic";
 // are distinct router cache keys. They warm on intent rather than on sight.
 import { IntentLink as Link } from "@/components/navigation/route-intent";
 
-import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, Container, Monitor, RefreshCw, TrendingUp, TrendingDown, Minus, Box, Play, Square, Clock, ArrowUp, ArrowDown, Info, ShieldAlert, Flame, Shield, WifiOff, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
+import { Server, Cpu, HardDrive, MemoryStick, Network, AlertTriangle, Container, Monitor, RefreshCw, TrendingUp, TrendingDown, Minus, Box, Pause, Play, Clock, ArrowUp, ArrowDown, Info, ShieldAlert, Flame, Shield, WifiOff, ZoomIn, ZoomOut, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 
 // Dynamically import Lottie to avoid SSR issues
 const Lottie = dynamic(() => import("lottie-react"), { ssr: false });
@@ -29,13 +29,32 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tooltip as UITooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { InstanceDetailDialog } from "@/components/instance-detail/instance-detail-dialog";
-import { useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
+import { queryKeys, useMonitoringDashboard, useMonitoringHistory, useWarnings, useSystemWarnings } from "@/hooks/use-lxd";
 import { useMonitoringWebSocket } from "@/hooks/use-monitoring-ws";
 import { usePermissions } from "@/hooks/use-permissions";
+import { useActorQueryScope } from "@/hooks/use-query-scope";
 import { PANEL_PAGE_SIZE, PANEL_PAGE_SIZES } from "@/lib/pagination";
 import { cn, formatMemory } from "@/lib/utils";
+import { instanceStatusDisplay } from "@/lib/instance-status";
 import { InstanceMonitoringSummary, VMInfo } from "@/types";
+import type {
+  MetricsHistoryPoint,
+  MonitoringDashboardResponse,
+  SystemWarningsResponse,
+} from "@/types/api";
 import { vmAPI } from "@/lib/api";
+
+type MonitoringDisplaySnapshot = {
+  actorScope: string;
+  dashboard: MonitoringDashboardResponse | undefined;
+  history: MetricsHistoryPoint[] | undefined;
+  warnings: unknown;
+  systemWarnings: SystemWarningsResponse | undefined;
+  dashboardError: Error | null;
+  dashboardLoading: boolean;
+  historyLoading: boolean;
+  updatedAt: number;
+};
 
 // Format CPU time from nanoseconds to readable format
 const formatCpuTime = (nanoseconds: number): string => {
@@ -173,6 +192,7 @@ interface TopConsumerCardProps {
 }
 
 const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type, onOpen }: TopConsumerCardProps) {
+  const project = instance.project || "default";
   const renderValue = () => {
     switch (type) {
       case "cpu":
@@ -213,7 +233,7 @@ const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type, on
   return (
     <button
       type="button"
-      aria-label={`Open resource details for ${instance.name}`}
+      aria-label={`Open resource details for ${instance.name} on ${instance.host} in project ${project}`}
       onClick={() => onOpen(instance)}
       className="flex w-full items-center gap-3 rounded-lg bg-muted/50 p-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
     >
@@ -222,7 +242,7 @@ const TopConsumerCard = memo(function TopConsumerCard({ instance, rank, type, on
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate">{instance.name}</p>
-        <p className="text-xs text-muted-foreground truncate">{instance.host}</p>
+        <p className="text-xs text-muted-foreground truncate">{instance.host} / {project}</p>
       </div>
       <div className="text-right shrink-0">
         {renderValue()}
@@ -456,7 +476,7 @@ const ResourceMetricsTooltip = memo(function ResourceMetricsTooltip({
                   <span className="text-sm truncate">{nodeName}</span>
                 </div>
                 {offline ? (
-                  <span className="text-xs text-muted-foreground italic shrink-0">offline</span>
+                  <span className="text-xs text-muted-foreground italic shrink-0">Offline</span>
                 ) : (
                   <span className="text-sm font-semibold shrink-0" style={{ color: entry.color }}>
                     {value.toFixed(1)}%
@@ -621,14 +641,8 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "Running":
-        return <Badge className="bg-green-500 text-white">Running</Badge>;
-      case "Stopped":
-        return <Badge variant="secondary">Stopped</Badge>;
-      default:
-        return <Badge variant="outline">{status}</Badge>;
-    }
+    const display = instanceStatusDisplay(status);
+    return <Badge variant={display.tone}>{display.label}</Badge>;
   };
 
   return (
@@ -650,41 +664,44 @@ function InstanceDetailsDialog({ open, onClose, filterType, instances, isLoading
               ))}
             </div>
           ) : instances.length > 0 ? (
-            pagedInstances.map((instance) => (
-              <div
-                key={`${instance.host}-${instance.name}`}
-                className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
-                    {instance.type === "container" ? (
-                      <Container className="h-5 w-5 text-muted-foreground" />
-                    ) : (
-                      <Monitor className="h-5 w-5 text-muted-foreground" />
-                    )}
+            pagedInstances.map((instance) => {
+              const project = instance.project || "default";
+              return (
+                <div
+                  key={`${instance.host}:${project}:${instance.name}`}
+                  className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-muted">
+                      {instance.type === "container" ? (
+                        <Container className="h-5 w-5 text-muted-foreground" />
+                      ) : (
+                        <Monitor className="h-5 w-5 text-muted-foreground" />
+                      )}
+                    </div>
+                    <div>
+                      {/* The hover tint on this row promised something for as long as it existed
+                          and never delivered it. The name is now a real control. */}
+                      <p className="font-medium">
+                        <TableLink
+                          onClick={() => onSelectInstance(instance)}
+                          aria-label={`Show details for ${instance.name} on ${instance.host} in project ${project}`}
+                        >
+                          {instance.name}
+                        </TableLink>
+                      </p>
+                      <p className="text-xs text-muted-foreground">{instance.host} / {project}</p>
+                    </div>
                   </div>
-                  <div>
-                    {/* The hover tint on this row promised something for as long as it existed
-                        and never delivered it. The name is now a real control. */}
-                    <p className="font-medium">
-                      <TableLink
-                        onClick={() => onSelectInstance(instance)}
-                        aria-label={`Show details for ${instance.name}`}
-                      >
-                        {instance.name}
-                      </TableLink>
-                    </p>
-                    <p className="text-xs text-muted-foreground">{instance.host}</p>
+                  <div className="flex items-center gap-2">
+                    {getStatusBadge(instance.status)}
+                    <Badge variant="outline" className="text-xs">
+                      {instance.type === "virtual-machine" ? "VM" : "CT"}
+                    </Badge>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  {getStatusBadge(instance.status)}
-                  <Badge variant="outline" className="text-xs">
-                    {instance.type === "virtual-machine" ? "VM" : "CT"}
-                  </Badge>
-                </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               <Box className="h-12 w-12 mx-auto mb-4 opacity-50" />
@@ -721,8 +738,11 @@ export default function MonitoringContent() {
   // content, which here is the alarm card (every tile links to a partner-gated page) and
   // status_message (the backend exception verbatim, see monitoring.py building it from str(e)).
   const { isPartner } = usePermissions();
+  const { scopeKey: actorScope } = useActorQueryScope();
+  const queryClient = useQueryClient();
   const [refreshInterval, setRefreshInterval] = useState(5000);
   const [isPaused, setIsPaused] = useState(false);
+  const [pausedSnapshot, setPausedSnapshot] = useState<MonitoringDisplaySnapshot | null>(null);
   const [timeRange, setTimeRange] = useState(60); // Default 5 minutes (60 points at 5s intervals)
   const [chartTab, setChartTab] = useState<"cpu" | "memory" | "storage" | "network">("cpu");
   
@@ -736,12 +756,22 @@ export default function MonitoringContent() {
   // because that one holds a monitoring summary and has to convert; this one already has the
   // VMInfo in hand.
   const [selectedListInstance, setSelectedListInstance] = useState<VMInfo | null>(null);
+  const [monitoringUiActorScope, setMonitoringUiActorScope] = useState(actorScope);
+  const previousActorScopeRef = useRef(actorScope);
+  const activeActorScopeRef = useRef(actorScope);
+  activeActorScopeRef.current = actorScope;
+
+  // This route can survive a sign-out/sign-in transition without unmounting. Actor-owned UI
+  // state is gated during render, then cleared after the change so prior organization rows or
+  // node names cannot flash before the new actor's queries settle.
+  const monitoringUiIsCurrent = monitoringUiActorScope === actorScope;
   
   // Sort order for top consumers (true = highest first, false = lowest first)
   const [sortDescending, setSortDescending] = useState(true);
   
   // Node selection for filtering
-  const [selectedNode, setSelectedNode] = useState<string>("all");
+  const [selectedNodeState, setSelectedNode] = useState<string>("all");
+  const selectedNode = monitoringUiIsCurrent ? selectedNodeState : "all";
   
   // Top N consumers count
   const [topNCount, setTopNCount] = useState<number>(5);
@@ -750,15 +780,40 @@ export default function MonitoringContent() {
   const [storagePoolsSortDesc, setStoragePoolsSortDesc] = useState(true);
   
   // Visible nodes for multi-line graph (when "all" is selected)
-  const [visibleNodes, setVisibleNodes] = useState<Record<string, boolean>>({});
+  const [visibleNodesState, setVisibleNodes] = useState<Record<string, boolean>>({});
+  const visibleNodes = monitoringUiIsCurrent ? visibleNodesState : {};
   
   // Zoom and pan state for charts
   // brushStart/EndIndex: always explicit numbers (never undefined) so Recharts Brush stays controlled
-  const [zoomLevel, setZoomLevel] = useState(1); // 1 = 100%, 2 = 50% of data (zoomed in), etc.
-  const [brushStartIndex, setBrushStartIndex] = useState(0);
-  const [brushEndIndex, setBrushEndIndex] = useState(0);
+  const [zoomLevelState, setZoomLevel] = useState(1); // 1 = 100%, 2 = 50% of data (zoomed in), etc.
+  const [brushStartIndexState, setBrushStartIndex] = useState(0);
+  const [brushEndIndexState, setBrushEndIndex] = useState(0);
   // Whether the user has actively zoomed (enables reset button even for manual brush drags)
-  const [isZoomed, setIsZoomed] = useState(false);
+  const [isZoomedState, setIsZoomed] = useState(false);
+  const zoomLevel = monitoringUiIsCurrent ? zoomLevelState : 1;
+  const brushStartIndex = monitoringUiIsCurrent ? brushStartIndexState : 0;
+  const brushEndIndex = monitoringUiIsCurrent ? brushEndIndexState : 0;
+  const isZoomed = monitoringUiIsCurrent ? isZoomedState : false;
+
+  useEffect(() => {
+    if (previousActorScopeRef.current === actorScope) return;
+    previousActorScopeRef.current = actorScope;
+    setMonitoringUiActorScope(actorScope);
+    setInstanceDialogOpen(false);
+    setInstanceFilterType(null);
+    setAllInstances([]);
+    setInstancesLoading(false);
+    setSelectedTopConsumer(null);
+    setSelectedListInstance(null);
+    setSelectedNode("all");
+    setVisibleNodes({});
+    setZoomLevel(1);
+    setBrushStartIndex(0);
+    setBrushEndIndex(0);
+    setIsZoomed(false);
+    setIsPaused(false);
+    setPausedSnapshot(null);
+  }, [actorScope]);
   
   // Transition for non-blocking time range switches
   const [isTimeRangePending, startTimeRangeTransition] = useTransition();
@@ -772,23 +827,174 @@ export default function MonitoringContent() {
   const { connected: wsConnected } = useMonitoringWebSocket(!isPaused);
 
   const { 
-    data: dashboardData, 
-    isLoading: dashboardLoading, 
-    error: dashboardError,
-    refetch: refetchDashboard,
+    data: liveDashboardData,
+    isLoading: liveDashboardLoading,
+    error: liveDashboardError,
     refreshNow: refreshDashboard,
-    dataUpdatedAt,
+    dataUpdatedAt: liveDataUpdatedAt,
   } = useMonitoringDashboard(!isPaused, wsConnected ? 0 : refreshInterval);
   
   const { 
-    data: historyData, 
-    isLoading: historyLoading,
-    isFetching: historyFetching,
+    data: liveHistoryData,
+    isLoading: liveHistoryLoading,
+    isFetching: liveHistoryFetching,
+    refetch: refetchHistory,
   } = useMonitoringHistory(timeRange, !isPaused);
 
-  // Fetch warnings from all nodes (same as Warnings page)
-  const { data: warningsData } = useWarnings();
-  const { data: systemWarnings } = useSystemWarnings();
+  // Warnings share the monitoring pause contract. Manual refresh below still bypasses the
+  // disabled observer for Partner/Admin, while Tenant never calls the privileged endpoints.
+  const {
+    data: liveWarningsData,
+    refreshNow: refreshWarnings,
+  } = useWarnings(undefined, { enabled: !isPaused });
+  const {
+    data: liveSystemWarnings,
+    refreshNow: refreshSystemWarnings,
+  } = useSystemWarnings({ enabled: !isPaused });
+
+  const frozenSnapshot =
+    isPaused && pausedSnapshot?.actorScope === actorScope ? pausedSnapshot : null;
+  const dashboardData = isPaused ? frozenSnapshot?.dashboard : liveDashboardData;
+  const historyData = isPaused ? frozenSnapshot?.history : liveHistoryData;
+  const warningsData = isPaused ? frozenSnapshot?.warnings : liveWarningsData;
+  const systemWarnings = isPaused ? frozenSnapshot?.systemWarnings : liveSystemWarnings;
+  const dashboardLoading = isPaused
+    ? frozenSnapshot?.dashboardLoading ?? false
+    : liveDashboardLoading;
+  const dashboardError = isPaused
+    ? frozenSnapshot?.dashboardError ?? null
+    : liveDashboardError;
+  const historyLoading = isPaused
+    ? frozenSnapshot?.historyLoading ?? false
+    : liveHistoryLoading;
+  const historyFetching = isPaused ? false : liveHistoryFetching;
+  const dataUpdatedAt = isPaused
+    ? frozenSnapshot?.updatedAt ?? liveDataUpdatedAt
+    : liveDataUpdatedAt;
+
+  const toggleMonitoringPause = useCallback(() => {
+    if (isPaused) {
+      setIsPaused(false);
+      setPausedSnapshot(null);
+      return;
+    }
+
+    setPausedSnapshot({
+      actorScope,
+      dashboard: liveDashboardData,
+      history: liveHistoryData,
+      warnings: liveWarningsData,
+      systemWarnings: liveSystemWarnings,
+      dashboardError: liveDashboardError,
+      dashboardLoading: liveDashboardLoading,
+      historyLoading: liveHistoryLoading,
+      updatedAt: liveDataUpdatedAt,
+    });
+    setIsPaused(true);
+    void Promise.all([
+      queryClient.cancelQueries({
+        queryKey: ["monitoring", "dashboard", actorScope],
+        exact: true,
+      }),
+      queryClient.cancelQueries({
+        // Cancel the selected request and any staggered range prefetch that already started.
+        // Timers that have not fired are cleared when the hook observes enabled=false.
+        queryKey: ["monitoring", "history", actorScope],
+      }),
+      queryClient.cancelQueries({
+        queryKey: ["warnings", actorScope, undefined],
+        exact: true,
+      }),
+      queryClient.cancelQueries({
+        queryKey: ["systemWarnings", actorScope],
+        exact: true,
+      }),
+    ]);
+  }, [
+    actorScope,
+    isPaused,
+    liveDashboardData,
+    liveDashboardError,
+    liveDashboardLoading,
+    liveDataUpdatedAt,
+    liveHistoryData,
+    liveHistoryLoading,
+    liveSystemWarnings,
+    liveWarningsData,
+    queryClient,
+  ]);
+
+  const refreshMonitoring = useCallback(async () => {
+    const results = await Promise.allSettled([
+      refreshDashboard(),
+      refetchHistory({ throwOnError: true }),
+      ...(isPartner ? [refreshWarnings(), refreshSystemWarnings()] : []),
+    ]);
+    if (isPaused && activeActorScopeRef.current === actorScope) {
+      const previous =
+        pausedSnapshot?.actorScope === actorScope ? pausedSnapshot : null;
+      const dashboardState = queryClient.getQueryState<MonitoringDashboardResponse>([
+        "monitoring",
+        "dashboard",
+        actorScope,
+      ]);
+      setPausedSnapshot({
+        actorScope,
+        // A paused screen is an operator snapshot, not an all-or-nothing transaction.
+        // Keep each last-good section when another endpoint fails, while still surfacing
+        // the rejected refresh through RefreshButton below.
+        dashboard: dashboardState?.data ?? previous?.dashboard,
+        history:
+          queryClient.getQueryData<MetricsHistoryPoint[]>([
+            "monitoring",
+            "history",
+            actorScope,
+            timeRange,
+          ]) ?? previous?.history,
+        warnings:
+          queryClient.getQueryData([
+            "warnings",
+            actorScope,
+            undefined,
+          ]) ?? previous?.warnings,
+        systemWarnings:
+          queryClient.getQueryData<SystemWarningsResponse>([
+            "systemWarnings",
+            actorScope,
+          ]) ?? previous?.systemWarnings,
+        dashboardError: null,
+        dashboardLoading: false,
+        historyLoading: false,
+        updatedAt: dashboardState?.dataUpdatedAt || previous?.updatedAt || 0,
+      });
+    }
+
+    const rejected = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (rejected) {
+      throw rejected.reason instanceof Error
+        ? rejected.reason
+        : new Error("One or more monitoring sections could not be refreshed");
+    }
+  }, [
+    actorScope,
+    isPartner,
+    isPaused,
+    pausedSnapshot,
+    queryClient,
+    refreshDashboard,
+    refreshSystemWarnings,
+    refreshWarnings,
+    refetchHistory,
+    timeRange,
+  ]);
+
+  const openTopConsumer = useCallback((instance: InstanceMonitoringSummary) => {
+    setMonitoringUiActorScope(actorScope);
+    setSelectedTopConsumer(instance);
+  }, [actorScope]);
+
   const actualWarnings = (warningsData as any)?.warnings || [];
   const certWarnings = systemWarnings?.certificate_warnings || [];
   const nodeWarnings = systemWarnings?.node_warnings || [];
@@ -846,16 +1052,16 @@ export default function MonitoringContent() {
     [nodeWarnings, selectedNode],
   );
 
-  // React Query client for leveraging cached data
-  const queryClient = useQueryClient();
-
   // Fetch instances for dialog - uses React Query cache for instant results
   const fetchInstances = async (filterType: "running" | "stopped" | "other" | "container" | "vm") => {
+    const requestActorScope = actorScope;
+    setMonitoringUiActorScope(requestActorScope);
     setInstanceFilterType(filterType);
     setInstanceDialogOpen(true);
 
     // Try cached data first for instant display
-    const cached = queryClient.getQueryData<{ vms: VMInfo[] }>(["vms", { host: undefined, status: undefined }]);
+    const allVmsQueryKey = queryKeys.vmsFor(actorScope, undefined, undefined);
+    const cached = queryClient.getQueryData<{ vms: VMInfo[] }>(allVmsQueryKey);
     if (cached?.vms) {
       setAllInstances(filterInstanceList(cached.vms, filterType));
       setInstancesLoading(false);
@@ -866,16 +1072,20 @@ export default function MonitoringContent() {
     setInstancesLoading(true);
     try {
       const response = await queryClient.fetchQuery({
-        queryKey: ["vms", { host: undefined, status: undefined }],
+        queryKey: allVmsQueryKey,
         queryFn: () => vmAPI.list(),
         staleTime: 30_000,
       });
+      if (activeActorScopeRef.current !== requestActorScope) return;
       setAllInstances(filterInstanceList(response.vms, filterType));
     } catch (error) {
+      if (activeActorScopeRef.current !== requestActorScope) return;
       console.error("Failed to fetch instances:", error);
       setAllInstances([]);
     } finally {
-      setInstancesLoading(false);
+      if (activeActorScopeRef.current === requestActorScope) {
+        setInstancesLoading(false);
+      }
     }
   };
 
@@ -1523,7 +1733,7 @@ export default function MonitoringContent() {
             <p className="text-muted-foreground mt-2">
               {dashboardError instanceof Error ? dashboardError.message : "Unknown error"}
             </p>
-            <Button onClick={() => void refreshDashboard()} className="mt-4">
+            <Button onClick={() => void refreshMonitoring()} className="mt-4">
               <RefreshCw className="h-4 w-4 mr-2" />
               Retry
             </Button>
@@ -1547,23 +1757,29 @@ export default function MonitoringContent() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <UITooltip>
-            <TooltipTrigger asChild>
-              <Button 
-                variant="outline" 
-                size="sm"
-                onClick={() => setIsPaused(!isPaused)}
-              >
-                {isPaused ? <Play className="h-4 w-4" /> : <Square className="h-4 w-4" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{isPaused ? "Resume" : "Pause"} updates</TooltipContent>
-          </UITooltip>
           <RefreshButton
             label="Refresh monitoring"
             lastUpdatedAt={dataUpdatedAt}
-            onRefresh={refreshDashboard}
+            onRefresh={refreshMonitoring}
           />
+          <UITooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                aria-label={isPaused ? "Resume automatic monitoring updates" : "Pause automatic monitoring updates"}
+                aria-pressed={isPaused}
+                onClick={toggleMonitoringPause}
+              >
+                {isPaused ? <Play className="h-4 w-4" /> : <Pause className="h-4 w-4" />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {isPaused
+                ? "Resume automatic monitoring updates. Workloads kept running while paused."
+                : "Pause automatic monitoring updates. Workloads will keep running."}
+            </TooltipContent>
+          </UITooltip>
           {/* Node Selection - at the end (rightmost) */}
           <NodeFilterSelect
             nodes={dashboardData?.nodes ?? []}
@@ -1770,6 +1986,8 @@ export default function MonitoringContent() {
                         ? "bg-primary text-primary-foreground shadow-sm" 
                         : "hover:bg-muted-foreground/10"
                     )}
+                    disabled={isPaused}
+                    title={isPaused ? "Resume automatic monitoring updates to change the time range" : undefined}
                     onClick={() => {
                       // Use transition for non-blocking UI during heavy chart recomputation
                       startTimeRangeTransition(() => {
@@ -2444,7 +2662,7 @@ export default function MonitoringContent() {
                       instance={instance}
                       rank={idx + 1}
                       type="cpu"
-                      onOpen={setSelectedTopConsumer}
+                      onOpen={openTopConsumer}
                     />
                   ))
                 ) : (
@@ -2459,7 +2677,7 @@ export default function MonitoringContent() {
                       instance={instance}
                       rank={idx + 1}
                       type="memory"
-                      onOpen={setSelectedTopConsumer}
+                      onOpen={openTopConsumer}
                     />
                   ))
                 ) : (
@@ -2474,7 +2692,7 @@ export default function MonitoringContent() {
                       instance={instance}
                       rank={idx + 1}
                       type="storage"
-                      onOpen={setSelectedTopConsumer}
+                      onOpen={openTopConsumer}
                     />
                   ))
                 ) : (
@@ -2489,7 +2707,7 @@ export default function MonitoringContent() {
                       instance={instance}
                       rank={idx + 1}
                       type="network"
-                      onOpen={setSelectedTopConsumer}
+                      onOpen={openTopConsumer}
                     />
                   ))
                 ) : (
@@ -2581,13 +2799,13 @@ export default function MonitoringContent() {
                 {warningsCounts.certIssues > 0 && (
                   <Link 
                     href="/inventory/clusters/certificates"
-                    className="flex items-center gap-3 p-4 rounded-lg border bg-purple-500/5 border-purple-500/20 hover:bg-purple-500/10 hover:border-purple-500/40 transition-all cursor-pointer group"
+                    className="flex items-center gap-3 p-4 rounded-lg border border-primary/20 bg-primary/5 transition-all hover:border-primary/40 hover:bg-primary/10 cursor-pointer group"
                   >
-                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-500/10 group-hover:bg-purple-500/20 transition-colors">
-                      <Shield className="h-5 w-5 text-purple-500" />
+                    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 transition-colors group-hover:bg-primary/20">
+                      <Shield className="h-5 w-5 text-primary" />
                     </div>
                     <div>
-                      <p className="text-2xl font-bold text-purple-600">{warningsCounts.certIssues}</p>
+                      <p className="text-2xl font-bold text-foreground">{warningsCounts.certIssues}</p>
                       <p className="text-xs text-muted-foreground">Cert Issues</p>
                     </div>
                   </Link>
@@ -2734,27 +2952,33 @@ export default function MonitoringContent() {
 
       {/* Instance Details Dialog */}
       <InstanceDetailsDialog
-        open={instanceDialogOpen}
+        open={monitoringUiIsCurrent && instanceDialogOpen}
         onClose={() => setInstanceDialogOpen(false)}
         filterType={instanceFilterType}
-        instances={allInstances}
-        isLoading={instancesLoading}
+        instances={monitoringUiIsCurrent ? allInstances : []}
+        isLoading={monitoringUiIsCurrent && instancesLoading}
         onSelectInstance={(instance) => {
           // Close the list before opening the detail. Stacking one modal on another is the
           // pattern being removed from member-resource-modal, not one to copy.
           setInstanceDialogOpen(false);
+          setMonitoringUiActorScope(actorScope);
           setSelectedListInstance(instance);
         }}
       />
 
       <InstanceDetailDialog
-        instance={selectedListInstance ?? selectedTopConsumerVm}
-        isOpen={!!selectedListInstance || !!selectedTopConsumer}
+        instance={monitoringUiIsCurrent ? selectedListInstance ?? selectedTopConsumerVm : null}
+        isOpen={monitoringUiIsCurrent && (!!selectedListInstance || !!selectedTopConsumer)}
+        hydrateDetail={monitoringUiIsCurrent && !selectedListInstance && !!selectedTopConsumer}
         onClose={() => {
           setSelectedListInstance(null);
           setSelectedTopConsumer(null);
         }}
-        project={selectedListInstance?.project || selectedTopConsumer?.project || "default"}
+        project={
+          monitoringUiIsCurrent
+            ? selectedListInstance?.project || selectedTopConsumer?.project || "default"
+            : "default"
+        }
       />
     </div>
   );

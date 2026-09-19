@@ -5,25 +5,17 @@ import { Badge } from "@/components/ui/badge";
 import { TableLink } from "@/components/ui/table-link";
 import { DetailField, DetailGrid, DetailSection } from "@/components/detail/detail-field";
 import { TagBadge } from "@/components/tag-manager";
-import { InstanceResourcesSection } from "./instance-resources-section";
 import { formatDateTime, formatInstanceType } from "@/lib/utils";
+import { instanceStatusDisplay } from "@/lib/instance-status";
 import type { VMInfo } from "@/types/api";
 import { inventoryLinks } from "@/lib/inventory-links";
 import { NodeLink } from "@/components/ui/node-link";
 
 // Everything the row already knew and the old modal never showed: description, architecture,
 // project, timestamps, profiles, tags, the cluster member, and the image the instance came from.
-export function InstanceOverviewTab({
-  instance,
-  isLoadingResources = false,
-  hasResourcesError = false,
-}: {
-  instance: VMInfo;
-  /** The detail fetch that carries `resources`; the row this opens from never has them. */
-  isLoadingResources?: boolean;
-  hasResourcesError?: boolean;
-}) {
+export function InstanceOverviewTab({ instance }: { instance: VMInfo }) {
   const baseImage = instance.config?.["volatile.base_image"];
+  const statusDisplay = instanceStatusDisplay(instance.status);
 
   return (
     <div className="space-y-4">
@@ -32,7 +24,10 @@ export function InstanceOverviewTab({
           <DetailField label="Type" value={formatInstanceType(instance.type)} />
           {/* important: raw. formatLabel would render x86_64 as "X86 64". */}
           <DetailField label="Architecture" value={instance.architecture} mono />
-          <DetailField label="Status" value={<Badge variant="outline">{instance.status}</Badge>} />
+          <DetailField
+            label="Status"
+            value={<Badge variant={statusDisplay.tone}>{statusDisplay.label}</Badge>}
+          />
           <DetailField label="Project" value={instance.project || "default"} />
           <DetailField label="Node" value={<NodeLink clusterId={instance.host} />} />
           <DetailField label="Cluster Member" value={instance.location} />
@@ -99,12 +94,6 @@ export function InstanceOverviewTab({
           />
         </DetailGrid>
       </DetailSection>
-
-      <InstanceResourcesSection
-        hasError={hasResourcesError}
-        instance={instance}
-        isLoading={isLoadingResources}
-      />
     </div>
   );
 }
