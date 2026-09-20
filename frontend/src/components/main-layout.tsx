@@ -69,7 +69,10 @@ export function MainLayout({ children }: { children: React.ReactNode }) {
         className={cn(
           // Scope the transition to margin. transition-all lerps every animatable property,
           // which makes a personalization sidebar background fade on every collapse.
-          "flex flex-1 flex-col transition-[margin] duration-200 ease-out motion-reduce:transition-none",
+          // A wide table contributes its min-content width through this flex item. Without
+          // min-w-0, mobile browsers expand the layout viewport to that desktop-sized width,
+          // which also centres fixed dialogs outside the visual viewport.
+          "flex min-w-0 flex-1 flex-col transition-[margin] duration-200 ease-out motion-reduce:transition-none",
           // Prevent content from affecting sidebar positioning.
           // note: clip, not hidden. `overflow-x-hidden` makes this column a scroll container,
           // and the sticky task panel would then pin to the column instead of the viewport.

@@ -1,13 +1,23 @@
 "use client";
 
-import type { FleetSnapshotListResponse, SnapshotInfo } from "@/types/api";
+import type {
+  FleetSnapshotListResponse,
+  SnapshotCreateResponse,
+  SnapshotInfo,
+} from "@/types/api";
 
 import { Suspense, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Camera, Loader2 } from "lucide-react";
 
 import { LoadingLottiePage } from "@/components/loading-lottie";
+import {
+  PendingSnapshotAlert,
+  type PendingSnapshotNotice,
+} from "@/components/snapshots/pending-snapshot-alert";
+import type { SnapshotCreateTarget } from "@/components/snapshots/snapshot-create-form";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
@@ -16,16 +26,20 @@ import { RefreshButton } from "@/components/ui/refresh-button";
 import { TableToolbar } from "@/components/ui/table-toolbar";
 import { UnreachableNodesBanner } from "@/components/ui/unreachable-nodes-banner";
 import { useFleetSnapshots, useNodeNames } from "@/hooks/use-lxd";
+import { useReadOnlyMode } from "@/hooks/use-read-only-mode";
 import { useRequireRole } from "@/hooks/use-require-role";
 import { useTableFilters } from "@/hooks/use-table-filters";
 import { useTableSort } from "@/hooks/use-table-sort";
+import { useToast } from "@/hooks/use-toast";
 import { EMPTY_FACET, parseFacet } from "@/lib/filter-url";
+import { api } from "@/lib/api";
 import { TABLE_PAGE_SIZE } from "@/lib/pagination";
 import { Role } from "@/types/rbac";
 
 import { ALL_CLUSTERS, ALL_PROJECTS, SnapshotScopePicker } from "./components/snapshot-scope-picker";
 import { SnapshotSchedulesCard } from "./components/snapshot-schedules-card";
 import { SNAPSHOTS, SnapshotsTable } from "./components/snapshots-table";
+import { TakeSnapshotDialog } from "./components/take-snapshot-dialog";
 
 /**
  * A hand-edited URL can carry several values, or the empty-bucket sentinel. Both have to degrade
@@ -60,12 +74,25 @@ function sizeNoteFor(data: FleetSnapshotListResponse): string | null {
 function SnapshotsHeader({
   onRefresh,
   lastUpdatedAt,
+  onTakeSnapshot,
+  takeSnapshotDisabled,
+  takeSnapshotLoading,
 }: {
   onRefresh: () => Promise<void> | void;
   lastUpdatedAt?: number;
+  onTakeSnapshot: () => void;
+  takeSnapshotDisabled: boolean;
+  takeSnapshotLoading: boolean;
 }) {
+  const disabledReasonId = "fleet-take-snapshot-disabled-reason";
+  const disabledReason = takeSnapshotLoading
+    ? "Checking whether snapshot creation is available."
+    : takeSnapshotDisabled
+      ? "Snapshot creation is disabled in read-only mode."
+      : null;
+
   return (
-    <div className="flex items-start justify-between gap-4">
+    <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
       <div>
         <h1 className="text-3xl font-bold">Snapshots</h1>
         <p className="text-muted-foreground mt-2">
@@ -73,16 +100,60 @@ function SnapshotsHeader({
           <span className="font-mono">ops-</span> and expire on their own.
         </p>
       </div>
-      <RefreshButton
-        label="Refresh snapshots"
-        lastUpdatedAt={lastUpdatedAt}
-        onRefresh={onRefresh}
-      />
+      <div className="flex w-full flex-wrap items-start gap-2 sm:w-auto sm:justify-end">
+        <div className="flex flex-col items-start gap-1 sm:items-end">
+          <Button
+            type="button"
+            size="sm"
+            className="min-h-11 sm:min-h-9"
+            onClick={onTakeSnapshot}
+            disabled={takeSnapshotDisabled || takeSnapshotLoading}
+            aria-busy={takeSnapshotLoading}
+            aria-describedby={disabledReason ? disabledReasonId : undefined}
+            title={
+              takeSnapshotLoading
+                ? "Checking read-only mode"
+                : takeSnapshotDisabled
+                  ? "Action disabled in read-only mode"
+                  : "Take an operator snapshot of one instance"
+            }
+          >
+            {takeSnapshotLoading ? (
+              <Loader2
+                className="mr-2 h-4 w-4 animate-spin motion-reduce:animate-none"
+                aria-hidden
+              />
+            ) : (
+              <Camera className="mr-2 h-4 w-4" aria-hidden />
+            )}
+            Take snapshot
+          </Button>
+          {disabledReason && (
+            <p
+              id={disabledReasonId}
+              role="status"
+              className="max-w-64 text-xs text-muted-foreground sm:text-right"
+            >
+              {disabledReason}
+            </p>
+          )}
+        </div>
+        <RefreshButton
+          label="Refresh snapshots"
+          lastUpdatedAt={lastUpdatedAt}
+          onRefresh={onRefresh}
+        />
+      </div>
     </div>
   );
 }
 
 function SnapshotsContent() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const readOnlyMode = useReadOnlyMode();
+  const [takeSnapshotOpen, setTakeSnapshotOpen] = useState(false);
+  const [pendingSnapshot, setPendingSnapshot] = useState<PendingSnapshotNotice | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE);
   const resetPage = () => setCurrentPage(1);
@@ -148,7 +219,7 @@ function SnapshotsContent() {
   const paginated = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // Ordered so the table never contradicts the banner above it. An unreachable cluster answers
-  // 200 with no rows, so "take one from an instance's Snapshots tab" used to render directly
+  // 200 with no rows, so the ordinary create guidance used to render directly
   // under an amber notice saying clusters could not be read.
   const empty =
     queriedNodes.length === 0 && unreachableNodes.length > 0
@@ -171,12 +242,68 @@ function SnapshotsContent() {
           : {
               title: "No snapshots here",
               description:
-                "Take one from an instance's Snapshots tab before risky maintenance.",
+                "Use Take snapshot above, or open an instance's Snapshots tab, before risky maintenance.",
             };
 
   // Never claimed before data exists: a note about sizes while loading states a measurement
   // decision the backend has not made.
   const sizeNote = data ? sizeNoteFor(data) : null;
+
+  const handleSnapshotCreated = (
+    result: SnapshotCreateResponse,
+    target: SnapshotCreateTarget,
+  ) => {
+    if (result.status === "succeeded") {
+      toast({ title: "Snapshot taken", description: result.message });
+      return;
+    }
+    setPendingSnapshot({
+      host: target.instance.host,
+      project: target.project,
+      instanceName: target.instance.name,
+      snapshotName: result.snapshot,
+      message: result.message,
+    });
+    toast({ title: "Snapshot creation is in progress", description: result.message });
+  };
+
+  const viewTargetSnapshots = (target: SnapshotCreateTarget) => {
+    // The dialog has already verified the exact instance endpoint. Apply that scope before the
+    // list reads again, so an unrelated fleet-wide outage cannot turn a successful target check
+    // into a failure or leave the operator looking at an unscoped stale table.
+    void queryClient.invalidateQueries({
+      queryKey: ["fleetSnapshots", target.instance.host, target.project],
+      exact: true,
+    });
+    filters.setFacet("host", [target.instance.host]);
+    filters.setFacet("project", [target.project]);
+    filters.setSearchInput(target.instance.name);
+  };
+
+  const refreshPendingSnapshot = async (notice: PendingSnapshotNotice) => {
+    // The page filters can differ from the target chosen in the dialog. Read the immutable
+    // notice tuple explicitly so Refresh can never verify an unrelated scope, then warm the
+    // exact fleet query before moving the table to that target.
+    await api.snapshots.list(notice.instanceName, notice.host, notice.project);
+    await queryClient.fetchQuery({
+      queryKey: ["fleetSnapshots", notice.host, notice.project],
+      queryFn: () => api.snapshots.listFleet(notice.host, notice.project, { fresh: true }),
+    });
+    filters.setFacet("host", [notice.host]);
+    filters.setFacet("project", [notice.project]);
+    filters.setSearchInput(notice.instanceName);
+  };
+
+  const takeSnapshotDialog = (
+    <TakeSnapshotDialog
+      open={takeSnapshotOpen}
+      onOpenChange={setTakeSnapshotOpen}
+      initialHost={scopeHost}
+      initialProject={scopeProject}
+      onCreated={handleSnapshotCreated}
+      onViewSnapshots={viewTargetSnapshots}
+    />
+  );
 
   // important: above every piece of chrome, which is what the other eighteen console pages do
   // and what this page stopped doing when the read became fleet-wide. The loader used to sit
@@ -200,7 +327,21 @@ function SnapshotsContent() {
   if (isError && !data) {
     return (
       <div className="p-8 space-y-6">
-        <SnapshotsHeader onRefresh={refreshNow} lastUpdatedAt={dataUpdatedAt} />
+        <SnapshotsHeader
+          onRefresh={refreshNow}
+          lastUpdatedAt={dataUpdatedAt}
+          onTakeSnapshot={() => setTakeSnapshotOpen(true)}
+          takeSnapshotDisabled={readOnlyMode.isReadOnly}
+          takeSnapshotLoading={readOnlyMode.isLoading}
+        />
+        {pendingSnapshot && (
+          <PendingSnapshotAlert
+            notice={pendingSnapshot}
+            onRefresh={() => refreshPendingSnapshot(pendingSnapshot)}
+            onDismiss={() => setPendingSnapshot(null)}
+          />
+        )}
+        {takeSnapshotDialog}
         {/* Still rendered. Schedules are read from Postgres rather than from a cluster, and a
             cluster outage is exactly when an operator needs to see what is scheduled against it
             and stop it. */}
@@ -229,7 +370,23 @@ function SnapshotsContent() {
 
   return (
     <div className="p-8 space-y-6">
-      <SnapshotsHeader onRefresh={refreshNow} lastUpdatedAt={dataUpdatedAt} />
+      <SnapshotsHeader
+        onRefresh={refreshNow}
+        lastUpdatedAt={dataUpdatedAt}
+        onTakeSnapshot={() => setTakeSnapshotOpen(true)}
+        takeSnapshotDisabled={readOnlyMode.isReadOnly}
+        takeSnapshotLoading={readOnlyMode.isLoading}
+      />
+
+      {pendingSnapshot && (
+        <PendingSnapshotAlert
+          notice={pendingSnapshot}
+          onRefresh={() => refreshPendingSnapshot(pendingSnapshot)}
+          onDismiss={() => setPendingSnapshot(null)}
+        />
+      )}
+
+      {takeSnapshotDialog}
 
       <UnreachableNodesBanner noun="snapshots" nodes={unreachableNodes} />
 

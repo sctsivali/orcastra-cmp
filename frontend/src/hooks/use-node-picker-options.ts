@@ -30,6 +30,8 @@ export interface UseNodePickerOptionsParams {
    * that is broken.
    */
   disableUntrusted?: boolean;
+  /** Disable every cluster that is known not to be online. Create mutations use this. */
+  disableUnreachable?: boolean;
   /** Show the cluster endpoint as the option's second line. Default true. */
   showEndpoint?: boolean;
 }
@@ -65,6 +67,7 @@ export function useNodePickerOptions(
     clusterType,
     leading,
     disableUntrusted = true,
+    disableUnreachable = false,
     showEndpoint = true,
   } = params;
 
@@ -120,7 +123,9 @@ export function useNodePickerOptions(
           ? { label: meta.label, dotClassName: meta.dotClassName, tone: meta.tone }
           : undefined,
         statusReason: row?.reason ?? undefined,
-        disabled: disableUntrusted && untrusted,
+        disabled:
+          (disableUntrusted && untrusted) ||
+          (disableUnreachable && Boolean(meta && !meta.reachable)),
         // kept out of the option so the sort below can read it without a second lookup
         _rank: meta?.toneRank ?? 2,
       };
@@ -136,7 +141,15 @@ export function useNodePickerOptions(
 
     const cleaned: SearchableSelectOption[] = rows.map(({ _rank, ...opt }) => opt);
     return leading ? [...leading, ...cleaned] : cleaned;
-  }, [names.data, byName, clusterType, disableUntrusted, showEndpoint, leading]);
+  }, [
+    names.data,
+    byName,
+    clusterType,
+    disableUntrusted,
+    disableUnreachable,
+    showEndpoint,
+    leading,
+  ]);
 
   const statusOf = useCallback(
     (nodeName: string) => {

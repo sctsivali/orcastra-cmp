@@ -102,6 +102,8 @@ export interface VMListResponse {
   offset: number;
   limit: number;
   has_more: boolean;
+  /** Clusters that could not answer this inventory read. */
+  unreachable_nodes?: string[];
 }
 
 /** How LXD resolved a CPU or memory limit for an instance. */
@@ -2954,6 +2956,17 @@ export interface SnapshotCreateRequest {
   reason?: string;
   /** Proceed on a source whose snapshots are billed elsewhere. Needs a reason with it. */
   acknowledge_billing_impact?: boolean;
+}
+
+/** A create can be accepted before the cluster has confirmed the restore point exists. */
+export interface SnapshotCreateResponse {
+  success: boolean;
+  status: "succeeded" | "pending";
+  instance_name: string;
+  snapshot: string;
+  /** Required by the backend when status is pending. */
+  operation_id?: string | null;
+  message: string;
 }
 
 export interface SnapshotRestoreRequest {

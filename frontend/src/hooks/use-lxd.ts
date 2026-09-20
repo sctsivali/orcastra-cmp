@@ -560,13 +560,17 @@ export function useAllProjects(options: { enabled?: boolean } = {}) {
   });
 }
 
-export function useProjects(host: string) {
+export function useProjects(
+  host: string,
+  options: { enabled?: boolean; verifyFresh?: boolean } = {},
+) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useQuery({
     queryKey: queryKeys.projectsFor(scopeKey, host),
     queryFn: () => projectAPI.list(host),
-    enabled: isAuthenticated && !!host,
-    staleTime: 30000,
+    enabled: isAuthenticated && !!host && (options.enabled ?? true),
+    staleTime: options.verifyFresh ? 0 : 30000,
+    refetchOnMount: options.verifyFresh ? "always" : true,
   });
 }
 
@@ -1481,7 +1485,7 @@ export function useDeleteProfile() {
 // Instances Hooks (alternative to VMs for LXD terminology)
 export function useInstances(
   host?: string,
-  opts?: { realtime?: boolean; enabled?: boolean; project?: string },
+  opts?: { realtime?: boolean; enabled?: boolean; project?: string; verifyFresh?: boolean },
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
@@ -1491,6 +1495,7 @@ export function useInstances(
     // Always enabled - fetches all instances when host is undefined
     ...DYNAMIC_DATA_CONFIG,
     enabled: isAuthenticated && (opts?.enabled ?? true),
+    ...(opts?.verifyFresh ? { staleTime: 0, refetchOnMount: "always" as const } : {}),
     // Default: poll so newly-created instances and status transitions show
     // without a manual refresh. When `realtime` is set (instances page), polling
     // is disabled and the list is kept current via the LXD events stream
@@ -2135,6 +2140,7 @@ export function useInstanceSnapshots(
   host: string,
   project = "default",
   enabled = true,
+  verifyFresh = false,
 ) {
   const { scopeKey, isAuthenticated } = useActorQueryScope();
   return useRefreshableQuery({
@@ -2147,6 +2153,7 @@ export function useInstanceSnapshots(
     // gone.
     queryFn: () => api.snapshots.list(instanceName, host, project),
     ...SEMI_STATIC_DATA_CONFIG,
+    ...(verifyFresh ? { staleTime: 0, refetchOnMount: "always" as const } : {}),
     // After the spread on purpose: the preset carries its own `enabled` and would otherwise
     // re-enable a query the caller gated on the active tab.
     enabled: isAuthenticated && enabled && !!instanceName && !!host,
@@ -2286,6 +2293,8 @@ export function useCreateSnapshot() {
   return useMutation({
     mutationFn: ({ instanceName, body }: { instanceName: string; body: SnapshotCreateRequest }) =>
       api.snapshots.create(instanceName, body),
+    // A timed-out POST can still have reached LXD. Retrying it can create a second restore point.
+    retry: false,
     onSuccess: () => invalidateSnapshots(queryClient),
   });
 }

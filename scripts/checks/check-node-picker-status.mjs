@@ -42,6 +42,7 @@ const PICKERS = new Map([
   ['components/iso-upload-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/groups/create-group-dialog.tsx', { kind: 'hook', notice: true }],
   ['app/my-keys/page.tsx', { kind: 'hook', notice: true }],
+  ['app/inventory/snapshots/components/take-snapshot-dialog.tsx', { kind: 'hook', notice: true }],
   ['components/tenant-access-dialog.tsx', { kind: 'meta', notice: false }],
   ['components/policy-management-section.tsx', { kind: 'meta', notice: false }],
   ['app/inventory/clustering/members/page.tsx', { kind: 'meta', notice: false }],

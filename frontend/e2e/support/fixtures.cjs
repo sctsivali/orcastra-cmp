@@ -1,4 +1,22 @@
 const { expect } = require("@playwright/test");
+const {
+  fullInstance,
+  instanceMetrics,
+  iso,
+  monitoringDashboard,
+  monitoringHistory,
+  platformNodes,
+  tenantSpecifications,
+} = require("./api-fixture-data.cjs");
+const {
+  fulfillSnapshotCreate,
+  fulfillSnapshotRead,
+  initializeSnapshotState,
+  isExactSnapshotCreate,
+  parseMutation,
+  snapshotReadDescriptor,
+  snapshotTarget,
+} = require("./snapshot-fixtures.cjs");
 
 const BASE_URL = process.env.ORCASTRA_E2E_BASE_URL || "http://127.0.0.1:2025";
 const AUTH_SECRET =
@@ -13,393 +31,6 @@ const ROLE_GROUPS = {
   tenant: ["role_tenant"],
 };
 
-const gib = 1024 ** 3;
-
-function iso(offsetMs = 0) {
-  return new Date(Date.now() + offsetMs).toISOString();
-}
-
-function nodeResources() {
-  return {
-    cpu_total: 32,
-    cpu_used: 8,
-    cpu_available: 24,
-    cpu_allocated: 8,
-    cpu_allocation_ratio: 0.25,
-    cpu_overcommitted: false,
-    cpu_sockets: 1,
-    memory_total: 128 * gib,
-    memory_used: 32 * gib,
-    memory_available: 96 * gib,
-    gpu_total: 1,
-    gpu_used: 1,
-    gpu_available: 0,
-    gpu_cards_total: 1,
-    gpu_integrated_total: 0,
-    gpu_display_total: 0,
-    gpu_unknown_total: 0,
-    gpu_vendors: ["NVIDIA"],
-    gpu_models: ["NVIDIA L4"],
-    gpu_utilization_supported: false,
-    gpu_cards: [
-      {
-        index: 0,
-        id: 0,
-        driver: "nvidia",
-        driver_version: "550.54",
-        pci_address: "0000:01:00.0",
-        vendor: "NVIDIA",
-        vendor_id: "10de",
-        product: "L4",
-        product_id: "27b8",
-        numa_node: 0,
-        in_use: true,
-        used_by: "/1.0/instances/tenant-owned-vm?project=tenant-a",
-        gpu_class: "compute",
-        is_compute: true,
-        is_integrated: false,
-        attachable: true,
-        model_name: "NVIDIA L4",
-        memory_total: 24 * gib,
-        memory_shared: false,
-        mdev_profiles: [],
-      },
-    ],
-    storage_total: 2 * 1024 ** 4,
-    storage_used: 600 * gib,
-    storage_available: 2 * 1024 ** 4 - 600 * gib,
-    storage_raw_total: 2 * 1024 ** 4,
-    storage_raw_used: 600 * gib,
-    storage_pools: [
-      {
-        name: "fast-pool",
-        driver: "zfs",
-        space_total: 2 * 1024 ** 4,
-        space_used: 600 * gib,
-        space_available: 2 * 1024 ** 4 - 600 * gib,
-      },
-    ],
-    degraded: false,
-    degraded_parts: [],
-    hardware: {
-      scope: "node",
-      member_count: 1,
-      detected: true,
-      system: {
-        vendor: "Acme Compute",
-        product: "Atlas 1U",
-        family: "Atlas",
-        version: "1",
-        type: "server",
-        firmware: { vendor: "Acme", version: "1.2.3", date: "2026-09-01" },
-        chassis: { vendor: "Acme", type: "rack", version: "1" },
-        motherboard: { vendor: "Acme", product: "Atlas Board", version: "1" },
-      },
-      cpu: {
-        architectures: ["x86_64"],
-        total: 32,
-        cores: 16,
-        threads: 32,
-        numa_nodes: 1,
-        sockets: [
-          {
-            socket: 0,
-            name: "Xeon Test CPU",
-            vendor: "Intel",
-            cores: 16,
-            threads: 32,
-            frequency: 2400,
-            frequency_turbo: 3400,
-          },
-        ],
-      },
-      memory: {
-        total: 128 * gib,
-        used: 32 * gib,
-        free: 96 * gib,
-        hugepages_total: 0,
-        hugepages_used: 0,
-        hugepages_size: 0,
-      },
-      networks: [],
-      storage_devices: [
-        {
-          id: "nvme0n1",
-          device: "/dev/nvme0n1",
-          model: "Fixture NVMe",
-          type: "nvme",
-          size: 2 * 1024 ** 4,
-          numa_node: 0,
-          removable: false,
-          read_only: false,
-          firmware_version: "1.0",
-          block_size: 4096,
-          rpm: 0,
-          partitions: 2,
-        },
-      ],
-      storage_types: ["NVMe"],
-    },
-    collected_at: iso(),
-  };
-}
-
-function platformNodes() {
-  return {
-    all_connected: false,
-    collected_at: iso(),
-    nodes: [
-      {
-        name: "cluster-a",
-        display_name: "Core Cluster",
-        endpoint: "https://cluster-a.invalid:8443",
-        connected: true,
-        reachable: true,
-        status: "online",
-        node_type: "LXD",
-        clustered: false,
-        server_version: "6.9",
-        api_version: "1.0",
-        auth: "trusted",
-        error: null,
-        tags: [],
-        environment: {
-          architectures: ["x86_64"],
-          kernel: "Linux",
-          kernel_architecture: "x86_64",
-          kernel_version: "6.8.0",
-          os_name: "Ubuntu",
-          os_version: "24.04",
-          server: "lxd",
-          server_version: "6.9",
-          driver: "lxc",
-          driver_version: "6.0",
-          storage: "zfs",
-          storage_version: "2.2",
-          firewall: "nftables",
-          instance_types: ["container", "virtual-machine"],
-          storage_supported_drivers: [{ Name: "zfs", Version: "2.2", Remote: false }],
-        },
-        resources: nodeResources(),
-      },
-      {
-        name: "cluster-unreachable",
-        display_name: "Edge Cluster",
-        endpoint: "https://edge.invalid:8443",
-        connected: false,
-        reachable: false,
-        status: "offline",
-        node_type: "LXD",
-        clustered: null,
-        server_version: null,
-        api_version: null,
-        auth: null,
-        environment: null,
-        error: "Connection timed out",
-        resources: null,
-        tags: [],
-      },
-    ],
-  };
-}
-
-function tenantSpecifications({ empty = false } = {}) {
-  return {
-    total: empty ? 0 : 1,
-    collected_at: iso(),
-    // The UI must disclose that the result is partial without disclosing this cluster id.
-    unreachable_nodes: ["customer-secret-cluster"],
-    instances: empty
-      ? []
-      : [
-          {
-            name: "tenant-owned-vm",
-            host: "cluster-a",
-            project: "tenant-a",
-            // Lowercase on purpose. The controlled display label must remain Title Case.
-            status: "running",
-            type: "virtual-machine",
-            architecture: "x86_64",
-            cpu: { value: "4", source: "explicit" },
-            memory: { value: "8GiB", source: "inherited" },
-            root_disk: { value: "80GiB", pool: "fast-pool", source: "explicit" },
-            gpu_count: 1,
-            gpu_devices: ["gpu0"],
-          },
-        ],
-  };
-}
-
-function fullInstance(status = "Running") {
-  return {
-    name: "tenant-owned-vm",
-    status,
-    status_code: status === "Running" ? 103 : 102,
-    ip_addresses: ["10.10.0.20"],
-    host: "cluster-a",
-    host_endpoint: "https://cluster-a.invalid:8443",
-    location: "member-1",
-    project: "tenant-a",
-    architecture: "x86_64",
-    created_at: "2026-09-18T09:00:00Z",
-    last_used_at: "2026-09-19T09:00:00Z",
-    description: "Tenant workload",
-    type: "virtual-machine",
-    resources: null,
-    config: {
-      "limits.cpu": "4",
-      "limits.memory": "8GiB",
-      "volatile.base_image": "fixture-image-fingerprint-that-remains-complete",
-    },
-    devices: { root: { type: "disk", path: "/", pool: "fast-pool", size: "80GiB" } },
-    expanded_devices: {
-      root: { type: "disk", path: "/", pool: "fast-pool", size: "80GiB" },
-      eth0: { type: "nic", network: "tenant-net" },
-    },
-    profiles: ["default"],
-    tags: ["tenant"],
-  };
-}
-
-function instanceMetrics(call) {
-  const calculating = call === 1;
-  return {
-    instance_name: "tenant-owned-vm",
-    host: "cluster-a",
-    status: "Running",
-    cpu_usage_percent: calculating ? 0 : 22.5,
-    memory_used_bytes: 3 * gib,
-    memory_total_bytes: 8 * gib,
-    memory_usage_percent: 37.5,
-    disk_usage_bytes: { root: 24 * gib },
-    network_rx_bytes: { eth0: 1024 * 1024 },
-    network_tx_bytes: { eth0: 512 * 1024 },
-    processes: 42,
-    uptime_seconds: 7200,
-    base_image: "fixture-image",
-    ipv4_addresses: ["10.10.0.20"],
-    ipv6_addresses: [],
-    pid: 1234,
-    cpu_sample_status: calculating ? "calculating" : "ready",
-    unavailable_sections: [],
-    // The first reading deliberately proves the 15-second stale threshold.
-    timestamp: calculating ? iso(-20_000) : iso(),
-  };
-}
-
-function monitoringDashboard() {
-  const consumer = {
-    name: "tenant-owned-vm",
-    host: "cluster-a",
-    project: "tenant-a",
-    type: "virtual-machine",
-    status: "running",
-    cpu_usage: 22.5,
-    memory_usage_bytes: 3 * gib,
-    memory_limit_bytes: 8 * gib,
-    disk_usage_bytes: 24 * gib,
-    network_rx_bytes: 1024 * 1024,
-    network_tx_bytes: 512 * 1024,
-  };
-  return {
-    timestamp: iso(),
-    total_nodes: 1,
-    online_nodes: 1,
-    inactive_nodes: 0,
-    total_instances: 1,
-    running_instances: 1,
-    stopped_instances: 0,
-    other_instances: 0,
-    container_count: 0,
-    vm_count: 1,
-    total_cpu: 32,
-    used_cpu: 4,
-    cpu_usage_percent: 12.5,
-    realtime_cpu_percent: 22.5,
-    total_memory_bytes: 128 * gib,
-    used_memory_bytes: 32 * gib,
-    memory_usage_percent: 25,
-    realtime_memory_bytes: 3 * gib,
-    realtime_memory_percent: 2.34,
-    total_storage_bytes: 2 * 1024 ** 4,
-    used_storage_bytes: 600 * gib,
-    storage_usage_percent: 29.3,
-    total_gpu: 1,
-    total_gpu_cards: 1,
-    used_gpu: 1,
-    nodes: [
-      {
-        node_name: "cluster-a",
-        node_type: "LXD",
-        is_online: true,
-        cluster_status: "online",
-        status_message: null,
-        cpu_total: 32,
-        cpu_used: 4,
-        cpu_usage_percent: 12.5,
-        cpu_allocated: 4,
-        cpu_allocation_ratio: 0.125,
-        cpu_overcommitted: false,
-        memory_total_bytes: 128 * gib,
-        memory_used_bytes: 32 * gib,
-        memory_usage_percent: 25,
-        storage_total_bytes: 2 * 1024 ** 4,
-        storage_used_bytes: 600 * gib,
-        storage_usage_percent: 29.3,
-        gpu_total: 1,
-        gpu_used: 1,
-        gpu_available: 0,
-        gpu_cards_total: 1,
-        gpu_integrated_total: 0,
-        gpu_models: ["NVIDIA L4"],
-        gpu_utilization_supported: false,
-        instance_count: 1,
-        running_instances: 1,
-      },
-    ],
-    storage_pools: [
-      {
-        name: "fast-pool",
-        node: "cluster-a",
-        members: [],
-        scope: null,
-        driver: "zfs",
-        total_bytes: 2 * 1024 ** 4,
-        used_bytes: 600 * gib,
-        available_bytes: 2 * 1024 ** 4 - 600 * gib,
-        usage_percent: 29.3,
-      },
-    ],
-    top_cpu_consumers: [consumer],
-    top_memory_consumers: [consumer],
-    warnings: { total: 0, critical: 0, warning: 0, info: 0 },
-    collection_time_ms: 125,
-  };
-}
-
-function monitoringHistory(points = 60) {
-  const count = Math.min(Math.max(Number(points) || 12, 2), 24);
-  return Array.from({ length: count }, (_, index) => ({
-    timestamp: iso((index - count) * 5_000),
-    cpu_usage_percent: 10 + index * 0.5,
-    memory_usage_percent: 25 + index * 0.25,
-    storage_usage_percent: 29.3,
-    network_rx_bytes: index * 100_000,
-    network_tx_bytes: index * 80_000,
-    disk_io_bytes: index * 20_000,
-    running_instances: 1,
-    nodes: {
-      "cluster-a": {
-        cpu_usage_percent: 10 + index * 0.5,
-        memory_usage_percent: 25 + index * 0.25,
-        storage_usage_percent: 29.3,
-        network_rx_bytes: index * 100_000,
-        network_tx_bytes: index * 80_000,
-        running_instances: 1,
-      },
-    },
-  }));
-}
 
 async function authenticate(context, role) {
   const groups = ROLE_GROUPS[role];
@@ -450,6 +81,7 @@ async function installApiFixtures(page, role, options = {}) {
     unexpectedWebSockets: [],
     webSocketAuthFailures: [],
     monitoringSockets: [],
+    instanceSockets: [],
     pageErrors: [],
     metricsMode: "success",
     metricsCalls: [],
@@ -458,6 +90,8 @@ async function installApiFixtures(page, role, options = {}) {
     nodeError: options.nodeError === true,
     instanceStatus: options.instanceStatus || "Running",
   };
+  initializeSnapshotState(state, options);
+  const configuredSnapshotTarget = snapshotTarget(options);
 
   page.on("pageerror", (error) => state.pageErrors.push(error.message));
 
@@ -486,8 +120,16 @@ async function installApiFixtures(page, role, options = {}) {
       url.hostname === baseUrl.hostname &&
       url.port === "4050" &&
       url.protocol === (baseUrl.protocol === "https:" ? "wss:" : "ws:");
+    const isExpectedInstanceSocket =
+      options.snapshotInstancePage === true &&
+      ["admin", "partner"].includes(role) &&
+      url.pathname === "/api/v1/events/ws" &&
+      url.searchParams.get("host") === configuredSnapshotTarget.host &&
+      url.hostname === baseUrl.hostname &&
+      url.port === "4050" &&
+      url.protocol === (baseUrl.protocol === "https:" ? "wss:" : "ws:");
 
-    if (!isExpectedMonitoringSocket) {
+    if (!isExpectedMonitoringSocket && !isExpectedInstanceSocket) {
       state.unexpectedWebSockets.push(entry);
       await webSocket.close({ code: 1008, reason: "Unexpected E2E WebSocket" });
       return;
@@ -499,7 +141,7 @@ async function installApiFixtures(page, role, options = {}) {
       return;
     }
 
-    state.monitoringSockets.push(entry);
+    (isExpectedMonitoringSocket ? state.monitoringSockets : state.instanceSockets).push(entry);
     webSocket.onClose(async (code) => {
       entry.closedAt = Date.now();
       entry.closeCode = code ?? null;
@@ -537,16 +179,6 @@ async function installApiFixtures(page, role, options = {}) {
       return;
     }
 
-    if (method !== "GET") {
-      state.mutations.push(entry);
-      await route.fulfill({
-        status: 405,
-        contentType: "application/json",
-        body: JSON.stringify({ detail: "E2E fixtures reject all mutations" }),
-      });
-      return;
-    }
-
     const expectedBearer = `Bearer e2e-${role}-access-token`;
     if (request.headers().authorization !== expectedBearer) {
       state.authFailures.push({ ...entry, authorization: request.headers().authorization || null });
@@ -558,9 +190,54 @@ async function installApiFixtures(page, role, options = {}) {
       return;
     }
 
+    if (method !== "GET") {
+      const { mutation, bodyParseError } = parseMutation(request, entry);
+      state.mutations.push(mutation);
+
+      if (
+        isExactSnapshotCreate({
+          options,
+          method,
+          path,
+          url,
+          mutation,
+          bodyParseError,
+        })
+      ) {
+        await fulfillSnapshotCreate(route, state, options, mutation);
+        return;
+      }
+
+      state.unexpectedMutations.push({
+        ...mutation,
+        reason: bodyParseError ?? "method, path, query, content type, or body did not match",
+      });
+      await route.fulfill({
+        status: 405,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "E2E fixtures reject undeclared mutations" }),
+      });
+      return;
+    }
+
     let status = 200;
     let headers = {};
     let body;
+
+    const snapshotRead = snapshotReadDescriptor({
+      path,
+      url,
+      entry,
+      role,
+      options,
+      state,
+      iso,
+      fullInstance,
+    });
+    if (snapshotRead) {
+      await fulfillSnapshotRead(route, snapshotRead);
+      return;
+    }
 
     if (path === "/user-preferences") {
       body = {};
@@ -570,7 +247,7 @@ async function installApiFixtures(page, role, options = {}) {
       body = { updated_at: null };
     } else if (path === "/system/settings") {
       body = {
-        read_only_mode: false,
+        read_only_mode: options.readOnly === true,
         api_version: "e2e",
         debug: false,
         snapshot_schedules_enabled: true,
@@ -641,7 +318,13 @@ async function installApiFixtures(page, role, options = {}) {
 
 async function expectCleanHarness(state) {
   expect(state.unexpected, "unexpected API requests").toEqual([]);
-  expect(state.mutations, "live-style mutations attempted by a read-only browser test").toEqual([]);
+  expect(state.unexpectedMutations, "undeclared or malformed mutations").toEqual([]);
+  expect(state.snapshotMutations, "declared snapshot mutation count").toHaveLength(
+    state.expectedSnapshotMutationCount,
+  );
+  expect(state.mutations, "only declared snapshot mutations may leave the browser").toEqual(
+    state.snapshotMutations,
+  );
   expect(state.authFailures, "requests without the role fixture bearer").toEqual([]);
   expect(state.externalRequests, "external requests attempted by the isolated browser test").toEqual(
     [],
@@ -655,7 +338,11 @@ async function expectCleanHarness(state) {
 
 async function expectNoHorizontalOverflow(page) {
   const dimensions = await page.evaluate(() => ({
-    viewport: window.innerWidth,
+    viewport: Math.min(
+      window.innerWidth,
+      document.documentElement.clientWidth,
+      window.visualViewport?.width ?? Number.POSITIVE_INFINITY,
+    ),
     document: document.documentElement.scrollWidth,
   }));
   expect(dimensions.document).toBeLessThanOrEqual(dimensions.viewport + 1);

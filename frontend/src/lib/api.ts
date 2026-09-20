@@ -72,6 +72,7 @@ import {
   SnapshotScheduleCreateRequest,
   SnapshotScheduleUpdateRequest,
   SnapshotCreateRequest,
+  SnapshotCreateResponse,
   SnapshotRestoreRequest,
   SnapshotActionResponse,
   MovePreflight,
@@ -322,6 +323,11 @@ export interface FetchAPIOptions {
    * what made refresh buttons look broken.
    */
   force?: boolean;
+  /**
+   * Retry once after a same-actor token refresh. Disable this for non-idempotent writes whose
+   * first outcome cannot safely be inferred from a lost or rewritten response.
+   */
+  retryAfterAuthRefresh?: boolean;
 }
 
 export async function fetchAPI<T>(
@@ -354,6 +360,7 @@ export async function fetchAPI<T>(
     timeoutMs,
     _isRetry,
     requestActorGeneration,
+    fetchOptions,
   );
 
   // Track in-flight GET requests for deduplication, keyed on auth generation and endpoint.
@@ -445,6 +452,7 @@ async function _fetchAPIInternal<T>(
   timeoutMs: number,
   _isRetry: boolean,
   requestActorGeneration: number,
+  fetchOptions: FetchAPIOptions,
 ): Promise<T> {
 
   try {
@@ -508,7 +516,11 @@ async function _fetchAPIInternal<T>(
         const refreshTriggered = handle401();
 
         // Retry once after waiting for session refresh to complete
-        if (refreshTriggered && !_isRetry) {
+        if (
+          refreshTriggered &&
+          !_isRetry &&
+          fetchOptions.retryAfterAuthRefresh !== false
+        ) {
           // Wait for the session refresh to complete (up to 5s)
           await new Promise<void>((resolve) => {
             let elapsed = 0;
@@ -528,7 +540,7 @@ async function _fetchAPIInternal<T>(
           }
 
           // Retry with the same actor's potentially refreshed token.
-          return fetchAPI<T>(endpoint, options, timeoutMs, true);
+          return fetchAPI<T>(endpoint, options, timeoutMs, true, fetchOptions);
         }
 
         throw new APIError(errorMessage, response.status, errorDetail, retryAfter);
@@ -2211,10 +2223,13 @@ const snapshotAPI = {
   create: async (
     instanceName: string,
     body: SnapshotCreateRequest,
-  ): Promise<SnapshotActionResponse> => {
-    return fetchAPI<SnapshotActionResponse>(
+  ): Promise<SnapshotCreateResponse> => {
+    return fetchAPI<SnapshotCreateResponse>(
       `/instances/${encodeURIComponent(instanceName)}/snapshots`,
       { method: "POST", body: JSON.stringify(body) },
+      undefined,
+      false,
+      { retryAfterAuthRefresh: false },
     );
   },
   remove: async (

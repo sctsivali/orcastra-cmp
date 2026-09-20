@@ -16,6 +16,11 @@ import {
 } from "@/components/ui/table";
 import { TableEmptyRow, TableEmptyValue } from "@/components/ui/table-text";
 import { EmptyState } from "@/components/ui/empty-state";
+import { OverflowText } from "@/components/ui/overflow-text";
+import {
+  PendingSnapshotAlert,
+  type PendingSnapshotNotice,
+} from "@/components/snapshots/pending-snapshot-alert";
 import { useInstanceSnapshots, useSnapshotSchedules } from "@/hooks/use-lxd";
 import { useReadOnlyMode, useSnapshotSchedulesEnabled } from "@/hooks/use-read-only-mode";
 import { PANEL_PAGE_SIZE } from "@/lib/pagination";
@@ -47,17 +52,19 @@ interface InstanceSnapshotsTabProps {
 
 export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTabProps) {
   const project = instance.project || "default";
-  const { data, isLoading, isError, error } = useInstanceSnapshots(
+  const { data, isLoading, isError, error, refreshNow } = useInstanceSnapshots(
     instance.name,
     instance.host,
     project,
     enabled,
   );
-  const { isReadOnly } = useReadOnlyMode();
+  const { isReadOnly, isLoading: readOnlyLoading } = useReadOnlyMode();
   // Read from the settings poll the console already runs, not probed by firing a request at a
   // route that may not exist. `undefined` is not yet answered and leaves the button as it was.
   const schedulesEnabled = useSnapshotSchedulesEnabled();
   const [creating, setCreating] = React.useState(false);
+  const [pendingSnapshot, setPendingSnapshot] =
+    React.useState<PendingSnapshotNotice | null>(null);
   const [scheduling, setScheduling] = React.useState(false);
   // Narrowed to this instance, so the tab reads one row rather than the whole fleet's schedules,
   // and skipped entirely once the deployment has said the routes are not mounted.
@@ -68,6 +75,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
   const ownSchedule = schedules.data?.items?.[0] ?? null;
   const [page, setPage] = React.useState(1);
   const pageSize = PANEL_PAGE_SIZE;
+  const takeSnapshotReasonId = "instance-take-snapshot-disabled-reason";
 
   const snapshots = data?.items ?? [];
   const policy = data?.policy;
@@ -76,10 +84,13 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
   const totalPages = Math.ceil(snapshots.length / pageSize);
   const paginated = snapshots.slice((page - 1) * pageSize, page * pageSize);
 
-  if (isLoading) {
+  // Keep the create dialog mounted while a fresh policy read is in flight or has failed. The
+  // dialog owns the ambiguous-outcome guard and draft; replacing this subtree during its Check
+  // snapshots flow would erase both after a non-idempotent request may have reached the cluster.
+  if (isLoading && !creating && !pendingSnapshot) {
     return <p className="text-sm text-muted-foreground py-6">Reading snapshots...</p>;
   }
-  if (isError) {
+  if (isError && !creating && !pendingSnapshot) {
     return (
       <p className="text-sm text-destructive py-6">
         {error instanceof Error ? error.message : "Could not read snapshots."}
@@ -89,6 +100,20 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
 
   return (
     <div className="space-y-4">
+      {isError && (
+        <p role="alert" className="text-sm text-destructive py-2">
+          {error instanceof Error ? error.message : "Could not read snapshots."}
+        </p>
+      )}
+
+      {pendingSnapshot && (
+        <PendingSnapshotAlert
+          notice={pendingSnapshot}
+          onRefresh={refreshNow}
+          onDismiss={() => setPendingSnapshot(null)}
+        />
+      )}
+
       {/*
         Two kinds of schedule can now describe one instance, so neither block uses a bare
         demonstrative. "That schedule" was true only while there was exactly one on screen; the
@@ -146,12 +171,13 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center">
         <div className="text-sm text-muted-foreground">
           {operatorCount} operator snapshot{operatorCount === 1 ? "" : "s"} of {snapshots.length}{" "}
           total
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-col items-start gap-1 sm:w-auto sm:items-end">
+          <div className="flex flex-wrap items-center gap-2">
           {/*
             Disabled with the reason written above rather than refused after a round trip. The tab
             already holds `policy.externally_managed`, so the one instance that cannot carry a
@@ -185,11 +211,18 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
             {ownSchedule ? "Edit schedule" : "Schedule snapshots"}
           </Button>
           <Button
+            type="button"
             size="sm"
             onClick={() => setCreating(true)}
-            disabled={isReadOnly}
+            disabled={isReadOnly || readOnlyLoading}
+            aria-busy={readOnlyLoading}
+            aria-describedby={
+              isReadOnly || readOnlyLoading ? takeSnapshotReasonId : undefined
+            }
             title={
-              isReadOnly
+              readOnlyLoading
+                ? "Checking read-only mode"
+                : isReadOnly
                 ? "Action disabled in read-only mode"
                 : "Take an operator snapshot of this instance"
             }
@@ -197,6 +230,18 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
             <Camera className="h-4 w-4 mr-2" aria-hidden />
             Take snapshot
           </Button>
+          </div>
+          {(isReadOnly || readOnlyLoading) && (
+            <p
+              id={takeSnapshotReasonId}
+              role="status"
+              className="text-xs text-muted-foreground sm:text-right"
+            >
+              {readOnlyLoading
+                ? "Checking whether snapshot creation is available."
+                : "Snapshot creation is disabled in read-only mode."}
+            </p>
+          )}
         </div>
       </div>
 
@@ -226,7 +271,11 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
                 paginated.map((snapshot) => (
                   <TableRow key={snapshot.name}>
                     <TableCell className="font-medium">
-                      <span className="font-mono">{snapshot.name}</span>
+                      <OverflowText
+                        value={snapshot.name}
+                        label={"snapshot " + snapshot.name}
+                        mono
+                      />
                     </TableCell>
                     {/*
                       The word the fleet table already uses, read from the same map.
@@ -290,6 +339,7 @@ export function InstanceSnapshotsTab({ instance, enabled }: InstanceSnapshotsTab
         instance={instance}
         project={project}
         billingLinked={Boolean(policy?.externally_managed)}
+        onPending={setPendingSnapshot}
       />
 
       <ScheduleSnapshotsDialog

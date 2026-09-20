@@ -87,8 +87,10 @@ const DialogContent = React.forwardRef<
         "fixed left-1/2 top-1/2 z-[100001] -translate-x-1/2 -translate-y-1/2",
         // Width with margins - responsive for mobile
         "w-[calc(100vw-2rem)] max-w-lg",
-        // Styling - relative for close button positioning
-        "relative border bg-background shadow-lg rounded-lg p-4 sm:p-6",
+        // `fixed` already establishes the containing block for the absolute close button.
+        // Adding `relative` here makes tailwind-merge discard `fixed`, placing dialogs in the
+        // document flow instead of the viewport.
+        "border bg-background shadow-lg rounded-lg p-4 sm:p-6",
         // Height constraints with dvh for mobile
         "max-h-[calc(100dvh-2rem)] overflow-y-auto",
         // Prevent scroll issues on mobile
