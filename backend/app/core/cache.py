@@ -50,6 +50,9 @@ NODES_AVAILABILITY_CACHE_TTL = 45
 MEMBER_RESOURCES_CACHE_PREFIX = f"member_resources:{RESOURCE_SCHEMA_VERSION}"
 # Not under the `instances:` pattern on purpose: it must survive the clearance it records.
 INSTANCE_LIST_GENERATION_KEY = "instance_list_generation"
+# Not under the `snapshots_fleet:` pattern so an invalidation can clear list entries while leaving
+# the token that tells already-running fleet reads their answer is stale.
+SNAPSHOT_FLEET_GENERATION_KEY = "snapshot_fleet_generation"
 MICROCLOUD_RESOURCES_CACHE_PREFIX = f"microcloud_resources:{RESOURCE_SCHEMA_VERSION}"
 
 # Lazy import encryption to avoid circular imports
@@ -464,8 +467,14 @@ class CacheManager:
         # ten seconds with a dead cluster registered). The generation lets such a read notice.
         try:
             self.set("api_responses", INSTANCE_LIST_GENERATION_KEY, str(time.time_ns()), ttl=3600)
+            self.set(
+                "api_responses",
+                SNAPSHOT_FLEET_GENERATION_KEY,
+                str(time.time_ns()),
+                ttl=3600,
+            )
         except Exception as e:  # noqa: BLE001 - the clearance above is what matters
-            logger.debug(f"Could not record the instance list generation: {e}")
+            logger.debug(f"Could not record list cache generations: {e}")
         logger.info(
             "Cleared instance, VM, monitoring, storage volume, IPAM, project usage and fleet snapshot caches"
         )
@@ -473,6 +482,11 @@ class CacheManager:
     def instance_list_generation(self) -> Optional[str]:
         """The token the last instance invalidation left; None when none has run yet."""
         value = self.get("api_responses", INSTANCE_LIST_GENERATION_KEY)
+        return str(value) if value is not None else None
+
+    def snapshot_fleet_generation(self) -> Optional[str]:
+        """The token the last fleet snapshot invalidation left."""
+        value = self.get("api_responses", SNAPSHOT_FLEET_GENERATION_KEY)
         return str(value) if value is not None else None
 
     def invalidate_resource_cache(self, *kinds: str):
@@ -489,6 +503,16 @@ class CacheManager:
         """
         for kind in kinds:
             self.delete_pattern("api_responses", f"{kind}:*")
+            if kind == "snapshots_fleet":
+                try:
+                    self.set(
+                        "api_responses",
+                        SNAPSHOT_FLEET_GENERATION_KEY,
+                        str(time.time_ns()),
+                        ttl=3600,
+                    )
+                except Exception as e:  # noqa: BLE001 - the clearance above is what matters
+                    logger.debug(f"Could not record the fleet snapshot generation: {e}")
         logger.info("Cleared cached list responses for: %s", ", ".join(kinds))
     
     def get_stats(self) -> Dict[str, Any]:

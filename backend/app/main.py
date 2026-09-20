@@ -936,7 +936,35 @@ Ensure your client certificates are properly configured.
         # is exactly what an operator needs, and replacing it turned a diagnosis into a shrug.
         # Those keep their message with URLs and paths stripped out of it.
         if exc.status_code in (502, 503, 504):
-            detail = sanitize_error(str(exc.detail))
+            # important: these are the only structured 5xx contracts the browser acts on. A
+            # create can reach LXD and then lose its response, while a settled daemon rejection is
+            # safe to retry. Flattening both envelopes makes those outcomes indistinguishable.
+            # Preserve only the allowlisted discriminator and a sanitised human message, never
+            # arbitrary fields supplied by another handler.
+            snapshot_error_codes = {
+                "snapshot_outcome_unknown",
+                "snapshot_terminal_failure",
+            }
+            if (
+                exc.status_code == 502
+                and isinstance(exc.detail, dict)
+                and exc.detail.get("error") in snapshot_error_codes
+            ):
+                error_code = exc.detail["error"]
+                raw_message = exc.detail.get("message")
+                default_message = (
+                    "Check this instance's snapshots before trying again."
+                    if error_code == "snapshot_outcome_unknown"
+                    else "The cluster did not complete the snapshot."
+                )
+                detail = {
+                    "error": error_code,
+                    "message": sanitize_error(
+                        raw_message if isinstance(raw_message, str) else default_message
+                    ),
+                }
+            else:
+                detail = sanitize_error(str(exc.detail))
         else:
             detail = client_detail(reference)
 

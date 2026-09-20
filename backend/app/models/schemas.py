@@ -1956,6 +1956,27 @@ class SnapshotActionResponse(BaseModel):
     message: str = Field(..., description="Operator-facing summary")
 
 
+class SnapshotCreateResponse(SnapshotActionResponse):
+    status: Literal["succeeded", "pending"] = Field(
+        ...,
+        description=(
+            "Whether the snapshot is confirmed to exist or the cluster is still creating it"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def require_operation_for_pending_snapshot(self):
+        """A pending result must give the caller an operation it can correlate.
+
+        A synchronous LXD response legitimately has no operation id, but it is already complete.
+        Pending without an id is an unverifiable acceptance and must never satisfy this public
+        response contract.
+        """
+        if self.status == "pending" and not self.operation_id:
+            raise ValueError("operation_id is required when snapshot creation is pending")
+        return self
+
+
 class SnapshotRestoreRequest(BaseModel):
     host: str = Field(..., description="Cluster the instance lives on")
     project: str = Field("default", description="LXD project the instance lives in")

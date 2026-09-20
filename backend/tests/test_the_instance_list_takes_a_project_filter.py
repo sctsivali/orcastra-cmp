@@ -28,27 +28,34 @@ def _vm(name, project, host="nuc2"):
 
 
 class _Service:
+    def __init__(self, *, connected=None, incomplete=None):
+        self.connected = ["nuc2", "nuc1"] if connected is None else connected
+        self.incomplete = [] if incomplete is None else incomplete
+        self.reads = 0
+
     def get_node_names(self):
         return ["nuc2", "nuc1"]
 
-    async def list_all_vms(self):
+    async def list_all_vms_with_failures(self):
+        self.reads += 1
         return [
             _vm("a", "default"), _vm("b", "qa-a"), _vm("c", "qa-a"), _vm("d", "qa-b"), _vm("e", "qa-a", host="nuc1"),
-        ], ["nuc2", "nuc1"]
+        ], self.connected, self.incomplete
 
 
-def _client(monkeypatch):
+def _client(monkeypatch, service=None):
     manager = CacheManager(redis_url=None)
+    service = service or _Service()
     monkeypatch.setattr(cache_mod, "get_cache_manager", lambda: manager)
     monkeypatch.setattr(instances_module, "get_cache_manager", lambda: manager)
     monkeypatch.setattr(instances_module, "verify_cluster_access", lambda host: None)
     app = FastAPI()
     app.include_router(instances_module.router)
-    app.dependency_overrides[get_lxd_service] = lambda: _Service()
+    app.dependency_overrides[get_lxd_service] = lambda: service
     app.dependency_overrides[get_current_user] = lambda: None
     app.dependency_overrides[org_scope_dependency] = lambda: None
     app.dependency_overrides[require_tenant()] = lambda: None
-    return TestClient(app, raise_server_exceptions=False), manager
+    return TestClient(app, raise_server_exceptions=False), manager, service
 
 
 def _names(r):
@@ -56,7 +63,7 @@ def _names(r):
 
 
 def test_the_project_narrows_the_list_and_composes_with_host(monkeypatch):
-    client, _ = _client(monkeypatch)
+    client, _, _ = _client(monkeypatch)
     assert _names(client.get("/instances?project=qa-a")) == ["b", "c", "e"]
     assert _names(client.get("/instances?host=nuc2&project=qa-a")) == ["b", "c"]
     assert _names(client.get("/instances?project=zz-absent")) == []
@@ -64,12 +71,13 @@ def test_the_project_narrows_the_list_and_composes_with_host(monkeypatch):
 
 
 def test_a_malformed_project_is_refused(monkeypatch):
-    client, _ = _client(monkeypatch)
+    client, _, service = _client(monkeypatch)
     assert client.get("/instances?project=../x").status_code == 422
+    assert service.reads == 0
 
 
 def test_the_project_is_part_of_the_cache_key(monkeypatch):
-    client, manager = _client(monkeypatch)
+    client, manager, _ = _client(monkeypatch)
     client.get("/instances?project=qa-a")
     client.get("/instances?project=qa-b")
     client.get("/instances")
@@ -80,7 +88,7 @@ def test_the_project_is_part_of_the_cache_key(monkeypatch):
 
 
 def test_a_project_outside_the_bound_is_an_empty_list_not_a_refusal(monkeypatch):
-    client, _ = _client(monkeypatch)
+    client, _, _ = _client(monkeypatch)
 
     def run():
         org_scope._visible_projects_var.set({"nuc2": {"default", "qa-a"}})
@@ -89,3 +97,75 @@ def test_a_project_outside_the_bound_is_an_empty_list_not_a_refusal(monkeypatch)
 
     r = contextvars.copy_context().run(run)
     assert r.status_code == 200 and r.json()["vms"] == []
+
+
+def test_an_unreachable_selected_host_is_named_and_not_cached(monkeypatch):
+    client, manager, service = _client(
+        monkeypatch,
+        _Service(connected=["nuc1"], incomplete=["nuc2", "nuc1"]),
+    )
+
+    first = client.get("/instances?host=nuc2&project=qa-a")
+    second = client.get("/instances?host=nuc2&project=qa-a")
+
+    assert first.status_code == 200, first.text
+    assert first.json()["vms"] == []
+    assert first.json()["nodes"] == []
+    assert first.json()["unreachable_nodes"] == ["nuc2"]
+    assert second.json()["unreachable_nodes"] == ["nuc2"]
+    assert service.reads == 2, "an answer from another host must not cache the selected outage"
+    assert not any("host=nuc2" in key for key in manager.memory_cache.cache)
+
+
+def test_a_connected_host_with_an_empty_project_is_cacheable(monkeypatch):
+    client, manager, service = _client(monkeypatch)
+
+    first = client.get("/instances?host=nuc2&project=zz-absent")
+    second = client.get("/instances?host=nuc2&project=zz-absent")
+
+    assert first.status_code == 200, first.text
+    assert first.json()["vms"] == []
+    assert first.json()["nodes"] == ["nuc2"]
+    assert first.json()["unreachable_nodes"] == []
+    assert second.json()["unreachable_nodes"] == []
+    assert service.reads == 1, "a connected host proved that this project is empty"
+    assert any("instances:list:v2" in key for key in manager.memory_cache.cache)
+
+
+def test_a_pre_fix_scoped_cache_entry_is_ignored(monkeypatch):
+    client, manager, service = _client(monkeypatch)
+    old_key = org_scope.get_scope_cache_key(
+        "instances:list:host=nuc2:project=qa-a:status=None:type=None:o=0:l=0"
+    )
+    manager.set(
+        "api_responses",
+        old_key,
+        {
+            "total": 0,
+            "vms": [],
+            "nodes": [],
+            "unreachable_nodes": [],
+        },
+        ttl=30,
+    )
+
+    response = client.get("/instances?host=nuc2&project=qa-a")
+
+    assert response.status_code == 200, response.text
+    assert _names(response) == ["b", "c"]
+    assert service.reads == 1
+
+
+def test_a_denied_host_never_reaches_lxd(monkeypatch):
+    from fastapi import HTTPException
+
+    client, _, service = _client(monkeypatch)
+
+    def deny(_host):
+        raise HTTPException(status_code=403, detail="Cluster access denied")
+
+    monkeypatch.setattr(instances_module, "verify_cluster_access", deny)
+    response = client.get("/instances?host=nuc2&project=qa-a")
+
+    assert response.status_code == 403
+    assert service.reads == 0

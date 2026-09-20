@@ -10,11 +10,15 @@ being refused on a billing-linked instance now leaves an audit record. A refusal
 records is the event most worth alerting on and the one that was invisible.
 """
 
+import asyncio
+import json
 from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.requests import Request
 
 from tests._snapshot_fakes import HOST, INSTANCE, PROJECT, FakeClient, FakeInstanceNode, service
 
@@ -293,7 +297,17 @@ def test_an_accepted_response_naming_no_operation_is_not_reported_as_done():
     assert "no operation" in response.text, response.text
 
 
-def test_a_create_the_cluster_accepts_without_an_operation_is_not_a_201():
+def test_a_create_the_cluster_accepts_without_an_operation_is_not_a_201(audited, monkeypatch):
+    from app.routers import instance_snapshots
+
+    invalidated = []
+
+    class _Cache:
+        def invalidate_resource_cache(self, resource):
+            invalidated.append(resource)
+
+    monkeypatch.setattr(instance_snapshots, "get_cache_manager", lambda: _Cache())
+
     node = FakeInstanceNode()
     node.omit_operation = True
     client = _client(service(FakeClient(node)))
@@ -301,4 +315,156 @@ def test_a_create_the_cluster_accepts_without_an_operation_is_not_a_201():
         f"/instances/{INSTANCE}/snapshots",
         json={"host": HOST, "project": PROJECT, "label": "unverifiable"},
     )
-    assert response.status_code >= 400, response.text
+    assert response.status_code == 502, response.text
+    assert response.json()["detail"] == {
+        "error": "snapshot_outcome_unknown",
+        "message": (
+            "The request ended before Orcastra could confirm the result. "
+            "Check this instance's snapshots before trying again."
+        ),
+    }
+    failures = [
+        row
+        for row in audited
+        if row.get("action") == "instance.snapshot.create" and row.get("result") == "failure"
+    ]
+    assert len(failures) == 1, f"the unverifiable acceptance must be audited: {audited}"
+    assert failures[0]["error_message"] == "snapshot_outcome_unknown"
+    assert invalidated == ["snapshots_fleet"]
+
+
+def test_a_create_transport_failure_after_post_started_has_an_unknown_outcome(
+    audited, monkeypatch
+):
+    from app.routers import instance_snapshots
+
+    invalidated = []
+
+    class _Cache:
+        def invalidate_resource_cache(self, resource):
+            invalidated.append(resource)
+
+    monkeypatch.setattr(instance_snapshots, "get_cache_manager", lambda: _Cache())
+
+    node = FakeInstanceNode()
+    node.create_error = Exception(
+        "connection reset by https://10.20.30.40:8443/1.0/operations/secret"
+    )
+    response = _client(service(FakeClient(node))).post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "ambiguous transport"},
+    )
+
+    assert response.status_code == 502, response.text
+    detail = response.json()["detail"]
+    assert detail["error"] == "snapshot_outcome_unknown"
+    assert "Check this instance's snapshots before trying again" in detail["message"]
+    assert "10.20.30.40" not in response.text
+    assert [row for row in node.recorded if row[0] == "create_snapshot"]
+    failures = [
+        row
+        for row in audited
+        if row.get("action") == "instance.snapshot.create" and row.get("result") == "failure"
+    ]
+    assert len(failures) == 1
+    assert failures[0]["error_message"] == "snapshot_outcome_unknown"
+    assert invalidated == ["snapshots_fleet"]
+
+
+def test_the_production_error_handler_preserves_the_unknown_outcome_contract():
+    """The browser must receive the discriminator after the global 5xx sanitiser runs."""
+    from app.main import app
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": f"/api/v1/instances/{INSTANCE}/snapshots",
+            "raw_path": b"/api/v1/instances/test/snapshots",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 443),
+            "root_path": "",
+        }
+    )
+    handler = app.exception_handlers[StarletteHTTPException]
+    response = asyncio.run(
+        handler(
+            request,
+            StarletteHTTPException(
+                status_code=502,
+                detail={
+                    "error": "snapshot_outcome_unknown",
+                    "message": (
+                        "The request ended at https://10.20.30.40:8443 before confirmation. "
+                        "Check this instance's snapshots before trying again."
+                    ),
+                    "untrusted": "/var/lib/orcastra/private",
+                },
+            ),
+        )
+    )
+
+    payload = json.loads(response.body)
+    assert response.status_code == 502
+    assert payload["detail"]["error"] == "snapshot_outcome_unknown"
+    assert "Check this instance's snapshots before trying again" in payload["detail"]["message"]
+    assert "10.20.30.40" not in response.body.decode()
+    assert "untrusted" not in payload["detail"]
+
+
+def test_the_production_error_handler_preserves_a_terminal_snapshot_failure():
+    from app.main import app
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "https",
+            "path": f"/api/v1/instances/{INSTANCE}/snapshots",
+            "raw_path": b"/api/v1/instances/test/snapshots",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 443),
+            "root_path": "",
+        }
+    )
+    handler = app.exception_handlers[StarletteHTTPException]
+    response = asyncio.run(
+        handler(
+            request,
+            StarletteHTTPException(
+                status_code=502,
+                detail={
+                    "error": "snapshot_terminal_failure",
+                    "message": "The cluster refused the snapshot: storage pool is full",
+                    "untrusted": "https://10.20.30.40:8443/1.0/operations/private",
+                },
+            ),
+        )
+    )
+
+    payload = json.loads(response.body)
+    assert response.status_code == 502
+    assert payload["detail"] == {
+        "error": "snapshot_terminal_failure",
+        "message": "The cluster refused the snapshot: storage pool is full",
+    }
+    assert "10.20.30.40" not in response.body.decode()
+
+
+def test_a_capacity_read_failure_keeps_its_pre_post_transport_mapping():
+    node = FakeInstanceNode()
+    node.size_read_error[(PROJECT, INSTANCE)] = Exception("connection refused")
+
+    response = _client(service(FakeClient(node))).post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "never posted"},
+    )
+
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"] == "Could not reach the LXD host"
+    assert not [row for row in node.recorded if row[0] == "create_snapshot"]

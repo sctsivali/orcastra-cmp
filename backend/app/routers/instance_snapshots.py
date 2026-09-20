@@ -20,17 +20,18 @@ Three rules follow from that split and are load-bearing:
 import logging
 from typing import Annotated, Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 
+from app.core.cache import get_cache_manager
 from app.core.config import get_settings
 from app.core.dependencies import (
     AuthenticatedUser,
     check_read_only_mode,
     require_tenant,
 )
-from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
-from app.core.cache import get_cache_manager
+from app.core.error_sanitizer import sanitize_error
 from app.core.lxd_errors import lxd_http_error
+from app.core.lxd_names import LXD_NAME_DESCRIPTION, LXD_NAME_PATTERN
 from app.core.org_scope import (
     org_scope_dependency,
     verify_project_access,
@@ -50,6 +51,7 @@ from app.services.lxd.proxy import PROXY_MAX_IN_FLIGHT, proxy_executor
 from app.services.lxd_service import LXDService, get_lxd_service
 from app.models.schemas import (
     SnapshotActionResponse,
+    SnapshotCreateResponse,
     SnapshotCreateRequest,
     SnapshotListResponse,
     SnapshotRestoreRequest,
@@ -66,6 +68,14 @@ router = APIRouter(
 )
 
 _LXD_CALL_TIMEOUT = 30
+
+_SNAPSHOT_OUTCOME_UNKNOWN = {
+    "error": "snapshot_outcome_unknown",
+    "message": (
+        "The request ended before Orcastra could confirm the result. "
+        "Check this instance's snapshots before trying again."
+    ),
+}
 
 
 def _blocking(fn, *args, label: str, **kwargs):
@@ -287,6 +297,32 @@ def _audit(action: str, instance_name: str, host: str, project: str, **kwargs: A
     )
 
 
+def _raise_create_outcome_unknown(
+    instance_name: str,
+    host: str,
+    project: str,
+    snapshot_name: str,
+    exc: BaseException,
+) -> None:
+    """Fail closed when the snapshot POST may have reached LXD but its result is unknown."""
+    _audit(
+        "instance.snapshot.create",
+        instance_name,
+        host,
+        project,
+        result="failure",
+        error_message="snapshot_outcome_unknown",
+        details={
+            "snapshot": snapshot_name,
+            "cause_type": type(exc).__name__,
+        },
+    )
+    # A retry is unsafe until the operator checks whether the first request appeared. Evict the
+    # fleet result so that check cannot be answered by the stale pre-request list.
+    get_cache_manager().invalidate_resource_cache("snapshots_fleet")
+    raise HTTPException(status_code=502, detail=_SNAPSHOT_OUTCOME_UNKNOWN)
+
+
 @router.get("/{instance_name}/snapshots", response_model=SnapshotListResponse)
 async def list_snapshots(
     instance_name: Annotated[
@@ -323,13 +359,24 @@ async def list_snapshots(
     return SnapshotListResponse(total=len(items), items=items, policy=policy)
 
 
-@router.post("/{instance_name}/snapshots", response_model=SnapshotActionResponse, status_code=201)
+@router.post(
+    "/{instance_name}/snapshots",
+    response_model=SnapshotCreateResponse,
+    status_code=201,
+    responses={
+        202: {
+            "model": SnapshotCreateResponse,
+            "description": "The cluster accepted the snapshot, but it is still being created.",
+        },
+    },
+)
 async def create_snapshot(
     instance_name: Annotated[
         str,
         Path(pattern=LXD_NAME_PATTERN, description=f"Instance to act on. {LXD_NAME_DESCRIPTION}"),
     ],
     body: SnapshotCreateRequest,
+    response: Response,
     lxd_service: LXDService = Depends(get_lxd_service),
     _: None = Depends(check_read_only_mode),
     user: AuthenticatedUser = Depends(require_tenant()),
@@ -355,6 +402,7 @@ async def create_snapshot(
     # expires_at, so LXD prunes the overshoot without help.
     lock_key = f"snapshot-create:{body.host}/{body.project}/{instance_name}"
     lock = rebuild_lock(lock_key)
+    create_started = False
     try:
         async with lock:
             try:
@@ -365,6 +413,10 @@ async def create_snapshot(
                     body.project,
                     label="snapshots.capacity",
                 )
+                # From this point onward a transport exception cannot prove whether LXD received
+                # the POST. The safe answer is "outcome unknown", never a retryable ordinary
+                # host failure that might make the caller create a duplicate.
+                create_started = True
                 operation_id = await _blocking(
                     snapshots_service.create_instance_snapshot,
                     client,
@@ -382,7 +434,9 @@ async def create_snapshot(
                 # The daemon took the work and told us nothing we can wait on. That is an upstream
                 # problem, not a bad request, and reporting success would be the exact failure this
                 # surface exists to avoid.
-                raise HTTPException(status_code=502, detail=str(exc))
+                _raise_create_outcome_unknown(
+                    instance_name, body.host, body.project, snapshot_name, exc
+                )
             except snapshots_service.SnapshotLimitError as exc:
                 _audit(
                     "instance.snapshot.create", instance_name, body.host, body.project,
@@ -392,6 +446,10 @@ async def create_snapshot(
             except snapshots_service.SnapshotNameError as exc:
                 raise HTTPException(status_code=422, detail=str(exc))
             except Exception as exc:  # noqa: BLE001
+                if create_started:
+                    _raise_create_outcome_unknown(
+                        instance_name, body.host, body.project, snapshot_name, exc
+                    )
                 _audit(
                     "instance.snapshot.create", instance_name, body.host, body.project,
                     result="failure", error_message=str(exc),
@@ -403,19 +461,25 @@ async def create_snapshot(
     if outcome.get("failed"):
         # The daemon refused after accepting the request. Reporting 201 here would be the exact
         # defect this feature exists to avoid: a control that says it worked and did not.
+        failure_detail = sanitize_error(str(outcome.get("err") or "unknown error"))
         _audit(
             "instance.snapshot.create", instance_name, body.host, body.project,
-            result="failure", error_message=outcome.get("err"),
+            result="failure", error_message=failure_detail,
             details={"snapshot": snapshot_name},
         )
         raise HTTPException(
             status_code=502,
-            detail=f"The cluster refused the snapshot: {outcome.get('err') or 'unknown error'}",
+            detail={
+                "error": "snapshot_terminal_failure",
+                "message": f"The cluster refused the snapshot: {failure_detail}",
+            },
         )
 
+    completed = outcome.get("settled") is True
+    create_status = "succeeded" if completed else "pending"
     _audit(
         "instance.snapshot.create", instance_name, body.host, body.project,
-        result="success" if outcome.get("settled") else "accepted",
+        result="success" if completed else "accepted",
         details={
             "operation_id": operation_id,
             "snapshot": snapshot_name,
@@ -424,7 +488,8 @@ async def create_snapshot(
             "externally_managed_source": bool(policy.get("externally_managed")),
             "reason": (body.reason or "").strip() or None,
             "requester": user.email or user.user_id,
-            "settled": outcome.get("settled"),
+            "settled": completed,
+            "status": create_status,
         },
     )
     if justification:
@@ -432,27 +497,34 @@ async def create_snapshot(
             "create", instance_name, body.host, body.project, policy, justification,
             user.email or user.user_id,
         )
-    # OrcaHub's receiver already understands SNAPSHOT events; emitting means a snapshot taken
-    # here is known to it immediately rather than being discovered an hour later by its sweep.
-    schedule_orcahub_event(
-        event_type="snapshot.created",
-        cluster_id=body.host,
-        project=body.project,
-        resource_type="SNAPSHOT",
-        name=snapshot_name,
-    )
+    if completed:
+        # important: snapshot.created asserts that the resource exists. A pending operation can
+        # still fail, so announcing it here would create an upstream ledger entry for something
+        # the cluster never produced. OrcaHub's reconciliation sweep discovers a pending create
+        # later if it does finish.
+        schedule_orcahub_event(
+            event_type="snapshot.created",
+            cluster_id=body.host,
+            project=body.project,
+            resource_type="SNAPSHOT",
+            name=snapshot_name,
+        )
     # The fleet listing is cached for 30s. Without this an operator acts on a snapshot and
-    # the row is still there when the page refreshes, which reads as a control that did
-    # nothing. Cleared only on the success path: a refused operation changed no listing.
+    # the row is still absent when the page refreshes, which reads as a control that did
+    # nothing. Cleared on every accepted path: pending work can appear during the next read,
+    # while a refused operation never reaches this point and changed no listing.
     get_cache_manager().invalidate_resource_cache("snapshots_fleet")
-    return SnapshotActionResponse(
+    if not completed:
+        response.status_code = 202
+    return SnapshotCreateResponse(
         success=True,
         instance_name=instance_name,
         snapshot=snapshot_name,
         operation_id=operation_id,
+        status=create_status,
         message=(
             f"Snapshot {snapshot_name} created, expiring {expires_at}."
-            if outcome.get("settled")
+            if completed
             else f"Snapshot {snapshot_name} is still being written. It will expire {expires_at}."
         ),
     )

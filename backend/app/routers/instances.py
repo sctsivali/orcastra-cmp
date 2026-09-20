@@ -207,8 +207,10 @@ async def list_instances(
     # Try cache first (scope+ACL aware, 30s TTL). The project is part of the key, as it is
     # for profiles: two callers asking for two projects must not share one body.
     cache = get_cache_manager()
+    # v2 keeps rolling deployments from serving a scoped-host 200/empty response cached by a
+    # build that could not distinguish an empty project from an unreachable selected cluster.
     cache_key = get_scope_cache_key(
-        f"instances:list:host={host}:project={project or '*'}:status={status}:type={instance_type}:o={offset}:l={limit}"
+        f"instances:list:v2:host={host}:project={project or '*'}:status={status}:type={instance_type}:o={offset}:l={limit}"
     )
     cached_response = None if fresh else cache.get("api_responses", cache_key)
     if cached_response is not None:
@@ -217,11 +219,34 @@ async def list_instances(
     
     try:
         generation = cache.instance_list_generation()
-        all_vms, connected_nodes = await lxd_service.list_all_vms()
+        all_vms, connected_nodes, incomplete_nodes = (
+            await lxd_service.list_all_vms_with_failures()
+        )
         
         # Filter by host if provided
         if host:
             all_vms = [vm for vm in all_vms if vm.host == host]
+            # The caller already passed verify_cluster_access above. Echo only that authorized
+            # target, never failures from the rest of the org-wide inventory fan-out.
+            selected_host_connected = host in connected_nodes
+            selected_host_incomplete = host in incomplete_nodes
+            if not selected_host_connected:
+                all_vms = []
+            response_nodes = [host] if selected_host_connected else []
+            unreachable_nodes = (
+                [host]
+                if not selected_host_connected or selected_host_incomplete
+                else []
+            )
+        else:
+            response_nodes = connected_nodes
+            # Keep the established denominator as a compatibility guard for service doubles and
+            # older mixed-version workers. The detailed fan-out also names clusters that answered
+            # only partially, which the former two-value contract silently lost.
+            unreachable_nodes = sorted(
+                (set(lxd_service.get_node_names()) - set(connected_nodes))
+                | set(incomplete_nodes)
+            )
 
         # Filter by project if provided. The bound and the tenant ACL below stay last, so a
         # project the caller may not see is an empty list, the same silence as no such project.
@@ -256,17 +281,10 @@ async def list_instances(
             )
         ]
         
-        # important: connected_nodes is what answered, not what exists. Both it and
-        # get_node_names() pass through apply_cluster_filter, so the difference is the
-        # registered clusters this operator can see that stayed silent. Without it the
-        # list just gets shorter and nothing says why.
-        unreachable_nodes = (
-            [] if host else sorted(set(lxd_service.get_node_names()) - set(connected_nodes))
-        )
         response = VMListResponse(
             total=len(all_vms),
             vms=all_vms[offset:offset + limit] if limit > 0 else all_vms,
-            nodes=connected_nodes,
+            nodes=response_nodes,
             unreachable_nodes=unreachable_nodes,
             offset=offset,
             limit=limit,
@@ -278,7 +296,12 @@ async def list_instances(
         # endpoint still returns 200 with an empty list, so caching it would pin
         # emptiness for the whole TTL and, on a forced refresh, overwrite good
         # data the operator could still see. No node answered means no result.
-        if connected_nodes:
+        # For a scoped request, an answer from some other cluster is irrelevant. Caching that
+        # empty response would hide recovery of the selected host for the full TTL.
+        cacheable_answer = (
+            host in connected_nodes if host is not None else bool(connected_nodes)
+        )
+        if cacheable_answer:
             if cache.instance_list_generation() != generation:
                 # important: an invalidation ran while this read was in flight (a create
                 # landed, a background start finished). What was read is already the old

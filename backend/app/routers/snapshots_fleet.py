@@ -188,14 +188,15 @@ async def list_fleet_snapshots(
         _enforce_snapshot_access(host, project, None)
 
     cache = get_cache_manager()
-    # note: `v2` because the body gained fields. The list cache lives in Redis and outlives a
-    # backend swap, so for the 30 s after a deploy the old build's entry would be deserialised
-    # into this model with the counters at their defaults and print "could not be measured" for
-    # a read that never ran. The prefix keeps every existing sweep pattern matching.
-    cache_key = get_scope_cache_key(f"snapshots_fleet:list:v2:host={host}:project={project}")
+    # note: `v3` because tenant row visibility now requires both view and snapshot. The list
+    # cache lives in Redis and outlives a backend swap; reusing v2 would serve a pre-fix row to a
+    # tenant denied view for the first 30 seconds after deployment. The prefix keeps every
+    # existing sweep pattern matching.
+    cache_key = get_scope_cache_key(f"snapshots_fleet:list:v3:host={host}:project={project}")
     cached = None if fresh else cache.get("api_responses", cache_key)
     if cached is not None:
         return FleetSnapshotListResponse(**cached)
+    generation = cache.snapshot_fleet_generation()
 
     # When a host is named, scope was proven above. When it is not, the node list itself is the
     # proof: get_node_names is apply_cluster_filter(list_clusters()), so a cluster outside the
@@ -257,11 +258,13 @@ async def list_fleet_snapshots(
     # and the first answer wins for every later instance sharing a name. That is one tenant's
     # snapshots appearing in another's list.
     #
-    # important: narrowed by the SNAPSHOT permission, not by "has any rule here".
+    # important: narrowed by BOTH VIEW and SNAPSHOT, not by "has any rule here".
     # filter_instances_by_acl ignores the permissions on a rule entirely, so a tenant holding
     # `view` on one instance and `snapshot` on another passed the project gate on the second and
-    # was then shown the first one's snapshots as well. Admin and Partner carry no ACL and
-    # check_tenant_permission answers True for them, so an operator read is unfiltered.
+    # was then shown the first one's snapshots as well. Checking only `snapshot` also exposed an
+    # instance's name, state and snapshot metadata to a caller explicitly denied `view`. Admin
+    # and Partner carry no ACL and check_tenant_permission answers True for them, so an operator
+    # read is unfiltered.
     seen: Dict[Tuple[str, str, str], bool] = {}
     visible: List[Dict[str, Any]] = []
     for row in rows:
@@ -271,8 +274,10 @@ async def list_fleet_snapshots(
             # None, and a snapshot row names the instance it came from. On a cluster carrying
             # two organizations that is the other organization's instance inventory. Same gate
             # the network, profile, ACL and instance lists apply.
-            seen[key] = project_is_visible(key[0], key[1]) and check_tenant_permission(
-                key[0], key[1], key[2], "snapshot"
+            seen[key] = (
+                project_is_visible(key[0], key[1])
+                and check_tenant_permission(key[0], key[1], key[2], "view")
+                and check_tenant_permission(key[0], key[1], key[2], "snapshot")
             )
         if seen[key]:
             visible.append(row)
@@ -323,7 +328,13 @@ async def list_fleet_snapshots(
     # refresh, overwrite good data the operator could still see. The degradation labels are
     # cached WITH the payload, so a cached partial read still renders its banner.
     if answered:
-        cache.set("api_responses", cache_key, response.model_dump(), ttl=_CACHE_TTL)
+        if cache.snapshot_fleet_generation() != generation:
+            # A create/delete or instance lifecycle change landed while this fan-out was reading.
+            # Its rows predate that mutation, so writing them after the invalidation would restore
+            # the exact stale cache entry the mutation just removed.
+            logger.info("Not caching fleet snapshots: snapshots changed during the read")
+        else:
+            cache.set("api_responses", cache_key, response.model_dump(), ttl=_CACHE_TTL)
     elif nodes_to_query:
         logger.warning("Not caching fleet snapshots: no cluster answered")
     # else: the caller's scope names no cluster at all, which is a settled answer rather than a

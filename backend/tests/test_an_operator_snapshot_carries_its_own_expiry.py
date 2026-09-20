@@ -45,6 +45,7 @@ def test_the_daemon_receives_an_expiry_and_an_ops_name():
         json={"host": HOST, "project": PROJECT, "label": "before upgrade"},
     )
     assert response.status_code == 201, response.text
+    assert response.json()["status"] == "succeeded"
 
     creates = [r for r in node.recorded if r[0] == "create_snapshot"]
     assert len(creates) == 1, "exactly one create should have reached the daemon"
@@ -111,6 +112,7 @@ def test_a_create_waits_for_the_operation_before_reporting_success():
         json={"host": HOST, "project": PROJECT, "label": "waits"},
     )
     assert response.status_code == 201, response.text
+    assert response.json()["status"] == "succeeded"
     assert response.json()["message"].startswith("Snapshot ops-")
     assert "still being written" not in response.json()["message"]
 
@@ -128,7 +130,7 @@ def test_an_operation_that_fails_is_not_reported_as_created():
     assert "storage pool is full" in response.text
 
 
-def test_an_unsettled_operation_says_so_rather_than_claiming_completion():
+def test_an_unsettled_operation_is_accepted_rather_than_claiming_completion():
     # A dir-backed pool copies the whole instance, which can outlast any sensible request budget.
     # That is neither success nor failure and must not be reported as either.
     node = FakeInstanceNode()
@@ -138,8 +140,115 @@ def test_an_unsettled_operation_says_so_rather_than_claiming_completion():
         f"/instances/{INSTANCE}/snapshots",
         json={"host": HOST, "project": PROJECT, "label": "slow pool"},
     )
-    assert response.status_code == 201, response.text
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "pending"
+    assert response.json()["operation_id"], "a pending response must name its LXD operation"
     assert "still being written" in response.json()["message"]
+
+
+def test_a_pending_create_is_audited_invalidated_and_not_announced(monkeypatch):
+    """Accepted work is visible to operators, but must not become a completed webhook event."""
+    from app.routers import instance_snapshots
+
+    audited = []
+    emitted = []
+    invalidated = []
+
+    class _Cache:
+        def invalidate_resource_cache(self, resource):
+            invalidated.append(resource)
+
+    monkeypatch.setattr(
+        instance_snapshots.activity_logger,
+        "log_activity",
+        lambda **kwargs: audited.append(kwargs),
+    )
+    monkeypatch.setattr(
+        instance_snapshots,
+        "schedule_orcahub_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+    monkeypatch.setattr(instance_snapshots, "get_cache_manager", lambda: _Cache())
+
+    node = FakeInstanceNode()
+    node.operation_status = "Running"
+    response = _client(service(FakeClient(node))).post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "slow but accepted"},
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "pending"
+    creates = [row for row in audited if row["action"] == "instance.snapshot.create"]
+    assert len(creates) == 1
+    assert creates[0]["result"] == "accepted"
+    assert creates[0]["details"]["status"] == "pending"
+    assert emitted == [], "snapshot.created must assert existence, not mere acceptance"
+    assert invalidated == ["snapshots_fleet"]
+
+
+def test_a_completed_create_is_audited_and_announced(monkeypatch):
+    from app.routers import instance_snapshots
+
+    audited = []
+    emitted = []
+    monkeypatch.setattr(
+        instance_snapshots.activity_logger,
+        "log_activity",
+        lambda **kwargs: audited.append(kwargs),
+    )
+    monkeypatch.setattr(
+        instance_snapshots,
+        "schedule_orcahub_event",
+        lambda **kwargs: emitted.append(kwargs),
+    )
+
+    response = _client(service(FakeClient(FakeInstanceNode()))).post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "confirmed"},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "succeeded"
+    creates = [row for row in audited if row["action"] == "instance.snapshot.create"]
+    assert len(creates) == 1
+    assert creates[0]["result"] == "success"
+    assert creates[0]["details"]["status"] == "succeeded"
+    assert len(emitted) == 1
+    assert emitted[0]["event_type"] == "snapshot.created"
+    assert emitted[0]["name"] == response.json()["snapshot"]
+
+
+def test_the_pending_response_contract_requires_an_operation_id():
+    from pydantic import ValidationError
+
+    from app.models.schemas import SnapshotCreateResponse
+
+    with pytest.raises(ValidationError, match="operation_id is required"):
+        SnapshotCreateResponse(
+            success=True,
+            instance_name=INSTANCE,
+            snapshot="ops-pending-20260920T000000Z",
+            operation_id=None,
+            status="pending",
+            message="Snapshot is still being written.",
+        )
+
+
+def test_a_failed_create_does_not_expose_an_upstream_url():
+    node = FakeInstanceNode()
+    node.operation_status = "Failure"
+    node.operation_err = "copy failed at https://10.20.30.40:8443/1.0/operations/secret"
+
+    response = _client(service(FakeClient(node))).post(
+        f"/instances/{INSTANCE}/snapshots",
+        json={"host": HOST, "project": PROJECT, "label": "sanitized failure"},
+    )
+
+    assert response.status_code == 502, response.text
+    assert "10.20.30.40" not in response.text
+    assert "/operations/secret" not in response.text
+    assert "[redacted]" in response.text
 
 
 def test_a_negative_size_is_reported_as_no_size():

@@ -147,6 +147,14 @@ def test_the_listing_carries_the_sources_schedule_so_the_gate_can_be_satisfied(f
 # passes on the first, and the listing must still withhold the second.
 MIXED_ACL = {HOST: {(PROJECT, MINE): {"view", "snapshot"}, (PROJECT, THEIRS): {"view"}}}
 
+# These two policies prove permissions from different rules cannot be composed into visibility
+# for either instance. The project-level gate intentionally merges rules, so the row-level gate
+# is the last boundary before snapshot metadata leaves the service.
+SNAPSHOT_ONLY_ON_OTHER_ACL = {
+    HOST: {(PROJECT, MINE): {"view", "snapshot"}, (PROJECT, THEIRS): {"snapshot"}}
+}
+SPLIT_ACL = {HOST: {(PROJECT, MINE): {"view"}, (PROJECT, THEIRS): {"snapshot"}}}
+
 
 def test_a_view_only_grant_does_not_come_with_the_snapshots(fake):
     """The filter has to ask about the snapshot permission, not about "has any rule here".
@@ -167,3 +175,42 @@ def test_a_view_only_grant_does_not_come_with_the_snapshots(fake):
     assert sources == {MINE}, (
         f"a view-only instance leaked its snapshots into the listing: {sources}"
     )
+
+
+def test_a_snapshot_only_grant_does_not_reveal_instance_metadata(fake):
+    client = _client(service(fake), acl=SNAPSHOT_ONLY_ON_OTHER_ACL)
+    try:
+        response = _fleet(client)
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 200, response.text
+    sources = {row["source_name"] for row in response.json()["items"]}
+    assert sources == {MINE}, (
+        f"an instance without view permission leaked through the fleet response: {sources}"
+    )
+
+
+def test_project_level_permissions_from_different_instances_do_not_compose(fake):
+    client = _client(service(fake), acl=SPLIT_ACL)
+    try:
+        response = _fleet(client)
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == []
+    assert response.json()["total"] == 0
+
+
+@pytest.mark.parametrize("permission", ["view", "snapshot"])
+def test_one_permission_cannot_open_a_narrowed_fleet_read(fake, permission):
+    acl = {HOST: {(PROJECT, MINE): {permission}}}
+    client = _client(service(fake), acl=acl)
+    try:
+        response = _fleet(client)
+    finally:
+        client._cleanup()
+
+    assert response.status_code == 403, response.text
+    assert fake.node.recorded == [], "an authorization refusal must happen before cluster I/O"
