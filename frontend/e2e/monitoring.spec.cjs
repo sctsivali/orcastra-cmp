@@ -235,7 +235,10 @@ test("stopped Top Consumer never starts a metrics poll", async ({ page }, testIn
 
   const dialog = page.getByRole("dialog");
   await expect.poll(() => api.detailCalls).toBe(1);
-  await expect(dialog.getByText("Stopped", { exact: true })).toBeVisible();
+  const dialogHeading = dialog.getByRole("heading", { name: "tenant-owned-vm" });
+  await expect(
+    dialogHeading.locator("xpath=..").getByText("Stopped", { exact: true }),
+  ).toBeVisible();
   await dialog.getByRole("tab", { name: "Metrics" }).click();
   await expect(dialog.getByRole("heading", { name: "Instance is not running" })).toBeVisible();
   await page.waitForTimeout(5_500);
